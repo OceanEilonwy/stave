@@ -197,7 +197,7 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            grips: grips::GripView::new(),
+            grips: grips::GripView::new(input),
             state: EditState::default(),
             changes,
             tools: item_tools::ItemTools::new(),

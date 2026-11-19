@@ -319,8 +319,8 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `view_tools.rs` | `PlanSwitch` | (mod.rs) `from_above.connect_toggled` → `PlanSwitchOutput::FromAbove(bool)` | `show(bool)` → `Show { plan }` | `#[block_signal]` on the toggle. |
 | `view_tools.rs` | `EmptyView` | — (its `open` button uses the `win.open` action: keep it) | `show(&str, &str, bool)` → `EmptyViewInput::Show { title, description, offers_open }` | |
 | `workbench.rs` | `Workbench` | `connect_tools()` → `WorkbenchOutput::ToolsChanged`; `connect_save_failed(&str)` → `SaveFailed(String)` | `apply(Layout)` → `Apply(Layout)`; `narrow_edges(&adw::Breakpoint, f64)` → `NarrowEdges { breakpoint, width }`, whose breakpoint's apply/unapply send `Fold(Vec<Side>)`/`Unfold(Vec<Side>)`; `dock_tool(Group, Spot)` → `DockTool { group, spot }`; `show_problem_count(usize)` → `ShowProblemCount(usize)`; `save()` → `Save`; `reset()` → `Reset`; `present(PanelId)` → `Present(PanelId)`; `bring_forward_beside_view(PanelId)` → `BringForwardBesideView(PanelId)`; `move_to(PanelId, Side)` → `MoveTo { panel, side }` | libpanel dock. *queries* `layout()`, `panel(PanelId)`, `is_open`, `is_shown`, `share_a_frame`; `tools()` hands out the shared `Rc<RefCell<Spots>>`: rule 11. |
-| `edit_view/grip_panel.rs` | `GripPanel` | `connect_action(PanelAction)` → `GripPanelOutput::Action(PanelAction)`; (`grips.rs`) `panel.value.connect_activate` → folds into `Action` | `show(&PanelModel)` → `Show(PanelModel)` | Test getters `words()`, `radios()`. |
-| `edit_view/grip_panel.rs` | `Readout` | — | `show(Option<&(String, String)>)` → `ReadoutInput::Show(Option<(String, String)>)` | Test getter `words()`. |
+| `edit_view/grip_panel.rs` | `GripPanelComponent` (in `GripSection`) | `connect_action(PanelAction)` → `GripPanelOutput::Action(PanelAction)`; (`grips.rs`) `panel.value.connect_activate` → folds into `Action` | `show(&PanelModel)` → `Show(Box<PanelModel>)` | **Done**: the shim is gone. The window's `GripView` owns a `GripSection` (the section around the content, the options box and the `Controller`), launched in `EditView::new` with its output forwarded to `EditingInput::GripPanel`. Test helpers `panel_words`, `panel_radios` read the controller's widgets. |
+| `edit_view/grip_panel.rs` | `ReadoutComponent` | — | `show(Option<&(String, String)>)` → `ReadoutInput::Show(Option<(String, String)>)` | **Done**: the shim is gone; `GripView` owns the `Controller` (no outputs, so launched with `detach()`). Test helper `readout_words`. |
 | `edit_view/changes.rs` | `ChangeCard` | `connect_action(ChangeAction)` → `ChangeCardOutput::Action(ChangeAction)` | `show(&ChangeWords)` → `Show(ChangeWords)` | |
 | `edit_view/changes.rs` | `DependantsDialog` | `include.connect_clicked` → `DependantsOutput::Include`; `cancel.connect_clicked` → `Cancel` | `show(&str, &[String])` → `Show { item, dependants }` | |
 | `edit_view/item_tools.rs` | `RepeatRow` | `connect_changed(usize, Axis)` → `RepeatRowOutput::Changed { count, axis }` | `show(usize, Axis, bool)` → `Show { count, axis, axis_shown }` | `#[block_signal]` on the count spin button and axis drop-down in `Show`. |
@@ -649,6 +649,17 @@ All three were on `main` before the move, not caused by it.
   (`free_children_on_destroy`), and `closed_window_is_freed` no longer
   lets them off. A draft upstream report is in
   `docs/reviews/upstream-adw-toggle-leak.md`.
+
+### Accepted exceptions
+
+- `ui/edit_view/grip_panel.rs`, `install_style`: a thread-local list of
+  the displays the grips' stylesheet is already on. GTK has no way to
+  ask whether a provider is on a display, and the stylesheet must go on
+  once per display however many windows open (a provider per window
+  would pile up, one more for every window ever opened). It is borrowed
+  only inside that function, holds no closures and no component's
+  state, and is the same once-per-display guard `edit_card.rs` and
+  `sections.rs` keep for their stylesheets.
 
 ### Still to do
 

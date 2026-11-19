@@ -21,21 +21,20 @@
 //!
 //! Both are relm4 components ([`GripPanelComponent`], [`ReadoutComponent`])
 //! following `docs/relm4-migration.md`: only `update` changes what they
-//! show, and their widgets' handlers only send messages. [`GripPanel`] and
-//! [`Readout`] keep the older API in front of them while the grips'
-//! coordinator (`grips.rs`, `impl Window`) is still old code. The section
-//! around the panel's content is its owner's: the owner shows and hides it
-//! at once, while what it says is drawn when the main loop next runs.
+//! show, and their widgets' handlers only send messages. The window owns
+//! their `Controller`s (the panel's inside a [`GripSection`]), launched
+//! with their outputs forwarded to its input. The section around the
+//! panel's content is its owner's: the owner shows and hides it at once,
+//! while what it says is drawn when the main loop next runs.
 
 use std::cell::RefCell;
 
 use adw::prelude::*;
 use gtk::gdk;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 use stave_model::ids::ParamId;
 
-use super::super::relm4_shim::Bridge;
 use super::super::sections;
 use super::grip_text::PanelModel;
 
@@ -327,105 +326,98 @@ impl GripPanelComponent {
     }
 }
 
-/// The size section, behind the callback API the grips still use: it owns
-/// the component (dropping it shuts the component down), passes
-/// [`GripPanel::show`] on as a message and the component's actions to the
-/// callback.
-pub(super) struct GripPanel {
-    /// The section, put into the change card's grip slot; its owner shows
-    /// and hides it.
+/// The size section as its owner holds it: the section around the
+/// panel's content (shown and hidden by the owner, at once), the box the
+/// owner puts the grip's options (⋮) in, and the component, whose
+/// outputs were forwarded to the owner when it was launched. Dropping it
+/// shuts the component down.
+pub(super) struct GripSection {
+    /// The section, put into the change card's grip slot.
     pub(super) root: gtk::Box,
     /// Where the window puts the grip's options (⋮).
     pub(super) options: gtk::Box,
-    bridge: Bridge<GripPanelComponent>,
-    /// The widgets, read by tests.
-    #[cfg(test)]
-    widgets: GripPanelWidgets,
+    /// The panel's content.
+    pub(super) panel: Controller<GripPanelComponent>,
 }
 
-impl GripPanel {
-    /// The section, hidden.
-    pub(super) fn new() -> GripPanel {
+impl GripSection {
+    /// The section, hidden, its actions going to `forward`'s answer on
+    /// `input`.
+    pub(super) fn new<Message: 'static>(
+        input: &relm4::Sender<Message>,
+        forward: impl Fn(GripPanelOutput) -> Message + 'static,
+    ) -> GripSection {
         let (root, body) = sections::section(&tr("Size"), "", true);
         root.set_visible(false);
         let widgets = GripPanelWidgets::new();
         let options = widgets.options.clone();
-        #[cfg(test)]
-        let kept = widgets.clone();
-        let bridge = Bridge::<GripPanelComponent>::launch(widgets);
-        body.append(bridge.widget());
-        GripPanel {
+        let panel = GripPanelComponent::builder()
+            .launch(widgets)
+            .forward(input, forward);
+        body.append(panel.widget());
+        GripSection {
             root,
             options,
-            bridge,
-            #[cfg(test)]
-            widgets: kept,
+            panel,
         }
-    }
-
-    /// Calls `callback` with what is clicked or typed.
-    pub(super) fn connect_action(&self, callback: impl Fn(PanelAction) + 'static) {
-        self.bridge.connect(move |output| match output {
-            GripPanelOutput::Action(action) => callback(action),
-        });
     }
 
     /// Draws `model` when the main loop next runs.
     pub(super) fn show(&self, model: &PanelModel) {
-        self.bridge
+        // After shutdown there is nothing to draw.
+        let _ = self
+            .panel
+            .sender()
             .send(GripPanelInput::Show(Box::new(model.clone())));
     }
+}
 
-    /// What the section says, top to bottom, once what it was told is
-    /// drawn, for a test.
-    #[cfg(test)]
-    pub(super) fn words(&self) -> Vec<String> {
-        crate::ui::gtk_test::settle();
-        let widgets = &self.widgets;
-        vec![
-            widgets.note.label().to_string(),
-            widgets.value.text().to_string(),
-            widgets.was.label().to_string(),
-            widgets.about.label().to_string(),
-            widgets.stop.label().to_string(),
-        ]
-    }
+/// What a grip panel says, top to bottom, once what it was told is drawn,
+/// for a test.
+#[cfg(test)]
+pub(super) fn panel_words(panel: &Controller<GripPanelComponent>) -> Vec<String> {
+    crate::ui::gtk_test::settle();
+    let widgets = panel.widgets();
+    vec![
+        widgets.note.label().to_string(),
+        widgets.value.text().to_string(),
+        widgets.was.label().to_string(),
+        widgets.about.label().to_string(),
+        widgets.stop.label().to_string(),
+    ]
+}
 
-    /// The radio rows' names and whether each is picked, once what it was
-    /// told is drawn, for a test.
-    #[cfg(test)]
-    pub(super) fn radios(&self) -> Vec<(String, bool)> {
-        crate::ui::gtk_test::settle();
-        let mut radios = Vec::new();
-        let mut child = self.widgets.choices.first_child();
-        while let Some(widget) = child {
-            if let Some(radio) = widget.downcast_ref::<gtk::CheckButton>() {
-                let name = radio
-                    .child()
-                    .and_then(|row| row.first_child())
-                    .and_downcast::<gtk::Label>()
-                    .map(|label| label.label().to_string())
-                    .unwrap_or_default();
-                radios.push((name, radio.is_active()));
-            }
-            child = widget.next_sibling();
+/// A grip panel's radio rows' names and whether each is picked, once
+/// what it was told is drawn, for a test.
+#[cfg(test)]
+pub(super) fn panel_radios(panel: &Controller<GripPanelComponent>) -> Vec<(String, bool)> {
+    crate::ui::gtk_test::settle();
+    radio_buttons(&panel.widgets().choices)
+        .iter()
+        .map(|radio| {
+            let name = radio
+                .child()
+                .and_then(|row| row.first_child())
+                .and_downcast::<gtk::Label>()
+                .map(|label| label.label().to_string())
+                .unwrap_or_default();
+            (name, radio.is_active())
+        })
+        .collect()
+}
+
+/// The radios in `choices`, to press them as people would, for a test.
+#[cfg(test)]
+fn radio_buttons(choices: &gtk::Box) -> Vec<gtk::CheckButton> {
+    let mut radios = Vec::new();
+    let mut child = choices.first_child();
+    while let Some(widget) = child {
+        if let Ok(radio) = widget.clone().downcast::<gtk::CheckButton>() {
+            radios.push(radio);
         }
-        radios
+        child = widget.next_sibling();
     }
-
-    /// The radios, to press them as people would, for a test.
-    #[cfg(test)]
-    fn radio_buttons(&self) -> Vec<gtk::CheckButton> {
-        let mut radios = Vec::new();
-        let mut child = self.widgets.choices.first_child();
-        while let Some(widget) = child {
-            if let Ok(radio) = widget.clone().downcast::<gtk::CheckButton>() {
-                radios.push(radio);
-            }
-            child = widget.next_sibling();
-        }
-        radios
-    }
+    radios
 }
 
 /// The one-line readout at the top of the 3D view while a grip is moved:
@@ -494,41 +486,16 @@ impl Component for ReadoutComponent {
     }
 }
 
-/// The readout, behind the API the grips still use: it owns the component
-/// and passes [`Readout::show`] on as a message.
-pub(super) struct Readout {
-    /// The overlay.
-    pub(super) root: gtk::Box,
-    bridge: Bridge<ReadoutComponent>,
-}
-
-impl Readout {
-    /// The readout, hidden.
-    pub(super) fn new() -> Readout {
-        let bridge = Bridge::<ReadoutComponent>::launch(());
-        Readout {
-            root: bridge.widget().clone(),
-            bridge,
-        }
-    }
-
-    /// Shows `name` and `value`, or hides it for `None`, when the main
-    /// loop next runs.
-    pub(super) fn show(&self, line: Option<&(String, String)>) {
-        self.bridge.send(ReadoutInput::Show(line.cloned()));
-    }
-
-    /// What it says once what it was told is shown, for a test.
-    #[cfg(test)]
-    pub(super) fn words(&self) -> Option<String> {
-        crate::ui::gtk_test::settle();
-        self.bridge
-            .model()
-            .line
-            .as_ref()
-            .filter(|_| self.root.is_visible())
-            .map(|(name, value)| format!("{name} {value}"))
-    }
+/// What a readout says once what it was told is shown, for a test.
+#[cfg(test)]
+pub(super) fn readout_words(readout: &Controller<ReadoutComponent>) -> Option<String> {
+    crate::ui::gtk_test::settle();
+    readout
+        .model()
+        .line
+        .as_ref()
+        .filter(|_| readout.widget().is_visible())
+        .map(|(name, value)| format!("{name} {value}"))
 }
 
 fn clear(container: &gtk::Box) {
@@ -629,34 +596,58 @@ mod tests {
         }
     }
 
+    /// A section, and what it reports as its owner hears it: from the
+    /// main loop, after the panel's update.
+    fn heard_section() -> (GripSection, Rc<RefCell<Vec<PanelAction>>>) {
+        let (sender, receiver) = relm4::channel::<PanelAction>();
+        let section = GripSection::new(&sender, |output| match output {
+            GripPanelOutput::Action(action) => action,
+        });
+        let heard: Rc<RefCell<Vec<PanelAction>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        relm4::spawn_local(async move {
+            while let Some(action) = receiver.recv().await {
+                log.borrow_mut().push(action);
+            }
+        });
+        (section, heard)
+    }
+
     #[test]
     fn a_dropped_grip_panel_is_freed() {
         on_gtk_thread(grip_panel_is_freed);
     }
 
-    /// Dropping the panel drops its controller: the content, the model
-    /// and the callback are freed once the main loop runs.
+    /// Dropping the section drops its controller: the content, the model
+    /// and the forwarding are freed once the main loop runs.
     fn grip_panel_is_freed() {
-        let panel = GripPanel::new();
+        let (sender, receiver) = relm4::channel::<PanelAction>();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        panel.connect_action(move |_| {
+        let section = GripSection::new(&sender, move |output| {
             let _ = &held;
+            match output {
+                GripPanelOutput::Action(action) => action,
+            }
         });
-        let callback = Rc::downgrade(&token);
+        let forwarding = Rc::downgrade(&token);
         drop(token);
-        panel.show(&two_choices());
+        drop(sender);
+        section.show(&two_choices());
         settle();
-        let content = panel.bridge.widget().downgrade();
-        let input = panel.bridge.sender().clone();
-        drop(panel);
+        let content = section.panel.widget().downgrade();
+        let root = section.root.downgrade();
+        let input = section.panel.sender().clone();
+        drop(section);
         settle();
         assert!(content.upgrade().is_none(), "the content is freed");
+        assert!(root.upgrade().is_none(), "the section is freed");
         assert!(
             input.send(GripPanelInput::Typed("1mm".to_owned())).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(forwarding.upgrade().is_none(), "the forwarding is freed");
+        drop(receiver);
     }
 
     #[test]
@@ -665,14 +656,11 @@ mod tests {
     }
 
     fn showing_reports_nothing() {
-        let panel = GripPanel::new();
-        let heard: Rc<RefCell<Vec<PanelAction>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        panel.connect_action(move |action| log.borrow_mut().push(action));
-        panel.show(&two_choices());
-        panel.show(&two_choices());
+        let (section, heard) = heard_section();
+        section.show(&two_choices());
+        section.show(&two_choices());
         assert_eq!(
-            panel.radios(),
+            panel_radios(&section.panel),
             [
                 ("overall_width".to_owned(), true),
                 ("case.overhang".to_owned(), false)
@@ -682,37 +670,58 @@ mod tests {
     }
 
     #[test]
+    fn typing_a_value_and_pressing_enter_reports_it() {
+        on_gtk_thread(typing_is_reported);
+    }
+
+    fn typing_is_reported() {
+        let (section, heard) = heard_section();
+        section.show(&two_choices());
+        settle();
+        let entry = section.panel.widgets().value.clone();
+        entry.set_text(" 1200mm ");
+        entry.emit_activate();
+        assert!(heard.borrow().is_empty(), "only queued");
+        settle();
+        assert_eq!(*heard.borrow(), [PanelAction::Type("1200mm".to_owned())]);
+    }
+
+    #[test]
     fn a_pick_made_while_a_pick_is_handled_is_queued() {
         on_gtk_thread(picks_are_queued);
     }
 
-    /// A pick only queues a message; the action reaches the callback after
-    /// the panel's update has returned. The callback redraws the panel
-    /// (which the old one did from inside the radio's own signal) and
-    /// presses another radio: both are queued, not run under it.
+    /// A pick only queues a message; the action reaches the owner after
+    /// the panel's update has returned. The owner's handler redraws the
+    /// panel and presses another radio: both are queued, not run under
+    /// it.
     fn picks_are_queued() {
-        let panel = Rc::new(GripPanel::new());
-        panel.show(&two_choices());
-        settle();
         let heard: Rc<RefCell<Vec<PanelAction>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&panel);
-        panel.connect_action(move |action| {
-            let Some(panel) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(action);
-            if first {
-                panel.show(&two_choices());
-                // The radios the queued redraw has not replaced yet.
-                if let Some(radio) = panel.radio_buttons().first() {
-                    radio.set_active(true);
+        let (sender, receiver) = relm4::channel::<PanelAction>();
+        let section = GripSection::new(&sender, |output| match output {
+            GripPanelOutput::Action(action) => action,
+        });
+        section.show(&two_choices());
+        settle();
+        let input = section.panel.sender().clone();
+        let choices = section.panel.widgets().choices.clone();
+        // The owner: hears each action from the main loop.
+        relm4::spawn_local(async move {
+            while let Some(action) = receiver.recv().await {
+                let first = log.borrow().is_empty();
+                log.borrow_mut().push(action);
+                if first {
+                    let _ = input.send(GripPanelInput::Show(Box::new(two_choices())));
+                    // The radios the queued redraw has not replaced yet.
+                    if let Some(radio) = radio_buttons(&choices).first() {
+                        radio.set_active(true);
+                    }
+                    assert_eq!(log.borrow().len(), 1, "nothing ran under the handler");
                 }
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
             }
         });
-        let radios = panel.radio_buttons();
+        let radios = radio_buttons(&section.panel.widgets().choices);
         let Some(second) = radios.get(1) else {
             panic!("two radios are drawn");
         };
@@ -725,6 +734,14 @@ mod tests {
             vec![pick(1), pick(0)],
             "each pick after its update, the inner one after the first"
         );
+        drop(sender);
+        drop(section);
+        settle();
+    }
+
+    /// A readout launched as the window launches it.
+    fn readout() -> Controller<ReadoutComponent> {
+        ReadoutComponent::builder().launch(()).detach()
     }
 
     #[test]
@@ -733,12 +750,15 @@ mod tests {
     }
 
     fn readout_is_freed() {
-        let readout = Readout::new();
-        readout.show(Some(&("overall_width".to_owned(), "940 mm".to_owned())));
+        let readout = readout();
+        let _ = readout.sender().send(ReadoutInput::Show(Some((
+            "overall_width".to_owned(),
+            "940 mm".to_owned(),
+        ))));
         settle();
-        assert!(readout.root.is_visible(), "a line shows it");
-        let root = readout.root.downgrade();
-        let input = readout.bridge.sender().clone();
+        assert!(readout.widget().is_visible(), "a line shows it");
+        let root = readout.widget().downgrade();
+        let input = readout.sender().clone();
         drop(readout);
         settle();
         assert!(root.upgrade().is_none(), "the widget is freed");
@@ -754,11 +774,17 @@ mod tests {
     }
 
     fn readout_is_queued() {
-        let readout = Readout::new();
-        readout.show(Some(&("overall_width".to_owned(), "940 mm".to_owned())));
-        assert!(!readout.root.is_visible(), "only queued");
-        assert_eq!(readout.words().as_deref(), Some("overall_width 940 mm"));
-        readout.show(None);
-        assert_eq!(readout.words(), None);
+        let readout = readout();
+        let _ = readout.sender().send(ReadoutInput::Show(Some((
+            "overall_width".to_owned(),
+            "940 mm".to_owned(),
+        ))));
+        assert!(!readout.widget().is_visible(), "only queued");
+        assert_eq!(
+            readout_words(&readout).as_deref(),
+            Some("overall_width 940 mm")
+        );
+        let _ = readout.sender().send(ReadoutInput::Show(None));
+        assert_eq!(readout_words(&readout), None);
     }
 }
