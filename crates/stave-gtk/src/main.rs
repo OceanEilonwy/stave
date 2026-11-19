@@ -287,17 +287,17 @@ fn main() -> ExitCode {
                 folder,
                 output,
                 &screenshot::Shot {
-                    scene: arguments.scene.clone(),
+                    scene: arguments.scene,
                     explode: arguments.explode,
                     turn: arguments.turn,
                     pitch: arguments.pitch,
-                    frame: arguments.frame.clone(),
-                    open: arguments.open.clone(),
-                    hide: arguments.hide.clone(),
+                    frame: arguments.frame,
+                    open: arguments.open,
+                    hide: arguments.hide,
                     section: arguments.section,
                     flat: arguments.flat,
                     no_tint: arguments.no_tint,
-                    focus: arguments.focus.clone().map(|name| screenshot::FocusShot {
+                    focus: arguments.focus.map(|name| screenshot::FocusShot {
                         name,
                         pair: arguments.pair,
                         step: arguments.step,

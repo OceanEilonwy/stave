@@ -166,9 +166,11 @@ impl AssemblyNode {
             .filter_map(|c| c.filtered(query))
             .collect();
         (!entries.is_empty() || !children.is_empty()).then(|| AssemblyNode {
+            id: self.id,
+            label: self.label.clone(),
+            detail: self.detail.clone(),
             entries,
             children,
-            ..self.clone()
         })
     }
 }
@@ -212,8 +214,10 @@ impl PartsTree {
 /// `110°`, `12.5°`.
 pub fn degrees(angle: Angle) -> String {
     let text = angle.to_string();
-    text.strip_suffix("deg")
-        .map_or(text.clone(), |number| format!("{number}°"))
+    match text.strip_suffix("deg") {
+        Some(number) => format!("{number}°"),
+        None => text,
+    }
 }
 
 /// A length in millimetres: `1029.5 mm`.
@@ -335,19 +339,18 @@ fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
         .filter_map(|(_, members)| {
             let mut members = members.into_iter();
             let first = members.next()?;
-            let rest: Vec<Single> = members.collect();
             let mut items = NonEmpty::one(first.item);
-            let mut names = vec![first.full.clone()];
-            let mut labels = vec![first.label.clone()];
+            let mut names = vec![first.full];
+            let mut labels = vec![first.label];
             let mut details = vec![first.detail.clone()];
-            for member in &rest {
+            for member in members {
                 items.push(member.item);
-                names.push(member.full.clone());
-                labels.push(member.label.clone());
-                details.push(member.detail.clone());
+                names.push(member.full);
+                labels.push(member.label);
+                details.push(member.detail);
             }
             let label = group_label(&labels);
-            let detail = if rest.is_empty() {
+            let detail = if items.len() == 1 {
                 first.detail
             } else {
                 first.group_detail.or(first.detail)
@@ -389,6 +392,23 @@ fn group_label(labels: &[String]) -> String {
             }
         }
         _ => labels.join(", "),
+    }
+}
+
+/// The parts and pieces of hardware a selection stands for in the 3D
+/// view: the selected item, or everything inside a selected assembly (at
+/// any depth), parts first, in design order. Nothing for a selection that
+/// is not an item (a joint, a place in the text, a problem).
+pub fn items_in(design: &SolvedDesign, selection: &Selection) -> Vec<Item> {
+    match selection {
+        Selection::Assembly(id) => design
+            .parts
+            .iter()
+            .map(|part| Item::Part(part.id))
+            .chain(design.hardware.iter().map(|piece| Item::Hardware(piece.id)))
+            .filter(|item| crate::problems::inside(design, *item, *id))
+            .collect(),
+        other => other.item().into_iter().collect(),
     }
 }
 
@@ -1055,9 +1075,7 @@ fn inspect_hardware(
     let description = model
         .and_then(|m| m.defs.kind(hardware.kind_id))
         .and_then(|k| docs(&k.decl));
-    let piece = design
-        .part(hardware.piece)
-        .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+    let piece = design.part(hardware.piece).map_or("?", |p| p.name.as_str());
     let what = match hardware.base {
         HardwareBase::Hinge => "hinge",
         HardwareBase::Slide => "drawer slide",

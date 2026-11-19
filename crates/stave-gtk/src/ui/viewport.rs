@@ -9,6 +9,7 @@
 //! every pixel of the drag.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::glib;
@@ -22,7 +23,7 @@ mod imp {
     use super::*;
 
     /// Called with the new size in device pixels.
-    pub type ResizeHandler = Box<dyn Fn(u32, u32)>;
+    pub type ResizeHandler = Rc<dyn Fn(u32, u32)>;
 
     #[derive(Default)]
     pub struct Viewport {
@@ -59,7 +60,10 @@ mod imp {
         fn report_size(&self) {
             let (width, height) = self.obj().device_size();
             self.reported.set((width, height));
-            if let Some(handler) = self.on_resize.borrow().as_ref() {
+            // Cloned out so that the handler may set a new one, or come
+            // back here through a synchronous allocation.
+            let handler = self.on_resize.borrow().clone();
+            if let Some(handler) = handler {
                 handler(width, height);
             }
         }
@@ -250,6 +254,6 @@ impl Viewport {
     /// once on a change of scale or the first allocation, and once a resize
     /// of the 3D view has held still for [`SETTLE`].
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
-        self.imp().on_resize.replace(Some(Box::new(handler)));
+        self.imp().on_resize.replace(Some(Rc::new(handler)));
     }
 }

@@ -64,7 +64,7 @@ struct TreeState {
     toggled: BTreeMap<AssemblyId, bool>,
     selection: Option<Selection>,
     /// The latest check's marks, for the dots.
-    marks: Marks,
+    marks: Rc<Marks>,
     /// The part whose joints are listed under its row, and those joints.
     listing: Listing,
     /// The joint row being activated, while its callback runs: the
@@ -120,8 +120,9 @@ impl TreeSidebar {
 
     fn connect(&self) {
         let state = self.state.clone();
-        let list = self.list.clone();
-        self.list.connect_row_activated(move |_, row| {
+        // The list the signal passes, not a captured one: the list keeps
+        // its handlers, so a capture would keep it forever.
+        self.list.connect_row_activated(move |list, row| {
             let kind = {
                 let state = state.borrow();
                 state
@@ -155,7 +156,7 @@ impl TreeSidebar {
                             });
                         state.toggled.insert(id, !open);
                     }
-                    fill(&list, &state);
+                    fill(list, &state);
                     let callback = state.borrow().on_select.clone();
                     if let Some(callback) = callback {
                         callback(Selection::Assembly(id));
@@ -183,10 +184,9 @@ impl TreeSidebar {
         self.list.connect_row_selected(move |_, row| {
             let Some(row) = row else { return };
             let (syncing, kind) = {
-                // Busy: the tree itself is changing the rows.
-                let Ok(state) = state.try_borrow() else {
-                    return;
-                };
+                // The tree changes the rows with nothing borrowed and with
+                // `syncing` up.
+                let state = state.borrow();
                 let kind = state
                     .rows
                     .iter()
@@ -257,7 +257,7 @@ impl TreeSidebar {
     }
 
     /// Takes the latest check's marks for the dots.
-    pub fn show_marks(&self, marks: Marks) {
+    pub fn show_marks(&self, marks: Rc<Marks>) {
         self.state.borrow_mut().marks = marks;
         fill(&self.list, &self.state);
     }
@@ -398,8 +398,8 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
     state.borrow_mut().syncing = false;
 }
 
-fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
-    let mut state = state.borrow_mut();
+fn sync_selection(list: &gtk::ListBox, state_cell: &Rc<RefCell<TreeState>>) {
+    let mut state = state_cell.borrow_mut();
     let was = state.syncing;
     state.syncing = true;
     // A joint chosen under a part is highlighted there, even when what it
@@ -433,7 +433,7 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
                     Some(row.clone())
                 }
                 RowKind::Source(location)
-                    if *selection == Selection::Location(location.clone()) =>
+                    if matches!(selection, Selection::Location(l) if l == location) =>
                 {
                     Some(row.clone())
                 }
@@ -448,11 +448,13 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
             })
         })
     });
+    // Selecting a row calls the handler above, which borrows the state.
+    drop(state);
     match selected {
         Some(row) => list.select_row(Some(&row)),
         None => list.unselect_all(),
     }
-    state.syncing = was;
+    state_cell.borrow_mut().syncing = was;
 }
 
 /// What the rows show besides the tree itself.
@@ -884,5 +886,57 @@ mod tests {
         // A joint that is not listed does not keep it either.
         let next = listing.next(Some(&Selection::of_target(dowel(7))), Vec::new(), None);
         assert_eq!(next, Listing::default());
+    }
+
+    #[test]
+    fn the_tree_selecting_a_row_itself_is_not_a_choice() {
+        crate::ui::gtk_test::on_gtk_thread(tree_selects_rows_quietly);
+    }
+
+    /// Showing the selection selects its row with nothing borrowed, and
+    /// the row handler hears that as the tree's own change, not a click;
+    /// a row chosen by hand is still passed on.
+    fn tree_selects_rows_quietly() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/stool");
+        let opened = stave_app::open(&folder).expect("the stool opens");
+        let design = opened.design.as_ref().expect("the stool solves");
+        let sidebar = TreeSidebar::new();
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        sidebar.connect_select({
+            let chosen = Rc::clone(&chosen);
+            move |selection| chosen.borrow_mut().push(selection)
+        });
+        sidebar.show_tree(stave_app::inspect::parts_tree(design));
+        let part = design.parts.first().expect("a part");
+        let selection = Selection::of_item(Item::Part(part.id));
+        sidebar.show_selection(Some(&selection), Vec::new());
+        assert!(
+            sidebar.list.selected_row().is_some(),
+            "the part's row is selected"
+        );
+        assert!(
+            chosen.borrow().is_empty(),
+            "the tree's own change is no choice"
+        );
+        // Showing it again leaves the rows as they are and syncs only.
+        sidebar.show_selection(Some(&selection), Vec::new());
+        assert!(chosen.borrow().is_empty());
+        let other = sidebar
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .find(|(row, kind)| {
+                matches!(kind, RowKind::Entry { .. })
+                    && Some(row) != sidebar.list.selected_row().as_ref()
+            })
+            .map(|(row, _)| row.clone())
+            .expect("another part's row");
+        sidebar.list.select_row(Some(&other));
+        assert_eq!(
+            chosen.borrow().len(),
+            1,
+            "a row chosen by hand is passed on"
+        );
     }
 }

@@ -221,7 +221,7 @@ pub(super) struct Shell {
     /// The start page, while it shows.
     start: RefCell<Option<Rc<StartPage>>>,
     /// The command line's options, taken by the first project window.
-    first: RefCell<Option<Options>>,
+    first: Cell<Option<Options>>,
     /// The style the window starts with: the command line's, or the one
     /// remembered.
     theme: Theme,
@@ -249,7 +249,7 @@ impl Shell {
             windows: RefCell::new(Vec::new()),
             start: RefCell::new(None),
             theme: options.theme.unwrap_or(remembered.theme),
-            first: RefCell::new(Some(options)),
+            first: Cell::new(Some(options)),
             remembered: Cell::new(remembered),
             remembers,
             reported: Cell::new(false),
@@ -322,11 +322,7 @@ impl Shell {
             window.present();
             return;
         }
-        let new_project = self
-            .first
-            .borrow_mut()
-            .take()
-            .is_some_and(|options| options.new_project);
+        let new_project = self.first.take().is_some_and(|options| options.new_project);
         let page = StartPage::new(self);
         page.window.present();
         if new_project {
@@ -350,7 +346,7 @@ impl Shell {
             window.widgets.window.present();
             return Some(window);
         }
-        let mut options = self.first.borrow_mut().take().unwrap_or_default();
+        let mut options = self.first.take().unwrap_or_default();
         if options.size.is_none() {
             if self.remembers {
                 let remembered = self.remembered.get();

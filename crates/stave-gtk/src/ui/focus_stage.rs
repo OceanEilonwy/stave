@@ -259,7 +259,7 @@ impl Caption {
 }
 
 /// Called when the pictures need rendering again at a new size.
-type ResizeHandler = Box<dyn Fn()>;
+type ResizeHandler = Rc<dyn Fn()>;
 
 /// Hardware focus's three small views at fixed angles. Each is rendered
 /// at its slot's size in device pixels and drawn one texel to a pixel, so
@@ -297,7 +297,7 @@ impl Pictures {
     /// (the window resized, or moved to a screen of another scale): they
     /// need rendering again at [`Pictures::device_size`].
     pub fn connect_resized(&self, handler: impl Fn() + 'static) {
-        self.on_resize.replace(Some(Box::new(handler)));
+        self.on_resize.replace(Some(Rc::new(handler)));
     }
 
     /// The size, in device pixels, to render the pictures at; `None`
@@ -335,9 +335,12 @@ impl Pictures {
             let size = self.size.clone();
             let on_resize = self.on_resize.clone();
             picture.connect_resized(move |width, height| {
-                if size.replace((width, height)) != (width, height)
-                    && let Some(handler) = on_resize.borrow().as_ref()
-                {
+                if size.replace((width, height)) == (width, height) {
+                    return;
+                }
+                // Cloned out so that the handler may set a new one.
+                let handler = on_resize.borrow().clone();
+                if let Some(handler) = handler {
                     handler();
                 }
             });

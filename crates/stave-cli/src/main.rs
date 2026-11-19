@@ -39,11 +39,10 @@ use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use stave_app::edit::Verdict;
 use stave_app::editing::commit_tried;
+use stave_app::format::{FormatTextError, Formatted, format_text};
 use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
 use stave_lang::ast;
-use stave_lang::{
-    FormatError, Parse, Severity, SourceMap, format_file, parse_patch_file, render_diagnostics,
-};
+use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, render_diagnostics};
 use stave_modules::DiskFiles;
 
 mod dump;
@@ -587,16 +586,14 @@ fn title(patch: &Parse<ast::PatchFile>, file: &str) -> String {
 /// with syntax errors are skipped with a note.
 fn fmt(path: &Path, check_only: bool) -> Result<bool> {
     let files = stave_files(path)?;
-    let mut sources = SourceMap::new();
     let mut all_fine = true;
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr().lock();
     for path in &files {
         let text = read(path)?;
-        let file = sources.add(path.display().to_string(), text.as_str())?;
-        match format_file(file, &text) {
-            Ok(formatted) if formatted == text => {}
-            Ok(formatted) => {
+        match format_text(&path.display().to_string(), &text) {
+            Ok(Formatted::Unchanged) => {}
+            Ok(Formatted::Changed(formatted)) => {
                 if check_only {
                     writeln!(stdout, "would reformat {}", path.display())?;
                     all_fine = false;
@@ -606,7 +603,7 @@ fn fmt(path: &Path, check_only: bool) -> Result<bool> {
                     writeln!(stdout, "formatted {}", path.display())?;
                 }
             }
-            Err(FormatError::Syntax(diagnostics)) => {
+            Err(FormatTextError::Format(FormatError::Syntax(diagnostics))) => {
                 // Layout is fmt's job; errors are check's. A file that
                 // doesn't parse is left alone and doesn't fail the run.
                 let errors = diagnostics.iter().filter(|d| d.is_error()).count();
@@ -617,10 +614,11 @@ fn fmt(path: &Path, check_only: bool) -> Result<bool> {
                     plural(errors, "error", "errors")
                 )?;
             }
-            Err(error @ FormatError::WouldChangeMeaning) => {
+            Err(error @ FormatTextError::Format(FormatError::WouldChangeMeaning)) => {
                 writeln!(stderr, "not formatted: {}: {error}", path.display())?;
                 all_fine = false;
             }
+            Err(FormatTextError::Source(error)) => return Err(error.into()),
         }
     }
     Ok(all_fine)

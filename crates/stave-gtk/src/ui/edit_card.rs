@@ -874,9 +874,15 @@ impl EditCard {
             };
             let focused = focused_choice(&list);
             self.fill_choices(&list, &short_list(setting), setting.options.len());
-            if let Some(text) = focused
-                && let Some((_, row)) = list.rows.borrow().iter().find(|(t, _)| *t == text)
-            {
+            // Found first, so that focus handlers run with nothing borrowed.
+            let row = focused.and_then(|text| {
+                list.rows
+                    .borrow()
+                    .iter()
+                    .find(|(t, _)| *t == text)
+                    .map(|(_, row)| row.clone())
+            });
+            if let Some(row) = row {
                 row.grab_focus();
             }
         }
