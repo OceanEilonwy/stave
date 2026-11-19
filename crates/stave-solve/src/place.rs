@@ -1789,15 +1789,16 @@ impl Solver<'_> {
             Some(Memo::Busy) => return Err(self.cycle(Frame::Region(region)).into()),
             _ => {}
         }
-        if let Some(slot) = self.regions.get_mut(region.index()) {
-            *slot = Memo::Busy;
-        }
         let Some(inst) = self.model.regions.get(region.index()).cloned() else {
             return Err(Fault::Internal("a region").into());
         };
         let Some(def) = self.model.defs.region(inst.def).cloned() else {
             return Err(Fault::Internal("a region's declaration").into());
         };
+        // Busy only once nothing below can return before the memo is set.
+        if let Some(slot) = self.regions.get_mut(region.index()) {
+            *slot = Memo::Busy;
+        }
         self.enter(Frame::Region(region), Some((def.decl.file, def.decl.span)));
         let result = self.compute_region(region, &inst, &def);
         self.leave();

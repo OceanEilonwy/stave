@@ -520,26 +520,30 @@ impl Solver<'_> {
                         array: None,
                     };
                     let value = self.eval(default, &env);
-                    if let (Ok(value), stave_model::defs::Scope::Module(_)) =
-                        (&value, def.decl.scope)
-                    {
-                        let domain_ctx = env.ctx;
-                        self.check_domain(
-                            def,
-                            value,
-                            Written {
-                                file: def.decl.file,
-                                span: default.span,
-                                path: self
-                                    .model
-                                    .defs
-                                    .patch_path(DefId::Param(inst.def), self.model.root),
-                            },
-                            &inst.name,
-                            domain_ctx,
-                        )?;
+                    // No `?` here: a value outside the domain must still
+                    // reach `leave` and the memo below, or the slot stays
+                    // busy and the next read reports a false cycle.
+                    match (value, def.decl.scope) {
+                        (Ok(value), stave_model::defs::Scope::Module(_)) => {
+                            let domain_ctx = env.ctx;
+                            self.check_domain(
+                                def,
+                                &value,
+                                Written {
+                                    file: def.decl.file,
+                                    span: default.span,
+                                    path: self
+                                        .model
+                                        .defs
+                                        .patch_path(DefId::Param(inst.def), self.model.root),
+                                },
+                                &inst.name,
+                                domain_ctx,
+                            )
+                            .map(|()| value)
+                        }
+                        (value, _) => value,
                     }
-                    value
                 }
                 None => Err(Fault::Earlier.into()),
             },
@@ -577,7 +581,8 @@ impl Solver<'_> {
                             array,
                         };
                         let value = self.eval(&arg, &env);
-                        if let Ok(value) = &value {
+                        // As for a default: no `?`, so the memo is settled.
+                        value.and_then(|value| {
                             let domain_ctx = Ctx {
                                 instance: inst.instance,
                                 element: None,
@@ -589,7 +594,7 @@ impl Solver<'_> {
                                 .map(|path| format!("{path}.{}", def.decl.name));
                             self.check_domain(
                                 def,
-                                value,
+                                &value,
                                 Written {
                                     file,
                                     span: arg.span,
@@ -597,9 +602,9 @@ impl Solver<'_> {
                                 },
                                 &inst.name,
                                 domain_ctx,
-                            )?;
-                        }
-                        value
+                            )
+                            .map(|()| value)
+                        })
                     }
                     None => Err(Fault::Earlier.into()),
                 }
