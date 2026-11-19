@@ -83,8 +83,13 @@ fn takes_setting(kind: &KindDef, name: &str) -> bool {
             stave_schema::fields::find(stave_schema::fields::JOINT_IMPLICIT_SETTINGS, name)
                 .is_some()
         }
-        base if base.is_mounted_hardware() => name == stave_schema::kinds::FACE_SETTING,
-        _ => false,
+        base @ (BaseKind::Slide
+        | BaseKind::Hinge
+        | BaseKind::Pull
+        | BaseKind::Fastener
+        | BaseKind::Tool) => {
+            base.is_mounted_hardware() && name == stave_schema::kinds::FACE_SETTING
+        }
     }
 }
 
@@ -189,6 +194,10 @@ fn count_words(count: usize) -> String {
 
 /// What sort of thing a value handed as a role is: `a part`, `parts`,
 /// `a space`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the variants it does not name all take the general path in the last arm"
+)]
 fn sort_words(value: &Value) -> &'static str {
     match value {
         Value::Part(_) => "a part",
@@ -299,21 +308,17 @@ impl Solver<'_> {
                     (&args.get(index)?.1, def.decl.file, ctx)
                 }
             };
-            match &expr.kind {
-                RExprKind::Symbol(Symbol::Def(DefId::Param(next))) => {
-                    let ItemSlot::Param(next) = self.model.item(DefId::Param(*next), ctx)? else {
-                        return None;
-                    };
-                    id = *next;
-                }
-                _ => {
-                    return Some(Choice {
-                        file,
-                        span: expr.span,
-                        param: inst.def,
-                    });
-                }
-            }
+            let RExprKind::Symbol(Symbol::Def(DefId::Param(next))) = &expr.kind else {
+                return Some(Choice {
+                    file,
+                    span: expr.span,
+                    param: inst.def,
+                });
+            };
+            let ItemSlot::Param(next) = self.model.item(DefId::Param(*next), ctx)? else {
+                return None;
+            };
+            id = *next;
         }
         None
     }
@@ -332,6 +337,10 @@ impl Solver<'_> {
     }
 
     /// Parts or a space as a message names them.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name all take the general path in the last arm"
+    )]
     fn handed_words(&self, value: &Value) -> String {
         match value {
             Value::Region(region) => self

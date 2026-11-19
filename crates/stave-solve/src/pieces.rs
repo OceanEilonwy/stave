@@ -448,6 +448,10 @@ impl Solver<'_> {
 
     /// The splicing a part's `lengths:` says, with the part it is written
     /// on; `None` when it says none.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn splicing(&mut self, source: PartId) -> Solved<Option<Splicing>> {
         let (Some(expr), Some(env)) = (
             self.part_body(source).and_then(|b| b.lengths.as_ref()),

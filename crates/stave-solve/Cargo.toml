@@ -11,3 +11,6 @@ stave-schema = { path = "../stave-schema" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
 thiserror = "2"
+
+[lints]
+workspace = true

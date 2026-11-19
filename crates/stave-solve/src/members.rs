@@ -199,6 +199,10 @@ impl Solver<'_> {
                     shapes: placed,
                 });
             }
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "takes only the values it names: any other, a new variant included, is a type error"
+            )]
             let item = match &body.item {
                 Some(item) => match self.eval(item, env)? {
                     Value::Kind(kind_value) => Some(kind_value),
@@ -231,6 +235,10 @@ impl Solver<'_> {
         if let Some(count) = NonZeroU32::new(self.eval_count(count, env)?) {
             return Ok(count);
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let setting = match &count.kind {
             RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
                 .model
@@ -258,6 +266,10 @@ impl Solver<'_> {
     }
 
     /// `on:`: the patch, `contact(a, b)`.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn member_patch(&mut self, layout: &LayoutDef, env: &Env<'_>) -> Solved<Patch> {
         match self.eval(&layout.on, env)? {
             Value::Patch(patch) => Ok(patch),
@@ -274,6 +286,10 @@ impl Solver<'_> {
     }
 
     /// `spaced:`, `evenly` when left out.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn member_spacing(&mut self, layout: &LayoutDef, env: &Env<'_>) -> Solved<Spacing> {
         let Some(spaced) = &layout.spaced else {
             return Ok(Spacing::Evenly);

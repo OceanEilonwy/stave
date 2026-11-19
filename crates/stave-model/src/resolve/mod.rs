@@ -365,6 +365,10 @@ impl<'a> Resolver<'a> {
         file: FileId,
         span: Span,
     ) {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "codes without a help of their own share the general one"
+        )]
         let help = match code {
             Code::UnitMismatch => {
                 "lengths go with lengths and angles with angles; a plain number scales them, as in 2 * 19mm"
@@ -696,7 +700,14 @@ impl<'a> Resolver<'a> {
                 DefId::Joint(_) => Some("joint"),
                 DefId::Hardware(_) => Some("hardware"),
                 DefId::Scene(_) => Some("scene"),
-                _ => None,
+                DefId::Param(_)
+                | DefId::Let(_)
+                | DefId::Require(_)
+                | DefId::Stock(_)
+                | DefId::Profile(_)
+                | DefId::Kind(_)
+                | DefId::Recipe(_)
+                | DefId::Component(_) => None,
             };
             if let Some(word) = not_allowed {
                 let article = if word == "assembly" { "an" } else { "a" };
@@ -914,7 +925,15 @@ impl<'a> Resolver<'a> {
             Syntax::Joint(j) => j.array.as_ref(),
             Syntax::Hardware(h) => h.array.as_ref(),
             Syntax::Assembly(a) => a.array.as_ref(),
-            _ => None,
+            Syntax::Param(_)
+            | Syntax::Let(_)
+            | Syntax::Require(_)
+            | Syntax::Stock(_)
+            | Syntax::Profile(_)
+            | Syntax::Kind(_)
+            | Syntax::Recipe(_)
+            | Syntax::Component(_)
+            | Syntax::Scene(_) => None,
         }?;
         Some(match array {
             ast::ArraySpec::Labels(labels) => ArrayShape::Labels(
@@ -1238,6 +1257,10 @@ impl<'a> Resolver<'a> {
     }
 
     /// Stores every component with its item list.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     fn finish_components(&mut self) {
         for (index, items) in self.component_items.clone().into_iter().enumerate() {
             let Some(id) = ComponentId::from_index(index) else {

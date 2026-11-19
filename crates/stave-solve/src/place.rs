@@ -143,6 +143,10 @@ pub(crate) fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
 }
 
 /// `true` for `box(across:, up:, deep:)`, the root region.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 pub(crate) fn is_region_box(value: &RExpr) -> bool {
     match &value.kind {
         RExprKind::Builtin(call) => matches!(**call, BuiltinCall::RegionBox { .. }),
@@ -468,6 +472,10 @@ impl<'m> Solver<'m> {
     // Stock, roundness and orientation
     // -----------------------------------------------------------------------
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn part_stock(&mut self, part: PartId) -> Solved<StockId> {
         if let Some(board) = self.boards.get(&part) {
             let owner = board.part;
@@ -495,6 +503,10 @@ impl<'m> Solver<'m> {
     }
 
     /// The profile of a turned part.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn part_profile(
         &mut self,
         part: PartId,
@@ -606,6 +618,10 @@ impl<'m> Solver<'m> {
             return Orientation::from_length_and_width(Direction::Right, Direction::Back)
                 .map_err(|_| Fault::Internal("a part's orientation").into());
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let direction = |this: &mut Self, expr: &RExpr| -> Solved<Direction> {
             match this.eval(expr, &env)? {
                 Value::Word(Word::Direction(d)) => Ok(d),
@@ -723,6 +739,10 @@ impl<'m> Solver<'m> {
 
     /// The world axis a face or plane expression is across, without
     /// placing anything when it can be read from the expression.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name all take the general path in the last arm"
+    )]
     fn anchor_axis(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<Axis> {
         match &expr.kind {
             RExprKind::Member {
@@ -1579,6 +1599,10 @@ impl<'m> Solver<'m> {
     fn term_centre(&mut self, term: &AxisTerm, axis: Axis, env: &Env<'_>) -> Solved<ExactLength> {
         match &term.kind {
             AxisTermKind::CenterOn { item } => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let bounds = match self.eval(item, env)? {
                     Value::Part(part) => self.drawn_box(part)?,
                     Value::Region(region) => self.region_value(region)?.bounds,
@@ -1604,7 +1628,12 @@ impl<'m> Solver<'m> {
                 let b = self.eval_anchor(to, env)?;
                 midpoint(a.position, b.position).ok_or(Failure::Fault(Fault::Overflow))
             }
-            _ => Err(Fault::Internal("the centre a term puts a part at").into()),
+            AxisTermKind::Against { .. }
+            | AxisTermKind::Flush { .. }
+            | AxisTermKind::Spaced { .. }
+            | AxisTermKind::Corner { .. } => {
+                Err(Fault::Internal("the centre a term puts a part at").into())
+            }
         }
     }
 
@@ -1673,7 +1702,11 @@ impl<'m> Solver<'m> {
                     Ok((add(position, inset)?, true))
                 }
             }
-            _ => Err(Fault::Internal("the face a term puts a part against").into()),
+            AxisTermKind::CenterOn { .. }
+            | AxisTermKind::CenterBetween { .. }
+            | AxisTermKind::Spaced { .. } => {
+                Err(Fault::Internal("the face a term puts a part against").into())
+            }
         }
     }
 
@@ -1716,7 +1749,7 @@ impl<'m> Solver<'m> {
             let last = siblings.sizes.last().copied().unwrap_or(own);
             let room = match spacing {
                 Spacing::Pitch(_) => sub(sub(span, divide(first, 2)?)?, divide(last, 2)?)?,
-                _ => {
+                Spacing::Evenly | Spacing::Ends(_) | Spacing::Gap(_) => {
                     let total = siblings
                         .sizes
                         .iter()
@@ -1772,6 +1805,10 @@ impl<'m> Solver<'m> {
                 let Some(siblings) = siblings else {
                     return Err(Fault::Internal("the other parts of a spaced array").into());
                 };
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let spacing = match self.eval(spacing, env)? {
                     Value::Spacing(spacing) => spacing,
                     Value::Word(Word::Evenly) => Spacing::Evenly,
@@ -1903,7 +1940,11 @@ impl<'m> Solver<'m> {
         let size = self.size_along(part, axis)?;
         let siblings = match &term.kind {
             AxisTermKind::Spaced { .. } => Some(self.part_siblings(part, axis)?),
-            _ => None,
+            AxisTermKind::Against { .. }
+            | AxisTermKind::Flush { .. }
+            | AxisTermKind::CenterOn { .. }
+            | AxisTermKind::CenterBetween { .. }
+            | AxisTermKind::Corner { .. } => None,
         };
         self.term_low(&term, axis, size, &env, siblings.as_ref())
     }
@@ -1992,6 +2033,10 @@ impl<'m> Solver<'m> {
         result
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn compute_region(
         &mut self,
         region: RegionId,

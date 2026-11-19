@@ -298,6 +298,10 @@ impl Resolver<'_> {
             );
             return None;
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let (callee, args) = match &item.kind {
             ExprKind::Call { callee, args } => (&**callee, args.as_slice()),
             _ => (item, &[][..]),
@@ -488,6 +492,10 @@ impl Resolver<'_> {
     }
 
     /// A shape's range argument: `lo..hi` or one length.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+    )]
     fn range(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> RangeDef {
         match &expr.kind {
             ExprKind::Range { lo, hi } => RangeDef::Between {
@@ -534,6 +542,10 @@ impl Resolver<'_> {
 
     /// `box(...)`, `cylinder(...)`, `prism(...)` or `bar(...)`.
     fn shape(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<ShapeDef> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let shape = match &expr.kind {
             ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Name(head) => ShapeFunction::from_word(head.as_str()).map(|s| (s, args)),
@@ -570,6 +582,10 @@ impl Resolver<'_> {
                 let axis = match found.get("axis") {
                     None => FrameAxis::Depth,
                     Some(arg) => {
+                        #[expect(
+                            clippy::wildcard_enum_match_arm,
+                            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+                        )]
                         let parsed = match &arg.value.kind {
                             ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
                             _ => None,
@@ -1041,6 +1057,10 @@ impl Resolver<'_> {
         value: &ast::Expr,
         span: Span,
     ) -> Option<DriveDef> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let call = match &value.kind {
             ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Name(head) if DRIVES.contains(&head.as_str()) => Some((head, args)),
@@ -1061,6 +1081,10 @@ impl Resolver<'_> {
         let function = head.as_str();
         let (positional, named): (Vec<&ast::Arg>, Vec<&ast::Arg>) =
             args.iter().partition(|arg| arg.name.is_none());
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let member = match positional.as_slice() {
             [only] => match &only.value.kind {
                 ExprKind::Name(ident) => self.body(cx, kind, bodies, ident),

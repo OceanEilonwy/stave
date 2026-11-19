@@ -178,6 +178,10 @@ impl Resolver<'_> {
     }
 
     /// `face: back` or `face: face(piece, nearer: in)`.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+    )]
     fn face_rule(&mut self, cx: &Cx, roles: &[RoleDef], expr: &ast::Expr) -> Option<FaceRule> {
         match &expr.kind {
             ExprKind::Name(word) => match Face::from_word(word.as_str()) {
@@ -363,6 +367,10 @@ impl Resolver<'_> {
                     return None;
                 };
                 let part = self.role_of(cx, roles, part, "end")?;
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+                )]
                 let direction = match &toward.kind {
                     ExprKind::Name(word) => Direction::from_word(word.as_str()),
                     _ => None,
@@ -441,6 +449,10 @@ impl Resolver<'_> {
         {
             return RoleIndex::new(index);
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let word = match &expr.kind {
             ExprKind::Name(ident) => ident.as_str().to_owned(),
             _ => String::new(),
@@ -466,6 +478,10 @@ impl Resolver<'_> {
         {
             return BodyId::new(index);
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let word = match &expr.kind {
             ExprKind::Name(ident) => ident.as_str().to_owned(),
             _ => String::new(),
@@ -484,6 +500,10 @@ impl Resolver<'_> {
 }
 
 /// The word a call's callee is, when it is a bare name.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+)]
 fn callee_word(callee: &ast::Expr) -> Option<&str> {
     match &callee.kind {
         ExprKind::Name(name) => Some(name.as_str()),

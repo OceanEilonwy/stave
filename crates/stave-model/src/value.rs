@@ -599,6 +599,10 @@ impl Value {
     }
 
     /// The number of a count or ratio.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn number(&self) -> Option<Rational> {
         match self {
             Value::Count(n) | Value::Ratio(n) => Some(*n),
@@ -608,6 +612,10 @@ impl Value {
 
     /// `true` when the value is a part, parts, or a list of them: what
     /// [`Value::parts`] would give, without collecting it.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn is_parts(&self) -> bool {
         match self {
             Value::Part(_) | Value::Parts(_) => true,
@@ -618,6 +626,10 @@ impl Value {
 
     /// Every part in the value, borrowed when it is already a list of
     /// parts and collected only when it is one part or a nested list.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn part_list(&self) -> Option<std::borrow::Cow<'_, [PartId]>> {
         match self {
             Value::Part(part) => Some(std::borrow::Cow::Borrowed(std::slice::from_ref(part))),
@@ -628,6 +640,10 @@ impl Value {
     }
 
     /// Every part in the value, flattening lists.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn parts(&self) -> Option<Vec<PartId>> {
         match self {
             Value::Part(part) => Some(vec![*part]),
@@ -683,7 +699,13 @@ fn compare(op: BinaryOp, order: Ordering) -> bool {
         BinaryOp::Le => order != Ordering::Greater,
         BinaryOp::Gt => order == Ordering::Greater,
         BinaryOp::Ge => order != Ordering::Less,
-        _ => false,
+        BinaryOp::Or
+        | BinaryOp::And
+        | BinaryOp::Add
+        | BinaryOp::Sub
+        | BinaryOp::Mul
+        | BinaryOp::Div
+        | BinaryOp::In => false,
     }
 }
 
@@ -850,6 +872,10 @@ pub fn format_length(length: ExactLength) -> String {
 }
 
 impl fmt::Display for Value {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "every other value prints the description it gives of itself"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Length(length) => f.write_str(&format_length(*length)),

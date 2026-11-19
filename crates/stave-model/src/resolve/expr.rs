@@ -38,6 +38,10 @@ impl Expect {
     }
 
     pub fn ty(ty: Ty) -> Self {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let words = match &ty {
             Ty::Word(set) => vec![*set],
             // A spacing is a call (`ends(inset: 5mm)`) or a bare word
@@ -72,7 +76,10 @@ impl Expect {
             },
             ValueType::Depth => Expect::ty(Ty::Length).with_words(&[WordSet::Through]),
             ValueType::Items => Expect::any(),
-            other => match Ty::from_value_type(other) {
+            other @ (ValueType::Type(_)
+            | ValueType::Words(_)
+            | ValueType::ListOf(_)
+            | ValueType::Special(_)) => match Ty::from_value_type(other) {
                 Some(ty) => Expect::ty(ty),
                 None => Expect::any(),
             },
@@ -213,6 +220,10 @@ impl Resolver<'_> {
         expr
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name all take the general path in the last arm"
+    )]
     fn expr_name(&self, expr: &RExpr) -> String {
         match &expr.kind {
             RExprKind::Symbol(Symbol::Def(def)) => self.def_name(*def),
@@ -328,7 +339,17 @@ impl Resolver<'_> {
             ExprKind::Binary { op, lhs, rhs } => {
                 let side_expect = match op {
                     BinaryOp::And | BinaryOp::Or => Expect::ty(Ty::Bool).named(op.symbol()),
-                    _ => Expect::any(),
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+                    | BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::In => Expect::any(),
                 };
                 let lhs = self.value(cx, lhs, &side_expect);
                 let rhs = self.value(cx, rhs, &side_expect);
@@ -349,7 +370,7 @@ impl Resolver<'_> {
                                 lhs.ty
                             ),
                             BinaryOp::Mul | BinaryOp::Div => "a length or angle can be multiplied or divided by a plain number, and divided by another length or angle".to_owned(),
-                            _ => "compare values of the same kind: two lengths, two angles or two numbers".to_owned(),
+                            BinaryOp::Or | BinaryOp::And | BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::In => "compare values of the same kind: two lengths, two angles or two numbers".to_owned(),
                         };
                         self.error_help(
                             Code::UnitMismatch,
@@ -363,6 +384,10 @@ impl Resolver<'_> {
                 }
             }
             ExprKind::List(elements) => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+                )]
                 let element_expect = Expect {
                     ty: expect.ty.as_ref().and_then(|t| match t {
                         Ty::List(inner) => Some((**inner).clone()),
@@ -378,6 +403,10 @@ impl Resolver<'_> {
                 for element in elements {
                     let value = self.value(cx, element, &element_expect);
                     // A list inside a list flattens; `x[*]` is a list.
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "the variants it does not name all take the general path in the last arm"
+                    )]
                     let ty = match &value.ty {
                         Ty::List(inner) => (**inner).clone(),
                         Ty::Parts => Ty::Part,
@@ -520,6 +549,10 @@ impl Resolver<'_> {
         match item {
             Some(Symbol::Def(def)) if cx.array == Some(def) && self.array_labels(def).is_some() => {
                 // An unindexed array name inside its own declaration.
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "the variants it does not name all take the general path in the last arm"
+                )]
                 let ty = match self.symbol_ty(Symbol::Def(def)) {
                     Ty::Array(inner) => *inner,
                     other => other,
@@ -683,7 +716,11 @@ impl Resolver<'_> {
                 let ty = match field {
                     StockField::Species => Ty::Word(WordSet::Species),
                     StockField::Form => Ty::Word(WordSet::StockForm),
-                    _ => Ty::Length,
+                    StockField::Thickness
+                    | StockField::Diameter
+                    | StockField::Width
+                    | StockField::MaxWidth
+                    | StockField::MaxLength => Ty::Length,
                 };
                 (Member::StockField(field), ty)
             }),
@@ -707,7 +744,30 @@ impl Resolver<'_> {
             }
             Ty::Kind(kind) => self.kind_member(*kind, name),
             Ty::Unknown => Some((Member::KindEntry(name.to_owned()), Ty::Unknown)),
-            _ => None,
+            Ty::Length
+            | Ty::Angle
+            | Ty::Ratio
+            | Ty::Count
+            | Ty::Bool
+            | Ty::Text
+            | Ty::Parts
+            | Ty::Regions
+            | Ty::Anchor
+            | Ty::Mount
+            | Ty::Shape
+            | Ty::Boards
+            | Ty::Splices
+            | Ty::Envelope
+            | Ty::Model
+            | Ty::Spacing
+            | Ty::Word(_)
+            | Ty::Tool
+            | Ty::Recipe
+            | Ty::Joint
+            | Ty::Hardware
+            | Ty::Array(_)
+            | Ty::List(_)
+            | Ty::Fit => None,
         };
         match resolved {
             Some((member, ty)) => RExpr {
@@ -724,6 +784,10 @@ impl Resolver<'_> {
                 RExpr::error(span)
             }
             None => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "the variants it does not name all take the general path in the last arm"
+                )]
                 let what = match &base.ty {
                     Ty::Assembly(component) => {
                         format!(
@@ -806,12 +870,45 @@ impl Resolver<'_> {
                     .map(|p| p.name.as_str().to_owned())
                     .chain(syntax.body.entries.iter().filter_map(|e| match e {
                         ast::KindEntry::Field(f) => Some(f.key.as_str().to_owned()),
-                        _ => None,
+                        ast::KindEntry::Param(_)
+                        | ast::KindEntry::Require(_)
+                        | ast::KindEntry::Makes(_)
+                        | ast::KindEntry::Member(_)
+                        | ast::KindEntry::Roles(_)
+                        | ast::KindEntry::Cut(_)
+                        | ast::KindEntry::Mount(_)
+                        | ast::KindEntry::Mechanism(_)
+                        | ast::KindEntry::Adjust(_) => None,
                     }))
                     .collect(),
                 _ => Vec::new(),
             },
-            _ => Vec::new(),
+            Ty::Length
+            | Ty::Angle
+            | Ty::Ratio
+            | Ty::Count
+            | Ty::Bool
+            | Ty::Text
+            | Ty::Parts
+            | Ty::Regions
+            | Ty::Anchor
+            | Ty::Mount
+            | Ty::Shape
+            | Ty::Boards
+            | Ty::Splices
+            | Ty::Envelope
+            | Ty::Model
+            | Ty::Spacing
+            | Ty::Word(_)
+            | Ty::Kind(_)
+            | Ty::Tool
+            | Ty::Recipe
+            | Ty::Joint
+            | Ty::Hardware
+            | Ty::Array(_)
+            | Ty::List(_)
+            | Ty::Fit
+            | Ty::Unknown => Vec::new(),
         }
     }
 
@@ -871,6 +968,10 @@ impl Resolver<'_> {
             );
             return RExpr::error(span);
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let array_def = match &base.kind {
             RExprKind::Symbol(Symbol::Def(def)) => Some(*def),
             RExprKind::Member {
@@ -905,6 +1006,10 @@ impl Resolver<'_> {
             }
             ast::Index::At(at) => match shape {
                 Some(ArrayShape::Labels(labels)) => {
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+                    )]
                     let label = match &at.kind {
                         ExprKind::Name(ident) => Some(ident.as_str().to_owned()),
                         ExprKind::Number(ast::Number::Integer(n)) => Some(n.to_string()),
@@ -954,6 +1059,10 @@ impl Resolver<'_> {
     // Calls
     // -----------------------------------------------------------------------
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn call(
         &mut self,
         cx: &Cx,
@@ -1038,6 +1147,10 @@ impl Resolver<'_> {
             }
         };
         let names = self.kind_cut_names.get(&kind).cloned().unwrap_or_default();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let name = match args {
             [
                 ast::Arg {
@@ -1093,6 +1206,10 @@ impl Resolver<'_> {
         if !reads_wall(condition) {
             return;
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let alone = match &condition.kind {
             RExprKind::Binary { op, lhs, rhs } if op.is_comparison() => {
                 match (&lhs.kind, &rhs.kind) {
@@ -1357,7 +1474,12 @@ impl Resolver<'_> {
                     self.check_item_argument(cx, builtin, parameter.name, &value);
                     value
                 }
-                _ => self.value(cx, &arg.value, &expect),
+                ValueType::Type(_)
+                | ValueType::Words(_)
+                | ValueType::LengthOrFit
+                | ValueType::Depth
+                | ValueType::ListOf(_)
+                | ValueType::Special(_) => self.value(cx, &arg.value, &expect),
             };
             settings.push(Setting {
                 name: parameter.name.to_owned(),
@@ -1391,6 +1513,10 @@ impl Resolver<'_> {
                 );
             }
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the variants it does not name all take the general path in the last arm"
+        )]
         let ty = match builtin.returns() {
             _ if builtin == Builtin::Split => Ty::Regions,
             name => Ty::from_type_name(name),
@@ -1408,6 +1534,10 @@ impl Resolver<'_> {
     /// `split(..., shares: [n, ...])`: a list of unitless numbers (grammar,
     /// "Regions"). How many there are and that each is more than zero are
     /// checked once they are worked out.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn check_shares(&mut self, cx: &Cx, value: &RExpr) {
         let wrong = match (&value.kind, &value.ty) {
             (RExprKind::List(items), _) => items
@@ -1690,7 +1820,7 @@ fn member_help(ty: &Ty) -> String {
         Ty::Stock => "a stock has species, form, thickness, diameter, width, max_width and max_length".into(),
         Ty::Profile => "a profile has length".into(),
         Ty::Patch => "a contact patch has length (its longer side) and width (its shorter side)".into(),
-        _ => format!("{ty} has no readable fields here"),
+        Ty::Length | Ty::Angle | Ty::Ratio | Ty::Count | Ty::Bool | Ty::Text | Ty::Parts | Ty::Regions | Ty::Anchor | Ty::Mount | Ty::Shape | Ty::Boards | Ty::Splices | Ty::Envelope | Ty::Model | Ty::Spacing | Ty::Word(_) | Ty::Kind(_) | Ty::Tool | Ty::Recipe | Ty::Assembly(_) | Ty::Joint | Ty::Hardware | Ty::Array(_) | Ty::List(_) | Ty::Fit | Ty::Unknown => format!("{ty} has no readable fields here"),
     }
 }
 

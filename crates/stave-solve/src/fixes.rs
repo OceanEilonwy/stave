@@ -21,6 +21,10 @@ pub(crate) struct Written {
 /// A value written as source text that reads back as exactly the same
 /// value: `300mm`, `95deg`, `3`, `1/3`. `None` for a value that isn't a
 /// quantity, or a length or angle finer than the units can write.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 pub(crate) fn value_source(value: &Value) -> Option<String> {
     match value {
         Value::Length(length) => length.to_length().map(|length| length.to_string()),
@@ -31,6 +35,10 @@ pub(crate) fn value_source(value: &Value) -> Option<String> {
 }
 
 /// A quantity's exact amount, for measuring how far apart two values are.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn amount(value: &Value) -> Option<Rational> {
     match value {
         Value::Length(length) => Some(length.value()),

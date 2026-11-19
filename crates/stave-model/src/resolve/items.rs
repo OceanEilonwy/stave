@@ -236,6 +236,10 @@ impl<'a> Resolver<'a> {
         self.value(cx, &field.value, &expect)
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn word_field(&mut self, cx: &Cx, field: &ast::Field, set: WordSet) -> Option<Word> {
         let value = self.value(
             cx,
@@ -825,6 +829,10 @@ impl<'a> Resolver<'a> {
         mirror: &ast::Mirror,
         source_ty: Ty,
     ) -> MirrorDef {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the variants it does not name all take the general path in the last arm"
+        )]
         let expect = match source_ty {
             Ty::Part => Expect::ty(Ty::Part).named("mirror"),
             _ => Expect::any().named("mirror"),
@@ -856,6 +864,10 @@ impl<'a> Resolver<'a> {
     ) -> (PartBodyDef, Option<&'b ast::PlaceBlock>) {
         let stock_expr = self.reference(cx, stock, &Expect::ty(Ty::Stock).named("stock"));
         let found = self.field_table(cx, body.fields(), fields::PART, what, body.span);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the variants it does not name all take the general path in the last arm"
+        )]
         let size = |this: &mut Self, field: &ast::Field| -> Size {
             let value = this.field_value(cx, field, fields::PART);
             match value.kind {
@@ -902,6 +914,10 @@ impl<'a> Resolver<'a> {
         };
         let face_side = face(self, "face_side");
         let face_edge = face(self, "face_edge");
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let note = found.get("note").and_then(|field| match &field.value.kind {
             ExprKind::String(string) => Some(self.text(cx, string)),
             _ => {
@@ -1211,6 +1227,10 @@ impl<'a> Resolver<'a> {
         } else {
             self.reference(cx, &call.kind, &expect)
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let kind_ty = match &kind.ty {
             Ty::Kind(kind_ty) => Some(*kind_ty),
             _ => None,
@@ -1438,6 +1458,10 @@ impl<'a> Resolver<'a> {
         body: &ast::FieldBlock,
         name: &str,
     ) -> Vec<(crate::ids::ParamDefId, RExpr)> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let params: Vec<(String, crate::ids::ParamDefId, bool)> = self
             .component_items
             .get(component.index())
@@ -1675,6 +1699,10 @@ pub(crate) fn role_expect(ty: RoleType) -> Expect {
 }
 
 /// The kinds named in a list expression (tools).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 pub(crate) fn kind_ids(expr: &RExpr) -> Vec<KindId> {
     match &expr.kind {
         RExprKind::List(items) => items.iter().flat_map(kind_ids).collect(),
@@ -1684,6 +1712,10 @@ pub(crate) fn kind_ids(expr: &RExpr) -> Vec<KindId> {
 }
 
 /// The recipes named in a list expression.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 pub(crate) fn recipe_ids(expr: &RExpr) -> Vec<RecipeId> {
     match &expr.kind {
         RExprKind::List(items) => items.iter().flat_map(recipe_ids).collect(),
