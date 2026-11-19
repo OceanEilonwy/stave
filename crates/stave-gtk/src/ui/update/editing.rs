@@ -30,8 +30,12 @@ pub(in crate::ui) enum EditingInput {
     RemoveSelected,
     /// An entry of the editing menu was chosen.
     MenuChosen(Declaration),
+    /// The menu has drawn what it was shown: place it by its new size.
+    MenuDrawn,
     /// The card asked for something.
     CardAction(CardAction),
+    /// The setting whose short list is open on the card changed.
+    CardOptionsOpen(Option<String>),
     /// "Add onto" the face last clicked.
     EditFace,
     /// The pointer is over the 3D view at this point (none: it left).
@@ -212,7 +216,9 @@ impl Window {
                 self.remove_selected();
             }
             EditingInput::MenuChosen(declaration) => self.choose_later(declaration),
+            EditingInput::MenuDrawn => self.menu_drawn(),
             EditingInput::CardAction(action) => self.card_action(action),
+            EditingInput::CardOptionsOpen(setting) => self.card_options_open(setting),
             EditingInput::EditFace => self.edit_face(),
             EditingInput::PointerAt(point) => self.edit_hover(point),
             EditingInput::SendEdit(command) => self.send_edit(command),
@@ -294,7 +300,7 @@ mod tests {
     use super::*;
     use crate::ui::edit_view::unchecked;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
-    use relm4::Controller;
+    use relm4::{ComponentController, Controller};
     use stave_app::edit::Picked;
     use stave_app::session::Selection;
 
@@ -405,7 +411,7 @@ mod tests {
         );
         settle();
         assert!(controller.model().session.edit().is_some());
-        assert!(controller.model().editing.menu.root.is_visible());
+        assert!(controller.model().editing.menu.widget().is_visible());
 
         // The entries are checked a step at a time, from timers.
         let all_checked = settle_until(Duration::from_secs(60), || {
@@ -430,7 +436,7 @@ mod tests {
                 .find(|candidate| candidate.entry.label.as_str() == "Door")
                 .unwrap()
                 .declaration;
-            let rows = model.editing.menu.rows();
+            let rows = model.editing.menu.model().rows().to_vec();
             rows.into_iter()
                 .find(|(declaration, _)| *declaration == door)
                 .map(|(_, button)| button)
@@ -454,8 +460,29 @@ mod tests {
                 .is_some_and(|edit| edit.chosen().is_some())
         });
         assert!(chosen, "the Door entry is chosen");
-        assert!(controller.model().editing.card.root.is_visible());
-        assert!(!controller.model().editing.menu.root.is_visible());
+        assert!(controller.model().editing.card.widget().is_visible());
+        assert!(!controller.model().editing.menu.widget().is_visible());
+
+        // Opening a short list on the card: the card tells the window,
+        // which keeps which list is open (its options are checked first).
+        let (param, toggle) = {
+            let model = controller.model();
+            let lists = model.editing.card.model().option_lists();
+            let (param, toggle, _) = lists.into_iter().next().expect("the door has a short list");
+            (param.as_str().to_owned(), toggle)
+        };
+        assert_eq!(controller.model().editing.card_open_options, None);
+        toggle.set_active(true);
+        assert_eq!(
+            controller.model().editing.card_open_options,
+            None,
+            "only queued"
+        );
+        settle();
+        assert_eq!(
+            controller.model().editing.card_open_options.as_deref(),
+            Some(param.as_str())
+        );
 
         // The card's Cancel ends the edit.
         send(&controller, EditingInput::CardAction(CardAction::Cancel));
@@ -463,7 +490,7 @@ mod tests {
             controller.model().session.edit().is_none()
         });
         assert!(cancelled, "Cancel drops the edit");
-        assert!(!controller.model().editing.card.root.is_visible());
+        assert!(!controller.model().editing.card.widget().is_visible());
 
         // A link's click selects what it names, once handled.
         let part = Selection::Part(side_l);

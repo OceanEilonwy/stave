@@ -31,10 +31,8 @@
 //! [`Inspector`] keeps the older callback API in front of it until the
 //! window moves to relm4 too.
 
-use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
@@ -53,8 +51,6 @@ use super::icons;
 use super::relm4_shim::Bridge;
 use super::sections::{self, LinkHandlers};
 use super::style::CODE;
-
-type UnsavedCallback = Rc<dyn Fn(&str) -> bool>;
 
 /// Which of the inspector's pages shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +117,8 @@ pub enum InspectorInput {
     ShowIdle(Option<Note>),
     /// Show an inspection, or the hint when nothing is selected.
     Show(Option<Box<Inspection>>),
-    /// The files with changes that aren't saved.
+    /// The files with changes that aren't saved, sent by the window when
+    /// they change; the ● is drawn from them when an inspection is shown.
     Unsaved(BTreeSet<PathBuf>),
     /// People asked to see a joint or hardware in focus mode.
     FocusAsked(Target),
@@ -633,9 +630,6 @@ pub struct Inspector {
     pub focus: FocusPanel,
     /// Where the links it draws report clicks and hovers.
     pub links: LinkHandlers,
-    /// Asked, as an inspection is shown, whether its file has unsaved
-    /// changes.
-    unsaved: Cell<Option<UnsavedCallback>>,
     bridge: Bridge<InspectorComponent>,
 }
 
@@ -652,7 +646,6 @@ impl Inspector {
             root: bridge.widget().clone(),
             focus,
             links,
-            unsaved: Cell::new(None),
             bridge,
         }
     }
@@ -664,10 +657,10 @@ impl Inspector {
         self.bridge.connect(callback);
     }
 
-    /// Asks `callback` whether a file (by its path) has unsaved changes,
-    /// for the ● after the file:line link.
-    pub fn connect_unsaved(&self, callback: impl Fn(&str) -> bool + 'static) {
-        self.unsaved.set(Some(Rc::new(callback)));
+    /// The files with changes that aren't saved, for the ● after the
+    /// file:line link of the inspections shown from now on.
+    pub fn show_unsaved(&self, unsaved: BTreeSet<PathBuf>) {
+        self.bridge.send(InspectorInput::Unsaved(unsaved));
     }
 
     /// Shows focus mode's panel (it fills itself).
@@ -684,20 +677,6 @@ impl Inspector {
 
     /// Shows an inspection, or the hint when nothing is selected.
     pub fn show(&self, inspection: Option<&Inspection>) {
-        if let Some(source) = inspection.and_then(|inspection| inspection.source.as_ref()) {
-            // Asked now, as the old inspector did while drawing; the
-            // answer goes to the component as the files it knows to be
-            // unsaved.
-            let callback = self.unsaved.take();
-            self.unsaved.set(callback.clone());
-            let path = &source.location.path;
-            let unsaved = callback
-                .filter(|unsaved| unsaved(path))
-                .map(|_| PathBuf::from(path))
-                .into_iter()
-                .collect();
-            self.bridge.send(InspectorInput::Unsaved(unsaved));
-        }
         self.bridge
             .send(InspectorInput::Show(inspection.cloned().map(Box::new)));
     }
@@ -706,6 +685,7 @@ impl Inspector {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use stave_app::session::LineNumber;
 
@@ -774,11 +754,6 @@ mod tests {
         inspector.connect_outputs(move |_| {
             let _ = &held;
         });
-        let held = Rc::clone(&token);
-        inspector.connect_unsaved(move |_| {
-            let _ = &held;
-            true
-        });
         let callback = Rc::downgrade(&token);
         drop(token);
         inspector.show(inspection().as_ref());
@@ -838,10 +813,10 @@ mod tests {
     /// GTK's signal still on the stack. Now a click only queues a
     /// message; its output reaches the callback after the update has
     /// returned, and a click fired from inside the callback is queued
-    /// too. The ● asks the unsaved callback as the inspection is shown.
+    /// too. The ● comes from the unsaved files the window sent.
     fn clicks_are_queued() {
         let inspector = Rc::new(Inspector::new());
-        inspector.connect_unsaved(|path| path == "doors.stave");
+        inspector.show_unsaved(BTreeSet::from([PathBuf::from("doors.stave")]));
         inspector.show(inspection().as_ref());
         settle();
         let details = inspector.root.upcast_ref::<gtk::Widget>().clone();
@@ -857,7 +832,7 @@ mod tests {
                 .model()
                 .unsaved
                 .contains(Path::new("doors.stave")),
-            "the file was asked about as the inspection was shown"
+            "the unsaved files the window sent are kept"
         );
 
         let heard: Rc<RefCell<Vec<(u32, bool)>>> = Rc::default();

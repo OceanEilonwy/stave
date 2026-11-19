@@ -20,6 +20,7 @@ use std::cell::Cell;
 
 use adw::prelude::*;
 use glam::Vec3;
+use relm4::ComponentController;
 use stave_app::edit::PlaceSlot;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::item_offer::{RepeatFold, candidate_repeat_fold};
@@ -313,7 +314,7 @@ impl Window {
             widgets.step_card.root.upcast_ref(),
             widgets.problem_card.root.upcast_ref(),
             widgets.edge_pin.upcast_ref(),
-            editing.menu.root.upcast_ref(),
+            editing.menu.widget().upcast_ref(),
         ]
         .into_iter()
         .filter(|widget| widget.is_visible())
@@ -366,8 +367,8 @@ impl Window {
         // The repeat controls sit on the candidate's card, above its
         // buttons, folded until asked for.
         repeats.row.place_apart(
-            &self.editing.card.repeat_button_slot,
-            &self.editing.card.repeat_slot,
+            &self.editing.card_slots.repeat_button_slot,
+            &self.editing.card_slots.repeat_slot,
         );
         let input = self.input();
         repeats

@@ -29,12 +29,15 @@
 //! The search bar is a relm4 component, [`EditorSearch`]
 //! (docs/relm4-migration.md), owned by the editor through a `Bridge`: what
 //! it is told is queued, and its widgets only send messages. The rest of
-//! the editor is still plain widgets, because the Files page relies on
-//! [`Editor::show_buffer`] and [`Editor::go_to`] taking effect at once: it
-//! reads the cursor straight after, and quiets its own cursor handler
-//! around them. It becomes a component when the Files page does. Until
-//! then its state is in cells, shared out and never borrowed across a GTK
-//! call.
+//! the editor is the view of the Files page's component
+//! (`files::FilesComponent`): its model owns the [`Editor`] and only its
+//! `update` calls it, so [`Editor::show_buffer`] and [`Editor::go_to`]
+//! take effect at once inside that update, which reads the cursor straight
+//! after. The editor's own widgets only send: a lens's links call the one
+//! function given to [`Editor::new`], which sends the component a message
+//! ([`LensClick`]); Escape asks an [`EscapeProbe`] (widgets only) whether
+//! anything is open to close. Its cells are fields of that one owner,
+//! never shared out across a GTK call.
 
 use stave_app::i18n::{fill_in, ntr, tr};
 use std::cell::Cell;
@@ -1178,13 +1181,56 @@ pub struct Editor {
     /// Counts go-tos, so a scroll still waiting for the text's size gives
     /// way to a newer one.
     scroll_ticket: Rc<Cell<u64>>,
-    on_uses: LensCallback,
-    on_show: LensCallback,
+    /// What a lens's links call: it sends the owner a message.
+    lens: Rc<dyn Fn(LensClick)>,
 }
 
-/// What a lens's link calls, set once the page connects it. It is cloned
-/// out of its cell before it is called (see [`current`]).
-type LensCallback = Rc<Cell<Option<Rc<dyn Fn(SymbolId)>>>>;
+/// Which link of a lens was clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LensClick {
+    /// "2 uses": list the declaration's uses.
+    Uses(SymbolId),
+    /// "show in 3D": select it in the 3D view.
+    Show(SymbolId),
+}
+
+/// Which click a lens's link makes, given its declaration.
+type LensLink = fn(SymbolId) -> LensClick;
+
+/// Whether anything is open over the text that Escape closes (the hover
+/// card, the peek, the search bar), read from the widgets alone, so a key
+/// handler can answer GTK at once without asking the model.
+#[derive(Clone)]
+pub struct EscapeProbe {
+    card: glib::WeakRef<gtk::Box>,
+    peek: glib::WeakRef<gtk::Box>,
+    search: glib::WeakRef<gtk::Revealer>,
+}
+
+impl EscapeProbe {
+    /// `true` while the card, the peek or the search bar shows.
+    pub fn anything_open(&self) -> bool {
+        self.card.upgrade().is_some_and(|card| card.is_visible())
+            || self.peek.upgrade().is_some_and(|peek| peek.is_visible())
+            || self
+                .search
+                .upgrade()
+                .is_some_and(|search| EditorSearch::is_open(&search))
+    }
+}
+
+/// A new buffer for a document, sharing the editor's tags (`table`). Its
+/// text can't be undone back to empty.
+pub fn new_buffer(table: &gtk::TextTagTable, text: &str) -> gtk::TextBuffer {
+    let buffer = sourceview5::Buffer::new(Some(table));
+    buffer.set_highlight_syntax(false);
+    buffer.set_highlight_matching_brackets(true);
+    buffer.begin_irreversible_action();
+    buffer.set_text(text);
+    buffer.end_irreversible_action();
+    buffer.place_cursor(&buffer.start_iter());
+    buffer.upcast()
+}
 
 /// What is in a cell, cloned out (and left there): a callback, so it may
 /// replace itself while it runs, or rows shared out rather than borrowed.
@@ -1222,9 +1268,10 @@ struct LensSlot {
 }
 
 impl Editor {
-    /// An empty editor.
-    pub fn new() -> Editor {
-        let table = gtk::TextTagTable::new();
+    /// An empty editor whose buffers share `table`; a lens's links call
+    /// `lens`.
+    pub fn new(table: &gtk::TextTagTable, lens: impl Fn(LensClick) + 'static) -> Editor {
+        let table = table.clone();
         let tags = Tags::new(&table);
         let code: CodeView = glib::Object::builder::<CodeView>()
             .property("monospace", true)
@@ -1312,8 +1359,7 @@ impl Editor {
             peek_tagged: Cell::new(None),
             card_box,
             scroll_ticket: Rc::new(Cell::new(0)),
-            on_uses: Rc::new(Cell::new(None)),
-            on_show: Rc::new(Cell::new(None)),
+            lens: Rc::new(lens),
         };
         editor.colour(adw::StyleManager::default().is_dark());
         editor
@@ -1327,14 +1373,16 @@ impl Editor {
     /// A new buffer for a document, sharing the editor's tags. Its text
     /// can't be undone back to empty.
     pub fn new_buffer(&self, text: &str) -> gtk::TextBuffer {
-        let buffer = sourceview5::Buffer::new(Some(&self.table));
-        buffer.set_highlight_syntax(false);
-        buffer.set_highlight_matching_brackets(true);
-        buffer.begin_irreversible_action();
-        buffer.set_text(text);
-        buffer.end_irreversible_action();
-        buffer.place_cursor(&buffer.start_iter());
-        buffer.upcast()
+        new_buffer(&self.table, text)
+    }
+
+    /// Whether Escape has something to close, for a key handler.
+    pub fn escape_probe(&self) -> EscapeProbe {
+        EscapeProbe {
+            card: self.card_box.downgrade(),
+            peek: self.peek_box.downgrade(),
+            search: self.search.widget().downgrade(),
+        }
     }
 
     /// Shows a buffer; read-only documents can't be typed in.
@@ -1497,16 +1545,6 @@ impl Editor {
         self.hide_card();
     }
 
-    /// A lens's "2 uses" was clicked.
-    pub fn connect_lens_uses(&self, callback: impl Fn(SymbolId) + 'static) {
-        self.on_uses.set(Some(Rc::new(callback)));
-    }
-
-    /// A lens's "show in 3D" was clicked.
-    pub fn connect_lens_show(&self, callback: impl Fn(SymbolId) + 'static) {
-        self.on_show.set(Some(Rc::new(callback)));
-    }
-
     /// The lens rows made so far, shared out of their cell.
     fn lens_slots(&self) -> Rc<[Rc<LensSlot>]> {
         current(&self.lenses)
@@ -1535,14 +1573,15 @@ impl Editor {
         root.append(&dot);
         root.append(&show);
         let symbol: Rc<Cell<Option<SymbolId>>> = Rc::new(Cell::new(None));
-        for (button, callbacks) in [(&uses, &self.on_uses), (&show, &self.on_show)] {
+        let links: [(&gtk::Button, LensLink); 2] =
+            [(&uses, LensClick::Uses), (&show, LensClick::Show)];
+        for (button, click) in links {
             let call = {
                 let symbol = symbol.clone();
-                let callbacks = callbacks.clone();
+                let lens = Rc::clone(&self.lens);
                 Rc::new(move || {
-                    let callback = current(&callbacks);
-                    if let (Some(callback), Some(symbol)) = (callback, symbol.get()) {
-                        callback(symbol);
+                    if let Some(symbol) = symbol.get() {
+                        lens(click(symbol));
                     }
                 })
             };
@@ -1857,7 +1896,7 @@ mod tests {
     /// model (with the search and the input channel the runtime held) and
     /// the editor's widgets are all freed.
     fn search_bar_is_freed() {
-        let editor = Editor::new();
+        let editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
         let buffer = editor.new_buffer("door\nshelf\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");
@@ -1888,7 +1927,7 @@ mod tests {
     /// is at the cursor: the match must be selected before `find` returns.
     /// The bar opening when the main loop runs leaves the match selected.
     fn find_selects_at_once() {
-        let editor = Editor::new();
+        let editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
         let text = "shelf\npart side\nshelf\n";
         let lines = LineStarts::new(text);
         let buffer = editor.new_buffer(text);
@@ -1933,7 +1972,7 @@ mod tests {
     /// the keyboard mid-step. Now what the bar is told is queued, and a
     /// close asked for from inside its step waits until the step is done.
     fn search_is_queued() {
-        let editor = Rc::new(Editor::new());
+        let editor = Rc::new(Editor::new(&gtk::TextTagTable::new(), |_| {}));
         let buffer = editor.new_buffer("door\nshelf\ndoor\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");

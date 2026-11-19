@@ -89,6 +89,9 @@ use chrome::MotionBar;
 use dock::Dock;
 pub use edit_demo::Showcase;
 use files::FilesPage;
+/// The Code panel as the window holds it: a request it answers hands the
+/// window's own next message back.
+type Files = FilesPage<Box<WindowInput>>;
 pub use files::Wish;
 use finder::{Choice, Finder};
 use focus_stage::{Caption, Pictures, ProblemCard, StepCard, SwingCard};
@@ -451,6 +454,9 @@ struct State {
     focus_start: Option<(Option<bool>, Option<f32>)>,
     /// Don't run checks (a screenshot of the checking state).
     hold_checks: bool,
+    /// Closing was asked for and waits on the unsaved changes: asking
+    /// again meanwhile does nothing.
+    closing: bool,
     /// The selection is changing because the editor's cursor moved: the
     /// editor stays where it is.
     linking: bool,
@@ -547,7 +553,7 @@ pub(in crate::ui) struct Widgets {
     caption: Caption,
     pictures: Pictures,
     problem_card: ProblemCard,
-    files: Rc<FilesPage>,
+    files: Files,
     /// The Output panel: what the checks said.
     output: output::OutputPanel,
     /// The controls floating on the 3D view, and their docking.
@@ -725,6 +731,7 @@ impl Component for Window {
                 exploding: false,
                 focus_start: None,
                 hold_checks: false,
+                closing: false,
                 linking: false,
                 xray: false,
                 hovered: Vec::new(),
@@ -734,7 +741,7 @@ impl Component for Window {
             },
             pins: Pins::default(),
             watcher: None,
-            editing: edit_view::EditView::new(),
+            editing: edit_view::EditView::new(sender.input_sender()),
             frame_lists: frame_lists::FrameLists::default(),
             sender,
             style_handler: None,
@@ -745,14 +752,16 @@ impl Component for Window {
         update::editing::wire(&mut window);
         if let Some(showcase) = options.edit_fixture {
             // The fixture's card takes the Edit panel's place of the
-            // session's own.
-            if edit_demo::show(
+            // session's own; the window keeps what it shows.
+            let shown = edit_demo::show(
                 &window.widgets.design,
                 &window.widgets.edit_holder,
                 showcase,
-            ) {
+            );
+            if shown.as_ref().is_some_and(edit_demo::Shown::in_panel) {
                 window.widgets.workbench.present(workbench::PanelId::Edit);
             }
+            window.editing.showcase = shown;
         }
         if options.new_project {
             window.ask_new_project();
@@ -817,7 +826,16 @@ impl Window {
 
     /// Sends a command to the session and redraws what changed.
     fn dispatch(&mut self, command: Command) {
+        // Add writes through the buffers as they are now, and opens a tab
+        // for what it writes only while the editor shows.
+        if matches!(command, Command::Edit(stave_app::editing::EditCommand::Add)) {
+            let editor_open = self.session.editor() == Editor::Open;
+            self.session
+                .set_edit_writer(Box::new(self.widgets.files.writer(editor_open)));
+        }
         let events = self.session.apply(command);
+        // What a commit wrote through a buffer it made is read at once.
+        self.widgets.files.take_written();
         self.handle(events);
     }
 
@@ -1161,7 +1179,7 @@ pub(in crate::ui) fn build_widgets(
         .hexpand(true)
         .vexpand(true)
         .build();
-    let files = FilesPage::new();
+    let files = Files::new();
     let file_list = panels::FilesList::new();
     let problems = panels::ProblemsPanel::new();
     let output = output::OutputPanel::new();

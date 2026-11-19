@@ -20,14 +20,12 @@
 //! name order. A greyed entry says the checker's reason and can't be
 //! chosen; an entry not checked yet says so.
 //!
-//! Two drivers draw it with the same code: [`EditMenu`], the API the
-//! window uses today, which draws at once and reports a choice from the
-//! entry's own signal; and [`EditMenuComponent`], the relm4 component
-//! the window will own once it is one (docs/relm4-migration.md), whose
-//! entries only send it messages.
+//! It is a relm4 component, [`EditMenuComponent`], owned by the window
+//! (docs/relm4-migration.md): its entries only send it messages, and it
+//! tells the window what was chosen, and when it has drawn what it was
+//! shown (the window places it by its new size then).
 
 use stave_app::i18n::{fill_in, tr};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
@@ -36,7 +34,7 @@ use stave_lang::Diagnostic;
 use stave_lang::ast::Name;
 use stave_model::nonempty::NonEmpty;
 
-use super::edit_card::{Callback, install_style};
+use super::edit_card::install_style;
 
 /// Whether a candidate's applicability check has finished. Until the check
 /// is done the caller says so here, and the entry shows that it is being
@@ -411,95 +409,25 @@ fn fill_frame(root: &gtk::Box) -> (gtk::Label, gtk::Box) {
     (heading, list)
 }
 
-/// The menu for a selection, behind the API the window still uses: what
-/// it shows is drawn at once and a choice is reported at once, from the
-/// entry's own signal, because the window's code and its tests read the
-/// menu straight after showing it. [`EditMenuComponent`] is the same menu
-/// as a relm4 component, for the window to own once it is one
-/// (docs/relm4-migration.md).
-pub struct EditMenu {
-    /// The panel, ready to float over the 3D view.
-    pub root: gtk::Box,
-    heading: gtk::Label,
-    list: gtk::Box,
-    /// The entries shown, in order, with their buttons (for tests).
-    #[cfg(test)]
-    rows: std::cell::Cell<MenuRows>,
-    on_chosen: Rc<Callback<Declaration>>,
-}
-
-impl EditMenu {
-    /// An empty menu.
-    pub fn new() -> EditMenu {
-        let root = menu_root();
-        let (heading, list) = fill_frame(&root);
-        EditMenu {
-            root,
-            heading,
-            list,
-            #[cfg(test)]
-            rows: std::cell::Cell::default(),
-            on_chosen: Rc::default(),
-        }
-    }
-
-    /// Calls `callback` with the declaration of the entry the user chose.
-    /// Greyed entries and entries still being checked never call it.
-    pub fn connect_chosen(&self, callback: impl Fn(Declaration) + 'static) {
-        self.on_chosen.connect(callback);
-    }
-
-    /// Shows the menu for a selection of this kind with these entries.
-    pub fn show(&self, heading: Heading, items: &[MenuItem<'_>]) {
-        let on_chosen = Rc::clone(&self.on_chosen);
-        let rows = fill_menu(
-            &self.root,
-            &self.heading,
-            &self.list,
-            heading,
-            &MenuEntry::list(items),
-            &move |declaration| on_chosen.call(declaration),
-        );
-        #[cfg(test)]
-        self.rows.set(rows);
-        #[cfg(not(test))]
-        let _ = rows;
-    }
-
-    /// The entries shown, in order, with their buttons (for tests).
-    #[cfg(test)]
-    pub fn rows(&self) -> MenuRows {
-        let rows = self.rows.take();
-        self.rows.set(rows.clone());
-        rows
-    }
-}
-
 /// The menu for a selection as a relm4 component: its model is the
 /// entries' buttons, only [`EditMenuComponent::update_with_view`] draws
 /// them, and an entry's button only sends [`EditMenuInput::Chose`].
 #[derive(Debug, Default)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 menu the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub struct EditMenuComponent {
     /// The entries shown, in order, with their buttons.
     rows: MenuRows,
 }
 
+impl EditMenuComponent {
+    /// The entries shown, in order, with their buttons (for tests).
+    #[cfg(test)]
+    pub fn rows(&self) -> &[(Declaration, gtk::Button)] {
+        &self.rows
+    }
+}
+
 /// What the menu is told.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 menu the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub enum EditMenuInput {
     /// Show the menu for a selection of this kind with these entries (in
     /// [`MenuEntry::list`] order).
@@ -515,27 +443,16 @@ pub enum EditMenuInput {
 
 /// What the menu tells its owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 menu the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub enum EditMenuOutput {
     /// People chose the entry for this declaration.
     Chosen(Declaration),
+    /// The menu has drawn what [`EditMenuInput::Show`] gave it, so its
+    /// owner can place it by its new size.
+    Drawn,
 }
 
 /// The menu component's widgets.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 menu the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub struct EditMenuWidgets {
     heading: gtk::Label,
     list: gtk::Box,
@@ -579,6 +496,8 @@ impl Component for EditMenuComponent {
                     &items,
                     &move |declaration| input.emit(EditMenuInput::Chose(declaration)),
                 );
+                // Nobody listening is not a mistake.
+                let _ = sender.output(EditMenuOutput::Drawn);
             }
             EditMenuInput::Chose(declaration) => {
                 // Nobody listening is not a mistake.
@@ -601,6 +520,8 @@ fn wrapped(text: &str, classes: &[&str]) -> gtk::Label {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::rc::Rc;
+
     use super::*;
     use crate::ui::relm4_shim::Bridge;
     use stave_app::edit::clothing_cabinet_fixture;
@@ -772,7 +693,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn showing_the_menu_component_draws_it_and_reports_nothing() {
+    fn showing_the_menu_component_draws_it_and_reports_only_that_it_drew() {
         crate::ui::gtk_test::on_gtk_thread(menu_component_shows);
     }
 
@@ -790,7 +711,12 @@ pub(super) mod tests {
         let rows = menu.model().rows.clone();
         assert_eq!(rows.len(), count);
         assert_eq!(rows[0].0, drawer);
-        assert!(heard.borrow().is_empty(), "showing reports nothing");
+        assert_eq!(
+            *heard.borrow(),
+            [EditMenuOutput::Drawn],
+            "showing reports only that it drew"
+        );
+        heard.borrow_mut().clear();
         // An entry still being checked never reports.
         rows[1].1.emit_clicked();
         settle();
@@ -847,6 +773,7 @@ pub(super) mod tests {
             *heard.borrow(),
             vec![
                 (EditMenuOutput::Chosen(drawer), 2),
+                (EditMenuOutput::Drawn, 1),
                 (EditMenuOutput::Chosen(drawer), 1)
             ],
             "each choice after its update, the inner one after the redraw"
