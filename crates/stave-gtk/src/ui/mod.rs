@@ -2027,34 +2027,62 @@ impl Window {
             .initial_name(name)
             .modal(true)
             .build();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         dialog.save(
             Some(&self.widgets.window),
             gio::Cancellable::NONE,
             move |result| {
                 let Ok(file) = result else { return };
                 let Some(path) = file.path() else { return };
-                let saved = {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                // The view as posed now, copied so that making and writing
+                // the file happen off the main thread with no borrow held.
+                let view = {
                     let session = window.session.borrow();
                     let state = window.state.borrow();
-                    match (session.drawable(), state.posed.as_ref()) {
-                        (Some((_, graph)), Some(posed)) => {
-                            stave_app::export_view::save_glb(graph, posed, &path)
-                                .map_err(|error| error.to_string())
-                        }
-                        _ => Err("there is nothing to save yet".to_owned()),
-                    }
+                    session
+                        .drawable()
+                        .zip(state.posed.as_ref())
+                        .map(|((_, graph), posed)| (graph.clone(), posed.clone()))
                 };
-                let title = match saved {
-                    Ok(()) => format!("Saved {}", path.display()),
-                    Err(error) => format!("Couldn't save the view: {error}"),
+                let Some((graph, posed)) = view else {
+                    window.toast("Couldn't save the view: there is nothing to save yet");
+                    return;
                 };
-                window
-                    .widgets
-                    .toasts
-                    .add_toast(adw::Toast::builder().title(title).timeout(4).build());
+                let exporting = adw::Toast::builder()
+                    .title("Exporting the view…")
+                    .timeout(0)
+                    .build();
+                window.widgets.toasts.add_toast(exporting.clone());
+                let window = Rc::downgrade(&window);
+                glib::spawn_future_local(async move {
+                    let target = path.clone();
+                    let saved = gio::spawn_blocking(move || {
+                        stave_app::export_view::save_glb(&graph, &posed, &target)
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("exporting crashed".to_owned()));
+                    exporting.dismiss();
+                    let Some(window) = window.upgrade() else {
+                        return;
+                    };
+                    window.toast(&match saved {
+                        Ok(()) => format!("Saved {}", path.display()),
+                        Err(error) => format!("Couldn't save the view: {error}"),
+                    });
+                });
             },
         );
+    }
+
+    /// A short message at the bottom of the window.
+    fn toast(&self, title: &str) {
+        self.widgets
+            .toasts
+            .add_toast(adw::Toast::builder().title(title).timeout(4).build());
     }
 
     fn explode_changed(self: &Rc<Self>) {
