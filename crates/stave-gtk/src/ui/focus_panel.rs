@@ -114,7 +114,7 @@ fn set_toggle_text(text: &gtk::Label, title: &str, words: &str) {
 impl FocusPanel {
     /// An empty, hidden panel.
     pub fn new() -> FocusPanel {
-        let eyebrow = label(&["stave-eyebrow", "stave-eyebrow-bold"]);
+        let eyebrow = label(&["stave-eyebrow", "stave-eyebrow-bold", "stave-caps"]);
         eyebrow.set_hexpand(true);
         let done = gtk::Button::builder()
             .child(&PathIcon::new(icons::CLOSE, 12))
@@ -151,8 +151,8 @@ impl FocusPanel {
         toggles.append(&xray_row);
         toggles.append(&tint_row);
         toggles.append(&fade_row);
-        let show_title = label(&["stave-section"]);
-        show_title.set_label("SHOW");
+        let show_title = label(&["stave-section", "stave-caps"]);
+        show_title.set_label("Show");
         let show_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         show_section.append(&show_title);
         show_section.append(&toggles);
@@ -165,8 +165,8 @@ impl FocusPanel {
                 .build(),
         );
         let insert_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let insert_title = label(&["stave-section"]);
-        insert_title.set_label("HOW IT GOES TOGETHER");
+        let insert_title = label(&["stave-section", "stave-caps"]);
+        insert_title.set_label("How it goes together");
         insert_title.set_hexpand(true);
         insert_title.set_wrap(false);
         insert_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -243,7 +243,7 @@ impl FocusPanel {
         self.root.set_visible(true);
         let joint = focus.assembles();
         self.eyebrow
-            .set_label(if joint { "JOINT" } else { "HARDWARE" });
+            .set_label(if joint { "Joint" } else { "Hardware" });
         self.heading.set_label(&focus.heading);
         // The first paragraph (two sentences at most), the rest under More.
         let full = focus.description.as_deref().unwrap_or(&focus.title);

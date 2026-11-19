@@ -1252,7 +1252,7 @@ it was. Once written, the window selects the item by its new name.
 
 ### The finder's verbs
 
-The finder (Ctrl+K) lists, before what it finds, under "DO · Enter does
+The finder (Ctrl+K) lists, before what it finds, under "Do · Enter does
 it", what a verb typed in it would do (`edit_view/verbs.rs`, through
 `Finder::connect_actions` and `connect_action`); Enter runs the first.
 "add shelf" (or "add hanging rail", "add casework.drawer") with a space's
