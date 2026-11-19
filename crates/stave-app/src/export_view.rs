@@ -1,4 +1,4 @@
-//! "Export View as glTF…": the 3D view as it is posed (pulled apart,
+//! "Export 3D Model…": the 3D view as it is posed (pulled apart,
 //! opened) saved as a binary glTF file, the same file `stave export`
 //! writes.
 

@@ -444,11 +444,11 @@ impl Finder {
 
 fn heading(kind: Kind) -> gtk::ListBoxRow {
     let words = match kind {
-        Kind::Part => "PARTS · Enter frames it in 3D",
-        Kind::File => "FILES · Enter opens the text",
-        Kind::Name => "NAMES · Enter opens where it is written",
-        Kind::Line => "LINES",
-        Kind::Problem => "PROBLEMS · Enter shows where it happens",
+        Kind::Part => "Parts · Enter frames it in 3D",
+        Kind::File => "Files · Enter opens the text",
+        Kind::Name => "Names · Enter opens where it is written",
+        Kind::Line => "Lines",
+        Kind::Problem => "Problems · Enter shows where it happens",
     };
     let label = gtk::Label::builder()
         .label(words)
@@ -467,7 +467,7 @@ fn heading(kind: Kind) -> gtk::ListBoxRow {
 
 fn action_heading() -> gtk::ListBoxRow {
     let label = gtk::Label::builder()
-        .label("DO · Enter does it")
+        .label("Do · Enter does it")
         .xalign(0.0)
         .css_classes(["stave-finder-heading"])
         .build();

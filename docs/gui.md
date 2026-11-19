@@ -158,7 +158,7 @@ forwards what people do.
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
 | `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
-| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
+| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). Its code is split beside it: `widgets.rs` builds the widgets, `events.rs` wires their signals, `actions.rs` holds the `win.*` actions and main menu, `selection.rs`, `camera.rs`, `drawing.rs`, `motion.rs`, `pins.rs` and `focus_mode.rs` one part of the 3D view each, `capture.rs` export and screenshots, `options.rs` how a window is asked to open. |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel (joint chips); the Details panel's pages (the Inspector for a selection, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/sections.rs` | The Inspector's and the Edit panel's building blocks, after Unity's inspector: the header row, collapsible sections, label \| value rows (22 px, a 104 px grey label column), name links (`LinkHandlers`: a click selects, the pointer lights it in 3D; wired by `edit_view/links.rs`), the Cancel (Esc) / Apply (Enter) footer, and their stylesheet. |
 | `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Edit, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
@@ -341,17 +341,22 @@ values, the repeat handles) sits over the model. Each panel is a
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
 the 3D view) or into another frame, or pick "Move to the Right" (left,
-bottom, top, middle) from its tab's menu; close it with its ×; show an edge
-again from the status bar's toggles. The default layout is the compact
-board (H2, `Layout::default`): Parts in a frame above Files on the left;
-the Model in the centre with Code as the next tab of the same frame (so
-the open files sit beside the Model); Details with Edit as tabs on the
-right, which shows; Problems and Output at the bottom, whose edge starts
-hidden (the status bar opens it). The edges start 272 px (left), 340 px
+bottom, top, middle) from its tab's menu; close it with its × (every
+panel but the 3D view, whose tab has no ×); show an edge again from the
+status bar's toggles. A first launch shows only the 3D view, Parts on the
+left and Problems along the bottom (`Layout::default`), so a beginner
+meets their project rather than a dock. Every other panel opens from the
+status bar's Panels menu (Code also from "Edit the Text" and Ctrl+E; Edit
+when an edit starts), into its home on the compact board (H2,
+`Layout::board`): Parts in a frame above Files on the left; the Model in
+the centre with Code as the next tab of the same frame (so the open files
+sit beside the Model); Details with Edit as tabs on the right; Problems
+and Output at the bottom. Choosing a part reveals its line in the Code
+panel only while that panel is open. The edges start 272 px (left), 340 px
 (right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
 the sides to 220 and 260. A layout file older than the Edit panel puts it
 beside Details wherever that file put Details, and a panel a file doesn't
-mention (Output, in a board B file) goes where the default puts it, so a
+mention (Output, in a board B file) goes where the compact board puts it, so a
 saved board B still opens as board B. The layout is remembered per user
 in `~/.config/stave/layout` (saved on every drop and when the window
 closes; a broken file means the default) and never in a `.stave` file:
@@ -365,7 +370,7 @@ tool camera right        # where a tool group on the 3D view is docked
 ```
 
 "Reset Layout" (View menu, and the status bar's Panels menu) puts the
-compact board back, the tool groups in their usual spots.
+first launch's three panels back, the tool groups in their usual spots.
 
 - **3D View** is the view with its controls floating on it (part of the
   panel, so they go wherever the view is docked): the scene menu at the
@@ -396,7 +401,7 @@ compact board back, the tool groups in their usual spots.
   The 3D view's tab reads "Model" with a cube. A panel can show its own
   tabs in place of its one (`tab_strip::set_page_tabs`): the Code panel
   shows one tab per open file (its problem dot, its name in monospace and
-  a yellow ● while it has unsaved changes), so in the default layout the
+  a yellow ● while it has unsaved changes), so on the compact board the
   strip reads "Model · doors.stave ● · carcass.stave". Clicking a file's
   tab shows the Code panel on that file; clicking Model shows the 3D view.
   With no file open the Code panel keeps its own "Code" tab.
@@ -472,13 +477,13 @@ compact board back, the tool groups in their usual spots.
 
 - **Title bar** (`Header`, 34 px): a menu bar (`gtk::PopoverMenuBar`)
   with Project (New Project…, Open Project…, Save, Check Again, Build
-  Plan, Export View as glTF…), Edit (Find…, Find in the Text, Format the
+  Plan, Export 3D Model…), Edit (Find…, Find in the Text, Format the
   Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
   Frame Everything, the panels, Reset Layout, the style) and Help (About
   Stave), all from `main_menu`; then the project's name in small grey
   words (`Session::title()`, its folder in the tooltip). The Design | Cut
   list switcher sits in the middle. On the right: a find button (a
-  magnifier; "Find a part, file, line or problem (Ctrl K)", `win.find`),
+  magnifier; "Find a part, file, line or problem (Ctrl+K)", `win.find`),
   the problems chip and the hammer. Back and forward are not in the bar:
   they are `win.back`/`win.forward` (Alt+←/→, the View menu, the mouse's
   side buttons), each offered only when it can go. The switcher is an
@@ -503,7 +508,7 @@ compact board back, the tool groups in their usual spots.
   Project…", `win.new-project`, see [A new project](#a-new-project)),
   opens a project folder (Ctrl+O) or a recent one ("Open Recent",
   `win.open-recent`), saves (Ctrl+S), checks again (Ctrl+R) and exports
-  the view as glTF ("Export View as glTF…", `win.export-view`, with
+  the view as glTF ("Export 3D Model…", `win.export-view`, with
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes); the View menu frames everything, brings back closed panels and
   sets the style (follow system, light, dark: `app.style`, remembered);
@@ -1252,7 +1257,7 @@ it was. Once written, the window selects the item by its new name.
 
 ### The finder's verbs
 
-The finder (Ctrl+K) lists, before what it finds, under "DO · Enter does
+The finder (Ctrl+K) lists, before what it finds, under "Do · Enter does
 it", what a verb typed in it would do (`edit_view/verbs.rs`, through
 `Finder::connect_actions` and `connect_action`); Enter runs the first.
 "add shelf" (or "add hanging rail", "add casework.drawer") with a space's

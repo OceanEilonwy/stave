@@ -139,6 +139,7 @@ const fn stroke(paths: &'static [&'static str]) -> Shape {
         paint: Paint::Stroke(1.5),
         paths,
         tilted: false,
+        directional: false,
     }
 }
 
