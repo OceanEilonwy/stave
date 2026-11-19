@@ -159,7 +159,7 @@ fn a_pin_selected_says_which_joint_placed_it_and_where_it_is_written() {
     assert_eq!(selection, Selection::Member(pins));
     assert_eq!(selection.item(), Some(Item::Member(pins)));
     let inspection = inspect::inspect(&checked, &selection).unwrap();
-    assert_eq!(inspection.eyebrow, "JOINT MEMBER");
+    assert_eq!(inspection.eyebrow, "Joint member");
     assert_eq!(inspection.title, "top_dowels's pin");
     let row = |label: &str| {
         inspection

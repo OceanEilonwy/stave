@@ -93,7 +93,7 @@ pub(in crate::ui) enum Commit {
 /// tested without a window).
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::ui) struct ChangeWords {
-    /// "CHANGE · REPEAT": the change's kind, in English.
+    /// "Change · repeat": the change's kind, in English.
     pub(in crate::ui) eyebrow: String,
     /// The change's kind as the card shows it: "repeat" (translated).
     pub(in crate::ui) kind: String,
@@ -292,7 +292,7 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
     };
     let can_add = !checking && matches!(progress, Progress::Tried(Verdict::Fits(_)));
     ChangeWords {
-        eyebrow: format!("CHANGE · {}", kind_word(request).to_uppercase()),
+        eyebrow: format!("Change · {}", kind_word(request)),
         kind: tr(kind_word(request)),
         title: change.summary().to_owned(),
         item: change_item(request),
@@ -1218,7 +1218,7 @@ mod tests {
     /// What a rename's card says, with Apply ready.
     fn rename_words() -> ChangeWords {
         ChangeWords {
-            eyebrow: "CHANGE · RENAME".to_owned(),
+            eyebrow: "Change · rename".to_owned(),
             kind: "rename".to_owned(),
             title: "Rename wall to back_wall".to_owned(),
             item: Some("wall".to_owned()),

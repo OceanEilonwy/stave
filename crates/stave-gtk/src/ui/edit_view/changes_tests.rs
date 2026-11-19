@@ -45,7 +45,7 @@ fn a_removal_names_what_goes_with_it_before_anything_goes() {
         parse_name("side_l").unwrap(),
     )));
     let words = change_words(session.change().expect("a removal"), false);
-    assert_eq!(words.eyebrow, "CHANGE · REMOVE");
+    assert_eq!(words.eyebrow, "Change · remove");
     assert!(words.waiting_on_dependants, "{words:?}");
     assert!(words.dependants.contains(&"side_r".to_owned()), "{words:?}");
     // Apply keeps a destructive look for a removal.
@@ -83,7 +83,7 @@ fn a_rename_says_what_it_rewrites_and_fits() {
         to: parse_name("back_wall").unwrap(),
     }));
     let words = change_words(session.change().expect("a rename"), false);
-    assert_eq!(words.eyebrow, "CHANGE · RENAME");
+    assert_eq!(words.eyebrow, "Change · rename");
     assert_eq!(words.commit, Commit::Write);
     assert!(
         words

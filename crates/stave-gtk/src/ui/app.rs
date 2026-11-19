@@ -276,7 +276,7 @@ pub(super) const ACCELERATORS: &[Accelerator] = &[
     Accelerator {
         action: "editor.follow",
         keys: &["F12"],
-        title: tr_noop("Go to where a name is made"),
+        title: tr_noop("Go to where a name is made (or Ctrl+click the name)"),
         section: KeySection::Editor,
         scope: KeyScope::Editor,
     },

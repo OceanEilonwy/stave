@@ -1,5 +1,6 @@
 //! The Parts panel ("joint chips"): a flat list grouped by assembly. Each
-//! group has a slim uppercase heading (CARCASS, DOOR_L) with a grey note
+//! group has a slim heading ("Carcass", `door_l`, drawn in capitals by
+//! the `.stave-caps` style so the words stay as written) with a grey note
 //! on the right ("12 parts · 6 joints", or how it moves: "110° on side_l"
 //! after a turn icon). Each part row (24 px) has its colour swatch, its
 //! name, small joint-kind chips (an icon per kind, with a count when there
@@ -1292,6 +1293,7 @@ fn heading_row(
     content.append(
         &gtk::Label::builder()
             .label(&heading.title)
+            .css_classes(["stave-caps"])
             .xalign(0.0)
             .hexpand(true)
             .ellipsize(gtk::pango::EllipsizeMode::End)

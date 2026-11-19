@@ -153,7 +153,7 @@ fn problems_that_are_not_about_a_part_come_after_the_tree() {
 fn a_motion_problem_has_its_details_and_its_card() {
     let checked = broken("door_hits_side");
     let details = problems::details(&checked, ProblemIndex(0)).expect("details");
-    assert_eq!(details.eyebrow, "ERROR · MOTION");
+    assert_eq!(details.eyebrow, "Error · Motion");
     assert_eq!(details.title, "door hits wall as it opens");
     assert_eq!(
         details.explanation,
@@ -193,7 +193,7 @@ fn a_motion_problem_has_its_details_and_its_card() {
 fn other_problems_have_plain_titles_and_no_card() {
     let checked = several();
     let overlap = problems::details(&checked, ProblemIndex(1)).expect("details");
-    assert_eq!(overlap.eyebrow, "ERROR · OVERLAP");
+    assert_eq!(overlap.eyebrow, "Error · Overlap");
     assert_eq!(overlap.title, "Wood passes through wood");
     assert!(overlap.motion.is_none());
     let syntax = broken("syntax_error");

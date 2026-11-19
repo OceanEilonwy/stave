@@ -134,7 +134,7 @@ fn selecting_in_3d_moves_the_text_to_the_line_that_places_it() {
     assert_eq!(location.display(&folder), "doors.stave:9");
     assert_eq!(
         link::chip(design, &stile, &location).as_deref(),
-        Some("Linked to the text · door_l.stile[hinge], line 9")
+        Some("door_l.stile[hinge] is written on line 9")
     );
     let side = design
         .parts()

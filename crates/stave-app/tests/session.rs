@@ -498,7 +498,7 @@ fn the_inspector_describes_a_door_part() {
     session.apply(Command::Select(Some(stile.clone())));
     let shown = session.shown().unwrap().clone();
     let inspection = inspect::inspect(&shown, &stile).unwrap();
-    assert_eq!(inspection.eyebrow, "PART · IN door_l");
+    assert_eq!(inspection.eyebrow, "Part · in door_l");
     assert_eq!(inspection.kind, "Part");
     assert_eq!(inspection.within.as_deref(), Some("door_l"));
     assert_eq!(inspection.title, "stile[hinge]");
