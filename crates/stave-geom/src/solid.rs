@@ -961,11 +961,16 @@ struct BoardWood {
 fn board_wood(part: &Part, boards: &Boards, design: &SolvedDesign) -> BoardWood {
     let mut wood = BoardWood::default();
     let mut numbered = part.cuts.len();
+    // One copy of the part, without its boards or cuts, reused for every
+    // board: only the size across the boards and the cuts change.
+    let mut alone = Part {
+        boards: None,
+        cuts: Vec::new(),
+        ..part.clone()
+    };
     for board in boards.boards.iter() {
-        let mut alone = part.clone();
         alone.cut = part.cut.with(boards.axis, board.width);
         alone.cuts.clone_from(&board.cuts);
-        alone.boards = None;
         let solid = Solid::of(&alone, design);
         for block in solid.blocks.shifted(boards.axis, board.offset).iter() {
             wood.blocks.add(*block);

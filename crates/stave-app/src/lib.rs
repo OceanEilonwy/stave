@@ -47,6 +47,7 @@ pub mod param_kind;
 pub mod problems;
 pub mod remove;
 pub mod repeat;
+pub mod save_failure;
 pub mod scratch;
 pub mod session;
 pub mod solve_edit;

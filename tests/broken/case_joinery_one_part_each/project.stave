@@ -1,0 +1,27 @@
+// expect: error[type-mismatch] 'half_lap' can't be the joinery of Case
+stave 1
+
+// A case whose joinery is a half lap. The Case joins both its sides to
+// its base in one joint, and a half lap joins one part to one part: it
+// can never be the Case's joinery. One error at the choice, for both of
+// the Case's joints.
+
+import "std:casework"
+
+project "Case joined with half laps" {
+  units: mm
+}
+
+param overall_width  = 940mm
+param overall_height = 1780mm
+param overall_depth  = 580mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+
+assembly case : casework.Case {
+  space:       envelope
+  panel_stock: oak_19
+  joinery:     half_lap
+}
