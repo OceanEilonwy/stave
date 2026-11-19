@@ -16,6 +16,7 @@ use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
+use super::launch::Launch;
 use super::remember::Remembered;
 use super::start_page::StartPage;
 use super::update::project::ProjectInput;
@@ -351,8 +352,8 @@ pub(super) struct Shell {
     start: Option<StartPage>,
     /// The command line's options, taken by the first project window.
     first: Option<Options>,
-    /// The style the window starts with: the command line's, or the one
-    /// remembered.
+    /// The style shown: the command line's or the one remembered at
+    /// first, then the menu's or a later launch's.
     theme: Theme,
     /// What is remembered from one run to the next.
     remembered: Remembered,
@@ -384,6 +385,9 @@ pub(super) enum ShellInput {
     Activate(gio::ApplicationHoldGuard),
     /// Stave was asked to open these folders.
     Open(Vec<PathBuf>, gio::ApplicationHoldGuard),
+    /// Stave was launched (the first time, or again while running): the
+    /// style it names, then its folders or, given none, as `Activate`.
+    Launch(Launch, gio::ApplicationHoldGuard),
     /// Opens a project folder, or brings forward the window showing it.
     OpenFolder(PathBuf),
     /// Opens a project just written by the New Project dialog, and
@@ -457,6 +461,20 @@ impl Component for Shell {
             }
             ShellInput::Open(folders, hold) => {
                 for folder in folders {
+                    self.open_folder(&folder);
+                }
+                drop(hold);
+            }
+            ShellInput::Launch(launch, hold) => {
+                // App-wide, as the style menu: a second launch with
+                // `--theme` restyles every open window.
+                if let Some(theme) = launch.theme {
+                    self.show_theme(theme);
+                }
+                if launch.folders.is_empty() {
+                    self.activate();
+                }
+                for folder in launch.folders {
                     self.open_folder(&folder);
                 }
                 drop(hold);
@@ -713,9 +731,24 @@ impl Shell {
         dialog.present(self.application.active_window().as_ref());
     }
 
+    /// Shows a style in every window, and ticks it in the style menu. Not
+    /// remembered: `--theme` from a launch lasts for this run, as it does
+    /// at startup.
+    fn show_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        theme.apply();
+        if let Some(style) = self
+            .application
+            .lookup_action("style")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            style.set_state(&theme.word().to_variant());
+        }
+    }
+
     /// The style was chosen in the menu: it shows and is remembered.
     fn set_theme(&mut self, theme: Theme) {
-        theme.apply();
+        self.show_theme(theme);
         if !self.remembers {
             return;
         }

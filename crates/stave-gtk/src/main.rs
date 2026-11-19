@@ -14,8 +14,9 @@
 //! ```
 //!
 //! Without `--screenshot` it opens a libadwaita window for each folder (or
-//! the start page, given none), or hands the folders to the Stave already
-//! running. With it, it renders one frame offscreen with the default
+//! the start page, given none), or hands the folders and `--theme` to the
+//! Stave already running (which restyles every window); the options that
+//! say how a fresh window starts are left out then, and named. With it, it renders one frame offscreen with the default
 //! framing, writes a PNG and exits, without touching GTK or a display.
 
 // Denied, not forbidden, so `render::dmabuf` alone can allow it: see the
@@ -31,7 +32,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::parser::ValueSource;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 
 #[derive(Debug, Parser)]
 #[command(name = "stave-gtk", version, about = "Show a .stave design in 3D")]
@@ -218,6 +220,23 @@ struct Arguments {
     new_project: bool,
 }
 
+/// The options a Stave already running is handed besides the folders:
+/// the app-wide ones (see `ui::launch`).
+const FORWARDED: [&str; 2] = ["folders", "theme"];
+
+/// The options typed on this command line that a Stave already running
+/// leaves out, as `--scene`, in the order `--help` lists them.
+fn not_forwarded(matches: &ArgMatches) -> Vec<String> {
+    Arguments::command()
+        .get_arguments()
+        .filter(|argument| !FORWARDED.contains(&argument.get_id().as_str()))
+        .filter(|argument| {
+            matches.value_source(argument.get_id().as_str()) == Some(ValueSource::CommandLine)
+        })
+        .filter_map(|argument| argument.get_long().map(|long| format!("--{long}")))
+        .collect()
+}
+
 fn parse_edit_fixture(text: &str) -> Result<ui::Showcase> {
     ui::Showcase::from_word(text.trim()).ok_or_else(|| {
         anyhow::anyhow!("the editing state is menu, greyed, refused, fits, choose or point")
@@ -299,7 +318,12 @@ fn start_translations() {
 }
 
 fn main() -> ExitCode {
-    let arguments = Arguments::parse();
+    let matches = Arguments::command().get_matches();
+    let not_forwarded = not_forwarded(&matches);
+    let arguments = match Arguments::from_arg_matches(&matches) {
+        Ok(arguments) => arguments,
+        Err(error) => error.exit(),
+    };
     let result = match &arguments.screenshot {
         Some(output) => match arguments.folders.as_slice() {
             [folder] => screenshot::run(
@@ -377,6 +401,7 @@ fn main() -> ExitCode {
                 edit_fixture: arguments.edit_fixture,
                 edit_script: arguments.edit_script,
                 new_project: arguments.new_project,
+                not_forwarded,
             })
         }
     };
@@ -386,5 +411,43 @@ fn main() -> ExitCode {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn left_out(words: &[&str]) -> Vec<String> {
+        let matches = Arguments::command()
+            .try_get_matches_from(words)
+            .expect("the command line parses");
+        not_forwarded(&matches)
+    }
+
+    /// The folders and `--theme` reach a Stave already running; the
+    /// options that shape a fresh window are named as left out, and
+    /// defaults nobody typed are not.
+    #[test]
+    fn only_window_options_are_left_out() {
+        assert!(left_out(&["stave-gtk"]).is_empty());
+        assert!(left_out(&["stave-gtk", "examples/stool", "--theme", "dark"]).is_empty());
+        assert_eq!(
+            left_out(&[
+                "stave-gtk",
+                "examples/stool",
+                "--theme",
+                "dark",
+                "--select",
+                "seat",
+                "--scene",
+                "all_open",
+                "--editor",
+                "--open",
+                "door_l=45",
+            ]),
+            ["--scene", "--select", "--editor", "--open"]
+        );
+        assert_eq!(left_out(&["stave-gtk", "--turn", "0"]), ["--turn"]);
     }
 }
