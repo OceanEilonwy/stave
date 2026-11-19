@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return Err(format!("non-UTF-8 file name in {}", folder.display()).into());
             };
-            files.push((name.to_owned(), path.clone()));
+            files.push((name.to_owned(), path));
         }
         files.sort();
         for (name, path) in files {
