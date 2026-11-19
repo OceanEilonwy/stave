@@ -461,10 +461,18 @@ impl Window {
     /// `message` makes of the frame's time.
     pub(in crate::ui) fn on_next_frame(&self, message: impl Fn(i64) -> WindowInput + 'static) {
         let input = self.input();
-        self.widgets.viewport.add_tick_callback(move |_, clock| {
-            input.emit(message(clock.frame_time()));
-            glib::ControlFlow::Break
-        });
+        let must_draw = frames_must_draw(&self.widgets.viewport.display());
+        self.widgets
+            .viewport
+            .add_tick_callback(move |viewport, clock| {
+                // The message is handled after this frame, so a frame asked
+                // for only by this tick would draw nothing.
+                if must_draw {
+                    viewport.queue_draw();
+                }
+                input.emit(message(clock.frame_time()));
+                glib::ControlFlow::Break
+            });
     }
 
     pub(in crate::ui) fn view_changed(&mut self) {
@@ -1367,6 +1375,19 @@ impl Window {
             crate::convert::f32_of(y - done_y),
         )
     }
+}
+
+/// `true` when every frame the view asks for must draw something: on
+/// GTK's Broadway backend (used for `--window-screenshot` without a
+/// screen). Its after-paint handler marks every frame as sent to the
+/// browser and, when the round trip comes back, reports it submitted at
+/// 1/30 s. Since GTK 4.24 the frame clock has already marked a frame that
+/// drew nothing as skipped by then, so the report warns "Duplicate call
+/// to gdk_frame_timings_submitted() with different values". Other
+/// backends report only frames they really sent, so there a frame that
+/// draws nothing is free and is left to draw nothing.
+fn frames_must_draw(display: &gdk::Display) -> bool {
+    display.type_().name() == "GdkBroadwayDisplay"
 }
 
 #[cfg(test)]
