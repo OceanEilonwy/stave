@@ -79,7 +79,6 @@ pub(super) fn build_widgets(
     let edge_pin = gtk::Button::builder()
         .child(&edge_content)
         .css_classes(["stave-edge-pin"])
-        .action_name("win.show-problem")
         .tooltip_text(tr("Show the problem off screen"))
         .visible(false)
         .build();

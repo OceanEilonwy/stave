@@ -48,6 +48,7 @@ mod floating;
 mod focus_mode;
 mod focus_panel;
 mod focus_stage;
+mod frame_lists;
 #[cfg(test)]
 mod gtk_test;
 mod header;
@@ -374,6 +375,10 @@ struct Window {
     /// design (made again when the result or the posed problem changes,
     /// moved on every frame).
     pins: RefCell<Pins>,
+    /// What each frame draws selected and how each node looks, kept
+    /// between frames and worked out again only when what they depend on
+    /// changes.
+    frame_lists: RefCell<frame_lists::FrameLists>,
     /// Kept alive for as long as the window: dropping it stops watching.
     watcher: RefCell<Option<Watcher>>,
     /// Editing in the 3D view: the menu, the card and the ghost.
@@ -459,6 +464,7 @@ impl Window {
                 edit_script: None,
             }),
             pins: RefCell::new(Pins::default()),
+            frame_lists: RefCell::default(),
             watcher: RefCell::new(None),
             editing: edit_view::EditView::new(),
             shell,
