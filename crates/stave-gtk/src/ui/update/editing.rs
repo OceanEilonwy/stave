@@ -480,4 +480,96 @@ mod tests {
         drop(controller);
         settle();
     }
+
+    /// Presses Delete on the window as GTK would, with no modifiers:
+    /// whether the window took it.
+    fn press_delete(controller: &Controller<Window>) -> bool {
+        use gtk::glib::translate::IntoGlib;
+        let keys = controller
+            .widget()
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter_map(|found| found.downcast::<gtk::EventControllerKey>().ok())
+            .find(|keys| {
+                keys.name()
+                    .is_some_and(|name| name == crate::ui::update::rendering::DELETE_KEYS)
+            })
+            .expect("the window has its Delete key controller");
+        keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &gdk::Key::Delete.into_glib(),
+                &0u32,
+                &gdk::ModifierType::empty(),
+            ],
+        )
+    }
+
+    #[test]
+    fn delete_is_passed_on_when_nothing_can_be_removed() {
+        on_gtk_thread(delete_only_when_something_goes);
+    }
+
+    /// Delete outside a text field is decided at once: with nothing
+    /// selected it is passed on to other widgets, and once a part is
+    /// selected the window takes it and removes the part (saying first
+    /// what goes).
+    fn delete_only_when_something_goes() {
+        let application = adw::Application::new(
+            Some("org.stave.WindowTest.Delete"),
+            gio::ApplicationFlags::NON_UNIQUE,
+        );
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let controller = launch(&application, door_project());
+        let checked = settle_until(Duration::from_secs(60), || {
+            controller.model().session.drawable().is_some()
+        });
+        assert!(checked, "the project is checked and drawable");
+        assert!(
+            controller.model().session.selection().is_none(),
+            "nothing is selected at first"
+        );
+
+        assert!(
+            !press_delete(&controller),
+            "with nothing to remove, Delete is passed on"
+        );
+        settle();
+        assert!(
+            controller.model().session.change().is_none(),
+            "nothing is being removed"
+        );
+
+        let side_l = {
+            let model = controller.model();
+            let (design, _) = model.session.drawable().unwrap();
+            design
+                .parts()
+                .iter()
+                .find(|p| p.name == "side_l")
+                .unwrap()
+                .id
+        };
+        send(
+            &controller,
+            EditingInput::LinkClicked(LinkTarget::Select(Selection::Part(side_l))),
+        );
+        settle();
+        assert!(
+            press_delete(&controller),
+            "with a part selected, the window takes Delete"
+        );
+        let removing = settle_until(Duration::from_secs(30), || {
+            controller.model().session.change().is_some()
+        });
+        assert!(removing, "Delete starts removing the selected part");
+
+        controller.widget().close();
+        settle();
+        drop(controller);
+        settle();
+    }
 }

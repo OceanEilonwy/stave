@@ -1034,6 +1034,12 @@ impl Window {
         true
     }
 
+    /// Whether Delete has something to remove: a selected item, or the
+    /// item the change in progress acts on.
+    pub(in crate::ui) fn has_removable(&self) -> bool {
+        self.change_target().is_some()
+    }
+
     /// The item a change of the selection acts on: the selected item, or
     /// the item the change in progress acts on.
     fn change_target(&self) -> Option<String> {

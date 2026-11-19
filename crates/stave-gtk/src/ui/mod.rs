@@ -472,6 +472,11 @@ struct State {
     marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
+    /// Whether Delete has something to remove ([`Window::has_removable`]),
+    /// set after each message. The window's key handler reads this copy
+    /// to take Delete or pass it on, without asking the model from inside
+    /// GTK's signal.
+    removable: Rc<Cell<bool>>,
 }
 
 /// The clock of something that plays frame by frame: the frame time it
@@ -723,6 +728,7 @@ impl Component for Window {
                 hovered: Vec::new(),
                 marks: Rc::default(),
                 edit_script: options.edit_script,
+                removable: Rc::default(),
             },
             pins: Pins::default(),
             watcher: None,
@@ -763,6 +769,7 @@ impl Component for Window {
         root.present();
         window.show_folder();
         window.dispatch(Command::Check);
+        window.state.removable.set(window.has_removable());
         ComponentParts {
             model: window,
             widgets: (),
@@ -781,6 +788,8 @@ impl Component for Window {
             WindowInput::Editing(message) => self.update_editing(message),
             WindowInput::Rendering(message) => self.update_rendering(message),
         }
+        // The selection and the change in progress change only here.
+        self.state.removable.set(self.has_removable());
     }
 
     fn shutdown(&mut self, _widgets: &mut (), _output: relm4::Sender<WindowOutput>) {

@@ -422,6 +422,17 @@ them.
   hands it a copy of the setting it searches (`give_option_search`)
   before it opens or refreshes it, and the dialog lists matches from
   that copy with no call back into the window.
+- A key handler that must answer GTK at once (take the key or pass it
+  on) decides from a copy the window keeps, never by asking the model.
+  Delete outside a text field is taken only when there is something to
+  remove, as on main: the window sets `State::removable` (an
+  `Rc<Cell<bool>>`) at the end of every `update`, and the handler reads
+  it, together with whether the editor's analysis reads (while it
+  doesn't, Delete says so; a new analysis arrives with no message, so it
+  is read at the press); the removal itself is a `RemoveSelected`
+  message. With nothing to remove the key goes on to other widgets. The
+  copy is written only by `update` and read only by that handler, so it
+  is not the shared state rule 11 warns about.
 - `update::Unprinted<T>` gives `Debug` to a payload that has none
   (`files::CursorName`, the analysis, a found fit or stop).
 
@@ -432,8 +443,6 @@ them.
 - A frame ready on the GPU is shown from a message after the frame-clock
   tick that found it, so it reaches the screen one frame later than
   before.
-- Delete outside a text field is always claimed by the window (it can't
-  ask the model whether something was removed before answering GTK).
 - A grip's typed value, a pick from a grip's sizes and a drag's next
   value were sent after a short timeout or an idle; they are queued
   messages now.

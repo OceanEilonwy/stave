@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
 use stave_app::session::{Editor, LineNumber, Session, SourceLocation};
-use stave_ide::Document;
+use stave_ide::{Analysis, Document};
 
 use super::super::Window;
 use super::super::sections;
@@ -538,27 +538,7 @@ impl Window {
     /// Why editing in the 3D view is off, when it is: a file of the project
     /// that doesn't read (a syntax error), in words.
     pub(in crate::ui) fn parse_block_line(&self) -> Option<String> {
-        let analysis = self.widgets.files.analysis()?;
-        for (file, document) in analysis.project_files() {
-            let broken = analysis
-                .diagnostics(file)
-                .find(|diagnostic| diagnostic.is_error() && diagnostic.code.layer() == 1);
-            if let Some(diagnostic) = broken {
-                let name = match &document {
-                    Document::File(path) => path
-                        .file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-                    Document::Std { file, .. } => (*file).to_owned(),
-                };
-                return Some(fill_in(
-                    &tr(
-                        "Editing in 3D is off while {file} doesn't read: {problem}. Fix the text first.",
-                    ),
-                    &[("file", &name), ("problem", &diagnostic.message)],
-                ));
-            }
-        }
-        None
+        block_line(&*self.widgets.files.analysis()?)
     }
 
     /// Shows why editing in 3D is off, when it is, low in the view above
@@ -587,6 +567,32 @@ impl Window {
     pub(in crate::ui) fn gestures_allowed(&self) -> bool {
         self.parse_block_line().is_none()
     }
+}
+
+/// Why editing in the 3D view is off for this analysis of the project, in
+/// words: a file that doesn't read (a syntax error). `None` when every
+/// file reads.
+pub(in crate::ui) fn block_line(analysis: &Analysis) -> Option<String> {
+    for (file, document) in analysis.project_files() {
+        let broken = analysis
+            .diagnostics(file)
+            .find(|diagnostic| diagnostic.is_error() && diagnostic.code.layer() == 1);
+        if let Some(diagnostic) = broken {
+            let name = match &document {
+                Document::File(path) => path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+                Document::Std { file, .. } => (*file).to_owned(),
+            };
+            return Some(fill_in(
+                &tr(
+                    "Editing in 3D is off while {file} doesn't read: {problem}. Fix the text first.",
+                ),
+                &[("file", &name), ("problem", &diagnostic.message)],
+            ));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
