@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use stave_lang::placement::{Axis, Direction};
+use stave_lang::placement::{Axis, Direction, PerAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::{
@@ -29,7 +29,7 @@ use stave_model::mechanism::{
 use stave_model::solved::Point;
 use stave_model::value::Value;
 
-use crate::hardware::{Frame, Placed, RoleBound, world_index};
+use crate::hardware::{Frame, ORIGIN, Placed, RoleBound};
 use crate::joints::Binding;
 use crate::{Failure, Fault, Solved, Solver};
 
@@ -63,7 +63,7 @@ pub(crate) type PlanePoint = [ExactLength; 2];
 /// directions of the plane's two coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Plane {
-    pub origin: [ExactLength; 3],
+    pub origin: PerAxis<ExactLength>,
     pub axis: Axis,
     pub across: Direction,
     pub depth: Direction,
@@ -73,9 +73,7 @@ impl Plane {
     /// The plane reflected across the world plane at `plane` on `axis`.
     pub fn reflected(&self, axis: Axis, plane: ExactLength) -> Option<Plane> {
         let mut origin = self.origin;
-        if let Some(slot) = origin.get_mut(world_index(axis)) {
-            *slot = plane.checked_add(plane)?.checked_sub(*slot)?;
-        }
+        origin[axis] = plane.checked_add(plane)?.checked_sub(self.origin[axis])?;
         let flip = |direction: Direction| {
             if direction.axis() == axis {
                 direction.opposite()
@@ -92,24 +90,24 @@ impl Plane {
     }
 
     /// The world vector of a vector in the plane.
-    fn world(&self, [across, depth]: PlanePoint) -> Option<[ExactLength; 3]> {
-        let mut out = [ExactLength::ZERO; 3];
+    fn world(&self, [across, depth]: PlanePoint) -> Option<PerAxis<ExactLength>> {
+        let mut out = ORIGIN;
         for (direction, amount) in [(self.across, across), (self.depth, depth)] {
-            let slot = out.get_mut(world_index(direction.axis()))?;
             let signed = if direction.is_positive() {
                 amount
             } else {
                 amount.checked_neg()?
             };
+            let slot = &mut out[direction.axis()];
             *slot = slot.checked_add(signed)?;
         }
         Some(out)
     }
 
     /// A world vector's coordinates in the plane.
-    fn coordinates(&self, vector: [ExactLength; 3]) -> Option<PlanePoint> {
+    fn coordinates(&self, vector: PerAxis<ExactLength>) -> Option<PlanePoint> {
         let along = |direction: Direction| -> Option<ExactLength> {
-            let value = *vector.get(world_index(direction.axis()))?;
+            let value = vector[direction.axis()];
             if direction.is_positive() {
                 Some(value)
             } else {
@@ -123,15 +121,15 @@ impl Plane {
     /// coordinates.
     fn point_of(&self, other: &Plane, point: PlanePoint) -> Option<PlanePoint> {
         let offset = other.world(point)?;
-        let mut vector = [ExactLength::ZERO; 3];
-        for (index, slot) in vector.iter_mut().enumerate() {
-            let from = other.origin.get(index)?.checked_add(*offset.get(index)?)?;
-            *slot = from.checked_sub(*self.origin.get(index)?)?;
-        }
+        let mut vector = PerAxis::try_from_fn(|axis| {
+            other.origin[axis]
+                .checked_add(offset[axis])
+                .and_then(|from| from.checked_sub(self.origin[axis]))
+                .ok_or(())
+        })
+        .ok()?;
         // Along the pins the coordinate carries no meaning.
-        if let Some(slot) = vector.get_mut(world_index(self.axis)) {
-            *slot = ExactLength::ZERO;
-        }
+        vector[self.axis] = ExactLength::ZERO;
         self.coordinates(vector)
     }
 
@@ -155,11 +153,10 @@ impl Plane {
 
     /// The solved frame, its origin to the nearest nanometre.
     fn frame(&self) -> Option<MechanismFrame> {
-        let near = |index: usize| self.origin.get(index)?.to_nearest_length();
         let origin = Point {
-            across: near(0)?,
-            up: near(1)?,
-            deep: near(2)?,
+            across: self.origin.across.to_nearest_length()?,
+            up: self.origin.up.to_nearest_length()?,
+            deep: self.origin.deep.to_nearest_length()?,
         };
         MechanismFrame::new(self.axis, origin, self.across, self.depth)
     }
@@ -1250,7 +1247,10 @@ mod tests {
 
     fn plane(origin: [i64; 3], across: Direction, depth: Direction) -> Plane {
         Plane {
-            origin: origin.map(mm),
+            origin: {
+                let [across, up, deep] = origin.map(mm);
+                PerAxis { across, up, deep }
+            },
             axis: Axis::Up,
             across,
             depth,
