@@ -422,7 +422,9 @@ impl Affine {
         Ok(Affine {
             constant: self.constant.checked_mul(factor).ok_or(Halt)?,
             terms,
-            ..self.clone()
+            bent: self.bent.clone(),
+            reasons: self.reasons.clone(),
+            opaque: self.opaque,
         })
     }
 
