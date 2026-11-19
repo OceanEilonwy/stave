@@ -358,12 +358,16 @@ impl Window {
                     None => {
                         // Name the thing, and say why: the view shows the
                         // last version of the design that had no errors.
-                        let name = analysis
-                            .symbol(symbol)
-                            .map_or_else(|| "That".to_owned(), |found| found.name.clone());
-                        self.toast(&format!(
-                            "{name} isn't in the 3D view, which shows the last version without errors"
-                        ));
+                        let name = analysis.symbol(symbol).map(|found| found.name.clone());
+                        self.toast(&match name {
+                            Some(name) => fill_in(
+                                &tr("{name} isn't in the 3D view, which shows the last version without errors"),
+                                &[("name", &name)],
+                            ),
+                            None => tr(
+                                "That isn't in the 3D view, which shows the last version without errors",
+                            ),
+                        });
                     }
                 }
             }
@@ -461,6 +465,7 @@ impl Window {
         self.widgets
             .window
             .set_title(Some(&format!("{title} — Stave")));
+        self.describe_view();
     }
 
     pub(in crate::ui) fn result_changed(&mut self) {
@@ -814,6 +819,7 @@ impl Window {
                 .show_problem_count(session.problems().len());
             self.widgets.output.add_line(&status.line());
         }
+        self.describe_view();
         self.build_changed();
     }
 
@@ -832,7 +838,7 @@ impl Window {
     /// Opens another project folder.
     pub(in crate::ui) fn choose_folder(&mut self) {
         let dialog = gtk::FileDialog::builder()
-            .title("Open a project folder")
+            .title(tr("Open a project folder"))
             .modal(true)
             .build();
         let input = self.input();
@@ -878,19 +884,22 @@ impl Window {
             return;
         }
         let dialog = adw::AlertDialog::builder()
-            .heading("Save Changes?")
-            .body(if count == 1 {
-                "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
-            } else {
-                format!("{count} files have changes that aren't saved. If you don't save them, they are lost.")
-            })
+            .heading(tr("Save Changes?"))
+            .body(fill_in(
+                &ntr(
+                    "One file has changes that aren't saved. If you don't save them, they are lost.",
+                    "{count} files have changes that aren't saved. If you don't save them, they are lost.",
+                    count,
+                ),
+                &[("count", &count)],
+            ))
             .close_response("cancel")
             .default_response("save")
             .build();
         dialog.add_responses(&[
-            ("cancel", "_Cancel"),
-            ("discard", "_Don't Save"),
-            ("save", "_Save"),
+            ("cancel", tr("_Cancel").as_str()),
+            ("discard", tr("_Don't Save").as_str()),
+            ("save", tr("_Save").as_str()),
         ]);
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
@@ -934,7 +943,7 @@ impl Window {
             inspect::PartsTree::default(),
             stave_app::part_joints::PartJoints::default(),
         );
-        self.show_status("Checking…", "");
+        self.show_status(&tr("Checking…"), "");
         self.dispatch(Command::Check);
         self.view_changed();
         self.selection_changed();
@@ -958,7 +967,9 @@ impl Window {
                 eprintln!("warning: {error}");
                 self.widgets.toasts.add_toast(
                     adw::Toast::builder()
-                        .title("Not watching the folder for changes: check again with Ctrl+R")
+                        .title(tr(
+                            "Not watching the folder for changes: check again with Ctrl+R",
+                        ))
                         .timeout(6)
                         .build(),
                 );

@@ -400,7 +400,10 @@ impl Window {
         }
         let explode = self.session.explode().get();
         self.show_hint(&if explode > 0.0 && selection.is_none() {
-            format!("Pulled apart · {}%", view_tools::percent(explode))
+            fill_in(
+                &tr("Pulled apart · {percent}%"),
+                &[("percent", &view_tools::percent(explode))],
+            )
         } else {
             String::new()
         });
@@ -431,7 +434,38 @@ impl Window {
         self.show_card();
         self.show_moves();
         self.grips_follow_selection();
+        self.describe_view();
         self.request_render();
+    }
+
+    /// Tells screen readers what the 3D view shows: the project, what is
+    /// selected and what the last check found.
+    pub(in crate::ui) fn describe_view(&self) {
+        let session = &self.session;
+        let selected = session.selection().and_then(|selection| match selection {
+            Selection::Problem(_) => session.selected_problem().map(|problem| {
+                fill_in(
+                    &tr("The problem “{message}”"),
+                    &[("message", &problem.message)],
+                )
+            }),
+            Selection::Part(_)
+            | Selection::Hardware(_)
+            | Selection::Joint { .. }
+            | Selection::Member(_)
+            | Selection::Assembly(_)
+            | Selection::Location(_) => session
+                .shown()
+                .and_then(|shown| inspect::inspect(shown, selection))
+                .map(|inspection| inspection.title),
+        });
+        let name = fill_in(
+            &tr("3D view of {project}"),
+            &[("project", &session.title())],
+        );
+        let description =
+            view_description(selected.as_deref(), &session.check_status().pill().label);
+        self.widgets.viewport.describe(&name, &description);
     }
 
     /// The Details panel always shows the selection's account; focus mode
@@ -548,10 +582,10 @@ impl Window {
             .focus
             .as_ref()
             .is_some_and(|f| f.focus.assembles());
-        self.show_hint(if assembles {
-            "Focused on one joint · Esc to go back"
+        self.show_hint(&if assembles {
+            tr("Focused on one joint · Esc to go back")
         } else {
-            "Focused on one piece of hardware · Esc to go back"
+            tr("Focused on one piece of hardware · Esc to go back")
         });
         self.show_focus_texts(texts);
         self.show_progress();
@@ -625,13 +659,13 @@ impl Window {
             return;
         };
         let (text, hint) = match focus.focus.plan_caption().filter(|_| focus.plan) {
-            Some(caption) => (caption.to_owned(), "back ↑ · front ↓"),
+            Some(caption) => (caption.to_owned(), tr("back ↑ · front ↓")),
             None => (
-                format!("In 3D around {}", focus.focus.title),
-                "drag to turn · scroll to zoom",
+                fill_in(&tr("In 3D around {name}"), &[("name", &focus.focus.title)]),
+                tr("drag to turn · scroll to zoom"),
             ),
         };
-        self.widgets.caption.show(&text, hint);
+        self.widgets.caption.show(&text, &hint);
     }
 
     pub(in crate::ui) fn leave_focus(&mut self) {
@@ -665,13 +699,13 @@ impl Window {
             &widgets.step_card.play,
             &widgets.step_card.play_icon,
             focus.playing,
-            "Play the assembly",
+            &tr("Play the assembly"),
         );
         focus_stage::show_playing(
             &widgets.swing_card.play,
             &widgets.swing_card.play_icon,
             focus.playing,
-            "Play the swing",
+            &tr("Play the swing"),
         );
         if let Some((_, range)) = focus.focus.motion() {
             widgets
@@ -938,7 +972,7 @@ impl Window {
                 };
                 self.show_motion(Some(MotionShown {
                     name: name.clone(),
-                    start: "closed".to_owned(),
+                    start: tr("closed"),
                     end,
                     full: f64::from(full),
                     value: f64::from(value),
@@ -999,10 +1033,9 @@ impl Window {
 
     /// "Posed at contact · door at 0.6°" at the top of the view.
     pub(in crate::ui) fn show_posed_status(&self, card: &MotionCard, amount: f32) {
-        self.show_hint(&format!(
-            "Posed at contact · {} at {}",
-            card.name,
-            card.amount_text(amount)
+        self.show_hint(&fill_in(
+            &tr("Posed at contact · {name} at {amount}"),
+            &[("name", &card.name), ("amount", &card.amount_text(amount))],
         ));
     }
 
@@ -1073,7 +1106,7 @@ impl Window {
                 self.widgets.contact_key.set_visible(shared);
                 self.widgets.offer_view_tools(false);
                 if shared {
-                    self.show_hint("Posed at contact");
+                    self.show_hint(&tr("Posed at contact"));
                 }
             }
         }
