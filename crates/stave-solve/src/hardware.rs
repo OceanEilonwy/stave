@@ -464,7 +464,6 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        let kind_name = binding.name.clone();
         if !kind.base.is_mounted_hardware() {
             return Err(self
                 .error(
@@ -516,8 +515,8 @@ impl Solver<'_> {
         // The kind's mechanism moves it, counted on its own first.
         let (mechanism, own) = match &kind.mechanism {
             Some(def) => {
-                let mechanism = self.kind_mechanism(&binding, kind, &kind_name, def, &frame)?;
-                let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
+                let mechanism = self.kind_mechanism(&binding, kind, &binding.name, def, &frame)?;
+                let own = self.check_mechanism(hardware, &roles, &mechanism, &binding.name)?;
                 (Some(mechanism), own)
             }
             None => (None, None),
@@ -539,7 +538,7 @@ impl Solver<'_> {
         )?;
         Ok(Placed {
             kind: binding.kind,
-            kind_name: binding.name.clone(),
+            kind_name: binding.name,
             base: kind.base,
             piece,
             mount_face,
@@ -566,11 +565,10 @@ impl Solver<'_> {
         let mut frame_bodies: Vec<(BodyId, FrameShapes)> = Vec::new();
         for (index, body) in kind.bodies.iter().enumerate() {
             let id = BodyId::new(index).ok_or(Fault::Internal("a member's number"))?;
-            let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
             let boxes = self.in_kind(binding, kind, |solver, kind_env| {
-                shapes
+                body.shapes
                     .iter()
-                    .map(|shape| solver.shape_box(shape, kind_env))
+                    .map(|shape| solver.shape_box(&shape.shape, kind_env))
                     .collect::<Solved<Vec<_>>>()
             })?;
             frame_bodies.push((id, boxes));
@@ -605,7 +603,7 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        let kind_name = binding.name.clone();
+        let kind_name = &binding.name;
         let Some(hardware_kind) = &kind.hardware else {
             return Err(Fault::Earlier.into());
         };
@@ -894,10 +892,9 @@ impl Solver<'_> {
         uses: &[stave_model::defs::UseDef],
     ) -> Solved<Vec<stave_model::solved::HardwareFastener>> {
         let file = kind.decl.file;
-        let uses = uses.to_vec();
         self.in_kind(binding, kind, |solver, kind_env| {
             let mut out = Vec::new();
-            for used in &uses {
+            for used in uses {
                 let Value::Kind(fastener) = solver.eval(&used.fastener, kind_env)? else {
                     return Err(Fault::Earlier.into());
                 };
@@ -1041,12 +1038,9 @@ impl Solver<'_> {
     ) -> Solved<(Plane, ExactLength)> {
         let plane = self.anchor_plane(binding, kind, mount_face, axis, &from.anchor, from.span)?;
         let inset = match &from.inset {
-            Some(inset) => {
-                let inset = inset.clone();
-                self.in_kind(binding, kind, |solver, kind_env| {
-                    solver.kind_length(&inset, kind_env)
-                })?
-            }
+            Some(inset) => self.in_kind(binding, kind, |solver, kind_env| {
+                solver.kind_length(inset, kind_env)
+            })?,
             None => ExactLength::ZERO,
         };
         let at = if plane.inward_positive {
@@ -1361,18 +1355,16 @@ impl Solver<'_> {
             let Some(placed) = bodies.iter().find(|placed| placed.body == cut.body) else {
                 return Err(Fault::Internal("a member a cut is made by").into());
             };
-            let operations = cut.operations.clone();
-            let cut_name = cut.name.clone();
             let kinds = self.in_kind(binding, kind, |solver, kind_env| {
                 let mut kinds = Vec::new();
-                for operation in &operations {
+                for operation in &cut.operations {
                     let made = solver.cut_kind(operation, kind_env)?;
                     let at = CutAt {
                         owner: name,
                         file,
                         span,
                     };
-                    solver.check_cut_size(at, cut_name.as_ref(), operation, &made, part)?;
+                    solver.check_cut_size(at, cut.name.as_ref(), operation, &made, part)?;
                     kinds.push(made);
                 }
                 Ok(kinds)
