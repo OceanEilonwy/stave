@@ -1,0 +1,18 @@
+// expect: warning[missing-field] pine_19 doesn't say how wide its boards are, and shelf is 600mm wide, wider than most boards
+stave 1
+
+// A 600mm deep shelf from pine that doesn't say how wide its boards come:
+// no board is that wide, but without max_width Stave can't tell the shelf
+// must be glued up from several.
+
+project "A stock without max_width" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  600mm
+  place { ground }
+}

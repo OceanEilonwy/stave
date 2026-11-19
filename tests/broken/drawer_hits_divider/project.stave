@@ -9,7 +9,7 @@ project "Drawer hits the divider" {
   units: mm
 }
 
-stock pine_19  { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+stock pine_19  { species: pine, form: solid, thickness: 19mm, max_width: 600mm, max_length: 2400mm }
 stock pine_15  { species: pine, form: solid, thickness: 15mm, max_length: 2400mm }
 stock maple_12 { species: hard_maple, form: solid, thickness: 12mm, max_length: 2400mm }
 

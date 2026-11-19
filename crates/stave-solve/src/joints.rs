@@ -19,7 +19,7 @@ use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
-use stave_schema::words::Grain;
+use stave_schema::words::{Grain, StockForm};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
@@ -877,6 +877,13 @@ impl Solver<'_> {
         if cut_length <= max_length {
             return Ok(());
         }
+        let across = geom.cut_size(match axis {
+            PartAxis::Length => PartAxis::Width,
+            PartAxis::Width | PartAxis::Thickness => PartAxis::Length,
+        })?;
+        if self.sheet_fits_turned(stock, cut_length, across)? {
+            return Ok(());
+        }
         let name = self.part_name(part);
         let stock_name = self.stock_name(stock);
         let max = stave_model::value::format_length(max_length);
@@ -920,6 +927,32 @@ impl Solver<'_> {
         Err(self
             .error(Code::TypeMismatch, message, file, span, help)
             .into())
+    }
+
+    /// `true` when a part cut from a sheet (plywood, MDF) fits it turned a
+    /// quarter turn: its size `along` its grain within the sheet's
+    /// `max_width` and its size `across` within its `max_length`. A part
+    /// may lie either way on a sheet (grammar, "stock").
+    pub(crate) fn sheet_fits_turned(
+        &mut self,
+        stock: StockId,
+        along: ExactLength,
+        across: ExactLength,
+    ) -> Solved<bool> {
+        let sheet = match self.model.defs.stock(stock).map(|def| def.form) {
+            Some(StockForm::Plywood | StockForm::Mdf) => true,
+            Some(StockForm::Solid | StockForm::Dowel) | None => false,
+        };
+        if !sheet {
+            return Ok(false);
+        }
+        let (Some(max_width), Some(max_length)) = (
+            self.stock_length(stock, StockField::MaxWidth)?,
+            self.stock_length(stock, StockField::MaxLength)?,
+        ) else {
+            return Ok(false);
+        };
+        Ok(along <= max_width && across <= max_length)
     }
 
     /// A part's cut thickness against its stock's: nothing may make a part

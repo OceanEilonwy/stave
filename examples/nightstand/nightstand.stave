@@ -33,7 +33,7 @@ require shelf_room  : bay[shelf].up >= 180mm "the open shelf should take a book 
 // ---- stock ----
 stock cherry_19 { species: cherry, form: solid, thickness: 19mm, max_width: 250mm, max_length: 2400mm }
 stock maple_12  { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
-stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
 
 // ---- the carcass ----
 

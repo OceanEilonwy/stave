@@ -300,6 +300,16 @@ fn the_cabinets_dowel_holes_line_up_where_the_top_covers_only_part_of_the_sides(
         );
     assert_ne!(edited, text);
     std::fs::write(&carcass, edited).unwrap();
+    // The back of a cabinet twice as wide needs a sheet wider than 1220mm.
+    let stock = folder.join("stock.stave");
+    let text = std::fs::read_to_string(&stock).unwrap();
+    let edited = text.replacen(
+        "thickness: 6mm, max_width: 1220mm",
+        "thickness: 6mm, max_width: 2440mm",
+        1,
+    );
+    assert_ne!(edited, text);
+    std::fs::write(&stock, edited).unwrap();
     let opened = stave_app::open(&folder).unwrap();
     let _ = std::fs::remove_dir_all(&folder);
     let design = design(&opened);

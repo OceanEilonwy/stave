@@ -771,10 +771,24 @@ A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
 say how long its boards are, so Stave can't check part lengths` (`sheets`
 for plywood and MDF), with the help `add the longest board you can buy to
 oak_19, for example max_length: 2400mm` (`sheet` and `2440mm` for sheets).
-Without it no part's length can be checked. Sheets get no default size: a
-part may lie either way on a sheet, and `max_width` and `max_length` are
-measured along the part's grain, so a standard sheet isn't one clean pair of
-limits. Round stock (`dowel`) is left out.
+Without it no part's length can be checked. Sheets get no default size.
+`max_width` and `max_length` are measured along the part's grain, but a part
+may lie either way on a sheet: a `plywood` or `mdf` part fits when its size
+along the grain is within `max_length` and across it within `max_width`, or
+turned a quarter turn, along the grain within `max_width` and across it
+within `max_length`. Round stock (`dowel`) is left out.
+
+A stock that gives `max_length` but neither `max_width` nor `width` is
+`warning[missing-field]` at the stock, once, when a part cut from it is
+wider than most boards (more than 300mm across the grain, for `solid`) or
+fits a 1220mm by 2440mm sheet neither way (for `plywood` and `mdf`):
+`pine_19 doesn't say how wide its boards are, and shelf is 600mm wide,
+wider than most boards`, with the help `add the widest board you can buy
+to pine_19, for example max_width: 200mm, so Stave can tell when a part
+needs gluing up` (`add the widest sheet ... max_width: 1220mm` for sheets).
+Without it Stave can't tell that the part must be glued up from boards, or
+needs a larger sheet. The warning about `max_length` comes first: a stock
+missing both is warned about its length only.
 
 ### `part name : stock { }` and `makes part name : stock { }`
 

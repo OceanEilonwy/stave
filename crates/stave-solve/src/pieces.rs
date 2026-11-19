@@ -28,7 +28,7 @@ use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
-use stave_model::ids::{JointId, PartId};
+use stave_model::ids::{JointId, PartId, StockId};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
     self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, End, Joint,
@@ -243,9 +243,14 @@ impl Solver<'_> {
     /// `warning[missing-field]` once for each stock a declared part is cut
     /// from that doesn't say how long its boards or sheets come
     /// (`max_length`), at the stock: without it no part's length can be
-    /// checked (grammar, "stock"). Round stock is left out.
-    pub(crate) fn warn_missing_max_length(&mut self) {
-        let mut stocks = std::collections::BTreeSet::new();
+    /// checked (grammar, "stock"). One that does but doesn't say how wide
+    /// they come (`max_width`), and isn't sold at a fixed `width:`, is
+    /// warned the same way when a part cut from it is wider than most
+    /// boards (300mm across the grain), or doesn't fit a 1220mm by 2440mm
+    /// sheet either way: nothing else would tell that part needs gluing up
+    /// or a larger sheet. Round stock is left out.
+    pub(crate) fn warn_missing_stock_limits(&mut self, geoms: &GeomTable) {
+        let mut stocks: BTreeMap<StockId, Vec<PartId>> = BTreeMap::new();
         for index in 0..self.model.parts.len() {
             let part = PartId::from_usize(index);
             let (file, span) = self.part_place(part);
@@ -255,23 +260,36 @@ impl Solver<'_> {
             }
             let stock = self.part_stock(part);
             if let Some(stock) = self.settled(stock, file, span) {
-                stocks.insert(stock);
+                stocks.entry(stock).or_default().push(part);
             }
         }
-        for stock in stocks {
+        for (stock, parts) in stocks {
             let Some(def) = self.model.defs.stock(stock) else {
                 continue;
             };
-            if def.max_length.is_some() {
-                continue;
-            }
-            let (what, example) = match def.form {
-                StockForm::Solid => ("boards", "2400mm"),
-                StockForm::Plywood | StockForm::Mdf => ("sheets", "2440mm"),
+            let sheet = match def.form {
+                StockForm::Solid => false,
+                StockForm::Plywood | StockForm::Mdf => true,
                 StockForm::Dowel => continue,
             };
             let name = def.decl.name.clone();
             let label = Label::new(def.decl.file, def.decl.name_span);
+            if def.max_length.is_some() {
+                if def.max_width.is_some() || def.width.is_some() {
+                    continue;
+                }
+                if let Some((message, help)) = self.too_wide_to_tell(&name, sheet, &parts, geoms) {
+                    self.report(
+                        Diagnostic::warning(Code::MissingField, message, label).with_help(help),
+                    );
+                }
+                continue;
+            }
+            let (what, example) = if sheet {
+                ("sheets", "2440mm")
+            } else {
+                ("boards", "2400mm")
+            };
             self.report(
                 Diagnostic::warning(
                     Code::MissingField,
@@ -280,13 +298,73 @@ impl Solver<'_> {
                 )
                 .with_help(format!(
                     "add the longest {} you can buy to {name}, for example max_length: {example}",
-                    match def.form {
-                        StockForm::Plywood | StockForm::Mdf => "sheet",
-                        StockForm::Solid | StockForm::Dowel => "board",
-                    }
+                    if sheet { "sheet" } else { "board" }
                 )),
             );
         }
+    }
+
+    /// For a stock without `max_width`: the warning and help for the first
+    /// of its `parts` wider than most boards (300mm across the grain) or,
+    /// for a sheet, too big for a 1220mm by 2440mm sheet either way.
+    fn too_wide_to_tell(
+        &mut self,
+        stock_name: &str,
+        sheet: bool,
+        parts: &[PartId],
+        geoms: &GeomTable,
+    ) -> Option<(String, String)> {
+        let board = ExactLength::from(Length::from_mm(300));
+        let (sheet_width, sheet_length) = (
+            ExactLength::from(Length::from_mm(1220)),
+            ExactLength::from(Length::from_mm(2440)),
+        );
+        for &part in parts {
+            let Some(geom) = geoms.get(part) else {
+                continue;
+            };
+            let grain = self
+                .part_body(part)
+                .map_or(Grain::Length, |body| body.grain);
+            let along_axis = crate::joints::grain_axis(grain);
+            let across_axis = match along_axis {
+                PartAxis::Length => PartAxis::Width,
+                PartAxis::Width | PartAxis::Thickness => PartAxis::Length,
+            };
+            let (Ok(along), Ok(across)) = (geom.cut_size(along_axis), geom.cut_size(across_axis))
+            else {
+                continue;
+            };
+            let part_name = self.part_name(part);
+            let format = stave_model::value::format_length;
+            if sheet {
+                let fits = (across <= sheet_width && along <= sheet_length)
+                    || (along <= sheet_width && across <= sheet_length);
+                if !fits {
+                    return Some((
+                        format!(
+                            "{stock_name} doesn't say how wide its sheets are, and {part_name} is {} by {}, more than a 1220mm by 2440mm sheet",
+                            format(along),
+                            format(across)
+                        ),
+                        format!(
+                            "add the widest sheet you can buy to {stock_name}, for example max_width: 1220mm"
+                        ),
+                    ));
+                }
+            } else if across > board {
+                return Some((
+                    format!(
+                        "{stock_name} doesn't say how wide its boards are, and {part_name} is {} wide, wider than most boards",
+                        format(across)
+                    ),
+                    format!(
+                        "add the widest board you can buy to {stock_name}, for example max_width: 200mm, so Stave can tell when a part needs gluing up"
+                    ),
+                ));
+            }
+        }
+        None
     }
 
     /// Where a part's `lengths:` is written (its body source's).

@@ -55,12 +55,13 @@ pub fn open_files(files: &[(&str, &str)]) -> Opened {
     opened
 }
 
-/// `true` for the warning that a stock doesn't say how long its boards
-/// (or sheets) are.
+/// `true` for the warning that a stock doesn't say how long, or how wide,
+/// its boards (or sheets) are.
 pub fn is_no_max_length_warning(d: &Diagnostic) -> bool {
     d.code == stave_lang::Code::MissingField
         && !d.is_error()
-        && d.message.contains("doesn't say how long its")
+        && (d.message.contains("doesn't say how long its")
+            || d.message.contains("doesn't say how wide its"))
 }
 
 /// Runs the pipeline on one file: [`HEADER`] followed by `body`.

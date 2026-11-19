@@ -1390,3 +1390,23 @@ fn a_member_nothing_moves_is_a_missing_field() {
         "member 'inner_link' has no 'with:' and nothing in its kind moves it",
     );
 }
+
+#[test]
+fn a_part_may_lie_either_way_on_a_sheet() {
+    let sheet = "stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }";
+    let panel = |length: &str| {
+        format!(
+            "{sheet}\npart panel : ply_18 {{\n  length: {length}\n  width:  2000mm\n  place {{\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
+        )
+    };
+    // 2000mm across its grain, but 1200mm along it: turned, it fits.
+    let opened = open(&panel("1200mm"));
+    assert_eq!(diagnostics(&opened), Vec::<String>::new());
+    // 1300mm along its grain fits the sheet neither way.
+    let opened = open(&panel("1300mm"));
+    the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "panel: its width across the grain works out as 2000mm, which is more than its stock's max_width of 1220mm",
+    );
+}

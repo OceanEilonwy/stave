@@ -471,7 +471,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         }
     }
 
-    solver.warn_missing_max_length();
+    solver.warn_missing_stock_limits(&geoms);
 
     // 4. Joints, pass B: made parts, cuts, steps.
     let mut cuts: Vec<Vec<Cut>> = vec![Vec::new(); part_count];

@@ -193,6 +193,13 @@ impl Solver<'_> {
             StockForm::Solid => {}
             StockForm::Dowel => return Ok(None),
             StockForm::Plywood | StockForm::Mdf => {
+                let along = geom.cut_size(match axis {
+                    PartAxis::Width => PartAxis::Length,
+                    PartAxis::Length | PartAxis::Thickness => PartAxis::Width,
+                })?;
+                if self.sheet_fits_turned(stock, along, total)? {
+                    return Ok(None);
+                }
                 if image {
                     // A mirror image: its source reports.
                     return Err(Fault::Earlier.into());
