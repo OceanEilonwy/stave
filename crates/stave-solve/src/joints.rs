@@ -268,7 +268,7 @@ impl Solver<'_> {
                 }
                 continue;
             }
-            if kind_def.base == BaseKind::Joint {
+            if kind_def.base() == BaseKind::Joint {
                 match JointSetting::from_word(&setting.name) {
                     Some(JointSetting::Glue) => {
                         glue = value == Value::Bool(true);
@@ -281,7 +281,7 @@ impl Solver<'_> {
                     None => {}
                 }
             }
-            if kind_def.base.is_mounted_hardware()
+            if kind_def.base().is_mounted_hardware()
                 && setting.name == stave_schema::kinds::FACE_SETTING
             {
                 if let Value::Word(Word::Face(f)) = value {
@@ -434,7 +434,7 @@ impl Solver<'_> {
         let result = self
             .bind_call(&def.call, &env, &what, DefId::Joint(inst.def))
             .and_then(|binding| {
-                let base = self.model.defs.kind(binding.kind).map(|k| k.base);
+                let base = self.model.defs.kind(binding.kind).map(|k| k.base());
                 if base == Some(BaseKind::Joint) {
                     Ok(binding)
                 } else {
@@ -664,7 +664,7 @@ impl Solver<'_> {
             requires.push(results);
             // What the joint adds.
             let mut extensions = Vec::new();
-            if let (Some(joint_def), Making::Made) = (&kind.joint, making) {
+            if let (Some(joint_def), Making::Made) = (kind.joint(), making) {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
                     let members: &[PartId] = if across {
@@ -1638,7 +1638,12 @@ impl Solver<'_> {
         pair: &PairWork,
         env: &Env<'_>,
     ) -> Solved<Vec<AssemblyStep>> {
-        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.as_ref()) else {
+        let Some(joint) = self
+            .model
+            .defs
+            .kind(kind)
+            .and_then(stave_model::defs::KindDef::joint)
+        else {
             return Ok(Vec::new());
         };
         let mut steps = Vec::new();

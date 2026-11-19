@@ -244,7 +244,7 @@ impl Checker<'_> {
         for hardware in mechanism.hardware() {
             let found = self.design.hardware_piece(*hardware)?;
             let kind = defs.kind(found.kind_id)?;
-            let to = match kind.mechanism.as_ref()?.drive.as_ref() {
+            let to = match kind.mechanism()?.drive.as_ref() {
                 Some(DriveDef::Turn { to, .. }) => to,
                 // Hardware that follows the one that drives the assembly.
                 None => continue,

@@ -23,9 +23,10 @@ use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
     BaseEntry, CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef,
-    JointMember, KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef,
-    ParamDef, RExpr, RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting,
-    StepDef, StepMotionDef, Symbol, UseDef, Word,
+    JointMember, KindBody, KindDef, KindFields, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef,
+    MountedBase, MountedKindDef, Need, OperationDef, ParamDef, RExpr, RExprKind, RecipeDef,
+    RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef, StepMotionDef, Symbol, UseDef,
+    Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -465,18 +466,28 @@ impl Resolver<'_> {
                 Some((field, entry))
             })
             .collect();
+        let fields = KindFields {
+            settings: kind_fields,
+            base_entries,
+        };
+        let body = match (joint, MountedBase::new(base_kind)) {
+            (Some(joint), _) => KindBody::Joint(joint),
+            (None, Some(base)) => KindBody::Mounted(Box::new(MountedKindDef {
+                base,
+                fields,
+                mechanism,
+                hardware,
+            })),
+            (None, None) if base_kind == BaseKind::Tool => KindBody::Tool(fields),
+            (None, None) => KindBody::Fastener(fields),
+        };
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
-            base: base_kind,
             roles,
             params,
             requires,
-            fields: kind_fields,
-            base_entries,
-            joint,
             bodies: bodies.unwrap_or_default(),
-            mechanism,
-            hardware,
+            body,
         }
     }
 

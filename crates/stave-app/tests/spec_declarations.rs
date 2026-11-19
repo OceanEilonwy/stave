@@ -1229,7 +1229,7 @@ fn a_cup_hinge_moves_on_the_mechanism_its_kind_declares() {
         .unwrap();
     let bodies: Vec<&str> = kind.bodies.iter().map(|b| b.name.as_str()).collect();
     assert_eq!(bodies, ["plate", "arm", "cup", "inner_link", "outer_link"]);
-    let mechanism = kind.mechanism.as_ref().unwrap();
+    let mechanism = kind.mechanism().unwrap();
     assert_eq!(mechanism.constraints.len(), 4);
     // The hinge's links are the kind's bars (thickness and length along
     // the pins), its pins the kind's pivots.

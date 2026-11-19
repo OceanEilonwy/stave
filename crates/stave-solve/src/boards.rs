@@ -506,7 +506,7 @@ impl Solver<'_> {
             let Some(kind) = self.model.defs.kind(value.kind) else {
                 return Err(Fault::Internal("a kind's declaration").into());
             };
-            if kind.base != BaseKind::Joint {
+            if kind.base() != BaseKind::Joint {
                 return Err(self.error(
                     Code::TypeMismatch,
                     format!("'{}' is not a joint kind", value.name),
@@ -734,7 +734,7 @@ impl Solver<'_> {
             });
         }
         let mut extensions = Vec::new();
-        if let Some(joint_def) = &kind.joint {
+        if let Some(joint_def) = kind.joint() {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
                 let members: &[PartId] = if method.across {
@@ -851,8 +851,10 @@ impl Solver<'_> {
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let no_joint = stave_model::defs::JointKindDef::default();
-        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
+        // The resolver gives every joint, splice and method a joint kind.
+        let Some(joint_def) = kind.joint() else {
+            return Err(Fault::Internal("a joint kind's entries").into());
+        };
         let part_name = self.part_name(part);
         let assembly = self.model.parts.get(part.index()).and_then(|p| p.assembly);
         let origin = PartOrigin::Boards {

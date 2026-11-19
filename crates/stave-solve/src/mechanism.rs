@@ -599,7 +599,7 @@ impl Solver<'_> {
     /// Where a kind's mechanism is written.
     fn mechanism_place(&self, kind: KindId) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
         let def: &KindDef = self.model.defs.kind(kind)?;
-        Some((def.decl.file, def.mechanism.as_ref()?.span))
+        Some((def.decl.file, def.mechanism()?.span))
     }
 
     /// Where a piece of hardware is declared.

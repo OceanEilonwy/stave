@@ -180,7 +180,7 @@ impl EditScope<'_> {
         self.in_scope(|item| match item {
             DefId::Kind(id) => defs
                 .kind(*id)
-                .is_some_and(|kind| bases.contains(&kind.base)),
+                .is_some_and(|kind| bases.contains(&kind.base())),
             _ => false,
         })
     }

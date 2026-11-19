@@ -69,7 +69,7 @@ impl Solver<'_> {
                 }
             }
         }
-        if let Some(mechanism) = &kind.mechanism {
+        if let Some(mechanism) = kind.mechanism() {
             let body_name = |id: BodyId| -> Solved<&str> {
                 kind.bodies
                     .get(id.index())
@@ -100,7 +100,7 @@ impl Solver<'_> {
             }
         }
         let span = match kind.base_entry(BaseField::Model) {
-            Some(BaseEntry::Field(index)) => kind.fields.get(index).map(|field| field.value.span),
+            Some(BaseEntry::Field(index)) => kind.fields().get(index).map(|field| field.value.span),
             Some(BaseEntry::Param(index)) => kind.params.get(index).map(|param| param.decl.span),
             None => None,
         };

@@ -20,8 +20,8 @@ fn base_entries_point_at_the_param_or_field_of_their_name() {
         for field in BaseField::ALL {
             let word = field.word();
             let param = kind.params.iter().position(|p| p.decl.name == word);
-            let written = kind.fields.iter().position(|f| f.name == word);
-            let expected = if base(kind.base).entry(word).is_none() {
+            let written = kind.fields().iter().position(|f| f.name == word);
+            let expected = if base(kind.base()).entry(word).is_none() {
                 None
             } else if let Some(index) = param {
                 Some(BaseEntry::Param(index))
@@ -35,11 +35,42 @@ fn base_entries_point_at_the_param_or_field_of_their_name() {
                 kind.decl.name
             );
         }
-        if kind.base == BaseKind::Fastener {
+        if kind.base() == BaseKind::Fastener {
             fasteners += 1;
             assert!(kind.base_entry(BaseField::Diameter).is_some());
             assert!(kind.base_entry(BaseField::Length).is_some());
         }
     }
     assert!(fasteners > 0, "the prelude's fasteners are resolved");
+}
+
+#[test]
+fn every_mounted_kind_in_the_prelude_has_its_mount_and_only_joints_have_joint_entries() {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/clothing_cabinet");
+    let modules = ModuleSet::load(&folder).unwrap();
+    let (defs, _) = resolve(&modules);
+    let mut mounted = 0;
+    for kind in &defs.kinds {
+        let base = kind.base();
+        assert_eq!(
+            kind.joint().is_some(),
+            base == BaseKind::Joint,
+            "{}",
+            kind.decl.name
+        );
+        assert_eq!(
+            kind.mounted().is_some(),
+            base.is_mounted_hardware(),
+            "{}",
+            kind.decl.name
+        );
+        if base.is_mounted_hardware() {
+            mounted += 1;
+            assert!(kind.hardware().is_some(), "{}", kind.decl.name);
+        }
+        if base == BaseKind::Joint {
+            assert!(kind.fields().is_empty(), "{}", kind.decl.name);
+        }
+    }
+    assert!(mounted > 0, "the prelude's hardware is resolved");
 }

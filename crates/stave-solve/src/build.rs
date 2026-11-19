@@ -828,8 +828,10 @@ impl Solver<'_> {
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let no_joint = stave_model::defs::JointKindDef::default();
-        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
+        // The resolver gives every joint, splice and method a joint kind.
+        let Some(joint_def) = kind.joint() else {
+            return Err(Fault::Internal("a joint kind's entries").into());
+        };
         let pair_count = work.pairs.len();
         let mut pairs = Vec::new();
         let mut note = None;

@@ -1076,28 +1076,89 @@ pub struct RoleDef {
 pub struct KindDef {
     /// Where it is.
     pub decl: Decl,
-    /// What it is a kind of.
-    pub base: BaseKind,
     /// Its roles, in order; the first takes the positional argument.
     pub roles: Vec<RoleDef>,
     /// Its params, in order.
     pub params: Vec<ParamDef>,
     /// Its requires, checked per pair.
     pub requires: Vec<RequireDef>,
-    /// Fields of a hardware, fastener or tool kind, by name.
-    pub fields: Vec<Setting>,
+    /// The members with a body (`member arm { ... }`), in source order;
+    /// a [`BodyId`] indexes this list. Empty for a fastener or tool kind.
+    pub bodies: Vec<BodyDef>,
+    /// What it is a kind of, with the entries only that base has.
+    pub body: KindBody,
+}
+
+/// What a kind is a kind of, with the entries only that base has: a joint
+/// kind has joint entries and no fields, a slide, hinge or pull kind has
+/// its mount and cuts, and only a mounted kind has a mechanism.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KindBody {
+    /// A `joint` kind.
+    Joint(JointKindDef),
+    /// A `slide`, `hinge` or `pull` kind.
+    Mounted(Box<MountedKindDef>),
+    /// A `fastener` kind.
+    Fastener(KindFields),
+    /// A `tool` kind.
+    Tool(KindFields),
+}
+
+/// A base whose kinds are mounted on a part: `slide`, `hinge` or `pull`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MountedBase {
+    /// A drawer slide.
+    Slide,
+    /// A hinge.
+    Hinge,
+    /// A knob or pull.
+    Pull,
+}
+
+impl MountedBase {
+    /// The mounted base `base` is, or `None` for a joint, fastener or tool.
+    pub fn new(base: BaseKind) -> Option<MountedBase> {
+        match base {
+            BaseKind::Slide => Some(MountedBase::Slide),
+            BaseKind::Hinge => Some(MountedBase::Hinge),
+            BaseKind::Pull => Some(MountedBase::Pull),
+            BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
+        }
+    }
+
+    /// The base kind it is.
+    pub fn base(self) -> BaseKind {
+        match self {
+            MountedBase::Slide => BaseKind::Slide,
+            MountedBase::Hinge => BaseKind::Hinge,
+            MountedBase::Pull => BaseKind::Pull,
+        }
+    }
+}
+
+/// The entries of a slide, hinge or pull kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountedKindDef {
+    /// Which of the three it is.
+    pub base: MountedBase,
+    /// Its fields.
+    pub fields: KindFields,
+    /// How the bodies move, when the kind says.
+    pub mechanism: Option<MechanismDef>,
+    /// Where it sits and what it cuts; `None` when one of those entries
+    /// is missing or did not lower, which has been reported.
+    pub hardware: Option<HardwareKindDef>,
+}
+
+/// The fields of a hardware, fastener or tool kind.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct KindFields {
+    /// Its fields, by name: the entries its base fixes and, for a mounted
+    /// kind, any catalogue data.
+    pub settings: Vec<Setting>,
     /// Where each entry its base fixes is given, found once when the kind
     /// is resolved; see [`KindDef::base_entry`].
     pub base_entries: BTreeMap<BaseField, BaseEntry>,
-    /// The joint entries, for a joint kind.
-    pub joint: Option<JointKindDef>,
-    /// The members with a body (`member arm { ... }`), in source order;
-    /// a [`BodyId`] indexes this list.
-    pub bodies: Vec<BodyDef>,
-    /// How the bodies move, when the kind says.
-    pub mechanism: Option<MechanismDef>,
-    /// Where it sits and what it cuts, for a slide, hinge or pull kind.
-    pub hardware: Option<HardwareKindDef>,
 }
 
 /// Where a kind gives one of the entries its base fixes.
@@ -1111,10 +1172,61 @@ pub enum BaseEntry {
 }
 
 impl KindDef {
+    /// What it is a kind of.
+    pub fn base(&self) -> BaseKind {
+        match &self.body {
+            KindBody::Joint(_) => BaseKind::Joint,
+            KindBody::Mounted(mounted) => mounted.base.base(),
+            KindBody::Fastener(_) => BaseKind::Fastener,
+            KindBody::Tool(_) => BaseKind::Tool,
+        }
+    }
+
+    /// The joint entries, for a joint kind.
+    pub fn joint(&self) -> Option<&JointKindDef> {
+        match &self.body {
+            KindBody::Joint(joint) => Some(joint),
+            KindBody::Mounted(_) | KindBody::Fastener(_) | KindBody::Tool(_) => None,
+        }
+    }
+
+    /// The entries of a slide, hinge or pull kind.
+    pub fn mounted(&self) -> Option<&MountedKindDef> {
+        match &self.body {
+            KindBody::Mounted(mounted) => Some(mounted.as_ref()),
+            KindBody::Joint(_) | KindBody::Fastener(_) | KindBody::Tool(_) => None,
+        }
+    }
+
+    /// Where it sits and what it cuts, for a slide, hinge or pull kind
+    /// whose entries lowered.
+    pub fn hardware(&self) -> Option<&HardwareKindDef> {
+        self.mounted()?.hardware.as_ref()
+    }
+
+    /// How its bodies move, for a slide, hinge or pull kind that says.
+    pub fn mechanism(&self) -> Option<&MechanismDef> {
+        self.mounted()?.mechanism.as_ref()
+    }
+
+    /// Its fields; a joint kind has none.
+    pub fn kind_fields(&self) -> Option<&KindFields> {
+        match &self.body {
+            KindBody::Joint(_) => None,
+            KindBody::Mounted(mounted) => Some(&mounted.fields),
+            KindBody::Fastener(fields) | KindBody::Tool(fields) => Some(fields),
+        }
+    }
+
+    /// Its fields, by name; empty for a joint kind.
+    pub fn fields(&self) -> &[Setting] {
+        self.kind_fields().map_or(&[], |fields| &fields.settings)
+    }
+
     /// Where the kind gives a base entry (`diameter`, `species`, `model`,
     /// ...), or `None` when it gives none.
     pub fn base_entry(&self, field: BaseField) -> Option<BaseEntry> {
-        self.base_entries.get(&field).copied()
+        self.kind_fields()?.base_entries.get(&field).copied()
     }
 
     /// The role at `index`.
@@ -1682,7 +1794,7 @@ impl KindDef {
 
     /// A field by name.
     pub fn field(&self, name: &str) -> Option<&Setting> {
-        self.fields.iter().find(|f| f.name == name)
+        self.fields().iter().find(|f| f.name == name)
     }
 }
 

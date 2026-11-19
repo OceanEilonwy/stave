@@ -136,7 +136,7 @@ impl Checker<'_> {
     ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
         let kind_id = self.design.hardware_piece(hardware)?.kind_id;
         let kind = self.model.defs.kind(kind_id)?;
-        Some((kind.decl.file, kind.mechanism.as_ref()?.span))
+        Some((kind.decl.file, kind.mechanism()?.span))
     }
 
     /// The assemblies with a motion that move a part, outermost first:

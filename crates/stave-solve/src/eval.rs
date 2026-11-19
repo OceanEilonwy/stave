@@ -509,7 +509,7 @@ impl<'m> Solver<'m> {
                     .model
                     .defs
                     .kind(id)
-                    .is_some_and(|k| k.base == stave_lang::ast::BaseKind::Tool);
+                    .is_some_and(|k| k.base() == stave_lang::ast::BaseKind::Tool);
                 return Ok(if is_tool {
                     Value::Tool(id)
                 } else {
@@ -909,7 +909,7 @@ impl<'m> Solver<'m> {
             None => Ok(None),
             Some(BaseEntry::Param(index)) => self.kind_param(kind_env, index, file, span).map(Some),
             Some(BaseEntry::Field(index)) => {
-                let Some(written) = kind.fields.get(index) else {
+                let Some(written) = kind.fields().get(index) else {
                     return Err(Fault::Internal("a kind's field").into());
                 };
                 self.kind_field(kind_env, &written.value).map(Some)
@@ -970,7 +970,7 @@ impl<'m> Solver<'m> {
                     kind.params
                         .iter()
                         .map(|p| p.decl.name.as_str())
-                        .chain(kind.fields.iter().map(|f| f.name.as_str())),
+                        .chain(kind.fields().iter().map(|f| f.name.as_str())),
                 )
                 .unwrap_or_else(|| "a kind value can be read for its params and fields".to_owned()),
             )
