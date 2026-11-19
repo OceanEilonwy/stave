@@ -992,7 +992,7 @@ impl Solver<'_> {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
-        let env = KindEnv::new(kind_id, roles, method.settings.clone(), kind.params.len());
+        let env = KindEnv::new(kind_id, roles, method.settings.clone());
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -1347,7 +1347,7 @@ impl Solver<'_> {
             });
             made_ids.push(id);
         }
-        pair.env.made = made_ids.clone();
+        pair.env.made = made_ids.clone().into();
         let env = Env {
             ctx,
             file: kind.decl.file,

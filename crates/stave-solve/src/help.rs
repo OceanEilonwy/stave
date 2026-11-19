@@ -3,7 +3,7 @@
 //! with the others as given, and offer the values that make it hold (see
 //! "Checks and `require`" in `docs/grammar.md`).
 
-use std::cell::RefCell;
+use std::borrow::Cow;
 
 use stave_lang::ast::{BinaryOp, Span};
 use stave_model::defs::{DefId, Domain, RExpr, RExprKind};
@@ -172,7 +172,6 @@ impl Solver<'_> {
                 Some(Domain::Range { .. }) | None => None,
             })
             .collect();
-        let param_count = kind.params.len();
         let module_env = Env {
             ctx,
             file,
@@ -210,14 +209,9 @@ impl Solver<'_> {
                     .cloned()
                     .collect();
                 settings.push((param.to_owned(), value.clone()));
-                let trial = KindEnv {
-                    kind: given.kind,
-                    roles: given.roles.clone(),
-                    settings,
-                    params: RefCell::new(vec![None; param_count]),
-                    made: given.made.clone(),
-                    mount: given.mount,
-                };
+                let mut trial = KindEnv::new(given.kind, &*given.roles, settings);
+                trial.made = Cow::Borrowed(&given.made);
+                trial.mount = given.mount;
                 if self.quietly(|solver| fits(solver, &trial)) {
                     found.push(Fitting {
                         param: param.to_owned(),

@@ -21,7 +21,7 @@ use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
 use stave_schema::words::{Grain, StockForm};
 
-use crate::eval::{Env, KindEnv, midpoint};
+use crate::eval::{Env, KindEnv, ParamCache, midpoint};
 use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
 
 /// A kind call with its kind, roles and settings worked out.
@@ -35,6 +35,9 @@ pub(crate) struct Binding {
     pub glue: bool,
     pub methods: Vec<RecipeId>,
     pub face: Option<Face>,
+    /// The kind's param values for these settings, worked out once and
+    /// shared by every environment built from this binding.
+    pub params: ParamCache,
 }
 
 /// Who a cut belongs to and where to report a mistake in its sizes: a
@@ -189,7 +192,7 @@ pub(crate) struct PairWork {
     /// of `parts`.
     pub across: bool,
     pub contact: Contact,
-    pub env: KindEnv,
+    pub env: KindEnv<'static>,
     pub extensions: Vec<stave_model::solved::Extension>,
     /// Whether the joint makes its cuts, parts and members for this pair.
     pub making: Making,
@@ -410,6 +413,7 @@ impl Solver<'_> {
             glue,
             methods,
             face,
+            params: ParamCache::default(),
         })
     }
 
@@ -610,12 +614,7 @@ impl Solver<'_> {
             } else {
                 parts.iter().map(|p| Value::Part(*p)).collect()
             };
-            let env = KindEnv::new(
-                binding.kind,
-                roles,
-                binding.settings.clone(),
-                kind.params.len(),
-            );
+            let env = KindEnv::new(binding.kind, roles, binding.settings.clone());
             let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
                 return Err(Fault::Internal("the file an item is declared in").into());
             };

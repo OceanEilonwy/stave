@@ -714,12 +714,7 @@ impl Solver<'_> {
         } else {
             parts.iter().map(|p| Value::Part(*p)).collect()
         };
-        let env = KindEnv::new(
-            method.kind,
-            roles,
-            method.settings.clone(),
-            kind.params.len(),
-        );
+        let env = KindEnv::new(method.kind, roles, method.settings.clone());
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -928,7 +923,7 @@ impl Solver<'_> {
             });
             made_ids.push(id);
         }
-        pair.env.made = made_ids;
+        pair.env.made = made_ids.into();
         let env = Env {
             ctx,
             file: kind.decl.file,

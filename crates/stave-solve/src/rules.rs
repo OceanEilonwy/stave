@@ -235,12 +235,7 @@ impl Solver<'_> {
         if self.noted_with_earlier(Code::Adjust, call) {
             return Ok(());
         }
-        let given = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        let given = KindEnv::of_binding(binding);
         let search = self.search_lists(&given, call.span, &mut |solver, trial| {
             solver.adjustments_fit(call.hardware, binding, kind, adjusts, &trial.settings)
         });
@@ -293,12 +288,8 @@ impl Solver<'_> {
         if kind.requires.is_empty() {
             return Ok(true);
         }
-        let mut kind_env = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        // Its own param values: `mount` is bound here and nowhere else.
+        let mut kind_env = KindEnv::new(binding.kind, &binding.roles, &binding.settings);
         kind_env.mount = Some(mount);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());

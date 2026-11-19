@@ -895,7 +895,7 @@ impl Solver<'_> {
                 });
                 made_ids.push(id);
             }
-            pair.env.made = made_ids.clone();
+            pair.env.made = made_ids.clone().into();
             let env = Env {
                 ctx,
                 file: kind.decl.file,

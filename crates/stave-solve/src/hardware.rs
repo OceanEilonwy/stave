@@ -948,12 +948,7 @@ impl Solver<'_> {
         file: stave_lang::FileId,
         span: Span,
     ) -> Solved<BTreeMap<String, Value>> {
-        let kind_env = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        let kind_env = KindEnv::of_binding(binding);
         let mut entries = BTreeMap::new();
         for (index, param) in kind.params.iter().enumerate() {
             let value = self.kind_param(&kind_env, index, file, span)?;
@@ -1415,12 +1410,7 @@ impl Solver<'_> {
         kind: &KindDef,
         body: impl FnOnce(&mut Self, &Env<'_>) -> Solved<T>,
     ) -> Solved<T> {
-        let kind_env = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        let kind_env = KindEnv::of_binding(binding);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };

@@ -1,5 +1,6 @@
 //! Evaluating resolved expressions to exact values, on demand.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 
 use stave_lang::ast::Span;
@@ -21,36 +22,111 @@ use stave_schema::words::StockForm;
 use crate::fixes::Written;
 use crate::{Fault, Frame, Memo, Reported, Solved, Solver};
 
-/// The roles and settings of one application of a kind.
-pub(crate) struct KindEnv {
+/// The param values of one application of a kind, worked out on demand
+/// and remembered. A [`crate::joints::Binding`] carries one so that every
+/// environment built from it shares what was worked out. A copy starts
+/// empty, because a copy is made to change the settings (the help search
+/// tries other values), and the values remembered would be wrong for it.
+#[derive(Default)]
+pub(crate) struct ParamCache(RefCell<Vec<Option<Value>>>);
+
+impl ParamCache {
+    /// The remembered value of the kind's param `index`.
+    fn get(&self, index: usize) -> Option<Value> {
+        self.0.borrow().get(index).cloned().flatten()
+    }
+
+    /// Remembers the value of the kind's param `index`.
+    fn set(&self, index: usize, value: Value) {
+        let mut values = self.0.borrow_mut();
+        if values.len() <= index {
+            values.resize(index.saturating_add(1), None);
+        }
+        if let Some(slot) = values.get_mut(index) {
+            *slot = Some(value);
+        }
+    }
+}
+
+impl Clone for ParamCache {
+    fn clone(&self) -> Self {
+        ParamCache::default()
+    }
+}
+
+impl PartialEq for ParamCache {
+    /// What is remembered follows from the settings: it never makes two
+    /// bindings differ.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for ParamCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ParamCache")
+    }
+}
+
+/// A kind environment's param values: its own, or a binding's, shared.
+enum Params<'e> {
+    Own(ParamCache),
+    Shared(&'e ParamCache),
+}
+
+/// The roles and settings of one application of a kind. It borrows them
+/// where it can: from the binding of a joint or a piece of hardware, or
+/// from a kind value.
+pub(crate) struct KindEnv<'e> {
     pub kind: KindId,
     /// Per role: a part or a region; empty for a kind value.
-    pub roles: Vec<Value>,
+    pub roles: Cow<'e, [Value]>,
     /// Settings from the kind value and the call.
-    pub settings: Vec<(String, Value)>,
+    pub settings: Cow<'e, [(String, Value)]>,
     /// Param values, worked out on demand.
-    pub params: RefCell<Vec<Option<Value>>>,
+    params: Params<'e>,
     /// Parts the kind made for this pair.
-    pub made: Vec<PartId>,
+    pub made: Cow<'e, [PartId]>,
     /// For a piece of hardware once it is placed: its mount face, as an
     /// anchor (`mount` in its kind's rules).
     pub mount: Option<AnchorValue>,
 }
 
-impl KindEnv {
+impl<'e> KindEnv<'e> {
+    /// An environment with its own (empty) param values.
     pub fn new(
         kind: KindId,
-        roles: Vec<Value>,
-        settings: Vec<(String, Value)>,
-        param_count: usize,
+        roles: impl Into<Cow<'e, [Value]>>,
+        settings: impl Into<Cow<'e, [(String, Value)]>>,
     ) -> Self {
         KindEnv {
             kind,
-            roles,
-            settings,
-            params: RefCell::new(vec![None; param_count]),
-            made: Vec::new(),
+            roles: roles.into(),
+            settings: settings.into(),
+            params: Params::Own(ParamCache::default()),
+            made: Cow::Borrowed(&[]),
             mount: None,
+        }
+    }
+
+    /// The environment of a binding: its roles and settings, borrowed, and
+    /// the param values it remembers, shared with every other environment
+    /// of the same binding.
+    pub fn of_binding(binding: &'e crate::joints::Binding) -> Self {
+        KindEnv {
+            kind: binding.kind,
+            roles: Cow::Borrowed(&binding.roles),
+            settings: Cow::Borrowed(&binding.settings),
+            params: Params::Shared(&binding.params),
+            made: Cow::Borrowed(&[]),
+            mount: None,
+        }
+    }
+
+    fn params(&self) -> &ParamCache {
+        match &self.params {
+            Params::Own(params) => params,
+            Params::Shared(params) => params,
         }
     }
 }
@@ -60,7 +136,7 @@ impl KindEnv {
 pub(crate) struct Env<'e> {
     pub ctx: Ctx,
     pub file: FileId,
-    pub kind: Option<&'e KindEnv>,
+    pub kind: Option<&'e KindEnv<'e>>,
     /// The array being declared and its element count, for `[same]` and
     /// `split(region, axis)`.
     pub array: Option<(DefId, usize)>,
@@ -731,7 +807,7 @@ impl Solver<'_> {
     /// this pair.
     pub(crate) fn kind_param(
         &mut self,
-        kind_env: &KindEnv,
+        kind_env: &KindEnv<'_>,
         index: usize,
         file: FileId,
         span: Span,
@@ -739,8 +815,8 @@ impl Solver<'_> {
         if self.poisoned(DefId::Kind(kind_env.kind)) {
             return Err(self.skip().into());
         }
-        if let Some(Some(value)) = kind_env.params.borrow().get(index) {
-            return Ok(value.clone());
+        if let Some(value) = kind_env.params().get(index) {
+            return Ok(value);
         }
         let Some(kind) = self.model.defs.kind(kind_env.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
@@ -784,9 +860,7 @@ impl Solver<'_> {
                 }
             },
         };
-        if let Some(slot) = kind_env.params.borrow_mut().get_mut(index) {
-            *slot = Some(value.clone());
-        }
+        kind_env.params().set(index, value.clone());
         Ok(value)
     }
 
@@ -807,12 +881,7 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(kind_value.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        let kind_env = KindEnv::new(
-            kind_value.kind,
-            Vec::new(),
-            kind_value.settings.clone(),
-            kind.params.len(),
-        );
+        let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
         if let Some(index) = kind.param(name) {
             return self.kind_param(&kind_env, index, file, span);
         }
