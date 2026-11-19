@@ -184,7 +184,11 @@ its own bridge. Nothing is borrowed across a callback or a GTK call.
 
    This replaces `updating_controls` in `mod.rs` and `syncing` in
    `tree.rs`. Setters that did not call back (`set_value` and friends)
-   become inputs whose `update` sends no output.
+   become inputs whose `update` sends no output. A component that fills
+   a list imperatively (in `update_with_view`) calls
+   `list.block_signal(&handler)` / `unblock_signal` on the view's
+   `@name` handler id itself, which is what `#[block_signal]` expands to
+   (`tree.rs` does this).
 6. **Who owns each `Controller`.** Exactly one owner, never shared, never
    in an `Rc`:
    - while a leaf keeps its old API, the leaf's shim owns it through a
@@ -265,8 +269,9 @@ arguments, and the raw widget signals a coordinator connects on its
 public fields) become **Output** variants; its setters become **Input**
 variants. Names are `<Type>Output::<Variant>` and `<Type>Input::<Variant>`.
 Getters that only read widgets for tests (`rows()`, `buttons()`,
-`entries()`, `words()`) stay as plain methods on the shim, reading
-`bridge.widgets()` or the model. Queries the window calls synchronously
+`entries()`, `words()`) stay as plain methods on the shim, reading the
+model or walking `bridge.widget()` (there is no `Bridge::widgets()`;
+`tree.rs`'s tests find the list by walking the root). Queries the window calls synchronously
 are marked *query*: keep them on the shim while the caller is old code,
 and move the answer into the owner's model when the caller moves.
 
@@ -286,9 +291,9 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `edit_card.rs` | `EditCard` | `connect_action(CardAction)` → `EditCardOutput::Action(CardAction)` | `show(&CardModel, &dyn Words)` → `Show(CardView)` (owned); `update_options(&Candidate)` → `UpdateOptions(Candidate)`; `open_options(&str) -> bool` → `OpenOptions(String)`, the bool becomes `EditCardOutput::OptionsOpened(bool)`; `scroll_to_open_options_now()` → `ScrollToOpenOptions` | Its `links: LinkHandlers` fold into `Action` (see `sections.rs`). Test getters: `key_controller`, `buttons`, `name_field`, `entries`, `option_lists`, `scrolled`, `put_back_button`, `fix_buttons`; *query* `open_setting()`. |
 | `edit_menu.rs` | `EditMenu` | `connect_chosen(Declaration)` → `EditMenuOutput::Chosen(Declaration)` | `show(Heading, &[MenuItem])` → `Show { heading, items: Vec<MenuEntry> }` (owned) | Test getter `rows()`. |
 | `edit_panel.rs` | `EditPanel` | — | `update() -> bool` → `Update`, the bool becomes `EditPanelOutput::Shown(bool)` | *query* `is_empty()`. Built from other cards' widgets: becomes part of its owner's view. |
-| `editor.rs` | `Editor` | `connect_lens_uses(SymbolId)` → `EditorOutput::LensUses(SymbolId)`; `connect_lens_show(SymbolId)` → `EditorOutput::LensShow(SymbolId)` | `set_lenses(&[LensLine])` → `SetLenses(Vec<LensLine>)`; `set_peek(Option<(gtk::Widget, i32)>)` → `SetPeek(Option<(gtk::Widget, i32)>)`; `show_buffer(&TextBuffer, bool)` → `ShowBuffer { buffer, editable }`; `colour(bool)` → `Colour { dark }`; `paint(&TextBuffer, &LineStarts, &[(Run, TokenClass)])` → `Paint { buffer, lines, runs }`; `start_search()` → `StartSearch`; `find(&str)` → `Find(String)`; `close_search()` → `CloseSearch`; `show_card(&Widget, i32, i32)` → `ShowCard { card, x, y }`; `hide_card()` → `HideCard`; `place_overlays()` → `PlaceOverlays`; `go_to(&LineStarts, u32)` → `GoTo { lines, offset }` | GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. *queries*: `new_buffer`, `vadjustment`, `has_focus`, `has_search`, `has_peek`, `has_card`, `cursor`, `offset_at`; `LineStarts` is plain data. Owned by `FilesPage`. |
+| `editor.rs` | `Editor` | `connect_lens_uses(SymbolId)` → `EditorOutput::LensUses(SymbolId)`; `connect_lens_show(SymbolId)` → `EditorOutput::LensShow(SymbolId)` | `set_lenses(&[LensLine])` → `SetLenses(Vec<LensLine>)`; `set_peek(Option<(gtk::Widget, i32)>)` → `SetPeek(Option<(gtk::Widget, i32)>)`; `show_buffer(&TextBuffer, bool)` → `ShowBuffer { buffer, editable }`; `colour(bool)` → `Colour { dark }`; `paint(&TextBuffer, &LineStarts, &[(Run, TokenClass)])` → `Paint { buffer, lines, runs }`; `start_search()` → `StartSearch`; `find(&str)` → `Find(String)` (it opens the bar on the text and highlights its matches but does not select: `Editor::find` selects the first match from the cursor before it sends it, so code that sends `Find` itself must select first); `close_search()` → `CloseSearch`; `show_card(&Widget, i32, i32)` → `ShowCard { card, x, y }`; `hide_card()` → `HideCard`; `place_overlays()` → `PlaceOverlays`; `go_to(&LineStarts, u32)` → `GoTo { lines, offset }` | GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. *queries*: `new_buffer`, `vadjustment`, `has_focus`, `has_search`, `has_peek`, `has_card`, `cursor`, `offset_at`; `LineStarts` is plain data. Owned by `FilesPage`. |
 | `files.rs` | `FilesPage` | `connect_link(CursorName)` → `FilesOutput::Link(CursorName)`; `connect_go(Option<SourceLocation>, SourceLocation)` → `Go { from, to }`; `connect_check()` → `Check`; `connect_show_in_3d(Rc<Analysis>, SymbolId)` → `ShowIn3d { analysis, symbol }`; `connect_open()` → `Open`; `connect_notice(String)` → `Notice(String)` | `focus_text()` → `FocusText`; `set_folder(&Path)` → `SetFolder(PathBuf)`; `save_all() -> bool` → `SaveAll`, answered by `FilesOutput::Saved(bool)`; `save()` → `Save`; `format()` → `Format`; `forget_unsaved()` → `ForgetUnsaved`; `focus_search() -> bool` → `FocusSearch`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_result(Option<Rc<Checked>>)` → `ShowResult(Option<Rc<Checked>>)`; `show_location(&SourceLocation)` → `ShowLocation(SourceLocation)`; `reveal(&SourceLocation)` → `Reveal(SourceLocation)`; `wish(Wish)` → `Wish(Wish)`; `restyle(bool)` → `Restyle { dark }`; `open_document(&Document)` → `OpenDocument(Document)` | The biggest leaf (own `RefCell` state, `Rc<Self>` methods); owns `Editor`. *queries*: `buffer_for`, `has_unsaved`, `is_unsaved`, `unsaved_count`, `analysis`, `overlay_for_check`, `edit_files`, `page_tabs`. `BufferWriter` (`edit_writer.rs`) writes through it with an `Rc<Cell<bool>>`: rule 11. |
-| `finder.rs` | `Finder` | `connect_search(&str) -> Vec<Hit>` → request `FinderOutput::Search(String)` / reply `FinderInput::Hits(Vec<Hit>)`; `connect_actions(&str) -> Vec<Action>` → `FinderOutput::SearchActions(String)` / `FinderInput::Actions(Vec<Action>)`; `connect_hit(Hit, Choice)` → `FinderOutput::Hit { hit, choice }`; `connect_action(usize)` → `FinderOutput::Action(usize)` | `present(&impl IsA<Widget>, &str)` → `Present { parent: gtk::Widget, query: String }` | Rule 9 for the two searches. Root is an `adw::Dialog`. |
+| `finder.rs` | `Finder` | `connect_search(&str) -> Vec<Hit>` → request `FinderOutput::Search(String)` / reply `FinderInput::Hits(Vec<Hit>)`; `connect_actions(&str) -> Vec<Action>` → `FinderOutput::SearchActions(String)` / `FinderInput::Actions(Vec<Action>)`; `connect_hit(Hit, Choice)` → `FinderOutput::Hit { hit, choice }`; `connect_action(usize)` → `FinderOutput::Action(usize)` | `present(&impl IsA<Widget>, &str)` → `Present { parent: gtk::Widget, query: String }` | Rule 9 for the two searches: the shim's `connect_search_request` / `show_hits` and `connect_actions_request` / `show_actions` are that request and reply, and the window uses them. `FinderInput::ListenForHits`: until it arrives, choosing a hit does nothing (`connect_hit` sends it); a parent that forwards `FinderOutput::Hit` itself sends it once at launch. Root is an `adw::Dialog`. |
 | `floating.rs` | `Floats` | constructor `orient: Orient` → `FloatsOutput::Orient { group, orientation }`; constructor `on_dock: OnDock` → `FloatsOutput::Docked { group, spot }` | `refresh()` → `Refresh` | Shares `Rc<RefCell<Spots>>` with `Workbench`: rule 11. Takes the view's overlay and the floating widgets at launch (`Init`). |
 | `focus_panel.rs` | `FocusPanel` | `connect_source(SourceLocation)` → `FocusPanelOutput::Source(SourceLocation)`; (mod.rs) `done.connect_clicked` → `Done`; `xray`, `tint`, `fade` `connect_active_notify` → `Xray(bool)`, `Tint(bool)`, `Fade(bool)` | `show(Option<&Focus>)` → `Show(Option<Focus>)` | `#[block_signal]` on the three checks when `Show` sets them. Owned by `Inspector`. |
 | `focus_stage.rs` | `StepCard` | (mod.rs) `play.connect_clicked` → `StepCardOutput::Play`; `scrub` `Changed` → `StepCardOutput::Scrubbed(f64)` | `show_frame(Option<&str>, &str)` → `ShowFrame { step: Option<String>, status: String }`; (mod.rs) `scrub.set_value` → `SetProgress(f64)` | Owns a slider: forward `SliderOutput::Changed`. |
@@ -306,7 +311,7 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `panels.rs` | `FilesList` | `connect_open(PathBuf)` → `FilesListOutput::Open(PathBuf)` | `set_folder(&Path)` → `SetFolder(PathBuf)` | |
 | `sections.rs` | `LinkHandlers` | `connect_click(LinkTarget)` → `<Owner>Output::Link(LinkTarget)`; `connect_hover(Option<LinkTarget>)` → `<Owner>Output::Hover(Option<LinkTarget>)` | `click_target(LinkTarget)` → `<Owner>Input::Click(LinkTarget)` | Not a component: its widget builders (`link`, `links`, `set_button_words`) are used inside `Inspector`'s and `EditCard`'s views, and the two slots become their owner's outputs. |
 | `start_page.rs` | `StartPage` | `open` / `create` actions, recent `row.connect_activated`, `window.connect_close_request` → `StartPageOutput::Open`, `Create`, `OpenRecent(PathBuf)`, `CloseRequest` | `ask_new_project()` → `AskNewProject` | Owned by `Shell`; a window component of its own. |
-| `tab_strip.rs` | `TabStrip`, `set_page_tabs` | `set_page_tabs(panel, Fn() -> Vec<PageTab>)` and `PageTab::show: Rc<dyn Fn()>` → `TabStripOutput::Show(usize)` | the tabs closure (a *query*) → `TabStripInput::SetTabs(Vec<PageTabLabel>)`, sent when the tabs change | A GObject subclass holding closures: rules 2 and 9. |
+| `tab_strip.rs` | `TabStrip`, `set_page_tabs` | `set_page_tabs(panel, Fn() -> Vec<PageTab>)` and `PageTab::show: Rc<dyn Fn()>` → `TabStripOutput::Show { page: glib::WeakRef<panel::Widget>, index }` (a frame can hold several panels with tabs of their own) | the tabs closure (a *query*) → `TabStripInput::SetTabs(Vec<PageTabLabel>)`, sent when the tabs change | A GObject subclass holding closures: rules 2 and 9. |
 | `tree.rs` | `TreeSidebar` | `connect_select(Selection)` → `TreeOutput::Select(Selection)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_focus(Target)` → `Focus(Target)`; `connect_hover(Vec<Item>)` → `Hover(Vec<Item>)` | `show_tree(PartsTree, PartJoints)` → `ShowTree { tree, joints }`; `show_empty(EmptyState)` → `ShowEmpty(EmptyState)`; `set_placeholder(Option<&str>)` → `SetPlaceholder(Option<String>)`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_selection(Option<&Selection>)` → `ShowSelection(Option<Selection>)` | Its `syncing` flag and `try_borrow_mut` go: `#[block_signal]` on row selection while filling and syncing. |
 | `viewport.rs` | `Viewport` | `connect_resized(u32, u32)` → `ViewportOutput::Resized { width, height }` | `show_frame(gdk::Texture)` → `ShowFrame(gdk::Texture)`; `show_live(LiveFrame) -> bool` → `ShowLive(LiveFrame)` | A GObject subclass (the wgpu surface): stays a widget, wrapped by the view's component. *queries* `scale()`, `device_size()`. Frame timing is sensitive: measure before and after. |
 | `view_tools.rs` | `ViewToolbar` | (mod.rs) `xray.connect_toggled` → `ViewToolbarOutput::Xray(bool)`; `pull.connect_toggled` → `Pull(bool)`; `play.connect_clicked` → `Play`; `slider` `Changed` → `Apart(f64)` | `show(bool, f32, bool)` → `Show { on, amount, playing }`; `offer(bool)` → `Offer(bool)` | `#[block_signal]` on Pull apart and X-ray (replaces `updating_controls`). Owns a slider. |
@@ -325,3 +330,120 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `edit_view/hold.rs` | `Hold` | (`connect_hold`) `from_space.connect_clicked` → `HoldOutput::FromSpace` | — | Owns the `HoldCard`; `from_space` sits in the edit menu's root. |
 | `edit_view/repeat_handles.rs` | `Repeats`, `Handle` | (`connect_repeats`) `row.connect_unfold` → `RepeatsOutput::Unfold`; `row.row.connect_changed` → `Changed { count, axis }`; the count overlay's drag and the boundary drags (`connect_boundary_drag`) → `Dragged { index, to }` | handle placement (from `shown_boundaries`) → `Show(Vec<Boundary>)` | Mostly `impl Window` today: split the widget part out first. Its `row` is a `RepeatFoldRow`. |
 | `edit_view/grip_layer.rs` | `GripLayer` | — | — | A GObject subclass (layout manager): stays a widget. |
+
+## Phase 2: the application and the window
+
+`app.rs` and `mod.rs` are relm4 components now; their leaves still sit
+behind their shims.
+
+### Who owns what
+
+- **The application, `app::Shell`**, is a component with no widget
+  (`type Root = ()`). `ui::run` launches it, keeps its controller until
+  `run_with_args` returns, and connects GApplication's `startup`,
+  `activate` and `open` to `ShellInput`s. `activate` and `open` carry an
+  `ApplicationHoldGuard`, dropped once the message is handled, so the
+  application can't end between the signal and its first window.
+- **The project windows**: the shell's model holds an
+  `OpenWindow { id, folder, controller: Controller<Window> }` for each.
+  The window's root sends `WindowOutput::Closed` from its `destroy`
+  signal and the shell drops that controller, which shuts the window's
+  component down. Nothing else holds a window, so a closed window is
+  freed and an open one can't be (the 960f06d and 0603e47 classes).
+  The root is made by `Window::init_root`; the shell takes it from
+  `Window::builder().widget()`, fills it with the fallible
+  `build_widgets(&root, ..)` and only then launches, destroying the root
+  if building failed.
+- **The window, `ui::Window`**, is the model: `widgets: Widgets`,
+  `session: Session`, `state: State`, `pins: Pins`,
+  `watcher: Option<Watcher>`, `editing: EditView`, plus its own
+  `ComponentSender`. No `Rc<Window>`, `Weak<Window>` or `RefCell` round
+  them; every handler is `&mut self`.
+- The window talks to the shell with `WindowOutput`: `GoToFolder` (the
+  shell brings the window showing it forward, or answers
+  `ProjectInput::OpenHere`), `Opened` (recent projects; which window
+  shows what), `Closing { size, maximized, hold }` (remembered; the hold
+  keeps the application up until it is saved) and `Closed`. The shell
+  talks to a window with `WindowInput`s (`ProjectInput::Notice`,
+  `ProjectInput::Welcome`).
+
+### The window's groups
+
+`WindowInput` wraps one input enum per group. Each group is a file in
+`ui/update/` with its enum, a `wire(window)` called from `Window::init`,
+and an `update_<group>` method that `Window::update` hands its messages
+to. The handlers themselves are `impl Window` methods in the group's
+file (for editing, in the `edit_view` files).
+
+| Group | File | Input | Handlers | Leaf outputs and signals it wires |
+|---|---|---|---|---|
+| Selection and focus | `update/selection.rs` | `SelectionInput` | `select_and_frame`, `selection_changed`, `show_card`, `show_hint`, `show_moves`, focus mode (`focus_changed`, `open_focus`, `leave_focus`, `update_focus`, `toggle_play_focus`, `focus_tick`, the progress, caption and pictures), posed problems and openings (`pose_problem`, `update_opening`, `motion_moved`, `problem_moved`), `finder_search`, `finder_hit` | actions `back`, `forward`, `next-problem`, `previous-problem`, `find`, `escape`, `show-problem`; `ProblemsPanel` choose/source; `FilesList` open; `TreeSidebar` select/source/focus/hover; `Dock` move; `Inspector` focus/source; `Finder` search request and hit; `FocusPanel` done/source/X-ray/tint/fade; the step and swing cards' scrubs and play; `ProblemCard`'s scrub; `Pictures` resized and chosen; `PlanSwitch`; `MotionBar`'s scale |
+| Project | `update/project.rs` | `ProjectInput` | `run_check` (and `Checked`), `show_folder`, `show_title`, `result_changed`, `apply_wanted`, `editor_changed`, `sync_files`, `text_linked`, `capture_if_asked`, `check_status_changed`, `build_changed`, `choose_folder`, `go_to_folder`, `ask_about_unsaved`, `open_folder`, `watch`, closing | actions `new-project`, `check`, `search`, `editor`, `show-panel`, `move-panel`, `reset-layout`, `model`, `save`, `format`, `open`, `open-recent`; the folder drop; `FilesPage` link/go/check/show-in-3D/open/notice and its tabs; `Workbench` save failed; `Inspector` unsaved; the root's `close-request` |
+| Editing | `update/editing.rs` | `EditingInput` | in `edit_view.rs` and `edit_view/*.rs`: the menu, the card, the option search, links, grips, changes, holds, item tools, repeats, verbs | `EditMenu` chosen; `EditCard` action and links; the face button; the pointer over the view; `OptionSearch` chosen/closed; `Inspector`'s links; `DependantsDialog`; `ChangeCard`; `Hold`/`HoldCard`; `ItemTools`; `RepeatFoldRow`s; the repeat count and boundary drags; `Finder` actions request and action; `GripPanel`; the grips' handles, entries and range menus; the edit menu's, options' and stops' timers and worker threads; the Delete key |
+| Rendering | `update/rendering.rs` | `RenderingInput` | `view_changed`, framing and the camera (`frame`, `frame_selection`, `look_from`, `update_orbit`, `pick`, `resized`), drawing (`request_render`, `render_now`, `poll_frame`, `looks`), pins, `pull_apart`, `toggle_play_explode`, `explode_tick`, `export_view`, `scene_changed`, `explode_changed`, `repose`, the backdrop | actions `frame`, `export-view`, `view-*`; `Header` outputs (view, scene); `ViewToolbar` X-ray, Pull apart, play and slider; `CameraToolbar` front and turn; the style manager's dark (disconnected in `shutdown`); `Viewport` resized; the view's drags, scroll and keys; the mouse's back and forward buttons |
+
+`dispatch`, `handle` and `toast` stay in `mod.rs`: every group uses
+them.
+
+### Conventions inside the window
+
+- A widget closure captures `window.input()` (a clone of the input
+  sender) and does `input.emit(GroupInput::X(..).into())`; background
+  work uses `input.send(..)` and stops when it fails. Nothing captures
+  the window.
+- `self.send(message)` queues a message for after the current one (what
+  the old code did with `idle_add` or a short timeout "once the signal is
+  done").
+- Animation and drawing use the view's frame clock through
+  `self.on_next_frame(|frame_time| message)`: one tick, one message.
+  Playing (`FocusTick`, `ExplodeTick`) asks for the next frame from its
+  handler while it plays; `Clock` in `State` keeps the last frame time
+  and whether a tick is already asked for, so pausing and playing again
+  never runs two clocks.
+- Controls the window sets itself on raw widgets of a leaf (Pull apart,
+  focus mode's checks and From above switch, the motion slider) have
+  their handler ids in `Window::controls`; `block_controls` /
+  `unblock_controls` wrap the setting, as `#[block_signal]` would. They
+  go once those leaves are owned as controllers and send outputs for
+  people's changes only.
+- Request and reply (rule 9): the finder's searches go out as
+  `SelectionInput::FinderSearch` / `EditingInput::FinderActions` and are
+  answered with `Finder::show_hits` / `show_actions`. The option search
+  is still synchronous (`option_search.rs` explains why), so the window
+  hands it a copy of the setting it searches (`give_option_search`)
+  before it opens or refreshes it, and the dialog lists matches from
+  that copy with no call back into the window.
+- `update::Unprinted<T>` gives `Debug` to a payload that has none
+  (`files::CursorName`, the analysis, a found fit or stop).
+
+### Behaviour that changed on purpose
+
+- Everything the window does in answer to a widget now happens when the
+  main loop next runs, after the signal has returned.
+- A frame ready on the GPU is shown from a message after the frame-clock
+  tick that found it, so it reaches the screen one frame later than
+  before.
+- Delete outside a text field is always claimed by the window (it can't
+  ask the model whether something was removed before answering GTK).
+- A grip's typed value, a pick from a grip's sizes and a drag's next
+  value were sent after a short timeout or an idle; they are queued
+  messages now.
+
+### Left for the group lanes
+
+- Own each leaf as a `Controller` (or `Bridge`) in the model and forward
+  its outputs in `wire`, deleting the shims, `Window::controls` and the
+  rest of the callback plumbing in the leaves (`TreeSidebar`'s `Slot`
+  and `TreeCallbacks`, `Finder`'s callbacks, `focus_stage`'s `Slot`,
+  `workbench`'s `Slot`).
+- `EditView` still keeps its own state in `Cell`s and `RefCell`s
+  (`state`, `grips.state`, `repeats`, `options`, `verbs`, `immediate`):
+  move them into plain fields of the model.
+- `FilesPage` is still called synchronously (the L3 list: `save_all`,
+  `forget_unsaved` before `close`, `buffer_for` in `BufferWriter`,
+  `overlay_for_check` before a check, `set_folder` before a check). The
+  closing path already answers with messages (`CloseAsked`,
+  `CloseNow`); `ask_about_unsaved` still calls `save_all` from its
+  dialog's response.
+- Replace `Unprinted` payloads with `Debug` types where the types can
+  have it.

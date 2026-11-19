@@ -31,6 +31,7 @@ type SearchCallback = Rc<dyn Fn(&str) -> Vec<Hit>>;
 type HitCallback = Rc<dyn Fn(Hit, Choice)>;
 type ActionsCallback = Rc<dyn Fn(&str) -> Vec<Action>>;
 type ActionCallback = Rc<dyn Fn(usize)>;
+type RequestCallback = Rc<dyn Fn(String)>;
 
 /// What the field says before anything is typed, and what screen readers
 /// call it.
@@ -573,6 +574,12 @@ struct Callbacks {
     hit: Cell<Option<HitCallback>>,
     actions: Cell<Option<ActionsCallback>>,
     action: Cell<Option<ActionCallback>>,
+    /// Told each query instead of `search`, for an owner that answers
+    /// from its own update with [`Finder::show_hits`].
+    search_request: Cell<Option<RequestCallback>>,
+    /// Told each query instead of `actions`, answered with
+    /// [`Finder::show_actions`].
+    actions_request: Cell<Option<RequestCallback>>,
 }
 
 /// The finder dialog, behind the callback API the window still uses: it
@@ -614,12 +621,20 @@ impl Finder {
     fn answer(&self, output: FinderOutput) {
         match output {
             FinderOutput::Search(query) => {
+                if let Some(request) = current(&self.callbacks.search_request) {
+                    request(query);
+                    return;
+                }
                 let hits = current(&self.callbacks.search)
                     .map(|search| search(&query))
                     .unwrap_or_default();
                 self.bridge.send(FinderInput::Hits(hits));
             }
             FinderOutput::SearchActions(query) => {
+                if let Some(request) = current(&self.callbacks.actions_request) {
+                    request(query);
+                    return;
+                }
                 let actions = current(&self.callbacks.actions)
                     .map(|list| list(&query))
                     .unwrap_or_default();
@@ -639,8 +654,40 @@ impl Finder {
     }
 
     /// Calls `callback` with the query to find what it matches.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the window answers with the request API; tests answer at once"
+        )
+    )]
     pub fn connect_search(&self, callback: impl Fn(&str) -> Vec<Hit> + 'static) {
         self.callbacks.search.set(Some(Rc::new(callback)));
+    }
+
+    /// Calls `request` with each query to find, instead of a search
+    /// callback: the owner answers later, from its own update, with
+    /// [`Finder::show_hits`] (docs/relm4-migration.md, rule 9).
+    pub fn connect_search_request(&self, request: impl Fn(String) + 'static) {
+        self.callbacks.search_request.set(Some(Rc::new(request)));
+    }
+
+    /// Lists `hits`: the answer to the last query asked for with
+    /// [`Finder::connect_search_request`].
+    pub fn show_hits(&self, hits: Vec<Hit>) {
+        self.bridge.send(FinderInput::Hits(hits));
+    }
+
+    /// Calls `request` with each query to list the verbs it names: the
+    /// owner answers with [`Finder::show_actions`].
+    pub fn connect_actions_request(&self, request: impl Fn(String) + 'static) {
+        self.callbacks.actions_request.set(Some(Rc::new(request)));
+    }
+
+    /// Lists `actions`: the answer to the last query asked for with
+    /// [`Finder::connect_actions_request`].
+    pub fn show_actions(&self, actions: Vec<Action>) {
+        self.bridge.send(FinderInput::Actions(actions));
     }
 
     /// Calls `callback` with a hit and what was asked of it. Until one is
@@ -651,6 +698,13 @@ impl Finder {
     }
 
     /// Calls `callback` with the query to list the verbs it names.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the window answers with the request API; tests answer at once"
+        )
+    )]
     pub fn connect_actions(&self, callback: impl Fn(&str) -> Vec<Action> + 'static) {
         self.callbacks.actions.set(Some(Rc::new(callback)));
     }

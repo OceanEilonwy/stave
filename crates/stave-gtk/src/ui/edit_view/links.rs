@@ -5,14 +5,13 @@
 //! hardware is outlined as a selection is, a space is lit as the pointer
 //! in it lights it.
 
-use std::rc::Rc;
-
 use stave_app::inspect::LinkTarget;
 use stave_app::session::{Command, Selection};
 use stave_scene::NodeId;
 
 use super::super::Window;
 use super::super::sections::LinkHandlers;
+use crate::ui::update::editing::EditingInput;
 
 /// What a link the pointer is on lights.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,41 +24,41 @@ pub(in crate::ui) enum Hovered {
 
 impl Window {
     /// Connects a panel's links: a click selects, the pointer lights.
-    pub(in crate::ui) fn connect_links(self: &Rc<Self>, links: &LinkHandlers) {
-        let window = Rc::downgrade(self);
-        links.connect_click(move |target| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            match target {
-                LinkTarget::Select(selection) => {
-                    window.editing.state.borrow_mut().link_hover = None;
-                    window.dispatch(Command::Select(Some(selection)));
-                }
-                LinkTarget::Space(region) => window.hover_region(region),
+    pub(in crate::ui) fn connect_links(&self, links: &LinkHandlers) {
+        let input = self.input();
+        links.connect_click(move |target| input.emit(EditingInput::LinkClicked(target).into()));
+        let input = self.input();
+        links.connect_hover(move |target| input.emit(EditingInput::LinkHovered(target).into()));
+    }
+
+    /// A link was clicked: an item is selected, a space lit.
+    pub(in crate::ui) fn link_clicked(&mut self, target: LinkTarget) {
+        match target {
+            LinkTarget::Select(selection) => {
+                self.editing.state.borrow_mut().link_hover = None;
+                self.dispatch(Command::Select(Some(selection)));
             }
-        });
-        let window = Rc::downgrade(self);
-        links.connect_hover(move |target| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            {
-                let mut state = window.editing.state.borrow_mut();
-                if state.link_hover == Some(Hovered::Space) {
-                    state.hover = None;
-                }
-                state.link_hover = match target {
-                    Some(LinkTarget::Select(selection)) => Some(Hovered::Item(selection)),
-                    Some(LinkTarget::Space(region)) => {
-                        state.hover = Some(region);
-                        Some(Hovered::Space)
-                    }
-                    None => None,
-                };
+            LinkTarget::Space(region) => self.hover_region(region),
+        }
+    }
+
+    /// The pointer is on a link (or left one): what it names is lit.
+    pub(in crate::ui) fn link_hovered(&mut self, target: Option<LinkTarget>) {
+        {
+            let mut state = self.editing.state.borrow_mut();
+            if state.link_hover == Some(Hovered::Space) {
+                state.hover = None;
             }
-            window.request_render();
-        });
+            state.link_hover = match target {
+                Some(LinkTarget::Select(selection)) => Some(Hovered::Item(selection)),
+                Some(LinkTarget::Space(region)) => {
+                    state.hover = Some(region);
+                    Some(Hovered::Space)
+                }
+                None => None,
+            };
+        }
+        self.request_render();
     }
 
     /// The nodes the link under the pointer names, to outline with the
@@ -68,7 +67,7 @@ impl Window {
         let Some(Hovered::Item(selection)) = self.editing.state.borrow().link_hover.clone() else {
             return Vec::new();
         };
-        let session = self.session.borrow();
+        let session = &self.session;
         let Some((_, graph)) = session.drawable() else {
             return Vec::new();
         };

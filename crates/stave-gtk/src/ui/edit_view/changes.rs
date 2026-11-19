@@ -48,6 +48,7 @@ use super::super::edit_card::diagnostic_head;
 use super::super::relm4_shim::Bridge;
 use super::super::sections;
 use super::card_verdict;
+use crate::ui::update::editing::EditingInput;
 
 /// What the user did on a change's card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -925,30 +926,24 @@ impl DependantsDialog {
 impl Window {
     /// Connects the change's card (in the Edit panel) and puts the
     /// removal's dialog over the 3D view.
-    pub(in crate::ui) fn connect_changes(self: &Rc<Self>) {
+    pub(in crate::ui) fn connect_changes(&self) {
         install_style();
         let card = &self.editing.changes.card;
         let dialog = &self.editing.changes.dialog;
         self.widgets.design.add_overlay(&dialog.root);
-        let window = Rc::downgrade(self);
+        let input = self.input();
         dialog.connect_answered(move |include| {
-            if let Some(window) = window.upgrade() {
-                window.answer_dependants(include);
-            }
+            input.emit(EditingInput::DependantsAnswered(include).into());
         });
-        let window = Rc::downgrade(self);
-        card.connect_action(move |action| {
-            if let Some(window) = window.upgrade() {
-                window.send_edit_later(action.command());
-            }
-        });
+        let input = self.input();
+        card.connect_action(move |action| input.emit(EditingInput::ChangeAction(action).into()));
     }
 
     /// Draws the change in progress on its card, or hides the card.
     /// Returns whether a change is in progress.
-    pub(in crate::ui) fn draw_change(self: &Rc<Self>, checking: bool) -> bool {
+    pub(in crate::ui) fn draw_change(&mut self, checking: bool) -> bool {
         let words = {
-            let session = self.session.borrow();
+            let session = &self.session;
             session.change().map(|change| {
                 (
                     change_words(change, checking),
@@ -974,7 +969,7 @@ impl Window {
     }
 
     /// Asks, once a removal, whether what uses the item goes too.
-    fn ask_about_dependants(self: &Rc<Self>, item: String, dependants: &[String]) {
+    fn ask_about_dependants(&mut self, item: String, dependants: &[String]) {
         if self.editing.changes.asked.borrow().as_deref() == Some(item.as_str()) {
             return;
         }
@@ -984,7 +979,7 @@ impl Window {
 
     /// The removal's dialog was answered: remove what uses the item too,
     /// or leave everything as it is.
-    pub(in crate::ui) fn answer_dependants(self: &Rc<Self>, include: bool) {
+    pub(in crate::ui) fn answer_dependants(&mut self, include: bool) {
         let dialog = &self.editing.changes.dialog;
         if !dialog.root.is_visible() {
             return;
@@ -1007,10 +1002,10 @@ impl Window {
     /// go see-through and red, so nothing is removed without being seen.
     /// `None` for anything else.
     pub(in crate::ui) fn render_removal(
-        &self,
+        &mut self,
         backdrop: crate::render::Backdrop,
     ) -> Option<anyhow::Result<crate::render::Ticket>> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let change = session.change()?;
         if !matches!(change.request(), ChangeRequest::Remove { .. }) {
             return None;
@@ -1023,7 +1018,7 @@ impl Window {
         }
         let shown = session.shown()?.clone();
         let (_, graph) = shown.drawable()?;
-        let mut state = self.state.borrow_mut();
+        let state = &mut self.state;
         if state.focus.is_some() {
             return None;
         }

@@ -16,7 +16,6 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use glam::Vec3;
@@ -31,6 +30,7 @@ use stave_scene::Aabb;
 
 use super::super::Window;
 use super::item_tools::{MOST, RepeatFoldRow};
+use crate::ui::update::editing::EditingInput;
 
 /// The unit vector of a design axis in the 3D view's frame (across is x,
 /// up is y; the front faces +z, so deep, front to back, is −z).
@@ -282,7 +282,7 @@ impl Window {
     /// The spaces the item of the project by this name fills, as the
     /// session's model binds them ([`filled_spaces`]): one per piece.
     fn spaces_of(&self, item: &str) -> Vec<RegionId> {
-        let session = self.session.borrow();
+        let session = &self.session;
         session
             .shown()
             .and_then(|checked| checked.opened.model.as_ref())
@@ -360,7 +360,7 @@ impl Window {
     }
 
     /// Puts the repeat controls on the card and over the 3D view.
-    pub(in crate::ui) fn connect_repeats(self: &Rc<Self>) {
+    pub(in crate::ui) fn connect_repeats(&self) {
         let repeats = &self.editing.repeats;
         // The repeat controls sit on the candidate's card, above its
         // buttons, folded until asked for.
@@ -368,39 +368,26 @@ impl Window {
             &self.editing.card.repeat_button_slot,
             &self.editing.card.repeat_slot,
         );
-        let window = Rc::downgrade(self);
-        repeats.row.connect_unfold(move || {
-            if let Some(window) = window.upgrade() {
-                window.update_repeat_row();
-                window.request_render();
-            }
-        });
-        let window = Rc::downgrade(self);
+        let input = self.input();
+        repeats
+            .row
+            .connect_unfold(move || input.emit(EditingInput::CardRepeatUnfolded.into()));
+        let input = self.input();
         repeats.row.row.connect_changed(move |count, axis| {
-            if let Some(window) = window.upgrade() {
-                window.repeat_selected(count, Some(axis));
-            }
+            input.emit(EditingInput::RepeatChanged { count, axis }.into());
         });
         self.widgets.design.add_overlay(&repeats.count.root);
         let drag = gtk::GestureDrag::new();
-        let window = Rc::downgrade(self);
+        let input = self.input();
         drag.connect_drag_begin(move |_, x, y| {
-            if let Some(window) = window.upgrade() {
-                window.count_drag_begin(x, y);
-            }
+            input.emit(EditingInput::CountDragBegun { x, y }.into());
         });
-        let window = Rc::downgrade(self);
+        let input = self.input();
         drag.connect_drag_update(move |_, x, y| {
-            if let Some(window) = window.upgrade() {
-                window.count_drag_update(x, y);
-            }
+            input.emit(EditingInput::CountDragged { x, y }.into());
         });
-        let window = Rc::downgrade(self);
-        drag.connect_drag_end(move |_, _, _| {
-            if let Some(window) = window.upgrade() {
-                window.count_drag_end();
-            }
-        });
+        let input = self.input();
+        drag.connect_drag_end(move |_, _, _| input.emit(EditingInput::CountDragEnded.into()));
         repeats.count.root.add_controller(drag);
     }
 
@@ -412,7 +399,7 @@ impl Window {
     pub(in crate::ui) fn update_repeat_row(&self) {
         let row = &self.editing.repeats.row;
         let shown = {
-            let session = self.session.borrow();
+            let session = &self.session;
             session.edit().and_then(|edit| edit.chosen()).map(|chosen| {
                 let repeat = chosen.repeat();
                 (
@@ -436,8 +423,8 @@ impl Window {
     /// selected item fills while its card offers a first repeat.
     fn count_handle_on(&self) -> Option<(Aabb, Axis, usize)> {
         let item = {
-            let session = self.session.borrow();
-            let state = self.state.borrow();
+            let session = &self.session;
+            let state = &self.state;
             let (_, graph) = session.drawable()?;
             let posed = state.posed.as_ref()?;
             if let Some(chosen) = session.edit().and_then(|edit| edit.chosen()) {
@@ -484,8 +471,8 @@ impl Window {
         let [space] = self.spaces_of(&item)[..] else {
             return None;
         };
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (_, graph) = session.drawable()?;
         let volume = graph.region_volume(state.posed.as_ref()?, space)?;
         let count = self.editing.repeats.dragged_count.get().unwrap_or(1);
@@ -493,9 +480,9 @@ impl Window {
     }
 
     /// Places the repeat handles after a frame is drawn.
-    pub(in crate::ui) fn place_repeat_handles(self: &Rc<Self>) {
+    pub(in crate::ui) fn place_repeat_handles(&mut self) {
         let repeats = &self.editing.repeats;
-        let focus = self.state.borrow().focus.is_some();
+        let focus = self.state.focus.is_some();
         let on = (!focus && self.gestures_allowed())
             .then(|| self.count_handle_on())
             .flatten();
@@ -506,8 +493,8 @@ impl Window {
                 let (start, end) = (at_edge(start, &volume, axis), at_edge(end, &volume, axis));
                 let at = start + (end - start) / crate::convert::f32_of_index(count.max(1));
                 let point = {
-                    let state = self.state.borrow();
-                    self.project(&state, at)
+                    let state = &self.state;
+                    self.project(state, at)
                 };
                 match point {
                     Some(point) => {
@@ -522,15 +509,15 @@ impl Window {
         self.place_boundary_handles(focus);
     }
 
-    fn count_drag_begin(&self, x: f64, y: f64) {
+    pub(in crate::ui) fn count_drag_begin(&self, x: f64, y: f64) {
         let repeats = &self.editing.repeats;
         let Some((volume, axis, _)) = repeats.count_on.get() else {
             return;
         };
         let (start, end) = axis_ends(&volume, axis);
         let (start, end) = (at_edge(start, &volume, axis), at_edge(end, &volume, axis));
-        let state = self.state.borrow();
-        let (Some(start), Some(end)) = (self.project(&state, start), self.project(&state, end))
+        let state = &self.state;
+        let (Some(start), Some(end)) = (self.project(state, start), self.project(state, end))
         else {
             return;
         };
@@ -538,7 +525,7 @@ impl Window {
         repeats.drag.set(Some(DragFrom { start, end, origin }));
     }
 
-    fn count_drag_update(self: &Rc<Self>, x: f64, y: f64) {
+    pub(in crate::ui) fn count_drag_update(&mut self, x: f64, y: f64) {
         let repeats = &self.editing.repeats;
         let Some(from) = repeats.drag.get() else {
             return;
@@ -555,7 +542,7 @@ impl Window {
         }
     }
 
-    fn count_drag_end(self: &Rc<Self>) {
+    pub(in crate::ui) fn count_drag_end(&mut self) {
         let repeats = &self.editing.repeats;
         repeats.drag.set(None);
         let Some(count) = repeats.dragged_count.take() else {
@@ -567,7 +554,7 @@ impl Window {
 
     /// Drags the count handle to `count` pieces, as a drag that ends there
     /// does (scripts).
-    pub(in crate::ui) fn drag_count_to(self: &Rc<Self>, count: usize) -> Result<(), String> {
+    pub(in crate::ui) fn drag_count_to(&mut self, count: usize) -> Result<(), String> {
         // The handle shows once the repeat controls are open: "Repeat…"
         // is pressed first, as a person would.
         self.unfold_repeat();
@@ -583,7 +570,7 @@ impl Window {
 
     /// Presses "Repeat…" on the candidate's card, or else on the selected
     /// item's, when it is folded; `true` when one was pressed.
-    pub(in crate::ui) fn unfold_repeat(self: &Rc<Self>) -> bool {
+    pub(in crate::ui) fn unfold_repeat(&mut self) -> bool {
         if self.editing.repeats.row.press() {
             return true;
         }
@@ -596,7 +583,7 @@ impl Window {
     /// item's space is a piece of, while nothing is being edited.
     fn shown_boundaries(&self) -> Vec<Boundary> {
         {
-            let session = self.session.borrow();
+            let session = &self.session;
             if session.edit().is_some()
                 || session.change().is_some()
                 || session.selection().is_none()
@@ -614,8 +601,8 @@ impl Window {
         let Some(space) = self.spaces_of(&item).first().copied() else {
             return Vec::new();
         };
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (Some(checked), Some((_, graph)), Some(posed)) =
             (session.shown(), session.drawable(), state.posed.as_ref())
         else {
@@ -634,7 +621,7 @@ impl Window {
             .collect()
     }
 
-    fn place_boundary_handles(self: &Rc<Self>, focus: bool) {
+    fn place_boundary_handles(&mut self, focus: bool) {
         let shown = if focus || !self.gestures_allowed() {
             Vec::new()
         } else {
@@ -675,8 +662,8 @@ impl Window {
             let (start, _, end) = found.points;
             let at = start + (end - start) * crate::convert::f32_of(fraction);
             let point = {
-                let state = self.state.borrow();
-                self.project(&state, at)
+                let state = &self.state;
+                self.project(state, at)
             };
             handle
                 .label
@@ -702,72 +689,78 @@ impl Window {
             .and_then(|(_, boundary)| boundary.clone())
     }
 
-    fn connect_boundary_drag(self: &Rc<Self>, root: &gtk::Box, index: usize) {
+    fn connect_boundary_drag(&self, root: &gtk::Box, index: usize) {
         let drag = gtk::GestureDrag::new();
-        let window = Rc::downgrade(self);
+        let input = self.input();
         drag.connect_drag_begin(move |_, x, y| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let Some(boundary) = window.boundary_of_handle(index) else {
-                return;
-            };
-            let state = window.state.borrow();
-            let (start, _, end) = boundary.points;
-            let (Some(start), Some(end)) =
-                (window.project(&state, start), window.project(&state, end))
-            else {
-                return;
-            };
-            let repeats = &window.editing.repeats;
-            let origin = repeats
-                .boundaries
-                .borrow()
-                .get(index)
-                .map(|(handle, _)| handle.origin((x, y)));
-            if let Some(origin) = origin {
-                repeats.drag.set(Some(DragFrom { start, end, origin }));
-            }
+            input.emit(EditingInput::BoundaryDragBegun { index, x, y }.into());
         });
-        let window = Rc::downgrade(self);
+        let input = self.input();
         drag.connect_drag_update(move |_, x, y| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let repeats = &window.editing.repeats;
-            let Some(from) = repeats.drag.get() else {
-                return;
-            };
-            let Some(boundary) = window.boundary_of_handle(index) else {
-                return;
-            };
-            let point = (
-                from.origin.0 + crate::convert::f32_of(x),
-                from.origin.1 + crate::convert::f32_of(y),
-            );
-            let length = boundary_at(&boundary, fraction_along(point, from.start, from.end));
-            repeats.dragged_boundary.set(Some((index, length)));
-            window.request_render();
+            input.emit(EditingInput::BoundaryDragged { index, x, y }.into());
         });
-        let window = Rc::downgrade(self);
-        drag.connect_drag_end(move |_, _, _| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let repeats = &window.editing.repeats;
-            repeats.drag.set(None);
-            let Some((dragged, length)) = repeats.dragged_boundary.take() else {
-                return;
-            };
-            if let Some(boundary) = window.boundary_of_handle(dragged) {
-                window.move_boundary(&boundary, length);
-            }
-        });
+        let input = self.input();
+        drag.connect_drag_end(move |_, _, _| input.emit(EditingInput::BoundaryDragEnded.into()));
         root.add_controller(drag);
     }
 
+    /// A boundary's handle was pressed: the drag starts from where it is.
+    pub(in crate::ui) fn boundary_drag_begun(&mut self, index: usize, x: f64, y: f64) {
+        let Some(boundary) = self.boundary_of_handle(index) else {
+            return;
+        };
+        let state = &self.state;
+        let (start, _, end) = boundary.points;
+        let (Some(start), Some(end)) = (self.project(state, start), self.project(state, end))
+        else {
+            return;
+        };
+        let repeats = &self.editing.repeats;
+        let origin = repeats
+            .boundaries
+            .borrow()
+            .get(index)
+            .map(|(handle, _)| handle.origin((x, y)));
+        if let Some(origin) = origin {
+            repeats.drag.set(Some(DragFrom { start, end, origin }));
+        }
+    }
+
+    /// A boundary's handle moved this far from where its drag began.
+    pub(in crate::ui) fn boundary_dragged(&mut self, index: usize, x: f64, y: f64) {
+        let repeats = &self.editing.repeats;
+        let Some(from) = repeats.drag.get() else {
+            return;
+        };
+        let Some(boundary) = self.boundary_of_handle(index) else {
+            return;
+        };
+        let point = (
+            from.origin.0 + crate::convert::f32_of(x),
+            from.origin.1 + crate::convert::f32_of(y),
+        );
+        let length = boundary_at(&boundary, fraction_along(point, from.start, from.end));
+        self.editing
+            .repeats
+            .dragged_boundary
+            .set(Some((index, length)));
+        self.request_render();
+    }
+
+    /// A boundary's drag ended: the boundary moves where it was let go.
+    pub(in crate::ui) fn boundary_drag_ended(&mut self) {
+        let repeats = &self.editing.repeats;
+        repeats.drag.set(None);
+        let Some((dragged, length)) = repeats.dragged_boundary.take() else {
+            return;
+        };
+        if let Some(boundary) = self.boundary_of_handle(dragged) {
+            self.move_boundary(&boundary, length);
+        }
+    }
+
     /// Moves a boundary between two pieces so the lower is `length` long.
-    pub(in crate::ui) fn move_boundary(self: &Rc<Self>, boundary: &Boundary, length: Length) {
+    pub(in crate::ui) fn move_boundary(&mut self, boundary: &Boundary, length: Length) {
         match parse_name(&boundary.split.region) {
             Ok(region) => self.start_change(EditCommand::MoveShares {
                 region,

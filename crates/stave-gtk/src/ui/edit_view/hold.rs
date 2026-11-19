@@ -17,7 +17,6 @@
 //! ([`HoldStep`]) is the window's.
 
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -31,6 +30,7 @@ use stave_scene::Target;
 use super::super::Window;
 use super::super::relm4_shim::Bridge;
 use super::super::sections;
+use crate::ui::update::editing::EditingInput;
 
 /// Where a hold stands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -401,34 +401,32 @@ impl Hold {
 impl Window {
     /// Connects the hold card (in the Edit panel) and the space menu's
     /// button.
-    pub(in crate::ui) fn connect_hold(self: &Rc<Self>) {
+    pub(in crate::ui) fn connect_hold(&self) {
         let hold = &self.editing.hold;
         self.editing.menu.root.append(&hold.from_space);
-        let window = Rc::downgrade(self);
-        hold.from_space.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.hold_from_space();
+        let input = self.input();
+        hold.from_space
+            .connect_clicked(move |_| input.emit(EditingInput::HoldFromSpace.into()));
+        let input = self.input();
+        hold.card
+            .connect(move |output| input.emit(EditingInput::HoldCard(output).into()));
+    }
+
+    /// The hold card asked for something.
+    pub(in crate::ui) fn hold_card_asked(&mut self, output: HoldCardOutput) {
+        match output {
+            HoldCardOutput::TryIt(fields) => self.try_hold_with(fields),
+            HoldCardOutput::Cancel => {
+                self.cancel_hold();
             }
-        });
-        let window = Rc::downgrade(self);
-        hold.card.connect(move |output| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            match output {
-                HoldCardOutput::TryIt(fields) => window.try_hold_with(fields),
-                HoldCardOutput::Cancel => {
-                    window.cancel_hold();
-                }
-            }
-        });
+        }
     }
 
     /// "Hold a distance…" on a part's card: the next click picks the
     /// second thing.
-    pub(in crate::ui) fn hold_from_selected(self: &Rc<Self>) {
+    pub(in crate::ui) fn hold_from_selected(&mut self) {
         let first = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let Some((design, _)) = session.drawable() else {
                 return;
             };
@@ -445,9 +443,9 @@ impl Window {
     }
 
     /// "Hold a distance from this space…" on a space's menu.
-    pub(in crate::ui) fn hold_from_space(self: &Rc<Self>) {
+    pub(in crate::ui) fn hold_from_space(&mut self) {
         let region = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let edit = session.edit();
             let (_, graph) = match session.drawable() {
                 Some(drawn) => drawn,
@@ -467,7 +465,7 @@ impl Window {
     }
 
     /// Begins a hold from `first`: the hint asks for the second thing.
-    pub(in crate::ui) fn start_hold(self: &Rc<Self>, first: Measured) {
+    pub(in crate::ui) fn start_hold(&mut self, first: Measured) {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return;
@@ -486,14 +484,14 @@ impl Window {
 
     /// A click while a hold waits for its second thing: a part or a space
     /// under the pointer is it. `true` when the click was used here.
-    pub(in crate::ui) fn hold_click(self: &Rc<Self>, x: f64, y: f64) -> bool {
+    pub(in crate::ui) fn hold_click(&mut self, x: f64, y: f64) -> bool {
         let first = match &*self.editing.hold.step.borrow() {
             HoldStep::Picking { first } => first.clone(),
             HoldStep::Idle | HoldStep::Asking { .. } => return false,
         };
         let (target, _) = self.pointed_at(x, y);
         let second = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let Some((design, graph)) = session.drawable() else {
                 return true;
             };
@@ -517,8 +515,8 @@ impl Window {
     }
 
     /// Both things are chosen: the hold card asks how to hold the distance.
-    pub(in crate::ui) fn ask_hold(self: &Rc<Self>, first: Measured, second: Measured) {
-        let now = self.session.borrow().measure(&first, &second);
+    pub(in crate::ui) fn ask_hold(&mut self, first: Measured, second: Measured) {
+        let now = self.session.measure(&first, &second);
         self.show_hint("");
         self.editing.hold.card.show(&first, &second, &now);
         self.update_edit_panel();
@@ -556,7 +554,7 @@ impl Window {
 
     /// "Try it", as a script presses it: the rule the window last filled
     /// the card with is tried as a change of the design.
-    pub(in crate::ui) fn try_hold(self: &Rc<Self>) {
+    pub(in crate::ui) fn try_hold(&mut self) {
         let fields = match &*self.editing.hold.step.borrow() {
             HoldStep::Asking { fields, .. } => fields.clone(),
             HoldStep::Idle | HoldStep::Picking { .. } => return,
@@ -566,7 +564,7 @@ impl Window {
 
     /// "Try it": the rule the card's fields make is tried as a change of
     /// the design.
-    fn try_hold_with(self: &Rc<Self>, fields: HoldFields) {
+    fn try_hold_with(&mut self, fields: HoldFields) {
         let (first, second) = match &*self.editing.hold.step.borrow() {
             HoldStep::Asking { first, second, .. } => (first.clone(), second.clone()),
             HoldStep::Idle | HoldStep::Picking { .. } => return,
@@ -589,7 +587,7 @@ impl Window {
     }
 
     /// Stops a hold being set up. `true` when there was one.
-    pub(in crate::ui) fn cancel_hold(self: &Rc<Self>) -> bool {
+    pub(in crate::ui) fn cancel_hold(&mut self) -> bool {
         let was = self.editing.hold.step.replace(HoldStep::Idle) != HoldStep::Idle;
         if was {
             self.editing.hold.card.root.set_visible(false);
@@ -603,6 +601,8 @@ impl Window {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]

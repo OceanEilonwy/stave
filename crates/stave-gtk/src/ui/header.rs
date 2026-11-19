@@ -571,6 +571,13 @@ pub struct Header {
     /// The scene menu (shown in the dock).
     pub scene: gtk::MenuButton,
     /// The scenes, in the scene menu's popover.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the window hears the scene chosen as an output; tests read the rows"
+        )
+    )]
     pub scenes: gtk::ListBox,
     bridge: Bridge<HeaderComponent>,
 }
@@ -603,13 +610,6 @@ impl Header {
     }
 
     /// Calls `callback` with each of the header's outputs.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the header's outputs; the window still connects its widgets itself"
-        )
-    )]
     pub fn connect(&self, callback: impl Fn(HeaderOutput) + 'static) {
         self.bridge.connect(callback);
     }

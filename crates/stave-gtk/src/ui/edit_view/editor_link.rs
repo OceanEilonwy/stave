@@ -17,7 +17,6 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use stave_app::session::{Editor, LineNumber, Session, SourceLocation};
@@ -391,16 +390,16 @@ impl Window {
     /// section of the card in progress, or takes them away; with the
     /// editor open, its text goes to the first place and the old lines are
     /// marked.
-    pub(in crate::ui) fn update_pending(self: &Rc<Self>) {
+    pub(in crate::ui) fn update_pending(&mut self) {
         let (texts, verb, editor_open) = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let verb = if session.change().is_some() {
                 "this change"
             } else {
                 "Add"
             };
             (
-                pending_texts(&session),
+                pending_texts(session),
                 verb,
                 session.editor() == Editor::Open,
             )
@@ -484,7 +483,7 @@ impl Window {
     /// For a rename alone (it is tried without a patch): each file it
     /// rewrites, with the name changed as a word.
     fn rename_texts(&self) -> Vec<(PathBuf, String)> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let Some(change) = session.change() else {
             return Vec::new();
         };

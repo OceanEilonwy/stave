@@ -1,0 +1,1065 @@
+//! What is selected and focused: the selection, focus mode, a posed
+//! problem and the motion sliders, the parts and problems panels, and the
+//! finder's hits.
+
+use super::add_action;
+// The window's own items and imports, as the handlers had them in mod.rs.
+use crate::ui::*;
+
+/// What the selection group is told.
+#[derive(Debug)]
+pub(in crate::ui) enum SelectionInput {
+    /// Selects something (or nothing), without moving the camera.
+    Select(Option<Selection>),
+    /// Selects something and frames it.
+    SelectAndFrame(Option<Selection>),
+    /// Opens a place in the text.
+    GoToSource(SourceLocation),
+    /// Opens focus mode on a joint or piece of hardware.
+    Focus(Target),
+    /// Leaves focus mode.
+    LeaveFocus,
+    /// A partner link in the Parts panel is under the pointer: these items
+    /// are outlined (none when it leaves).
+    Hovered(Vec<stave_scene::Item>),
+    /// Back in the history.
+    Back,
+    /// Forward in the history.
+    Forward,
+    /// The next problem.
+    NextProblem,
+    /// The previous problem.
+    PreviousProblem,
+    /// Escape: cancels an edit, leaves focus mode or clears the selection.
+    Escape,
+    /// Shows a problem (the chip at the view's edge, a pin on the model).
+    ShowProblem(usize),
+    /// Opens the finder.
+    Find,
+    /// The finder asks what a query finds.
+    FinderSearch(String),
+    /// A finder's hit was chosen.
+    FinderHit {
+        /// The hit.
+        hit: finding::Hit,
+        /// What was asked of it.
+        choice: Choice,
+    },
+    /// The selection's motion slider moved.
+    MotionMoved(f64),
+    /// A posed problem's slider moved.
+    ProblemMoved(f64),
+    /// Focus mode's scrub moved (0 to 1).
+    FocusScrubbed(f64),
+    /// Focus mode's play button.
+    PlayFocus,
+    /// A frame while focus mode plays, at this frame time.
+    FocusTick(i64),
+    /// Focus mode's X-ray check.
+    FocusXray(bool),
+    /// Focus mode's tint check.
+    FocusTint(bool),
+    /// Focus mode's fade check.
+    FocusFade(bool),
+    /// Focus mode's From above switch.
+    FocusPlan(bool),
+    /// Hardware focus's small views changed size.
+    PicturesResized,
+    /// The small views' size has settled (for the ask with this number).
+    PicturesDue(u64),
+    /// One of hardware focus's small views was chosen.
+    PictureChosen(usize),
+}
+
+impl From<SelectionInput> for WindowInput {
+    fn from(message: SelectionInput) -> WindowInput {
+        WindowInput::Selection(message)
+    }
+}
+
+/// Wires the parts, problems and Details panels, the dock's chips, focus
+/// mode's controls, the motion sliders, the finder and the history's
+/// actions to [`SelectionInput`]s.
+pub(in crate::ui) fn wire(window: &mut Window) {
+    let input = window.input();
+    let widgets = &window.widgets;
+    let root = &widgets.window;
+    add_action(root, "back", &input, || SelectionInput::Back);
+    add_action(root, "forward", &input, || SelectionInput::Forward);
+    add_action(root, "next-problem", &input, || SelectionInput::NextProblem);
+    add_action(root, "previous-problem", &input, || {
+        SelectionInput::PreviousProblem
+    });
+    add_action(root, "find", &input, || SelectionInput::Find);
+    add_action(root, "escape", &input, || SelectionInput::Escape);
+    // The chip at the view's edge names a problem off screen.
+    let off_screen = gio::SimpleAction::new("show-problem", Some(glib::VariantTy::UINT64));
+    let sender = input.clone();
+    off_screen.connect_activate(move |_, parameter| {
+        if let Some(index) = parameter
+            .and_then(|p| p.get::<u64>())
+            .and_then(|index| usize::try_from(index).ok())
+        {
+            sender.emit(SelectionInput::ShowProblem(index).into());
+        }
+    });
+    root.add_action(&off_screen);
+
+    let sender = input.clone();
+    widgets
+        .problems
+        .connect_choose(move |index| sender.emit(SelectionInput::ShowProblem(index).into()));
+    let sender = input.clone();
+    widgets
+        .problems
+        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
+    let sender = input.clone();
+    widgets.file_list.connect_open(move |path| {
+        if let Some(line) = LineNumber::new(1) {
+            sender.emit(
+                SelectionInput::GoToSource(SourceLocation {
+                    path: path.display().to_string(),
+                    line,
+                })
+                .into(),
+            );
+        }
+    });
+    let sender = input.clone();
+    widgets.tree.connect_select(move |selection| {
+        sender.emit(SelectionInput::SelectAndFrame(Some(selection)).into());
+    });
+    let sender = input.clone();
+    widgets
+        .tree
+        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
+    let sender = input.clone();
+    widgets
+        .tree
+        .connect_focus(move |target| sender.emit(SelectionInput::Focus(target).into()));
+    let sender = input.clone();
+    widgets
+        .tree
+        .connect_hover(move |items| sender.emit(SelectionInput::Hovered(items).into()));
+    let sender = input.clone();
+    widgets.dock.connect_move(move |assembly| {
+        sender.emit(SelectionInput::Select(Some(Selection::Assembly(assembly))).into());
+    });
+    let sender = input.clone();
+    widgets
+        .inspector
+        .connect_focus(move |target| sender.emit(SelectionInput::Focus(target).into()));
+    let sender = input.clone();
+    widgets
+        .inspector
+        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
+
+    // The finder finds through `stave_app::finder`; the window answers its
+    // searches from its own update.
+    let sender = input.clone();
+    widgets.finder.connect_search_request(move |query| {
+        sender.emit(SelectionInput::FinderSearch(query).into())
+    });
+    let sender = input.clone();
+    widgets.finder.connect_hit(move |hit, choice| {
+        sender.emit(SelectionInput::FinderHit { hit, choice }.into());
+    });
+
+    // Focus mode's panel and its controls in the 3D view's area.
+    let focus_panel = &widgets.inspector.focus;
+    let sender = input.clone();
+    focus_panel
+        .done
+        .connect_clicked(move |_| sender.emit(SelectionInput::LeaveFocus.into()));
+    let sender = input.clone();
+    focus_panel
+        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
+    for scrub in [&widgets.step_card.scrub, &widgets.swing_card.scrub] {
+        let sender = input.clone();
+        scrub
+            .connect_changed(move |value| sender.emit(SelectionInput::FocusScrubbed(value).into()));
+    }
+    for play in [&widgets.step_card.play, &widgets.swing_card.play] {
+        let sender = input.clone();
+        play.connect_clicked(move |_| sender.emit(SelectionInput::PlayFocus.into()));
+    }
+    let sender = input.clone();
+    widgets
+        .problem_card
+        .scrub
+        .connect_changed(move |value| sender.emit(SelectionInput::ProblemMoved(value).into()));
+    let sender = input.clone();
+    widgets
+        .pictures
+        .connect_resized(move || sender.emit(SelectionInput::PicturesResized.into()));
+
+    // The controls the window also sets itself: their handlers are
+    // blocked while it does (`Window::block_controls`).
+    let mut controls: Vec<(glib::Object, glib::SignalHandlerId)> = Vec::new();
+    for (check, message) in [
+        (
+            &focus_panel.xray,
+            SelectionInput::FocusXray as fn(bool) -> SelectionInput,
+        ),
+        (&focus_panel.tint, SelectionInput::FocusTint),
+        (&focus_panel.fade, SelectionInput::FocusFade),
+    ] {
+        let sender = input.clone();
+        let handler = check.connect_active_notify(move |check| {
+            sender.emit(message(check.is_active()).into());
+        });
+        controls.push((check.clone().upcast(), handler));
+    }
+    let sender = input.clone();
+    let from_above = &widgets.plan_switch.from_above;
+    let handler = from_above.connect_toggled(move |button| {
+        sender.emit(SelectionInput::FocusPlan(button.is_active()).into());
+    });
+    controls.push((from_above.clone().upcast(), handler));
+    let sender = input;
+    let scale = &widgets.motion.scale;
+    let handler = scale.connect_value_changed(move |scale| {
+        sender.emit(SelectionInput::MotionMoved(scale.value()).into());
+    });
+    controls.push((scale.clone().upcast(), handler));
+    window.controls.extend(controls);
+}
+
+impl Window {
+    /// Handles a [`SelectionInput`].
+    pub(in crate::ui) fn update_selection(&mut self, message: SelectionInput) {
+        match message {
+            SelectionInput::Select(selection) => self.dispatch(Command::Select(selection)),
+            SelectionInput::SelectAndFrame(selection) => self.select_and_frame(selection),
+            SelectionInput::GoToSource(location) => self.dispatch(Command::GoToSource(location)),
+            SelectionInput::Focus(target) => self.dispatch(Command::Focus(target)),
+            SelectionInput::LeaveFocus => self.dispatch(Command::LeaveFocus),
+            SelectionInput::Hovered(items) => {
+                if self.state.hovered != items {
+                    self.state.hovered = items;
+                    self.request_render();
+                }
+            }
+            SelectionInput::Back => self.dispatch(Command::Back),
+            SelectionInput::Forward => self.dispatch(Command::Forward),
+            SelectionInput::NextProblem => self.dispatch(Command::NextProblem),
+            SelectionInput::PreviousProblem => self.dispatch(Command::PreviousProblem),
+            SelectionInput::Escape => {
+                if self.cancel_edit() {
+                    return;
+                }
+                if self.session.focus().is_some() {
+                    self.dispatch(Command::LeaveFocus);
+                } else {
+                    self.dispatch(Command::Select(None));
+                }
+            }
+            SelectionInput::ShowProblem(index) => {
+                self.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
+                    index,
+                )))));
+            }
+            SelectionInput::Find => self.widgets.finder.present(&self.widgets.window, ""),
+            SelectionInput::FinderSearch(query) => self.finder_search(&query),
+            SelectionInput::FinderHit { hit, choice } => self.finder_hit(hit, choice),
+            SelectionInput::MotionMoved(value) => self.motion_moved(value),
+            SelectionInput::ProblemMoved(value) => self.problem_moved(value),
+            SelectionInput::FocusScrubbed(value) => {
+                let value = narrow(value).clamp(0.0, 1.0);
+                self.update_focus(|focus| {
+                    focus.progress = value;
+                    focus.playing = false;
+                });
+            }
+            SelectionInput::PlayFocus => self.toggle_play_focus(),
+            SelectionInput::FocusTick(now) => self.focus_tick(now),
+            SelectionInput::FocusXray(on) => self.update_focus(|focus| focus.options.xray = on),
+            SelectionInput::FocusTint(on) => {
+                self.update_focus(|focus| focus.options.tint_cut_faces = on);
+            }
+            SelectionInput::FocusFade(on) => {
+                self.update_focus(|focus| focus.options.fade_others = on);
+            }
+            SelectionInput::FocusPlan(on) => self.update_focus(|focus| focus.plan = on),
+            SelectionInput::PicturesResized => self.schedule_pictures(),
+            SelectionInput::PicturesDue(asked) => {
+                // Only the last ask renders.
+                if asked == self.state.pictures_asked {
+                    self.render_pictures();
+                }
+            }
+            SelectionInput::PictureChosen(index) => {
+                let progress = self
+                    .state
+                    .focus
+                    .as_ref()
+                    .and_then(|f| f.focus.key_poses.get(index).map(|pose| pose.progress));
+                if let Some(progress) = progress {
+                    self.update_focus(|focus| {
+                        focus.progress = progress;
+                        focus.playing = false;
+                    });
+                }
+            }
+        }
+    }
+
+    /// Selects something and frames it: for the parts list, the finder,
+    /// "show in 3D" and the command line. Clicking in the 3D view selects
+    /// without moving the camera (`pick`). The 3D View comes to the front
+    /// (brought back if it was closed), so what was chosen can be seen.
+    pub(in crate::ui) fn select_and_frame(&mut self, selection: Option<Selection>) {
+        self.widgets.workbench.present(workbench::PanelId::View);
+        self.dispatch(Command::Select(selection));
+        self.frame_selection();
+    }
+
+    pub(in crate::ui) fn selection_changed(&mut self) {
+        let (selection, inspection, problem, focused) = {
+            let session = &self.session;
+            let selection = session.selection().cloned();
+            let inspection = session
+                .shown()
+                .zip(selection.as_ref())
+                .and_then(|(shown, selection)| inspect::inspect(shown, selection));
+            let problem = session.selected_problem().cloned();
+            let details = if let (Some(Selection::Problem(index)), Some(latest)) =
+                (&selection, session.latest())
+            {
+                stave_app::problems::details(latest, *index)
+            } else {
+                None
+            };
+            (
+                selection,
+                inspection,
+                problem.zip(details),
+                session.focus().is_some(),
+            )
+        };
+        let linked = {
+            let session = &self.session;
+            session
+                .drawable()
+                .zip(selection.as_ref())
+                .and_then(|((design, _), selection)| {
+                    let placed = link::placed_at(session.shown()?, selection)?;
+                    link::chip(design, selection, &placed)
+                })
+        };
+        self.widgets
+            .workbench
+            .status
+            .set_label(linked.as_deref().unwrap_or(""));
+        self.widgets.tree.show_selection(selection.as_ref());
+        self.widgets.problems.show_selected(match &selection {
+            Some(Selection::Problem(index)) => Some(index.0),
+            _ => None,
+        });
+        self.sync_files();
+        if focused {
+            self.show_card();
+            return;
+        }
+        let explode = self.session.explode().get();
+        self.show_hint(&if explode > 0.0 && selection.is_none() {
+            format!("Pulled apart · {}%", view_tools::percent(explode))
+        } else {
+            String::new()
+        });
+        // A problem is read in the Problems panel; Details keeps to the
+        // design.
+        self.widgets.inspector.show(inspection.as_ref());
+        // Pose a problem where it happens, or offer to open the selection.
+        match problem.and_then(|(problem, details)| Some((problem.contact?, details.motion))) {
+            Some((contact, card)) => self.pose_problem(contact, card),
+            None => {
+                self.state.problem = None;
+                self.show_problem_controls(None);
+                let moves_with = match &selection {
+                    Some(Selection::Assembly(id)) => Some(*id),
+                    _ => inspection.and_then(|i| i.moves_with),
+                };
+                self.update_opening(moves_with);
+            }
+        }
+        self.show_card();
+        self.show_moves();
+        self.grips_follow_selection();
+        self.request_render();
+    }
+
+    /// The Details panel always shows the selection's account; focus mode
+    /// brings it forward, since its controls are there.
+    pub(in crate::ui) fn show_card(&mut self) {
+        if self.session.focus().is_some() {
+            self.widgets.workbench.present(workbench::PanelId::Details);
+        }
+        self.update_face_button();
+    }
+
+    /// A short line at the top of the 3D view ("Focused on one joint · Esc
+    /// to go back"); empty hides it.
+    pub(in crate::ui) fn show_hint(&self, text: &str) {
+        self.widgets.hint.set_label(text);
+        self.widgets.hint_box.set_visible(!text.is_empty());
+    }
+
+    /// The dock's chips: every assembly that moves, with its mark, the
+    /// one the motion slider shows marked current.
+    pub(in crate::ui) fn show_moves(&mut self) {
+        let (moving, current, sliding) = {
+            let session = &self.session;
+            let state = &self.state;
+            let moving: Vec<(AssemblyId, String, Option<Mark>)> = session
+                .drawable()
+                .map(|(design, graph)| {
+                    design
+                        .assemblies
+                        .iter()
+                        .filter(|a| a.parent.is_none() && graph.motion_range(a.id).is_some())
+                        .map(|a| (a.id, a.name.clone(), state.marks.assembly(a.id)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                moving,
+                state.opening.map(|o| o.assembly),
+                self.widgets.motion.root.is_visible(),
+            )
+        };
+        // While the selection's own slider shows, the chips step aside
+        // (V2C_Spatial.dc.html): there isn't room for both.
+        self.widgets
+            .dock
+            .show_moves(if sliding { &[] } else { &moving }, current);
+    }
+
+    /// Opens or leaves focus mode to match the session.
+    pub(in crate::ui) fn focus_changed(&mut self) {
+        let wanted = self.session.focus();
+        let current = self.state.focus.as_ref().map(|f| f.focus.target);
+        if wanted == current {
+            return;
+        }
+        match wanted {
+            Some(target) => self.open_focus(target),
+            None => self.leave_focus(),
+        }
+    }
+
+    pub(in crate::ui) fn open_focus(&mut self, target: Target) {
+        let found = {
+            let session = &self.session;
+            session.shown().and_then(|shown| {
+                let (design, graph) = shown.drawable()?;
+                let focus = focus::open(&shown.opened, design, graph, target)?;
+                let name = focus
+                    .motion()
+                    .and_then(|(assembly, _)| design.assemblies.get(assembly.index()))
+                    .map(|assembly| assembly.name.clone());
+                Some((focus, name))
+            })
+        };
+        let Some((found, moving_name)) = found else {
+            return;
+        };
+        let start = self.state.focus_start.take();
+        let (start_plan, start_step) = start.unwrap_or((None, None));
+        let progress = start_step.unwrap_or(if found.assembles() { 0.0 } else { 0.4 });
+        let plan = found.plan().is_some() && start_plan.unwrap_or(found.prefers_plan());
+        {
+            let state = &mut self.state;
+            state.problem = None;
+            state.opening = None;
+            state.exploding = false;
+            state.focus = Some(FocusState {
+                focus: found,
+                progress,
+                options: focus::Options::default(),
+                plan,
+                playing: false,
+                looks: Vec::new(),
+                overlay: Overlay::default(),
+            });
+        }
+        self.widgets.motion.show(None);
+        self.show_problem_controls(None);
+        self.layout_for_focus(moving_name.as_deref());
+        self.hide_pins();
+        let texts = self.repose();
+        self.frame_focus();
+        {
+            let state = &self.state;
+            self.widgets
+                .inspector
+                .focus
+                .show(state.focus.as_ref().map(|f| &f.focus));
+        }
+        // Setting the check boxes would call their handlers: blocked, so
+        // the window does not hear its own changes.
+        self.block_controls();
+        let panel = &self.widgets.inspector.focus;
+        panel.xray.set_active(true);
+        panel.tint.set_active(true);
+        panel.fade.set_active(true);
+        self.widgets.plan_switch.show(plan);
+        self.unblock_controls();
+        self.widgets.inspector.show_focus();
+        let assembles = self
+            .state
+            .focus
+            .as_ref()
+            .is_some_and(|f| f.focus.assembles());
+        self.show_hint(if assembles {
+            "Focused on one joint · Esc to go back"
+        } else {
+            "Focused on one piece of hardware · Esc to go back"
+        });
+        self.show_focus_texts(texts);
+        self.show_progress();
+        self.render_pictures();
+        self.request_render();
+    }
+
+    /// Frames the joint or the hardware (from the direction focus asks
+    /// for).
+    pub(in crate::ui) fn frame_focus(&mut self) {
+        let state = &mut self.state;
+        let aspect = Self::aspect(state);
+        let framed = state
+            .focus
+            .as_ref()
+            .and_then(|f| f.focus.zone())
+            .zip(state.orbit);
+        let view = state.focus.as_ref().and_then(|f| f.focus.view());
+        if let Some((zone, orbit)) = framed {
+            let orbit = match view {
+                Some((yaw, pitch)) => Orbit {
+                    yaw,
+                    pitch,
+                    ..orbit
+                },
+                None => orbit,
+            };
+            state.orbit = Some(orbit.framed(zone, aspect));
+        }
+    }
+
+    /// Lays the 3D view's area out for focus mode (`Some` focus) or for
+    /// the Parts view: a joint gets its step player over the view; hardware
+    /// gets a page with a line over the view, three small views and the
+    /// swing card.
+    pub(in crate::ui) fn layout_for_focus(&self, moving_name: Option<&str>) {
+        let state = &self.state;
+        let focus = state.focus.as_ref();
+        let widgets = &self.widgets;
+        let joint = focus.is_some_and(|f| f.focus.assembles());
+        let hardware = focus.filter(|f| !f.focus.assembles());
+        let page = hardware.is_some();
+        if page {
+            widgets.stage.add_css_class("page");
+        } else {
+            widgets.stage.remove_css_class("page");
+        }
+        widgets.step_card.root.set_visible(joint);
+        let swing = hardware.and_then(|f| f.focus.motion());
+        widgets.swing_card.root.set_visible(swing.is_some());
+        if let Some((_, range)) = swing {
+            widgets
+                .swing_card
+                .show_name(moving_name.unwrap_or("it"), range.turns);
+        }
+        widgets.caption.root.set_visible(page);
+        widgets.pictures.root.set_visible(false);
+        widgets
+            .plan_switch
+            .root
+            .set_visible(focus.is_some_and(|f| f.focus.plan().is_some()));
+        widgets.camera.root.set_visible(focus.is_none());
+        widgets.offer_view_tools(focus.is_none());
+        self.show_caption();
+    }
+
+    /// The line over hardware focus's view: from above or in 3D.
+    pub(in crate::ui) fn show_caption(&self) {
+        let state = &self.state;
+        let Some(focus) = state.focus.as_ref() else {
+            return;
+        };
+        let (text, hint) = match focus.focus.plan_caption().filter(|_| focus.plan) {
+            Some(caption) => (caption.to_owned(), "back ↑ · front ↓"),
+            None => (
+                format!("In 3D around {}", focus.focus.title),
+                "drag to turn · scroll to zoom",
+            ),
+        };
+        self.widgets.caption.show(&text, hint);
+    }
+
+    pub(in crate::ui) fn leave_focus(&mut self) {
+        self.state.focus = None;
+        self.widgets.inspector.focus.show(None);
+        self.layout_for_focus(None);
+        self.show_hint("");
+        self.repose();
+        self.selection_changed();
+    }
+
+    pub(in crate::ui) fn show_focus_texts(&self, texts: Option<(Option<String>, String)>) {
+        if let Some((step, status)) = texts {
+            self.widgets.step_card.show_frame(step.as_deref(), &status);
+        }
+    }
+
+    /// Moves the step player's and the swing card's sliders to the
+    /// progress, with the swing's reading and the small view nearest it
+    /// ringed.
+    pub(in crate::ui) fn show_progress(&self) {
+        let state = &self.state;
+        let Some(focus) = state.focus.as_ref() else {
+            return;
+        };
+        let progress = f64::from(focus.progress);
+        let widgets = &self.widgets;
+        widgets.step_card.scrub.set_value(progress);
+        widgets.swing_card.scrub.set_value(progress);
+        focus_stage::show_playing(
+            &widgets.step_card.play,
+            &widgets.step_card.play_icon,
+            focus.playing,
+            "Play the assembly",
+        );
+        focus_stage::show_playing(
+            &widgets.swing_card.play,
+            &widgets.swing_card.play_icon,
+            focus.playing,
+            "Play the swing",
+        );
+        if let Some((_, range)) = focus.focus.motion() {
+            widgets
+                .swing_card
+                .show_value(&stave_scene::focus::amount_text(
+                    range,
+                    focus.progress * range.full,
+                ));
+        }
+        let nearest = focus
+            .focus
+            .key_poses
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (a.progress - focus.progress)
+                    .abs()
+                    .total_cmp(&(b.progress - focus.progress).abs())
+            })
+            .map(|(index, _)| index);
+        widgets.pictures.show_current(nearest);
+    }
+
+    /// The scrub moved, or a toggle changed: poses again.
+    pub(in crate::ui) fn update_focus(&mut self, change: impl FnOnce(&mut FocusState)) {
+        {
+            // The window's own changes to the controls are blocked, so
+            // only people's reach here.
+            let Some(focus) = self.state.focus.as_mut() else {
+                return;
+            };
+            change(focus);
+        }
+        let texts = self.repose();
+        self.show_focus_texts(texts);
+        self.show_progress();
+        self.show_caption();
+        self.request_render();
+    }
+
+    /// The play button: plays from where it is (from the start when it is
+    /// at the end), or pauses.
+    pub(in crate::ui) fn toggle_play_focus(&mut self) {
+        let playing = {
+            let state = &mut self.state;
+            let Some(focus) = state.focus.as_mut() else {
+                return;
+            };
+            focus.playing = !focus.playing;
+            if focus.playing && focus.progress >= 1.0 {
+                focus.progress = 0.0;
+            }
+            focus.playing
+        };
+        self.show_progress();
+        if !playing {
+            return;
+        }
+        self.state.focus_clock.last = None;
+        if !self.state.focus_clock.ticking {
+            self.state.focus_clock.ticking = true;
+            self.on_next_frame(|now| SelectionInput::FocusTick(now).into());
+        }
+    }
+
+    /// A frame while focus mode plays: the progress moves on, and the
+    /// next frame is asked for until it is done or paused.
+    pub(in crate::ui) fn focus_tick(&mut self, now: i64) {
+        self.state.focus_clock.ticking = false;
+        let seconds = self.state.focus_clock.seconds_to(now);
+        let done = {
+            let Some(focus) = self.state.focus.as_mut() else {
+                return;
+            };
+            if !focus.playing {
+                return;
+            }
+            focus.progress = (focus.progress + narrow(seconds * PLAY_PER_SECOND)).min(1.0);
+            let done = focus.progress >= 1.0;
+            if done {
+                focus.playing = false;
+            }
+            done
+        };
+        let texts = self.repose();
+        self.show_focus_texts(texts);
+        self.show_progress();
+        self.request_render();
+        if !done {
+            self.state.focus_clock.ticking = true;
+            self.on_next_frame(|now| SelectionInput::FocusTick(now).into());
+        }
+    }
+
+    /// Renders hardware focus's small views again shortly, once their
+    /// size has stopped changing: only the last of several asks renders.
+    pub(in crate::ui) fn schedule_pictures(&mut self) {
+        self.state.pictures_asked = self.state.pictures_asked.wrapping_add(1);
+        let asked = self.state.pictures_asked;
+        let input = self.input();
+        glib::timeout_add_local_once(PICTURES_DELAY, move || {
+            input.emit(SelectionInput::PicturesDue(asked).into());
+        });
+    }
+
+    /// Renders hardware focus's small views offscreen, at fixed angles
+    /// (closed, part way, fully open), in the view from above when there
+    /// is one, each at its slot's size in device pixels. Before the slots
+    /// have room they are only laid out: their first size renders them.
+    pub(in crate::ui) fn render_pictures(&mut self) {
+        let captions: Vec<String> = {
+            let state = &self.state;
+            match state.focus.as_ref() {
+                Some(focus) if !focus.focus.assembles() => focus
+                    .focus
+                    .key_poses
+                    .iter()
+                    .map(|pose| pose.caption.clone())
+                    .collect(),
+                Some(_) | None => Vec::new(),
+            }
+        };
+        let input = self.input();
+        self.widgets.pictures.root.set_visible(!captions.is_empty());
+        self.widgets.pictures.show(&captions, move |index| {
+            input.emit(SelectionInput::PictureChosen(index).into());
+        });
+        let Some((width, height)) = self.widgets.pictures.device_size() else {
+            return;
+        };
+        let backdrop = self.backdrop();
+        let textures = {
+            let session = &self.session;
+            let (Some((_, graph)), Some(entry)) = (session.drawable(), session.scene_entry())
+            else {
+                return;
+            };
+            let state = &mut self.state;
+            let State {
+                focus,
+                renderer,
+                orbit,
+                ..
+            } = &mut *state;
+            let (Some(focus), Ok(renderer), Some(orbit)) = (focus.as_ref(), renderer, *orbit)
+            else {
+                return;
+            };
+            if focus.focus.assembles() {
+                return;
+            }
+            let mut textures = Vec::new();
+            for pose in &focus.focus.key_poses {
+                let frame = focus
+                    .focus
+                    .frame(graph, entry, pose.progress, &focus.options);
+                let aspect = crate::render::aspect(width, height);
+                let (orbit, section) = match focus.focus.plan() {
+                    Some(plan) => (
+                        Orbit::plan(plan.bounds, aspect, plan.yaw),
+                        Some(plan.section),
+                    ),
+                    None => (
+                        focus
+                            .focus
+                            .zone()
+                            .map_or(orbit, |zone| orbit.framed(zone, aspect)),
+                        entry.section,
+                    ),
+                };
+                let image = renderer.render(&Frame {
+                    scene: graph,
+                    posed: &frame.posed,
+                    orbit,
+                    selection: &[],
+                    highlight: None,
+                    section,
+                    looks: Some(&frame.looks),
+                    overlay: None,
+                    lit: None,
+                    tints: None,
+                    tint_cut_faces: focus.options.tint_cut_faces,
+                    backdrop,
+                    width,
+                    height,
+                });
+                let Ok(image) = image else { continue };
+                if let Some(texture) = texture(image) {
+                    textures.push(texture);
+                }
+            }
+            textures
+        };
+        self.widgets.pictures.show_textures(textures);
+        self.show_progress();
+    }
+
+    /// Offers the motion bar to open the selection's door or drawer.
+    pub(in crate::ui) fn update_opening(&mut self, assembly: Option<AssemblyId>) {
+        let found = {
+            let session = &self.session;
+            assembly.and_then(|id| {
+                let (design, graph) = session.drawable()?;
+                let range = graph.motion_range(id)?;
+                let name = design.assemblies.get(id.index())?.name.clone();
+                Some((id, range, name))
+            })
+        };
+        let amount = {
+            let state = &mut self.state;
+            if state.focus.is_some() {
+                return;
+            }
+            let keep = state
+                .opening
+                .filter(|o| Some(o.assembly) == found.as_ref().map(|(id, _, _)| *id));
+            state.opening = keep.or_else(|| {
+                found.as_ref().map(|(id, range, _)| Opening {
+                    assembly: *id,
+                    amount: 0.0,
+                    turns: range.turns,
+                })
+            });
+            state.opening.map_or(0.0, |o| o.amount)
+        };
+        self.block_controls();
+        match &found {
+            Some((_, range, name)) => {
+                let (full, value, end) = if range.turns {
+                    let degrees = range.full.to_degrees();
+                    (
+                        degrees,
+                        amount.to_degrees(),
+                        format!("{}°", degrees.round()),
+                    )
+                } else {
+                    (range.full, amount, format!("{} mm", range.full.round()))
+                };
+                self.widgets.motion.show(Some((
+                    name,
+                    "closed",
+                    &end,
+                    f64::from(full),
+                    f64::from(value),
+                )));
+            }
+            None => self.widgets.motion.show(None),
+        }
+        self.unblock_controls();
+        self.repose();
+    }
+
+    /// The motion bar moved: the selection opening.
+    pub(in crate::ui) fn motion_moved(&mut self, value: f64) {
+        {
+            let state = &mut self.state;
+            let value = narrow(value);
+            if let Some(opening) = state.opening.as_mut() {
+                opening.amount = if opening.turns {
+                    value.to_radians()
+                } else {
+                    value
+                };
+            }
+        }
+        self.repose();
+        self.request_render();
+    }
+
+    /// The problem card's slider moved: swings the problem's motion.
+    pub(in crate::ui) fn problem_moved(&mut self, value: f64) {
+        let shown = {
+            let state = &mut self.state;
+            let Some(problem) = state.problem.as_mut() else {
+                return;
+            };
+            let value = narrow(value);
+            let amount = if problem.turns {
+                value.to_radians()
+            } else {
+                value
+            };
+            problem.amount = Some(amount);
+            problem.card.clone().map(|card| (card, amount))
+        };
+        if let Some((card, amount)) = &shown {
+            self.widgets.problem_card.show_value(card, *amount);
+            self.show_posed_status(card, *amount);
+        }
+        self.repose();
+        self.request_render();
+    }
+
+    /// "Posed at contact · door at 0.6°" at the top of the view.
+    pub(in crate::ui) fn show_posed_status(&self, card: &MotionCard, amount: f32) {
+        self.show_hint(&format!(
+            "Posed at contact · {} at {}",
+            card.name,
+            card.amount_text(amount)
+        ));
+    }
+
+    /// Shows the controls for a posed problem (its motion card and the
+    /// shared-wood key in place of the view toolbar), or the usual ones.
+    pub(in crate::ui) fn show_problem_controls(&self, problem: Option<(&MotionCard, f32, bool)>) {
+        let widgets = &self.widgets;
+        match problem {
+            Some((card, amount, _)) => widgets.problem_card.show(Some(card), amount),
+            None => widgets.problem_card.show(None, 0.0),
+        }
+        let posed = problem.is_some();
+        let shared = problem.is_some_and(|(_, _, shared)| shared);
+        let focused = self.state.focus.is_some();
+        widgets.contact_key.set_visible(shared && !focused);
+        widgets.offer_view_tools(!posed && !focused);
+        if !posed && !focused {
+            self.show_hint("");
+        }
+    }
+
+    /// Poses the design where a problem happens and frames its parts.
+    pub(in crate::ui) fn pose_problem(&mut self, contact: Contact, card: Option<MotionCard>) {
+        let highlight = {
+            let session = &self.session;
+            session
+                .drawable()
+                .map(|(_, graph)| view::highlight(graph, &contact))
+        };
+        let Some(highlight) = highlight else {
+            return;
+        };
+        let shared = !highlight.volumes.is_empty();
+        let turns = card.as_ref().is_none_or(|c| c.turns);
+        {
+            let state = &mut self.state;
+            state.opening = None;
+            state.problem = Some(ShownProblem {
+                contact,
+                highlight,
+                card: card.clone(),
+                amount: None,
+                turns,
+            });
+        }
+        self.widgets.motion.show(None);
+        self.repose();
+        {
+            let session = &self.session;
+            let state = &mut self.state;
+            let aspect = Self::aspect(state);
+            let framed = session.drawable().and_then(|(_, graph)| {
+                let nodes = &state.problem.as_ref()?.highlight.nodes;
+                let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
+                Some(state.orbit?.framed(bounds, aspect))
+            });
+            if framed.is_some() {
+                state.orbit = framed;
+            }
+        }
+        match &card {
+            Some(card) => {
+                self.show_problem_controls(Some((card, card.shown, shared)));
+                self.show_posed_status(card, card.shown);
+            }
+            None => {
+                self.widgets.problem_card.show(None, 0.0);
+                self.widgets.contact_key.set_visible(shared);
+                self.widgets.offer_view_tools(false);
+                if shared {
+                    self.show_hint("Posed at contact");
+                }
+            }
+        }
+    }
+
+    /// Answers the finder's search with what the query finds.
+    pub(in crate::ui) fn finder_search(&self, query: &str) {
+        let analysis = self.widgets.files.analysis();
+        let session = &self.session;
+        let hits = finding::search(
+            finding::Sources {
+                shown: session.shown().map(|c| &**c),
+                latest: session.latest().map(|c| &**c),
+                analysis: analysis.as_deref(),
+            },
+            query,
+        );
+        self.widgets.finder.show_hits(hits);
+    }
+
+    /// Goes where a finder's hit says: a part is selected (and framed), a
+    /// problem posed, a place in the text opened in the editor.
+    pub(in crate::ui) fn finder_hit(&mut self, hit: finding::Hit, choice: Choice) {
+        match (hit.goal, choice) {
+            // Resting on a part shows it, without going there.
+            (
+                Goal::Select(
+                    selection @ (Selection::Part(_)
+                    | Selection::Hardware(_)
+                    | Selection::Assembly(_)),
+                ),
+                Choice::Preview,
+            ) => {
+                self.state.linking = true;
+                self.dispatch(Command::Link(Some(selection)));
+                self.state.linking = false;
+                self.frame();
+            }
+            (Goal::Select(_) | Goal::Open(_), Choice::Preview) => {}
+            (Goal::Select(selection), Choice::Go) => {
+                self.select_and_frame(Some(selection));
+            }
+            (Goal::Select(selection), Choice::OpenText) => {
+                let placed = self
+                    .session
+                    .shown()
+                    .and_then(|shown| link::placed_at(shown, &selection));
+                self.select_and_frame(Some(selection));
+                if let Some(placed) = placed {
+                    self.dispatch(Command::GoToSource(placed));
+                }
+            }
+            (Goal::Open(location), Choice::Go | Choice::OpenText) => {
+                self.dispatch(Command::GoToSource(location));
+            }
+        }
+    }
+}

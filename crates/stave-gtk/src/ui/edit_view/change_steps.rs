@@ -18,8 +18,6 @@
 //! do <text>                            Ctrl+K, the text, Enter: the first verb listed is run
 //! ```
 
-use std::rc::Rc;
-
 use stave_lang::placement::Axis;
 
 use super::super::Window;
@@ -48,11 +46,7 @@ fn hold_fields(rest: &str) -> Result<(bool, Option<String>, String), String> {
 impl Window {
     /// Does a step of an edit script that changes the design, or says the
     /// word isn't a step.
-    pub(in crate::ui) fn change_step(
-        self: &Rc<Self>,
-        word: &str,
-        rest: &str,
-    ) -> Result<(), String> {
+    pub(in crate::ui) fn change_step(&mut self, word: &str, rest: &str) -> Result<(), String> {
         // Each command is sent at once, so the next step sees it done.
         self.editing.immediate.set(true);
         let done = self.change_step_now(word, rest);
@@ -60,11 +54,11 @@ impl Window {
         done
     }
 
-    fn change_step_now(self: &Rc<Self>, word: &str, rest: &str) -> Result<(), String> {
+    fn change_step_now(&mut self, word: &str, rest: &str) -> Result<(), String> {
         match word {
             "pick" => {
                 let selection = {
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
                     stave_app::link::selection_named(design, rest)
                         .ok_or_else(|| format!("the design has nothing called '{rest}'"))?

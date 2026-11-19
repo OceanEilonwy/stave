@@ -4,8 +4,6 @@
 //! "repeat 3 up", "mirror" and "hold" do what the card's buttons do. Each
 //! runs the same method of the window as the mouse: one path for both.
 
-use std::rc::Rc;
-
 use stave_app::edit::{Declaration, Picked};
 use stave_app::session::Selection;
 use stave_lang::placement::Axis;
@@ -14,6 +12,7 @@ use stave_model::nonempty::NonEmpty;
 use super::super::Window;
 use super::super::finder::Action;
 use super::item_tools::MOST;
+use crate::ui::update::editing::EditingInput;
 
 /// A verb typed in the finder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,20 +111,16 @@ pub(in crate::ui) enum Run {
 }
 
 impl Window {
-    /// The finder lists the verbs a query names and runs the one chosen.
-    pub(in crate::ui) fn connect_verbs(self: &Rc<Self>) {
-        let window = Rc::downgrade(self);
-        self.widgets.finder.connect_actions(move |query| {
-            window
-                .upgrade()
-                .map(|window| window.finder_actions(query))
-                .unwrap_or_default()
+    /// The finder lists the verbs a query names (answered from the
+    /// window's update) and runs the one chosen.
+    pub(in crate::ui) fn connect_verbs(&self) {
+        let input = self.input();
+        self.widgets.finder.connect_actions_request(move |query| {
+            input.emit(EditingInput::FinderActions(query).into());
         });
-        let window = Rc::downgrade(self);
+        let input = self.input();
         self.widgets.finder.connect_action(move |index| {
-            if let Some(window) = window.upgrade() {
-                window.run_finder_action(index);
-            }
+            input.emit(EditingInput::RunFinderAction(index).into());
         });
     }
 
@@ -136,7 +131,7 @@ impl Window {
             self.editing.verbs.replace(Vec::new());
             return Vec::new();
         };
-        let session = self.session.borrow();
+        let session = &self.session;
         let item = self.selected_item();
         let mut found: Vec<(Action, Run)> = Vec::new();
         match &verb {
@@ -155,7 +150,7 @@ impl Window {
                             ));
                         }
                     }
-                } else if let Some(picked) = self.picked_for_verb(&session) {
+                } else if let Some(picked) = self.picked_for_verb(session) {
                     let what = if words.is_empty() {
                         "something".to_owned()
                     } else {
@@ -270,7 +265,7 @@ impl Window {
     }
 
     /// Runs the verb the finder listed at `index`.
-    pub(in crate::ui) fn run_finder_action(self: &Rc<Self>, index: usize) {
+    pub(in crate::ui) fn run_finder_action(&mut self, index: usize) {
         let run = self.editing.verbs.borrow().get(index).cloned();
         if let Some(run) = run {
             self.run_verb(run);
@@ -278,7 +273,7 @@ impl Window {
     }
 
     /// Runs a verb: the same methods the menu, the cards and the keys call.
-    pub(in crate::ui) fn run_verb(self: &Rc<Self>, run: Run) {
+    pub(in crate::ui) fn run_verb(&mut self, run: Run) {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return;
@@ -288,7 +283,7 @@ impl Window {
             Run::StartThenChoose(picked, words) => {
                 let point = self.point_of(None);
                 self.start_edit(picked, point);
-                let declaration = self.session.borrow().edit().and_then(|edit| {
+                let declaration = self.session.edit().and_then(|edit| {
                     edit.menu()
                         .iter()
                         .find(|candidate| {

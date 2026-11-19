@@ -52,8 +52,10 @@ use super::edit_menu::{Checked, EditMenu, MenuItem};
 use super::edit_panel::EditPanel;
 use super::edit_writer::BufferWriter;
 use super::option_search::OptionSearch;
+use super::update::editing::EditingInput;
 use super::{EDGE, Window};
 use crate::render::{Backdrop, Frame, Ticket};
+use crate::ui::update::Unprinted;
 
 /// How long one step of the menu's check runs before the window draws
 /// what it found so far; a step that finds nothing new gets twice as long.
@@ -415,7 +417,7 @@ pub(super) struct EditMarks {
 
 impl Window {
     /// Puts the editing widgets over the 3D view and connects them.
-    pub(super) fn connect_editing(self: &Rc<Self>) {
+    pub(super) fn connect_editing(&mut self) {
         let editing = &self.editing;
         let design = &self.widgets.design;
         design.add_overlay(&editing.menu.root);
@@ -431,57 +433,43 @@ impl Window {
         self.connect_editor_link();
         self.connect_verbs();
 
-        let window = Rc::downgrade(self);
+        let editing = &self.editing;
+        let input = self.input();
         editing.menu.connect_chosen(move |declaration| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.choose_later(declaration);
+            input.emit(EditingInput::MenuChosen(declaration).into());
         });
-        let window = Rc::downgrade(self);
-        editing.card.connect_action(move |action| {
-            if let Some(window) = window.upgrade() {
-                window.card_action(action);
-            }
-        });
-        self.connect_links(&editing.card.links);
-        let window = Rc::downgrade(self);
-        editing.face_button.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.edit_face();
-            }
-        });
+        let input = self.input();
+        editing
+            .card
+            .connect_action(move |action| input.emit(EditingInput::CardAction(action).into()));
+        self.connect_links(&self.editing.card.links);
+        let input = self.input();
+        self.editing
+            .face_button
+            .connect_clicked(move |_| input.emit(EditingInput::EditFace.into()));
 
         // The pointer lights the space under it.
         let motion = gtk::EventControllerMotion::new();
-        let window = Rc::downgrade(self);
+        let input = self.input();
         motion.connect_motion(move |_, x, y| {
-            if let Some(window) = window.upgrade() {
-                window.edit_hover(Some((x, y)));
-            }
+            input.emit(EditingInput::PointerAt(Some((x, y))).into());
         });
-        let window = Rc::downgrade(self);
-        motion.connect_leave(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.edit_hover(None);
-            }
-        });
+        let input = self.input();
+        motion.connect_leave(move |_| input.emit(EditingInput::PointerAt(None).into()));
         self.widgets.viewport.add_controller(motion);
         self.connect_grips();
     }
 
     /// Add writes through the editor's buffers.
-    fn install_edit_writer(&self) {
-        self.session
-            .borrow_mut()
-            .set_edit_writer(Box::new(BufferWriter::new(
-                &self.widgets.files,
-                self.editing.editor_open.clone(),
-            )));
+    fn install_edit_writer(&mut self) {
+        self.session.set_edit_writer(Box::new(BufferWriter::new(
+            &self.widgets.files,
+            self.editing.editor_open.clone(),
+        )));
     }
 
     /// Another folder is open: a fresh session, nothing being edited.
-    pub(super) fn editing_folder_changed(self: &Rc<Self>) {
+    pub(super) fn editing_folder_changed(&mut self) {
         self.install_edit_writer();
         {
             let mut state = self.editing.state.borrow_mut();
@@ -503,12 +491,12 @@ impl Window {
 
     /// `true` while an edit (or a change) is in progress.
     pub(super) fn edit_open(&self) -> bool {
-        let session = self.session.borrow();
+        let session = &self.session;
         session.edit().is_some() || session.change().is_some()
     }
 
     /// Escape: drops the edit in progress. `true` when there was one.
-    pub(super) fn cancel_edit(self: &Rc<Self>) -> bool {
+    pub(super) fn cancel_edit(&mut self) -> bool {
         if self.cancel_hold() {
             return true;
         }
@@ -523,7 +511,7 @@ impl Window {
 
     /// The ray through a point of the 3D view.
     fn ray_at(&self, x: f64, y: f64) -> Option<Ray> {
-        let state = self.state.borrow();
+        let state = &self.state;
         let viewport = &self.widgets.viewport;
         state.orbit.map(|orbit| {
             orbit.ray(
@@ -541,8 +529,8 @@ impl Window {
         let Some(ray) = self.ray_at(x, y) else {
             return (None, None);
         };
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (Some((_, graph)), Some(posed)) = (session.drawable(), state.posed.as_ref()) else {
             return (None, None);
         };
@@ -557,7 +545,7 @@ impl Window {
     /// What the chosen candidate still waits to have pointed at; the next
     /// click binds it when anything is.
     pub(super) fn wanted(&self) -> pointing::Wanted {
-        pointing::Wanted::of(self.session.borrow().edit())
+        pointing::Wanted::of(self.session.edit())
     }
 
     /// What a click at a point of the 3D view binds, for what the card
@@ -569,8 +557,8 @@ impl Window {
         wanted: pointing::Wanted,
     ) -> Option<Picked> {
         let ray = self.ray_at(x, y)?;
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (_, graph) = session.drawable()?;
         pointing::binding_pick(graph, state.posed.as_ref()?, ray, wanted)
     }
@@ -578,11 +566,11 @@ impl Window {
     /// The pointer moved over the 3D view (or left it: `None`): lights the
     /// space under it while nothing is chosen, or while the card asks for
     /// a place to point at.
-    fn edit_hover(self: &Rc<Self>, point: Option<(f64, f64)>) {
+    pub(in crate::ui) fn edit_hover(&mut self, point: Option<(f64, f64)>) {
         let hover = match point {
             Some((x, y))
-                if self.state.borrow().focus.is_none()
-                    && (self.session.borrow().edit().is_none() || self.wanted().region) =>
+                if self.state.focus.is_none()
+                    && (self.session.edit().is_none() || self.wanted().region) =>
             {
                 match self.pointed_at(x, y).0 {
                     Some(Target::Region(hit)) => Some(hit.region),
@@ -607,8 +595,8 @@ impl Window {
     /// binds it. A click on a part is left to the selection (its face is
     /// kept for the card's "Add onto" button), dropping any edit. `true`
     /// when the click was used here.
-    pub(super) fn edit_click(self: &Rc<Self>, x: f64, y: f64) -> bool {
-        if self.state.borrow().focus.is_some() {
+    pub(super) fn edit_click(&mut self, x: f64, y: f64) -> bool {
+        if self.state.focus.is_some() {
             return false;
         }
         if self.hold_click(x, y) {
@@ -654,21 +642,21 @@ impl Window {
     }
 
     /// Starts an edit from a selection: the menu opens near `point`.
-    pub(super) fn start_edit(self: &Rc<Self>, picked: Picked, point: (f64, f64)) {
+    pub(super) fn start_edit(&mut self, picked: Picked, point: (f64, f64)) {
         let keeps_selection = matches!(picked, Picked::Face(_));
         {
-            let mut session = self.session.borrow_mut();
+            let session = &mut self.session;
             session.set_edit_files(Arc::new(self.widgets.files.edit_files()));
         }
         self.editing.state.borrow_mut().point = Some(point);
-        if !keeps_selection && self.session.borrow().selection().is_some() {
+        if !keeps_selection && self.session.selection().is_some() {
             self.dispatch(Command::Select(None));
         }
         self.dispatch(Command::Edit(EditCommand::Start(picked)));
     }
 
     /// The part's card's button: the menu for the face clicked on it.
-    fn edit_face(self: &Rc<Self>) {
+    pub(in crate::ui) fn edit_face(&mut self) {
         let Some(face) = self.editing.state.borrow().face else {
             return;
         };
@@ -682,7 +670,7 @@ impl Window {
     /// one whose face was clicked and nothing is being edited.
     pub(super) fn update_face_button(&self) {
         let face = self.editing.state.borrow().face;
-        let selected = match self.session.borrow().selection() {
+        let selected = match self.session.selection() {
             Some(Selection::Part(part)) => Some(*part),
             _ => None,
         };
@@ -703,10 +691,9 @@ impl Window {
         let waiting = self.editing.state.borrow().first_space.is_some()
             || self
                 .session
-                .borrow()
                 .drawable()
                 .is_some_and(|(_, graph)| pointing::only_spaces(graph));
-        if waiting && !self.edit_open() && self.session.borrow().selection().is_none() {
+        if waiting && !self.edit_open() && self.session.selection().is_none() {
             self.show_hint("Click inside the box to add the first piece");
         }
         self.update_item_tools();
@@ -719,7 +706,7 @@ impl Window {
     // ---- commands ----
 
     /// What the card reports, as the session's command.
-    fn card_action(self: &Rc<Self>, action: CardAction) {
+    pub(in crate::ui) fn card_action(&mut self, action: CardAction) {
         if let CardAction::Search { param } = &action {
             self.open_option_search(param.as_str(), "");
             return;
@@ -739,7 +726,7 @@ impl Window {
     /// Sends an edit command once the widget that asked has finished its
     /// own signal; a command that tries the candidate again first shows
     /// Checking (the card's spinner and the ghost's grey).
-    pub(super) fn send_edit_later(self: &Rc<Self>, command: EditCommand) {
+    pub(super) fn send_edit_later(&mut self, command: EditCommand) {
         if self.editing.immediate.get() {
             self.send_edit(command);
             return;
@@ -747,9 +734,9 @@ impl Window {
         if tries_again(&command) {
             self.show_checking();
         }
-        let window = self.clone();
+        let input = self.input();
         glib::timeout_add_local_once(CHECKING_DELAY, move || {
-            window.send_edit(command);
+            input.emit(EditingInput::SendEdit(command).into());
         });
     }
 
@@ -757,24 +744,23 @@ impl Window {
     /// is looked up by its declaration when the command is sent, not when
     /// it was clicked: a step of the menu's check may sort the menu in
     /// between (greyed entries go last in their group), moving indexes.
-    pub(super) fn choose_later(self: &Rc<Self>, declaration: Declaration) {
+    pub(super) fn choose_later(&mut self, declaration: Declaration) {
         if self.editing.immediate.get() {
             self.choose_now(declaration);
             return;
         }
         self.show_checking();
-        let window = self.clone();
+        let input = self.input();
         glib::timeout_add_local_once(CHECKING_DELAY, move || {
-            window.choose_now(declaration);
+            input.emit(EditingInput::ChooseNow(declaration).into());
         });
     }
 
     /// Chooses the menu entry for a declaration now, wherever the menu
     /// holds it; an entry that is gone chooses nothing.
-    pub(super) fn choose_now(self: &Rc<Self>, declaration: Declaration) {
+    pub(super) fn choose_now(&mut self, declaration: Declaration) {
         let index = self
             .session
-            .borrow()
             .edit()
             .and_then(|edit| entry_index(edit, declaration));
         match index {
@@ -788,7 +774,7 @@ impl Window {
 
     /// The card's spinner and the ghost's grey, before a command that
     /// tries the candidate again.
-    fn show_checking(self: &Rc<Self>) {
+    fn show_checking(&mut self) {
         {
             let mut state = self.editing.state.borrow_mut();
             state.checking = true;
@@ -800,11 +786,10 @@ impl Window {
     }
 
     /// Sends an edit command now.
-    pub(super) fn send_edit(self: &Rc<Self>, command: EditCommand) {
+    pub(super) fn send_edit(&mut self, command: EditCommand) {
         if command == EditCommand::Add {
             let name = self
                 .session
-                .borrow()
                 .edit()
                 .and_then(Edit::chosen)
                 .and_then(|chosen| chosen.item_name().map(|name| name.as_str().to_owned()));
@@ -813,7 +798,7 @@ impl Window {
             state.select_after = name;
             self.editing
                 .editor_open
-                .set(self.session.borrow().editor() == Editor::Open);
+                .set(self.session.editor() == Editor::Open);
         }
         // The events draw the card from the try that follows, so it no
         // longer shows Checking.
@@ -824,7 +809,6 @@ impl Window {
             // back the verdict it had.
             let verdict = self
                 .session
-                .borrow()
                 .edit()
                 .and_then(Edit::chosen)
                 .and_then(|chosen| ghost_verdict(chosen.progress()));
@@ -838,7 +822,7 @@ impl Window {
     }
 
     /// Redraws what an edit event names.
-    pub(super) fn edit_event(self: &Rc<Self>, event: EditEvent) {
+    pub(super) fn edit_event(&mut self, event: EditEvent) {
         self.grip_event(&event);
         match event {
             EditEvent::Started => {
@@ -885,13 +869,14 @@ impl Window {
             }
             EditEvent::OptionsChanged => {
                 {
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     if let Some(chosen) = session.edit().and_then(Edit::chosen) {
                         self.editing.card.update_options(chosen.candidate());
                     }
                 }
                 // An open search shows each answer as it comes.
-                if self.editing.search.setting().is_some() {
+                if let Some(name) = self.editing.search.setting() {
+                    self.give_option_search(&name);
                     self.editing.search.refresh();
                 }
             }
@@ -905,7 +890,7 @@ impl Window {
                 self.clear_ghost();
                 self.refresh_edit();
                 let selection = {
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     name.zip(session.drawable())
                         .and_then(|(name, (design, _))| {
                             stave_app::link::selection_named(design, &name)
@@ -936,11 +921,11 @@ impl Window {
 
     /// Draws the menu or the card from the session, places them, and
     /// hides the part's card while an edit is open.
-    pub(super) fn refresh_edit(self: &Rc<Self>) {
+    pub(super) fn refresh_edit(&mut self) {
         let checking = self.editing.state.borrow().checking;
         let open = {
-            let session = self.session.borrow();
-            draw_edit(&self.editing.menu, &self.editing.card, &session, checking)
+            let session = &self.session;
+            draw_edit(&self.editing.menu, &self.editing.card, session, checking)
         };
         let open = self.draw_change(checking) || open;
         self.update_repeat_row();
@@ -948,7 +933,7 @@ impl Window {
         self.editing
             .hold
             .from_space
-            .set_visible(self.session.borrow().edit().is_some_and(|edit| {
+            .set_visible(self.session.edit().is_some_and(|edit| {
                 edit.chosen().is_none() && matches!(edit.picked(), Picked::Region(_))
             }));
         if open {
@@ -1020,21 +1005,19 @@ impl Window {
     /// Works the menu's applicability out a step at a time, drawing what
     /// each step finds, until every entry is checked, something is chosen
     /// or the edit ends.
-    fn check_menu_soon(self: &Rc<Self>, generation: u64, budget: Duration) {
-        let window = Rc::downgrade(self);
+    fn check_menu_soon(&mut self, generation: u64, budget: Duration) {
+        let input = self.input();
         glib::timeout_add_local_once(Duration::from_millis(16), move || {
-            if let Some(window) = window.upgrade() {
-                window.check_menu_step(generation, budget);
-            }
+            input.emit(EditingInput::CheckMenuStep { generation, budget }.into());
         });
     }
 
-    fn check_menu_step(self: &Rc<Self>, generation: u64, budget: Duration) {
+    pub(in crate::ui) fn check_menu_step(&mut self, generation: u64, budget: Duration) {
         if self.editing.state.borrow().generation != generation {
             return;
         }
         let before = {
-            let session = self.session.borrow();
+            let session = &self.session;
             match session.edit() {
                 Some(edit) if edit.chosen().is_none() => unchecked(edit),
                 Some(_) | None => 0,
@@ -1052,8 +1035,8 @@ impl Window {
                 stop.store(true, Ordering::Relaxed);
             });
         }
-        let events = self.session.borrow_mut().check_edit_menu(&stop);
-        let after = self.session.borrow().edit().map_or(0, unchecked);
+        let events = self.session.check_edit_menu(&stop);
+        let after = self.session.edit().map_or(0, unchecked);
         if events.is_empty() && after < before {
             self.refresh_edit();
         }
@@ -1084,11 +1067,11 @@ impl Window {
     /// was is stopped (its answers would be dropped). Scripts check the
     /// options they open themselves, so a picture never depends on how
     /// far a worker got.
-    fn start_options_check(self: &Rc<Self>) {
+    fn start_options_check(&mut self) {
         if self.editing.immediate.get() {
             return;
         }
-        let Some(job) = self.session.borrow().options_job() else {
+        let Some(job) = self.session.options_job() else {
             self.stop_options_check();
             return;
         };
@@ -1126,14 +1109,15 @@ impl Window {
                 let _ = sender.send_blocking(found);
             });
         });
-        let window = Rc::downgrade(self);
+        let input = self.input();
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
-                let Some(window) = window.upgrade() else {
+                if input
+                    .send(EditingInput::OptionFitFound(Unprinted(Box::new(found))).into())
+                    .is_err()
+                {
                     return;
-                };
-                let events = window.session.borrow_mut().option_fit_found(found);
-                window.handle(events);
+                }
             }
         });
     }
@@ -1142,13 +1126,12 @@ impl Window {
     /// first (an edit script's `options` and `search` steps), with `query`
     /// typed.
     pub(super) fn open_setting_options(
-        self: &Rc<Self>,
+        &mut self,
         setting: &str,
         query: &str,
     ) -> Result<(), String> {
         let events = self
             .session
-            .borrow_mut()
             .check_setting_options(Some(setting), &AtomicBool::new(false));
         self.handle(events);
         if self.setting_has_options(setting) {
@@ -1161,10 +1144,9 @@ impl Window {
 
     /// Opens a setting's short list on the card, checking its options
     /// first (an edit script's `choices` step).
-    pub(super) fn open_setting_choices(self: &Rc<Self>, setting: &str) -> Result<(), String> {
+    pub(super) fn open_setting_choices(&mut self, setting: &str) -> Result<(), String> {
         let events = self
             .session
-            .borrow_mut()
             .check_setting_options(Some(setting), &AtomicBool::new(false));
         self.handle(events);
         if self.editing.card.open_options(setting) {
@@ -1178,7 +1160,6 @@ impl Window {
     /// `true` when the chosen candidate's setting has options to search.
     fn setting_has_options(&self, setting: &str) -> bool {
         self.session
-            .borrow()
             .edit()
             .and_then(Edit::chosen)
             .and_then(|chosen| {
@@ -1192,57 +1173,63 @@ impl Window {
             .unwrap_or(false)
     }
 
-    /// The search dialog asks the session what a query matches, and what
-    /// is chosen in it is set as a value typed on the card would be.
-    fn connect_option_search(self: &Rc<Self>) {
+    /// What is chosen in the search dialog is set as a value typed on the
+    /// card would be; closed, the keyboard goes back to the card.
+    fn connect_option_search(&self) {
         let search = &self.editing.search;
-        let window = Rc::downgrade(self);
-        search.connect_search(move |query| {
-            let Some(window) = window.upgrade() else {
-                return Vec::new();
-            };
-            let Some(name) = window.editing.search.setting() else {
-                return Vec::new();
-            };
-            let session = window.session.borrow();
-            session
-                .edit()
-                .and_then(Edit::chosen)
-                .and_then(|chosen| {
-                    chosen
-                        .candidate()
-                        .settings
-                        .iter()
-                        .find(|setting| setting.name.as_str() == name)
-                        .map(|setting| stave_app::choices::search(setting, query))
-                })
+        let input = self.input();
+        search.connect_chosen(move |setting, text| {
+            input.emit(EditingInput::OptionChosen { setting, text }.into());
+        });
+        let input = self.input();
+        search.connect_closed(move || input.emit(EditingInput::OptionSearchClosed.into()));
+    }
+
+    /// Gives the search dialog the setting it searches, as the session has
+    /// it now: it lists what a query matches from that copy, at once, with
+    /// no call back into the window.
+    fn give_option_search(&self, name: &str) {
+        let setting = self
+            .session
+            .edit()
+            .and_then(Edit::chosen)
+            .and_then(|chosen| {
+                chosen
+                    .candidate()
+                    .settings
+                    .iter()
+                    .find(|setting| setting.name.as_str() == name)
+                    .cloned()
+            });
+        self.editing.search.connect_search(move |query| {
+            setting
+                .as_ref()
+                .map(|setting| stave_app::choices::search(setting, query))
                 .unwrap_or_default()
         });
-        let window = Rc::downgrade(self);
-        search.connect_chosen(move |setting, text| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let Ok(param) = parse_name(&setting) else {
-                return;
-            };
-            window.card_action(CardAction::Choose { param, text });
-        });
-        // Closed, the keyboard goes back to the card, so Enter and Escape
-        // work there again.
-        let window = Rc::downgrade(self);
-        search.connect_closed(move || {
-            if let Some(window) = window.upgrade()
-                && window.editing.card.root.is_visible()
-            {
-                window.editing.card.root.grab_focus();
-            }
-        });
+    }
+
+    /// An option chosen in the search dialog, set as a value typed on the
+    /// card would be.
+    pub(in crate::ui) fn option_chosen(&mut self, setting: &str, text: String) {
+        let Ok(param) = parse_name(setting) else {
+            return;
+        };
+        self.card_action(CardAction::Choose { param, text });
+    }
+
+    /// The search dialog closed: the keyboard goes back to the card, so
+    /// Enter and Escape work there again.
+    pub(in crate::ui) fn option_search_closed(&self) {
+        if self.editing.card.root.is_visible() {
+            self.editing.card.root.grab_focus();
+        }
     }
 
     /// Opens the search over a setting's options, `query` typed; the
     /// options' check is started again with that setting first.
-    pub(super) fn open_option_search(self: &Rc<Self>, setting: &str, query: &str) {
+    pub(super) fn open_option_search(&mut self, setting: &str, query: &str) {
+        self.give_option_search(setting);
         self.editing.search.present(setting, query);
         // Checked with that setting first.
         self.stop_options_check();
@@ -1253,9 +1240,9 @@ impl Window {
 
     /// Builds the chosen candidate's ghost from its last try: what it adds
     /// or changes, over the design as it is.
-    fn update_ghost(self: &Rc<Self>) {
+    fn update_ghost(&mut self) {
         let ghosts = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let chosen = session.edit().and_then(Edit::chosen);
             // A change of the design (a grip's drag) has a ghost too.
             let (verdict, candidate) = match (chosen, session.change()) {
@@ -1293,7 +1280,7 @@ impl Window {
 
     /// Takes the ghost away; the next frame puts the design's own scene
     /// back in the renderer.
-    fn clear_ghost(self: &Rc<Self>) {
+    fn clear_ghost(&mut self) {
         if self.editing.state.borrow_mut().ghost.take().is_some() {
             self.request_render();
         }
@@ -1352,15 +1339,15 @@ impl Window {
     /// covers the space it goes in see-through. `None` draws the design
     /// as usual (and puts its scene back in the renderer first if a ghost
     /// had it).
-    pub(super) fn render_ghost(&self, backdrop: Backdrop) -> Option<anyhow::Result<Ticket>> {
+    pub(super) fn render_ghost(&mut self, backdrop: Backdrop) -> Option<anyhow::Result<Ticket>> {
         if let Some(image) = self.render_removal(backdrop) {
             return Some(image);
         }
-        let session = self.session.borrow();
+        let session = &self.session;
         let mut edit_state = self.editing.state.borrow_mut();
-        let mut state = self.state.borrow_mut();
-        let shows_ghost = edit_state.ghost.is_some() && state.focus.is_none();
+        let shows_ghost = edit_state.ghost.is_some() && self.state.focus.is_none();
         if !shows_ghost {
+            let state = &mut self.state;
             if state.uploaded.is_none()
                 && let Some(shown) = session.shown()
                 && let Some((_, graph)) = shown.drawable()
@@ -1371,12 +1358,13 @@ impl Window {
             }
             return None;
         }
+        let region = session
+            .drawable()
+            .and_then(|(_, graph)| self.edit_region(session, graph));
+        let state = &mut self.state;
         let ghost = edit_state.ghost.as_mut()?;
         let orbit = state.orbit?;
         let (width, height) = state.size;
-        let region = session
-            .drawable()
-            .and_then(|(_, graph)| self.edit_region(&session, graph));
         let super::State {
             renderer,
             uploaded,
@@ -1435,54 +1423,54 @@ impl Window {
     /// Places the repeat handles after a frame is drawn. The ghost's
     /// verdict is not said on the model: its tint says it (red when it
     /// doesn't fit), and the Edit panel says it in words.
-    pub(super) fn place_ghost_verdict(self: &Rc<Self>) {
+    pub(super) fn place_ghost_verdict(&mut self) {
         self.place_repeat_handles();
     }
 
     // ---- driving it without a pointer (screenshots) ----
 
     /// Lights a space as if the pointer rested in it.
-    pub(super) fn hover_region(self: &Rc<Self>, region: RegionId) {
+    pub(super) fn hover_region(&mut self, region: RegionId) {
         self.editing.state.borrow_mut().hover = Some(region);
         self.request_render();
     }
 
     /// Selects a part as a click on one of its faces does.
-    pub(super) fn click_face(self: &Rc<Self>, face: PartFace) {
+    pub(super) fn click_face(&mut self, face: PartFace) {
         self.editing.state.borrow_mut().face = Some(face);
         self.cancel_edit();
         self.dispatch(Command::Select(Some(Selection::Part(face.part))));
     }
 
     /// Works out every entry of the menu now, as the steps would.
-    pub(super) fn check_menu_now(self: &Rc<Self>) {
+    pub(super) fn check_menu_now(&mut self) {
         let never = AtomicBool::new(false);
-        let events = self.session.borrow_mut().check_edit_menu(&never);
+        let events = self.session.check_edit_menu(&never);
         self.handle(events);
         self.refresh_edit();
     }
 
     /// Where a node set shows, as a point to open a menu at.
     pub(super) fn point_of(&self, volume: Option<Aabb>) -> (f64, f64) {
-        let state = self.state.borrow();
+        let state = &self.state;
         volume
-            .and_then(|volume| self.project(&state, volume.centre()))
+            .and_then(|volume| self.project(state, volume.centre()))
             .map_or((300.0, 300.0), |(x, y)| (f64::from(x), f64::from(y)))
     }
 }
 
 mod change_steps;
-mod changes;
+pub(in crate::ui) mod changes;
 #[cfg(test)]
 mod changes_tests;
 mod editor_link;
 mod grip_layer;
-mod grip_panel;
+pub(in crate::ui) mod grip_panel;
 mod grip_script;
 mod grip_text;
 mod grips;
-mod hold;
-mod item_tools;
+pub(in crate::ui) mod hold;
+pub(in crate::ui) mod item_tools;
 mod links;
 mod pointing;
 mod repeat_handles;

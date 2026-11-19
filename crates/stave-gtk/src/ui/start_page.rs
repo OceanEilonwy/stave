@@ -19,17 +19,16 @@
 //! The page's window is a relm4 component, [`StartPageComponent`]: its
 //! actions, rows and drop target only send [`StartPageInput`] messages,
 //! and it tells its owner what people asked for as [`StartPageOutput`]s.
-//! [`StartPage`] keeps the older API the application uses and does what
-//! they ask with the application ([`Shell`]).
+//! [`StartPage`] keeps the older API the application uses and passes what
+//! they ask on to the application as [`ShellInput`]s.
 
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 
-use super::app::{self, APP_ID, Shell};
+use super::app::{self, APP_ID, ShellInput};
 use super::relm4_shim::Bridge;
 use super::{new_project, shown_path};
 
@@ -275,43 +274,42 @@ pub(super) struct StartPage {
 }
 
 impl StartPage {
-    /// The start page, listing the recent projects.
-    pub(super) fn new(shell: &Rc<Shell>) -> Rc<StartPage> {
+    /// The start page, listing the recent projects; what people ask for
+    /// goes to the application as [`ShellInput`]s.
+    pub(super) fn new(
+        application: &adw::Application,
+        recent: Vec<PathBuf>,
+        shell: relm4::Sender<ShellInput>,
+    ) -> StartPage {
         let toasts = adw::ToastOverlay::new();
         let bridge = Bridge::<StartPageComponent>::launch(StartPageInit {
-            application: shell.application().clone(),
-            recent: shell.recent_projects(),
+            application: application.clone(),
+            recent,
             toasts: toasts.clone(),
         });
         let window = bridge.widget().clone();
-        let owner = Rc::downgrade(shell);
         let parent = window.downgrade();
-        bridge.connect(move |output| {
-            let Some(shell) = owner.upgrade() else {
-                return;
-            };
-            match output {
-                StartPageOutput::Open => {
-                    if let Some(window) = parent.upgrade() {
-                        choose_folder(&window, &shell);
-                    }
+        bridge.connect(move |output| match output {
+            StartPageOutput::Open => {
+                if let Some(window) = parent.upgrade() {
+                    choose_folder(&window, shell.clone());
                 }
-                StartPageOutput::Create => {
-                    if let Some(window) = parent.upgrade() {
-                        ask_new_project(&window, &shell);
-                    }
-                }
-                StartPageOutput::OpenRecent(folder) | StartPageOutput::Dropped(folder) => {
-                    shell.open_folder(&folder);
-                }
-                StartPageOutput::CloseRequest => shell.start_closed(),
             }
+            StartPageOutput::Create => {
+                if let Some(window) = parent.upgrade() {
+                    ask_new_project(&window, shell.clone());
+                }
+            }
+            StartPageOutput::OpenRecent(folder) | StartPageOutput::Dropped(folder) => {
+                shell.emit(ShellInput::OpenFolder(folder));
+            }
+            StartPageOutput::CloseRequest => shell.emit(ShellInput::StartClosed),
         });
-        Rc::new(StartPage {
+        StartPage {
             window,
             toasts,
             bridge,
-        })
+        }
     }
 
     /// The New Project dialog; the project it makes opens in its window.
@@ -321,35 +319,32 @@ impl StartPage {
 }
 
 /// Asks for a project folder over `window` and opens it.
-fn choose_folder(window: &adw::ApplicationWindow, shell: &Rc<Shell>) {
+fn choose_folder(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInput>) {
     let dialog = gtk::FileDialog::builder()
         .title("Open a project folder")
         .modal(true)
         .build();
-    let shell = Rc::downgrade(shell);
     dialog.select_folder(Some(window), gio::Cancellable::NONE, move |result| {
-        if let (Ok(folder), Some(shell)) = (result, shell.upgrade())
+        if let Ok(folder) = result
             && let Some(path) = folder.path()
         {
-            shell.open_folder(&path);
+            shell.emit(ShellInput::OpenFolder(path));
         }
     });
 }
 
 /// The New Project dialog over `window`; the project it makes opens in
 /// its window.
-fn ask_new_project(window: &adw::ApplicationWindow, shell: &Rc<Shell>) {
-    let shell = Rc::downgrade(shell);
+fn ask_new_project(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInput>) {
     new_project::ask(window.upcast_ref(), move |folder: PathBuf| {
-        if let Some(window) = shell.upgrade().and_then(|shell| shell.open_folder(&folder)) {
-            window.welcome_new_project();
-        }
+        shell.emit(ShellInput::OpenNewProject(folder));
     });
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};

@@ -50,12 +50,13 @@ mod start_page;
 mod style;
 mod tab_strip;
 mod tree;
+mod update;
 mod view_layout;
 mod view_tools;
 mod viewport;
 mod workbench;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -63,6 +64,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender};
 use stave_app::Contact;
 use stave_app::check::{self, Checked, Watcher};
 use stave_app::finder::{self as finding, Goal};
@@ -77,6 +79,8 @@ use stave_app::session::{
 use stave_app::view::{self, Highlight};
 use stave_model::solved::AssemblyId;
 use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
+use update::editing::EditingInput;
+use update::selection::SelectionInput;
 
 use crate::render::{Backdrop, Frame, Highlighted, Renderer};
 use chrome::MotionBar;
@@ -105,9 +109,6 @@ const MOUSE_FORWARD: u32 = 9;
 
 /// How fast focus mode plays: the whole way in 2.5 seconds.
 const PLAY_PER_SECOND: f64 = 0.4;
-
-/// What one of the window's own actions does, given the window.
-type ActionHandler = Box<dyn Fn(&Rc<Window>)>;
 
 /// How fast pulling apart plays: the whole way in 3 seconds.
 const EXPLODE_PER_SECOND: f64 = 1.0 / 3.0;
@@ -275,15 +276,25 @@ pub fn run(options: Options) -> Result<()> {
         .application_id(app::APP_ID)
         .flags(flags)
         .build();
-    let shell = app::Shell::new(&application, options);
-    let this = shell.clone();
-    application.connect_startup(move |_| this.startup());
-    let this = shell.clone();
-    application.connect_activate(move |_| this.activate());
-    application.connect_open(move |_, files, _| {
-        for path in files.iter().filter_map(gio::File::path) {
-            shell.open_folder(&path);
-        }
+    // The application's component: GApplication's signals only queue its
+    // messages. Activating and opening hold the application until the
+    // message is handled, so it doesn't end before its first window.
+    let shell = app::Shell::builder()
+        .launch(app::ShellInit {
+            application: application.clone(),
+            options,
+        })
+        .detach();
+    let input = shell.sender().clone();
+    application.connect_startup(move |_| input.emit(app::ShellInput::Startup));
+    let input = shell.sender().clone();
+    application.connect_activate(move |application| {
+        input.emit(app::ShellInput::Activate(application.hold()));
+    });
+    let input = shell.sender().clone();
+    application.connect_open(move |application, files, _| {
+        let folders = files.iter().filter_map(gio::File::path).collect();
+        input.emit(app::ShellInput::Open(folders, application.hold()));
     });
     // GApplication reads the folders as files to open: in this process
     // if it is the first Stave, or handed to the one already running.
@@ -294,6 +305,8 @@ pub fn run(options: Options) -> Result<()> {
             .map(|folder| gio::File::for_path(folder).uri().to_string()),
     );
     let status = application.run_with_args(&arguments);
+    // The application, its windows and the start page go with it.
+    drop(shell);
     if status != glib::ExitCode::SUCCESS {
         bail!("Stave stopped with an error");
     }
@@ -424,8 +437,6 @@ struct State {
     problem: Option<ShownProblem>,
     opening: Option<Opening>,
     focus: Option<FocusState>,
-    /// Ignore control changes made by the window itself.
-    updating_controls: bool,
     /// "Pull apart" is on (its slider shows), even at 0.
     pull_apart: bool,
     /// Pulling apart is playing.
@@ -441,8 +452,13 @@ struct State {
     /// command line's selection is made.
     start_camera: Option<StartCamera>,
     /// Hardware focus's small views render again once their size has
-    /// settled (not on every frame of a resize).
-    pictures_timer: Option<glib::SourceId>,
+    /// settled (not on every frame of a resize): the number of the last
+    /// ask, so only its timer renders.
+    pictures_asked: u64,
+    /// Focus mode's playing, frame by frame.
+    focus_clock: Clock,
+    /// Pulling apart's playing, frame by frame.
+    explode_clock: Clock,
     /// X-ray: everything but the selection see-through.
     xray: bool,
     /// What a partner link in the Parts panel points at, while the pointer
@@ -454,8 +470,28 @@ struct State {
     edit_script: Option<PathBuf>,
 }
 
+/// The clock of something that plays frame by frame: the frame time it
+/// last moved at, and whether the next frame is asked for already.
+#[derive(Default)]
+struct Clock {
+    last: Option<i64>,
+    ticking: bool,
+}
+
+impl Clock {
+    /// The seconds since the last frame it moved at (none at the first),
+    /// moving it to `now` (in microseconds, as the frame clock gives it).
+    fn seconds_to(&mut self, now: i64) -> f64 {
+        let seconds = self.last.map_or(0.0, |before| {
+            f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
+        });
+        self.last = Some(now);
+        seconds
+    }
+}
+
 /// The window's widgets.
-struct Widgets {
+pub(in crate::ui) struct Widgets {
     window: adw::ApplicationWindow,
     header: Header,
     toasts: adw::ToastOverlay,
@@ -518,39 +554,113 @@ impl Widgets {
     }
 }
 
-struct Window {
+/// The project window: a relm4 component whose model is everything the
+/// window keeps. The application owns its [`Controller`](relm4::Controller)
+/// for exactly as long as its GTK window is open (until GTK takes the
+/// window out of the application). Only
+/// [`Window::update`] changes it; the widgets, timers and background work
+/// hold a [`ComponentSender`] and send it [`WindowInput`]s, which are
+/// queued and handled one at a time.
+pub(in crate::ui) struct Window {
     widgets: Widgets,
-    session: RefCell<Session>,
-    state: RefCell<State>,
+    session: Session,
+    state: State,
     /// The problems pinned on the model, as overlay children of the
     /// design (made again when the result or the posed problem changes,
     /// moved on every frame).
-    pins: RefCell<Pins>,
-    /// Kept alive for as long as the window: dropping it stops watching.
-    watcher: RefCell<Option<Watcher>>,
+    pins: Pins,
+    /// Kept for as long as the window: dropping it stops watching.
+    watcher: Option<Watcher>,
     /// Editing in the 3D view: the menu, the card and the ghost.
     editing: edit_view::EditView,
-    /// The application: the other windows, recent projects, what is
-    /// remembered.
-    shell: Rc<app::Shell>,
+    /// Where the window's handlers, timers and background work send its
+    /// messages.
+    sender: ComponentSender<Window>,
+    /// The handlers of the controls the window also sets itself (Pull
+    /// apart, focus mode's checks and switch, the motion slider): blocked
+    /// while it does, so it never hears its own changes.
+    controls: Vec<(glib::Object, glib::SignalHandlerId)>,
+    /// The handler on the style manager, which outlives the window:
+    /// disconnected when the window shuts down.
+    style_handler: Option<glib::SignalHandlerId>,
 }
 
-impl Window {
-    fn open(
-        application: &adw::Application,
-        folder: PathBuf,
-        options: Options,
-        shell: Rc<app::Shell>,
-    ) -> Result<Rc<Window>> {
-        if options.window_screenshot.is_some() {
-            settle_for_screenshot();
-        }
-        let widgets = build_widgets(application, &folder, &shell, &options)?;
-        let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
-        let window = Rc::new(Window {
+/// What a project window is opened with.
+pub(in crate::ui) struct WindowInit {
+    /// Its widgets, built (and their window) before it is launched.
+    pub(super) widgets: Widgets,
+    /// The project folder it shows.
+    pub(super) folder: PathBuf,
+    /// The command line's wishes.
+    pub(super) options: Options,
+}
+
+/// What a project window is told: each group of its behaviour has its
+/// own messages (`update/`).
+#[derive(Debug)]
+pub(in crate::ui) enum WindowInput {
+    /// What is selected and focused.
+    Selection(update::selection::SelectionInput),
+    /// The project: folders, files, checks and the window's actions.
+    Project(update::project::ProjectInput),
+    /// Editing in the 3D view.
+    Editing(update::editing::EditingInput),
+    /// The 3D view: camera, drawing, pulling apart.
+    Rendering(update::rendering::RenderingInput),
+}
+
+/// What a project window tells the application.
+#[derive(Debug)]
+pub(in crate::ui) enum WindowOutput {
+    /// Show this folder: the window already showing it comes forward, or
+    /// this window is asked to open it
+    /// ([`ProjectInput::OpenHere`](update::project::ProjectInput::OpenHere)).
+    GoToFolder(PathBuf),
+    /// The window now shows this folder.
+    Opened(PathBuf),
+    /// The window is closing: its size and whether it is maximised, to
+    /// remember. The application is held until this is handled.
+    Closing {
+        /// Its size, as `default_size` gives it.
+        size: (i32, i32),
+        /// It is maximised.
+        maximized: bool,
+        /// Keeps the application running until the size is saved.
+        hold: gio::ApplicationHoldGuard,
+    },
+}
+
+impl Component for Window {
+    type Init = WindowInit;
+    type Input = WindowInput;
+    type Output = WindowOutput;
+    type CommandOutput = ();
+    type Root = adw::ApplicationWindow;
+    type Widgets = ();
+
+    fn init_root() -> adw::ApplicationWindow {
+        adw::ApplicationWindow::builder()
+            .width_request(360)
+            .height_request(400)
+            .css_classes(["stave-window"])
+            .build()
+    }
+
+    fn init(
+        init: WindowInit,
+        root: adw::ApplicationWindow,
+        sender: ComponentSender<Window>,
+    ) -> ComponentParts<Window> {
+        let WindowInit {
             widgets,
-            session: RefCell::new(Session::new(folder)),
-            state: RefCell::new(State {
+            folder,
+            options,
+        } = init;
+        let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
+        let mut window = Window {
+            widgets,
+            session: Session::new(folder),
+            state: State {
                 wanted: Some(Wanted {
                     scene: options.scene,
                     selection: options.select,
@@ -571,7 +681,9 @@ impl Window {
                 }),
                 window_screenshot: options.window_screenshot,
                 start_camera: (options.camera != StartCamera::default()).then_some(options.camera),
-                pictures_timer: None,
+                pictures_asked: 0,
+                focus_clock: Clock::default(),
+                explode_clock: Clock::default(),
                 renderer,
                 uploaded: None,
                 posed: None,
@@ -582,7 +694,6 @@ impl Window {
                 problem: None,
                 opening: None,
                 focus: None,
-                updating_controls: false,
                 pull_apart: false,
                 exploding: false,
                 focus_start: None,
@@ -591,16 +702,19 @@ impl Window {
                 xray: false,
                 hovered: Vec::new(),
                 marks: Rc::default(),
-                edit_script: None,
-            }),
-            pins: RefCell::new(Pins::default()),
-            watcher: RefCell::new(None),
+                edit_script: options.edit_script,
+            },
+            pins: Pins::default(),
+            watcher: None,
             editing: edit_view::EditView::new(),
-            shell,
-        });
-        window.install_actions();
-        window.connect_events();
-        window.connect_editing();
+            sender,
+            controls: Vec::new(),
+            style_handler: None,
+        };
+        update::project::wire(&window);
+        update::selection::wire(&mut window);
+        update::rendering::wire(&mut window);
+        update::editing::wire(&mut window);
         if let Some(showcase) = options.edit_fixture {
             // The fixture's card takes the Edit panel's place of the
             // session's own.
@@ -612,7 +726,6 @@ impl Window {
                 window.widgets.workbench.present(workbench::PanelId::Edit);
             }
         }
-        window.state.borrow_mut().edit_script = options.edit_script;
         if options.new_project {
             window.ask_new_project();
         }
@@ -621,29 +734,80 @@ impl Window {
         // widget GTK finds, which can be a problem's selectable `stave
         // check` text in the card (it would show a text cursor).
         gtk::prelude::GtkWindowExt::set_focus(
-            &window.widgets.window,
+            &root,
             Some(window.widgets.viewport.upcast_ref::<gtk::Widget>()),
         );
         if options.maximized {
-            window.widgets.window.maximize();
+            root.maximize();
         }
-        window.widgets.window.present();
+        root.present();
         window.show_folder();
         window.dispatch(Command::Check);
-        Ok(window)
+        ComponentParts {
+            model: window,
+            widgets: (),
+        }
     }
 
-    // ---- the session ----
+    fn update(
+        &mut self,
+        message: WindowInput,
+        _sender: ComponentSender<Window>,
+        _root: &adw::ApplicationWindow,
+    ) {
+        match message {
+            WindowInput::Selection(message) => self.update_selection(message),
+            WindowInput::Project(message) => self.update_project(message),
+            WindowInput::Editing(message) => self.update_editing(message),
+            WindowInput::Rendering(message) => self.update_rendering(message),
+        }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut (), _output: relm4::Sender<WindowOutput>) {
+        if let Some(handler) = self.style_handler.take() {
+            adw::StyleManager::default().disconnect(handler);
+        }
+    }
+}
+
+impl Window {
+    /// A clone of the window's input sender, for a handler, a timer or
+    /// background work to send messages with. Sending fails quietly once
+    /// the window has gone.
+    fn input(&self) -> relm4::Sender<WindowInput> {
+        self.sender.input_sender().clone()
+    }
+
+    /// Queues a message for the window, handled after the current one.
+    fn send(&self, message: impl Into<WindowInput>) {
+        // Only fails once the window has gone, when nobody needs to know.
+        let _ = self.sender.input_sender().send(message.into());
+    }
+
+    /// Blocks the handlers of the controls the window sets itself, before
+    /// it sets them (what `#[block_signal]` does in a view).
+    fn block_controls(&self) {
+        for (control, handler) in &self.controls {
+            control.block_signal(handler);
+        }
+    }
+
+    /// Unblocks them once it has.
+    fn unblock_controls(&self) {
+        for (control, handler) in &self.controls {
+            control.unblock_signal(handler);
+        }
+    }
 
     /// Sends a command to the session and redraws what changed.
-    fn dispatch(self: &Rc<Self>, command: Command) {
-        let events = self.session.borrow_mut().apply(command);
+    fn dispatch(&mut self, command: Command) {
+        let events = self.session.apply(command);
         self.handle(events);
     }
 
     /// Redraws what the events name. A new result is taken first, so the
     /// other views see it.
-    fn handle(self: &Rc<Self>, events: Vec<Event>) {
+    fn handle(&mut self, events: Vec<Event>) {
         let result = events.contains(&Event::ResultChanged);
         if result {
             self.result_changed();
@@ -657,7 +821,7 @@ impl Window {
                 Event::HistoryChanged => {
                     // Back and Forward are in the View menu and on
                     // Alt+← / Alt+→; each is offered only when it can go.
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     for (name, enabled) in [
                         ("back", session.can_go_back()),
                         ("forward", session.can_go_forward()),
@@ -688,3026 +852,11 @@ impl Window {
         }
     }
 
-    /// Selects something and frames it: for the parts list, the finder,
-    /// "show in 3D" and the command line. Clicking in the 3D view selects
-    /// without moving the camera (`pick`). The 3D View comes to the front
-    /// (brought back if it was closed), so what was chosen can be seen.
-    fn select_and_frame(self: &Rc<Self>, selection: Option<Selection>) {
-        self.widgets.workbench.present(workbench::PanelId::View);
-        self.dispatch(Command::Select(selection));
-        self.frame_selection();
-    }
-
-    /// Runs a check on a worker thread and hands its outcome back.
-    fn run_check(self: &Rc<Self>, ticket: stave_app::session::CheckTicket) {
-        if self.state.borrow().hold_checks {
-            return;
-        }
-        let folder = self.session.borrow().folder().to_path_buf();
-        // The project as the editor shows it, unsaved changes included.
-        let overlay = self.widgets.files.overlay_for_check();
-        let window = Rc::downgrade(self);
-        crate::render::profile::edit_started();
-        glib::spawn_future_local(async move {
-            let outcome = gio::spawn_blocking(move || check::run_with(&folder, &overlay))
-                .await
-                .unwrap_or_else(|_| check::Outcome::CantOpen {
-                    message: "checking the design crashed".to_owned(),
-                    elapsed: Duration::ZERO,
-                });
-            crate::render::profile::edit_checked();
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let events = window.session.borrow_mut().finish_check(ticket, outcome);
-            window.handle(events);
-        });
-    }
-
-    /// The folder in the title until the design is in.
-    fn show_folder(self: &Rc<Self>) {
-        let folder = self.session.borrow().folder().to_path_buf();
-        self.show_title();
-        self.widgets.files.set_folder(&folder);
-        self.widgets.file_list.set_folder(&folder);
-    }
-
-    /// The project's or library's own title (the folder's name until one
-    /// is read), with the folder under it.
-    fn show_title(&self) {
-        let (title, folder) = {
-            let session = self.session.borrow();
-            (session.title(), session.folder().to_path_buf())
-        };
-        self.widgets.header.show_title(&title, &shown_path(&folder));
-        self.widgets
-            .window
-            .set_title(Some(&format!("{title} — Stave")));
-    }
-
-    fn result_changed(self: &Rc<Self>) {
-        self.grips_result_changed();
-        let (shown, latest, showing_older) = {
-            let session = self.session.borrow();
-            (
-                session.shown().cloned(),
-                session.latest().cloned(),
-                session.showing_older(),
-            )
-        };
-        self.show_title();
-        let widgets = &self.widgets;
-        widgets.files.show_result(latest.clone());
-        {
-            let session = self.session.borrow();
-            let selected = match session.selection() {
-                Some(Selection::Problem(index)) => Some(index.0),
-                _ => None,
-            };
-            let reports = latest
-                .as_deref()
-                .map(stave_app::problems::reports)
-                .unwrap_or_default();
-            widgets.problems.show(&reports, selected, showing_older);
-        }
-        // The dots: by file always; by part only when the latest result is
-        // the one shown (its ids are the tree's).
-        // Read-only from here on, so the three holders share one copy.
-        let marks = Rc::new(
-            latest
-                .as_deref()
-                .map(stave_app::problems::marks)
-                .unwrap_or_default(),
-        );
-        widgets.files.show_marks(Rc::clone(&marks));
-        let tree_marks = if showing_older { Rc::default() } else { marks };
-        self.state.borrow_mut().marks = Rc::clone(&tree_marks);
-        widgets.tree.show_marks(tree_marks);
-        let empty = edit_view::empty_state(&self.session.borrow());
-        if let Some(empty) = empty {
-            // The sidebar and the inspector say why too (for a library,
-            // what it defines and how to use it), not "Nothing selected".
-            widgets.inspector.show_idle(Some(empty.inspector()));
-            self.show_empty(&empty.title, &empty.description, empty.offers_open);
-            widgets.tree.show_empty(empty);
-            self.show_card();
-            // What doesn't need the 3D view (the editor) still opens as
-            // asked.
-            self.apply_wanted();
-            return;
-        }
-        widgets.inspector.show_idle(None);
-        let Some(shown) = shown else {
-            return;
-        };
-        // An older design on show is said by the red problems chip and a
-        // line over the Problems panel's list, not a banner.
-        let Some((design, graph)) = shown.drawable() else {
-            return;
-        };
-        widgets.tree.show_tree(
-            inspect::parts_tree(design),
-            stave_app::part_joints::PartJoints::new(design),
-        );
-        let first = {
-            let mut state = self.state.borrow_mut();
-            let fresh = !state
-                .uploaded
-                .as_ref()
-                .is_some_and(|uploaded| Rc::ptr_eq(uploaded, &shown));
-            if fresh {
-                if let Ok(renderer) = &mut state.renderer {
-                    renderer.upload(graph);
-                }
-                state.uploaded = Some(shown.clone());
-                // A new result renumbers everything: focus and the posed
-                // problem are opened again from the session.
-                state.focus = None;
-                state.problem = None;
-                state.opening = None;
-            }
-            state.posed.is_none()
-        };
-        let titles: Vec<String> = graph.scenes.iter().map(|s| s.title.clone()).collect();
-        let index = self.session.borrow().scene_index();
-        widgets.header.show_scenes(&titles, index);
-        widgets.view_stack.set_visible_child_name("view");
-        self.show_moves();
-        self.repose();
-        if first {
-            let mut state = self.state.borrow_mut();
-            state.orbit = Self::frame_all(&state, &shown);
-        }
-        self.apply_wanted();
-        self.apply_start_camera();
-        // Whatever the session carried over, shown again; the editor stays
-        // where people are typing.
-        self.state.borrow_mut().linking = true;
-        self.selection_changed();
-        self.state.borrow_mut().linking = false;
-        self.focus_changed();
-        self.request_render();
-        // The 3D view draws (and saves a screenshot) only when it shows.
-        if !self.shows_3d() {
-            self.capture_if_asked();
-        }
-    }
-
-    /// Applies the command line's wishes once, after the first result.
-    fn apply_wanted(self: &Rc<Self>) {
-        let Some(wanted) = self.state.borrow_mut().wanted.take() else {
-            return;
-        };
-        let found = {
-            let session = self.session.borrow();
-            session.drawable().map(|(design, graph)| {
-                let select = wanted
-                    .selection
-                    .as_ref()
-                    .and_then(|name| link::selection_named(design, name));
-                let focus = wanted
-                    .focus
-                    .as_ref()
-                    .and_then(|name| focus::find(design, name, None).ok());
-                let scene = wanted
-                    .scene
-                    .as_ref()
-                    .filter(|name| graph.scenes.iter().any(|s| &s.name == *name))
-                    .cloned();
-                (select, focus, scene)
-            })
-        };
-        let (select, target, scene) = found.unwrap_or_default();
-        let plan = if wanted.plan {
-            Some(true)
-        } else if wanted.in_3d {
-            Some(false)
-        } else {
-            None
-        };
-        if let Some(scene) = scene {
-            self.dispatch(Command::ShowScene(scene));
-        }
-        if let Some(explode) = wanted.explode {
-            self.dispatch(Command::SetExplode(Explode::clamped(explode)));
-        }
-        if let Some(selection) = select {
-            self.select_and_frame(Some(selection));
-        }
-        if let Some(target) = target {
-            self.state.borrow_mut().focus_start = Some((plan, wanted.step));
-            self.dispatch(Command::Focus(target));
-            self.state.borrow_mut().focus_start = None;
-        }
-        if let Some(index) = wanted.problem {
-            self.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
-                index,
-            )))));
-        }
-        if wanted.view != View::Design {
-            self.dispatch(Command::ShowView(wanted.view));
-        }
-        if wanted.xray {
-            self.widgets.view_toolbar.xray.set_active(true);
-        }
-        if wanted.editor && wanted.file.is_none() {
-            self.dispatch(Command::ShowEditor(Editor::Open));
-        }
-        if let Some(file) = &wanted.file {
-            let location = SourceLocation::parse(self.session.borrow().folder(), file);
-            if let Some(location) = location {
-                self.dispatch(Command::GoToSource(location));
-            }
-        }
-        if wanted.wish != Wish::default() {
-            self.widgets.files.wish(wanted.wish);
-        }
-        if wanted.checking || wanted.building {
-            self.state.borrow_mut().hold_checks = true;
-            self.dispatch(if wanted.building {
-                Command::Build
-            } else {
-                Command::Check
-            });
-        }
-        if let Some(query) = &wanted.finder {
-            self.widgets
-                .finder
-                .present(&self.widgets.window, query.as_str());
-        }
-    }
-
-    fn view_changed(self: &Rc<Self>) {
-        let view = self.session.borrow().view();
-        self.widgets.header.show_view(view);
-        self.widgets.views.set_visible_child_name(view.word());
-        self.sync_files();
-        self.request_render();
-    }
-
-    /// `true` when the 3D view is on screen: the design.
-    fn shows_3d(&self) -> bool {
-        match self.session.borrow().view() {
-            View::Design => true,
-            View::CutList => false,
-        }
-    }
-
-    /// The editor opened or closed. Opening shows the Code panel wherever
-    /// it is docked, with the selection's line; closing gives the keyboard
-    /// back to the 3D view (the panel stays where it is).
-    fn editor_changed(self: &Rc<Self>) {
-        let open = self.session.borrow().editor() == Editor::Open;
-        if open {
-            self.widgets.workbench.present(workbench::PanelId::Code);
-            self.sync_files();
-            self.widgets.files.focus_text();
-        } else {
-            gtk::prelude::GtkWindowExt::set_focus(
-                &self.widgets.window,
-                Some(self.widgets.viewport.upcast_ref::<gtk::Widget>()),
-            );
-        }
-        self.request_render();
-    }
-
-    /// The editor follows the selection while it is open: a place in a
-    /// file is shown; a part, assembly or piece of hardware selected in
-    /// the 3D view, the model tree or the finder moves the text to the
-    /// line that places it.
-    fn sync_files(self: &Rc<Self>) {
-        let (open, selection, placed) = {
-            let session = self.session.borrow();
-            let selection = session.selection().cloned();
-            let placed = session
-                .shown()
-                .zip(selection.as_ref())
-                .and_then(|(shown, selection)| link::placed_at(shown, selection));
-            (session.editor() == Editor::Open, selection, placed)
-        };
-        let files = &self.widgets.files;
-        match (&selection, placed) {
-            (Some(Selection::Location(location)), _) if open => files.show_location(location),
-            // A part, assembly or piece of hardware chosen anywhere opens
-            // the file that places it, at that line, in the Code panel
-            // (forward unless it would cover the 3D view; the keyboard
-            // stays where it is).
-            (Some(_), Some(placed)) if !self.state.borrow().linking => {
-                files.reveal(&placed);
-                self.widgets
-                    .workbench
-                    .bring_forward_beside_view(workbench::PanelId::Code);
-            }
-            _ => {}
-        }
-    }
-
-    /// The editor's cursor rests on a name: select what it means in the
-    /// design, without a history entry. A name the 3D view can't show
-    /// leaves the selection as it is.
-    fn text_linked(self: &Rc<Self>, found: files::CursorName) {
-        let (analysis, symbol) = match found {
-            files::CursorName::Name(analysis, symbol) => (analysis, symbol),
-            // A broken name: the 3D view lets go, and the chip goes.
-            files::CursorName::Unresolved => {
-                let linked =
-                    self.session.borrow().selection().is_some_and(|s| {
-                        !matches!(s, Selection::Location(_) | Selection::Problem(_))
-                    });
-                if linked {
-                    self.state.borrow_mut().linking = true;
-                    self.dispatch(Command::Link(None));
-                    self.state.borrow_mut().linking = false;
-                }
-                return;
-            }
-            files::CursorName::Other => return,
-        };
-        let selection = {
-            let session = self.session.borrow();
-            session.drawable().and_then(|(design, _)| {
-                link::selection_for(design, &analysis, symbol, session.selection())
-            })
-        };
-        if let Some(selection) = selection {
-            self.state.borrow_mut().linking = true;
-            self.dispatch(Command::Link(Some(selection)));
-            self.state.borrow_mut().linking = false;
-        }
-    }
-
-    fn selection_changed(self: &Rc<Self>) {
-        let (selection, inspection, problem, focused) = {
-            let session = self.session.borrow();
-            let selection = session.selection().cloned();
-            let inspection = session
-                .shown()
-                .zip(selection.as_ref())
-                .and_then(|(shown, selection)| inspect::inspect(shown, selection));
-            let problem = session.selected_problem().cloned();
-            let details = if let (Some(Selection::Problem(index)), Some(latest)) =
-                (&selection, session.latest())
-            {
-                stave_app::problems::details(latest, *index)
-            } else {
-                None
-            };
-            (
-                selection,
-                inspection,
-                problem.zip(details),
-                session.focus().is_some(),
-            )
-        };
-        let widgets = &self.widgets;
-        let linked = {
-            let session = self.session.borrow();
-            session
-                .drawable()
-                .zip(selection.as_ref())
-                .and_then(|((design, _), selection)| {
-                    let placed = link::placed_at(session.shown()?, selection)?;
-                    link::chip(design, selection, &placed)
-                })
-        };
-        widgets
-            .workbench
-            .status
-            .set_label(linked.as_deref().unwrap_or(""));
-        widgets.tree.show_selection(selection.as_ref());
-        widgets.problems.show_selected(match &selection {
-            Some(Selection::Problem(index)) => Some(index.0),
-            _ => None,
-        });
-        self.sync_files();
-        if focused {
-            self.show_card();
-            return;
-        }
-        let explode = self.session.borrow().explode().get();
-        self.show_hint(&if explode > 0.0 && selection.is_none() {
-            format!("Pulled apart · {}%", view_tools::percent(explode))
-        } else {
-            String::new()
-        });
-        // A problem is read in the Problems panel; Details keeps to the
-        // design.
-        widgets.inspector.show(inspection.as_ref());
-        // Pose a problem where it happens, or offer to open the selection.
-        match problem.and_then(|(problem, details)| Some((problem.contact?, details.motion))) {
-            Some((contact, card)) => self.pose_problem(contact, card),
-            None => {
-                self.state.borrow_mut().problem = None;
-                self.show_problem_controls(None);
-                let moves_with = match &selection {
-                    Some(Selection::Assembly(id)) => Some(*id),
-                    _ => inspection.and_then(|i| i.moves_with),
-                };
-                self.update_opening(moves_with);
-            }
-        }
-        self.show_card();
-        self.show_moves();
-        self.grips_follow_selection();
-        self.request_render();
-    }
-
-    /// The Details panel always shows the selection's account; focus mode
-    /// brings it forward, since its controls are there.
-    fn show_card(self: &Rc<Self>) {
-        if self.session.borrow().focus().is_some() {
-            self.widgets.workbench.present(workbench::PanelId::Details);
-        }
-        self.update_face_button();
-    }
-
-    /// A short line at the top of the 3D view ("Focused on one joint · Esc
-    /// to go back"); empty hides it.
-    fn show_hint(&self, text: &str) {
-        self.widgets.hint.set_label(text);
-        self.widgets.hint_box.set_visible(!text.is_empty());
-    }
-
-    /// The dock's chips: every assembly that moves, with its mark, the
-    /// one the motion slider shows marked current.
-    fn show_moves(self: &Rc<Self>) {
-        let (moving, current, sliding) = {
-            let session = self.session.borrow();
-            let state = self.state.borrow();
-            let moving: Vec<(AssemblyId, String, Option<Mark>)> = session
-                .drawable()
-                .map(|(design, graph)| {
-                    design
-                        .assemblies
-                        .iter()
-                        .filter(|a| a.parent.is_none() && graph.motion_range(a.id).is_some())
-                        .map(|a| (a.id, a.name.clone(), state.marks.assembly(a.id)))
-                        .collect()
-                })
-                .unwrap_or_default();
-            (
-                moving,
-                state.opening.map(|o| o.assembly),
-                self.widgets.motion.root.is_visible(),
-            )
-        };
-        // While the selection's own slider shows, the chips step aside
-        // (V2C_Spatial.dc.html): there isn't room for both.
-        self.widgets
-            .dock
-            .show_moves(if sliding { &[] } else { &moving }, current);
-    }
-
-    // ---- focus mode ----
-
-    /// Opens or leaves focus mode to match the session.
-    fn focus_changed(self: &Rc<Self>) {
-        let wanted = self.session.borrow().focus();
-        let current = self.state.borrow().focus.as_ref().map(|f| f.focus.target);
-        if wanted == current {
-            return;
-        }
-        match wanted {
-            Some(target) => self.open_focus(target),
-            None => self.leave_focus(),
-        }
-    }
-
-    fn open_focus(self: &Rc<Self>, target: Target) {
-        let found = {
-            let session = self.session.borrow();
-            session.shown().and_then(|shown| {
-                let (design, graph) = shown.drawable()?;
-                let focus = focus::open(&shown.opened, design, graph, target)?;
-                let name = focus
-                    .motion()
-                    .and_then(|(assembly, _)| design.assemblies.get(assembly.index()))
-                    .map(|assembly| assembly.name.clone());
-                Some((focus, name))
-            })
-        };
-        let Some((found, moving_name)) = found else {
-            return;
-        };
-        let start = self.state.borrow_mut().focus_start.take();
-        let (start_plan, start_step) = start.unwrap_or((None, None));
-        let progress = start_step.unwrap_or(if found.assembles() { 0.0 } else { 0.4 });
-        let plan = found.plan().is_some() && start_plan.unwrap_or(found.prefers_plan());
-        {
-            let mut state = self.state.borrow_mut();
-            state.problem = None;
-            state.opening = None;
-            state.exploding = false;
-            state.focus = Some(FocusState {
-                focus: found,
-                progress,
-                options: focus::Options::default(),
-                plan,
-                playing: false,
-                looks: Vec::new(),
-                overlay: Overlay::default(),
-            });
-        }
-        self.widgets.motion.show(None);
-        self.show_problem_controls(None);
-        self.layout_for_focus(moving_name.as_deref());
-        self.hide_pins();
-        let texts = self.repose();
-        self.frame_focus();
-        {
-            let state = self.state.borrow();
-            self.widgets
-                .inspector
-                .focus
-                .show(state.focus.as_ref().map(|f| &f.focus));
-        }
-        // Setting the check boxes calls their handlers, which look at the
-        // state: nothing may be borrowed here.
-        self.state.borrow_mut().updating_controls = true;
-        let panel = &self.widgets.inspector.focus;
-        panel.xray.set_active(true);
-        panel.tint.set_active(true);
-        panel.fade.set_active(true);
-        self.widgets.plan_switch.show(plan);
-        self.state.borrow_mut().updating_controls = false;
-        self.widgets.inspector.show_focus();
-        let assembles = self
-            .state
-            .borrow()
-            .focus
-            .as_ref()
-            .is_some_and(|f| f.focus.assembles());
-        self.show_hint(if assembles {
-            "Focused on one joint · Esc to go back"
-        } else {
-            "Focused on one piece of hardware · Esc to go back"
-        });
-        self.show_focus_texts(texts);
-        self.show_progress();
-        self.render_pictures();
-        self.request_render();
-    }
-
-    /// Frames the joint or the hardware (from the direction focus asks
-    /// for).
-    fn frame_focus(&self) {
-        let mut state = self.state.borrow_mut();
-        let aspect = Self::aspect(&state);
-        let framed = state
-            .focus
-            .as_ref()
-            .and_then(|f| f.focus.zone())
-            .zip(state.orbit);
-        let view = state.focus.as_ref().and_then(|f| f.focus.view());
-        if let Some((zone, orbit)) = framed {
-            let orbit = match view {
-                Some((yaw, pitch)) => Orbit {
-                    yaw,
-                    pitch,
-                    ..orbit
-                },
-                None => orbit,
-            };
-            state.orbit = Some(orbit.framed(zone, aspect));
-        }
-    }
-
-    /// Lays the 3D view's area out for focus mode (`Some` focus) or for
-    /// the Parts view: a joint gets its step player over the view; hardware
-    /// gets a page with a line over the view, three small views and the
-    /// swing card.
-    fn layout_for_focus(&self, moving_name: Option<&str>) {
-        let state = self.state.borrow();
-        let focus = state.focus.as_ref();
-        let widgets = &self.widgets;
-        let joint = focus.is_some_and(|f| f.focus.assembles());
-        let hardware = focus.filter(|f| !f.focus.assembles());
-        let page = hardware.is_some();
-        if page {
-            widgets.stage.add_css_class("page");
-        } else {
-            widgets.stage.remove_css_class("page");
-        }
-        widgets.step_card.root.set_visible(joint);
-        let swing = hardware.and_then(|f| f.focus.motion());
-        widgets.swing_card.root.set_visible(swing.is_some());
-        if let Some((_, range)) = swing {
-            widgets
-                .swing_card
-                .show_name(moving_name.unwrap_or("it"), range.turns);
-        }
-        widgets.caption.root.set_visible(page);
-        widgets.pictures.root.set_visible(false);
-        widgets
-            .plan_switch
-            .root
-            .set_visible(focus.is_some_and(|f| f.focus.plan().is_some()));
-        widgets.camera.root.set_visible(focus.is_none());
-        widgets.offer_view_tools(focus.is_none());
-        drop(state);
-        self.show_caption();
-    }
-
-    /// The line over hardware focus's view: from above or in 3D.
-    fn show_caption(&self) {
-        let state = self.state.borrow();
-        let Some(focus) = state.focus.as_ref() else {
-            return;
-        };
-        let (text, hint) = match focus.focus.plan_caption().filter(|_| focus.plan) {
-            Some(caption) => (caption.to_owned(), "back ↑ · front ↓"),
-            None => (
-                format!("In 3D around {}", focus.focus.title),
-                "drag to turn · scroll to zoom",
-            ),
-        };
-        self.widgets.caption.show(&text, hint);
-    }
-
-    fn leave_focus(self: &Rc<Self>) {
-        self.state.borrow_mut().focus = None;
-        self.widgets.inspector.focus.show(None);
-        self.layout_for_focus(None);
-        self.show_hint("");
-        self.repose();
-        self.selection_changed();
-    }
-
-    fn show_focus_texts(&self, texts: Option<(Option<String>, String)>) {
-        if let Some((step, status)) = texts {
-            self.widgets.step_card.show_frame(step.as_deref(), &status);
-        }
-    }
-
-    /// Moves the step player's and the swing card's sliders to the
-    /// progress, with the swing's reading and the small view nearest it
-    /// ringed.
-    fn show_progress(&self) {
-        let state = self.state.borrow();
-        let Some(focus) = state.focus.as_ref() else {
-            return;
-        };
-        let progress = f64::from(focus.progress);
-        let widgets = &self.widgets;
-        widgets.step_card.scrub.set_value(progress);
-        widgets.swing_card.scrub.set_value(progress);
-        focus_stage::show_playing(
-            &widgets.step_card.play,
-            &widgets.step_card.play_icon,
-            focus.playing,
-            "Play the assembly",
-        );
-        focus_stage::show_playing(
-            &widgets.swing_card.play,
-            &widgets.swing_card.play_icon,
-            focus.playing,
-            "Play the swing",
-        );
-        if let Some((_, range)) = focus.focus.motion() {
-            widgets
-                .swing_card
-                .show_value(&stave_scene::focus::amount_text(
-                    range,
-                    focus.progress * range.full,
-                ));
-        }
-        let nearest = focus
-            .focus
-            .key_poses
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                (a.progress - focus.progress)
-                    .abs()
-                    .total_cmp(&(b.progress - focus.progress).abs())
-            })
-            .map(|(index, _)| index);
-        widgets.pictures.show_current(nearest);
-    }
-
-    /// The scrub moved, or a toggle changed: poses again.
-    fn update_focus(self: &Rc<Self>, change: impl FnOnce(&mut FocusState)) {
-        {
-            // The window sets the controls with nothing borrowed and with
-            // `updating_controls` up; a borrow held here would be a bug.
-            let mut state = self.state.borrow_mut();
-            if state.updating_controls {
-                return;
-            }
-            let Some(focus) = state.focus.as_mut() else {
-                return;
-            };
-            change(focus);
-        }
-        let texts = self.repose();
-        self.show_focus_texts(texts);
-        self.show_progress();
-        self.show_caption();
-        self.request_render();
-    }
-
-    /// The play button: plays from where it is (from the start when it is
-    /// at the end), or pauses.
-    fn toggle_play_focus(self: &Rc<Self>) {
-        let playing = {
-            let mut state = self.state.borrow_mut();
-            let Some(focus) = state.focus.as_mut() else {
-                return;
-            };
-            focus.playing = !focus.playing;
-            if focus.playing && focus.progress >= 1.0 {
-                focus.progress = 0.0;
-            }
-            focus.playing
-        };
-        self.show_progress();
-        if !playing {
-            return;
-        }
-        let window = Rc::downgrade(self);
-        let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
-        self.widgets.viewport.add_tick_callback(move |_, clock| {
-            let Some(window) = window.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            let now = clock.frame_time();
-            let seconds = last.get().map_or(0.0, |before| {
-                f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
-            });
-            last.set(Some(now));
-            let done = {
-                let mut state = window.state.borrow_mut();
-                let Some(focus) = state.focus.as_mut() else {
-                    return glib::ControlFlow::Break;
-                };
-                if !focus.playing {
-                    return glib::ControlFlow::Break;
-                }
-                focus.progress = (focus.progress + narrow(seconds * PLAY_PER_SECOND)).min(1.0);
-                let done = focus.progress >= 1.0;
-                if done {
-                    focus.playing = false;
-                }
-                done
-            };
-            let texts = window.repose();
-            window.show_focus_texts(texts);
-            window.show_progress();
-            window.request_render();
-            if done {
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
-    }
-
-    /// Renders hardware focus's small views again shortly, once their
-    /// size has stopped changing.
-    fn schedule_pictures(self: &Rc<Self>) {
-        let window = Rc::downgrade(self);
-        let timer = glib::timeout_add_local_once(PICTURES_DELAY, move || {
-            if let Some(window) = window.upgrade() {
-                window.state.borrow_mut().pictures_timer = None;
-                window.render_pictures();
-            }
-        });
-        if let Some(old) = self.state.borrow_mut().pictures_timer.replace(timer) {
-            old.remove();
-        }
-    }
-
-    /// Renders hardware focus's small views offscreen, at fixed angles
-    /// (closed, part way, fully open), in the view from above when there
-    /// is one, each at its slot's size in device pixels. Before the slots
-    /// have room they are only laid out: their first size renders them.
-    fn render_pictures(self: &Rc<Self>) {
-        let captions: Vec<String> = {
-            let state = self.state.borrow();
-            match state.focus.as_ref() {
-                Some(focus) if !focus.focus.assembles() => focus
-                    .focus
-                    .key_poses
-                    .iter()
-                    .map(|pose| pose.caption.clone())
-                    .collect(),
-                Some(_) | None => Vec::new(),
-            }
-        };
-        let window = Rc::downgrade(self);
-        self.widgets.pictures.root.set_visible(!captions.is_empty());
-        self.widgets.pictures.show(&captions, move |index| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let progress = window
-                .state
-                .borrow()
-                .focus
-                .as_ref()
-                .and_then(|f| f.focus.key_poses.get(index).map(|pose| pose.progress));
-            if let Some(progress) = progress {
-                window.update_focus(|focus| {
-                    focus.progress = progress;
-                    focus.playing = false;
-                });
-            }
-        });
-        let Some((width, height)) = self.widgets.pictures.device_size() else {
-            return;
-        };
-        let backdrop = self.backdrop();
-        let textures = {
-            let session = self.session.borrow();
-            let (Some((_, graph)), Some(entry)) = (session.drawable(), session.scene_entry())
-            else {
-                return;
-            };
-            let mut state = self.state.borrow_mut();
-            let State {
-                focus,
-                renderer,
-                orbit,
-                ..
-            } = &mut *state;
-            let (Some(focus), Ok(renderer), Some(orbit)) = (focus.as_ref(), renderer, *orbit)
-            else {
-                return;
-            };
-            if focus.focus.assembles() {
-                return;
-            }
-            let mut textures = Vec::new();
-            for pose in &focus.focus.key_poses {
-                let frame = focus
-                    .focus
-                    .frame(graph, entry, pose.progress, &focus.options);
-                let aspect = crate::render::aspect(width, height);
-                let (orbit, section) = match focus.focus.plan() {
-                    Some(plan) => (
-                        Orbit::plan(plan.bounds, aspect, plan.yaw),
-                        Some(plan.section),
-                    ),
-                    None => (
-                        focus
-                            .focus
-                            .zone()
-                            .map_or(orbit, |zone| orbit.framed(zone, aspect)),
-                        entry.section,
-                    ),
-                };
-                let image = renderer.render(&Frame {
-                    scene: graph,
-                    posed: &frame.posed,
-                    orbit,
-                    selection: &[],
-                    highlight: None,
-                    section,
-                    looks: Some(&frame.looks),
-                    overlay: None,
-                    lit: None,
-                    tints: None,
-                    tint_cut_faces: focus.options.tint_cut_faces,
-                    backdrop,
-                    width,
-                    height,
-                });
-                let Ok(image) = image else { continue };
-                if let Some(texture) = texture(image) {
-                    textures.push(texture);
-                }
-            }
-            textures
-        };
-        self.widgets.pictures.show_textures(textures);
-        self.show_progress();
-    }
-
-    // ---- the 3D view ----
-
-    fn aspect(state: &State) -> f32 {
-        crate::render::aspect(state.size.0, state.size.1)
-    }
-
-    /// A camera that shows everything shown.
-    fn frame_all(state: &State, shown: &Checked) -> Option<Orbit> {
-        let (_, graph) = shown.drawable()?;
-        let bounds = edit_view::drawn_bounds(graph, state.posed.as_ref()?)?;
-        let aspect = Self::aspect(state);
-        Some(match state.orbit {
-            Some(orbit) => orbit.framed(bounds, aspect),
-            None => Orbit::framing(bounds, aspect),
-        })
-    }
-
-    /// The node drawn as selected.
-    fn selected_node(&self) -> Option<NodeId> {
-        let session = self.session.borrow();
-        let item = session.selection()?.item()?;
-        let (_, graph) = session.drawable()?;
-        graph.nodes_of(item).into_iter().next()
-    }
-
-    /// Every node to draw selected: the selected item's, or those of every
-    /// part and piece of hardware inside a selected assembly.
-    fn selected_nodes(&self) -> Vec<NodeId> {
-        let session = self.session.borrow();
-        let Some((design, graph)) = session.drawable() else {
-            return Vec::new();
-        };
-        let items = session
-            .selection()
-            .map_or_else(Vec::new, |selection| inspect::items_in(design, selection));
-        items
-            .into_iter()
-            .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
-            .collect()
-    }
-
-    /// The nodes of what the pointer is over in the Parts panel.
-    fn hovered_nodes(&self) -> Vec<NodeId> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let Some((_, graph)) = session.drawable() else {
-            return Vec::new();
-        };
-        state
-            .hovered
-            .iter()
-            .flat_map(|item| graph.nodes_of(*item).into_iter().take(1))
-            .collect()
-    }
-
-    /// F: frames the selection (every part of a selected assembly), or
-    /// everything.
-    fn frame(self: &Rc<Self>) {
-        let nodes = self.selected_nodes();
-        {
-            let session = self.session.borrow();
-            let Some(shown) = session.shown() else {
-                return;
-            };
-            let mut state = self.state.borrow_mut();
-            let aspect = Self::aspect(&state);
-            let selected = (!nodes.is_empty())
-                .then(|| {
-                    let (_, graph) = shown.drawable()?;
-                    let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
-                    let framed = state.orbit?.framed(bounds, aspect);
-                    Some(Orbit {
-                        distance: framed.distance * FRAME_ROOM,
-                        ..framed
-                    })
-                })
-                .flatten();
-            state.orbit = selected.or_else(|| Self::frame_all(&state, shown));
-        }
-        self.request_render();
-    }
-
-    /// Choosing something frames it at once: a part, a piece of hardware
-    /// or an assembly, or everything again when nothing is chosen. A
-    /// problem frames itself where it is posed; focus mode frames its
-    /// joint; a place in the text leaves the camera alone.
-    fn frame_selection(self: &Rc<Self>) {
-        let reframes = {
-            let session = self.session.borrow();
-            session.focus().is_none()
-                && matches!(
-                    session.selection(),
-                    None | Some(
-                        Selection::Part(_) | Selection::Hardware(_) | Selection::Assembly(_)
-                    )
-                )
-        };
-        if reframes {
-            self.frame();
-        }
-    }
-
-    /// Moves the camera where the command line asked, once the view has a
-    /// size and the asked-for selection is made.
-    fn apply_start_camera(self: &Rc<Self>) {
-        let ready = {
-            let state = self.state.borrow();
-            state.size.0 > 1 && state.wanted.is_none() && state.start_camera.is_some()
-        };
-        if !ready {
-            return;
-        }
-        let node = self.selected_node();
-        {
-            let session = self.session.borrow();
-            let mut state = self.state.borrow_mut();
-            let Some(camera) = state.start_camera.take() else {
-                return;
-            };
-            let aspect = Self::aspect(&state);
-            let Some(orbit) = state.orbit else {
-                return;
-            };
-            let turned = Orbit {
-                yaw: (orbit.yaw + camera.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
-                pitch: camera.pitch.map_or(orbit.pitch, f32::to_radians),
-                ..orbit
-            };
-            let posed = state.posed.as_ref();
-            let drawable = session.drawable();
-            let bounds = drawable.and_then(|(_, graph)| {
-                let posed = posed?;
-                match node.filter(|_| camera.frame_selection) {
-                    Some(id) => graph.bounds_of(posed, &[id]),
-                    None => edit_view::drawn_bounds(graph, posed),
-                }
-            });
-            let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
-            let zoomed = Orbit {
-                distance: framed.distance / camera.zoom.unwrap_or(1.0),
-                ..framed
-            };
-            state.orbit = Some(zoomed);
-        }
-        self.request_render();
-    }
-
-    /// Offers the motion bar to open the selection's door or drawer.
-    fn update_opening(self: &Rc<Self>, assembly: Option<AssemblyId>) {
-        let found = {
-            let session = self.session.borrow();
-            assembly.and_then(|id| {
-                let (design, graph) = session.drawable()?;
-                let range = graph.motion_range(id)?;
-                let name = design.assemblies.get(id.index())?.name.clone();
-                Some((id, range, name))
-            })
-        };
-        let amount = {
-            let mut state = self.state.borrow_mut();
-            if state.focus.is_some() {
-                return;
-            }
-            let keep = state
-                .opening
-                .filter(|o| Some(o.assembly) == found.as_ref().map(|(id, _, _)| *id));
-            state.opening = keep.or_else(|| {
-                found.as_ref().map(|(id, range, _)| Opening {
-                    assembly: *id,
-                    amount: 0.0,
-                    turns: range.turns,
-                })
-            });
-            state.updating_controls = true;
-            state.opening.map_or(0.0, |o| o.amount)
-        };
-        match &found {
-            Some((_, range, name)) => {
-                let (full, value, end) = if range.turns {
-                    let degrees = range.full.to_degrees();
-                    (
-                        degrees,
-                        amount.to_degrees(),
-                        format!("{}°", degrees.round()),
-                    )
-                } else {
-                    (range.full, amount, format!("{} mm", range.full.round()))
-                };
-                self.widgets.motion.show(Some((
-                    name,
-                    "closed",
-                    &end,
-                    f64::from(full),
-                    f64::from(value),
-                )));
-            }
-            None => self.widgets.motion.show(None),
-        }
-        self.state.borrow_mut().updating_controls = false;
-        self.repose();
-    }
-
-    /// The motion bar moved: the selection opening.
-    fn motion_moved(self: &Rc<Self>, value: f64) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.updating_controls {
-                return;
-            }
-            let value = narrow(value);
-            if let Some(opening) = state.opening.as_mut() {
-                opening.amount = if opening.turns {
-                    value.to_radians()
-                } else {
-                    value
-                };
-            }
-        }
-        self.repose();
-        self.request_render();
-    }
-
-    /// The problem card's slider moved: swings the problem's motion.
-    fn problem_moved(self: &Rc<Self>, value: f64) {
-        let shown = {
-            let mut state = self.state.borrow_mut();
-            let Some(problem) = state.problem.as_mut() else {
-                return;
-            };
-            let value = narrow(value);
-            let amount = if problem.turns {
-                value.to_radians()
-            } else {
-                value
-            };
-            problem.amount = Some(amount);
-            problem.card.clone().map(|card| (card, amount))
-        };
-        if let Some((card, amount)) = &shown {
-            self.widgets.problem_card.show_value(card, *amount);
-            self.show_posed_status(card, *amount);
-        }
-        self.repose();
-        self.request_render();
-    }
-
-    /// "Posed at contact · door at 0.6°" at the top of the view.
-    fn show_posed_status(&self, card: &MotionCard, amount: f32) {
-        self.show_hint(&format!(
-            "Posed at contact · {} at {}",
-            card.name,
-            card.amount_text(amount)
-        ));
-    }
-
-    /// Shows the controls for a posed problem (its motion card and the
-    /// shared-wood key in place of the view toolbar), or the usual ones.
-    fn show_problem_controls(&self, problem: Option<(&MotionCard, f32, bool)>) {
-        let widgets = &self.widgets;
-        match problem {
-            Some((card, amount, _)) => widgets.problem_card.show(Some(card), amount),
-            None => widgets.problem_card.show(None, 0.0),
-        }
-        let posed = problem.is_some();
-        let shared = problem.is_some_and(|(_, _, shared)| shared);
-        let focused = self.state.borrow().focus.is_some();
-        widgets.contact_key.set_visible(shared && !focused);
-        widgets.offer_view_tools(!posed && !focused);
-        if !posed && !focused {
-            self.show_hint("");
-        }
-    }
-
-    /// Poses the design where a problem happens and frames its parts.
-    fn pose_problem(self: &Rc<Self>, contact: Contact, card: Option<MotionCard>) {
-        let highlight = {
-            let session = self.session.borrow();
-            session
-                .drawable()
-                .map(|(_, graph)| view::highlight(graph, &contact))
-        };
-        let Some(highlight) = highlight else {
-            return;
-        };
-        let shared = !highlight.volumes.is_empty();
-        let turns = card.as_ref().is_none_or(|c| c.turns);
-        {
-            let mut state = self.state.borrow_mut();
-            state.opening = None;
-            state.problem = Some(ShownProblem {
-                contact,
-                highlight,
-                card: card.clone(),
-                amount: None,
-                turns,
-            });
-        }
-        self.widgets.motion.show(None);
-        self.repose();
-        {
-            let session = self.session.borrow();
-            let mut state = self.state.borrow_mut();
-            let aspect = Self::aspect(&state);
-            let framed = session.drawable().and_then(|(_, graph)| {
-                let nodes = &state.problem.as_ref()?.highlight.nodes;
-                let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
-                Some(state.orbit?.framed(bounds, aspect))
-            });
-            if framed.is_some() {
-                state.orbit = framed;
-            }
-        }
-        match &card {
-            Some(card) => {
-                self.show_problem_controls(Some((card, card.shown, shared)));
-                self.show_posed_status(card, card.shown);
-            }
-            None => {
-                self.widgets.problem_card.show(None, 0.0);
-                self.widgets.contact_key.set_visible(shared);
-                self.widgets.offer_view_tools(false);
-                if shared {
-                    self.show_hint("Posed at contact");
-                }
-            }
-        }
-    }
-
-    /// The 3D view's area behind its cards takes the stage colour, so a
-    /// page laid out around the view (hardware focus) matches it.
-    fn show_backdrop(&self, dark: bool) {
-        for page in [&self.widgets.stage, &self.widgets.empty.root] {
-            if dark {
-                page.add_css_class("dark");
-            } else {
-                page.remove_css_class("dark");
-            }
-        }
-        // What only the dark style changes in the sheet (the code blocks)
-        // hangs off the window: a CSS media query doesn't see a style
-        // chosen in the app's menu.
-        if dark {
-            self.widgets.window.add_css_class("stave-dark");
-        } else {
-            self.widgets.window.remove_css_class("stave-dark");
-        }
-    }
-
-    /// Turns the camera to look from a direction, framing everything.
-    fn look_from(self: &Rc<Self>, yaw: f32, pitch: f32) {
-        {
-            let session = self.session.borrow();
-            let mut state = self.state.borrow_mut();
-            let aspect = Self::aspect(&state);
-            let bounds = session
-                .drawable()
-                .and_then(|(_, graph)| edit_view::drawn_bounds(graph, state.posed.as_ref()?));
-            state.orbit = state.orbit.map(|orbit| {
-                let turned = Orbit {
-                    yaw: yaw.rem_euclid(std::f32::consts::TAU),
-                    pitch,
-                    ..orbit
-                };
-                bounds.map_or(turned, |bounds| turned.framed(bounds, aspect))
-            });
-        }
-        self.request_render();
-    }
-
-    /// "Pull apart" switched on (all the way apart) or off (together).
-    fn pull_apart(self: &Rc<Self>, on: bool) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.updating_controls || state.pull_apart == on {
-                return;
-            }
-            state.pull_apart = on;
-            state.exploding = false;
-        }
-        self.dispatch(Command::SetExplode(Explode::clamped(if on {
-            1.0
-        } else {
-            0.0
-        })));
-        self.show_view_toolbar();
-    }
-
-    /// Shows the view toolbar as the session and the window have it.
-    fn show_view_toolbar(&self) {
-        let explode = self.session.borrow().explode().get();
-        let (on, playing) = {
-            let mut state = self.state.borrow_mut();
-            state.pull_apart |= explode > 0.0;
-            state.updating_controls = true;
-            (state.pull_apart, state.exploding)
-        };
-        self.widgets.view_toolbar.show(on, explode, playing);
-        self.state.borrow_mut().updating_controls = false;
-    }
-
-    /// The pull apart play button: plays from together to apart (from the
-    /// start when it is apart already), or pauses.
-    fn toggle_play_explode(self: &Rc<Self>) {
-        let playing = {
-            let mut state = self.state.borrow_mut();
-            state.exploding = !state.exploding;
-            state.exploding
-        };
-        if playing && self.session.borrow().explode().get() >= 1.0 {
-            self.dispatch(Command::SetExplode(Explode::clamped(0.0)));
-        }
-        self.show_view_toolbar();
-        if !playing {
-            return;
-        }
-        let window = Rc::downgrade(self);
-        let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
-        self.widgets.viewport.add_tick_callback(move |_, clock| {
-            let Some(window) = window.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            if !window.state.borrow().exploding {
-                return glib::ControlFlow::Break;
-            }
-            let now = clock.frame_time();
-            let seconds = last.get().map_or(0.0, |before| {
-                f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
-            });
-            last.set(Some(now));
-            let explode = window.session.borrow().explode().get();
-            let next = (explode + narrow(seconds * EXPLODE_PER_SECOND)).min(1.0);
-            let done = next >= 1.0;
-            if done {
-                window.state.borrow_mut().exploding = false;
-            }
-            window.dispatch(Command::SetExplode(Explode::clamped(next)));
-            if done {
-                window.show_view_toolbar();
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
-    }
-
-    /// Saves the view as posed as a glTF file, asking where.
-    fn export_view(self: &Rc<Self>) {
-        let name = stave_app::export_view::default_file_name(
-            self.session.borrow().drawable().map(|(design, _)| design),
-        );
-        let dialog = gtk::FileDialog::builder()
-            .title("Export View as glTF")
-            .initial_name(name)
-            .modal(true)
-            .build();
-        let window = Rc::downgrade(self);
-        dialog.save(
-            Some(&self.widgets.window),
-            gio::Cancellable::NONE,
-            move |result| {
-                let Ok(file) = result else { return };
-                let Some(path) = file.path() else { return };
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                // The view as posed now, copied so that making and writing
-                // the file happen off the main thread with no borrow held.
-                let view = {
-                    let session = window.session.borrow();
-                    let state = window.state.borrow();
-                    session
-                        .drawable()
-                        .zip(state.posed.as_ref())
-                        .map(|((_, graph), posed)| (graph.clone(), posed.clone()))
-                };
-                let Some((graph, posed)) = view else {
-                    window.show_export_failure(&stave_app::save_failure::SaveFailure {
-                        heading: "Couldn't Export the View".to_owned(),
-                        body: "There is nothing in the 3D view to save yet. Wait for the design to show, then try again.".to_owned(),
-                    });
-                    return;
-                };
-                let exporting = adw::Toast::builder()
-                    .title("Exporting the view…")
-                    .timeout(0)
-                    .build();
-                window.widgets.toasts.add_toast(exporting.clone());
-                let window = Rc::downgrade(&window);
-                glib::spawn_future_local(async move {
-                    let target = path.clone();
-                    let saved = gio::spawn_blocking(move || {
-                        stave_app::export_view::save_glb(&graph, &posed, &target).map_err(
-                            |error| stave_app::save_failure::describe_export(&error, &target),
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|_| {
-                        Err(stave_app::save_failure::SaveFailure {
-                            heading: "Couldn't Export the View".to_owned(),
-                            body: "Stave stopped part way through making the file. Nothing was saved; try again.".to_owned(),
-                        })
-                    });
-                    exporting.dismiss();
-                    let Some(window) = window.upgrade() else {
-                        return;
-                    };
-                    match saved {
-                        Ok(()) => window.toast(&format!("Saved the view as {}", path.display())),
-                        Err(failure) => window.show_export_failure(&failure),
-                    }
-                });
-            },
-        );
-    }
-
-    /// Shows a failed export of the view. It stays until it is answered,
-    /// and offers another place to save to.
-    fn show_export_failure(self: &Rc<Self>, failure: &stave_app::save_failure::SaveFailure) {
-        let alert = adw::AlertDialog::builder()
-            .heading(&failure.heading)
-            .body(&failure.body)
-            .close_response("cancel")
-            .default_response("again")
-            .build();
-        alert.add_responses(&[("cancel", "_Cancel"), ("again", "Save _Elsewhere…")]);
-        alert.set_response_appearance("again", adw::ResponseAppearance::Suggested);
-        let again = Rc::clone(self);
-        alert.connect_response(None, move |_, response| {
-            if response == "again" {
-                again.export_view();
-            }
-        });
-        alert.present(Some(&self.widgets.window));
-    }
-
     /// A short message at the bottom of the window.
     fn toast(&self, title: &str) {
         self.widgets
             .toasts
             .add_toast(adw::Toast::builder().title(title).timeout(4).build());
-    }
-
-    fn explode_changed(self: &Rc<Self>) {
-        self.show_view_toolbar();
-        let explode = self.session.borrow().explode().get();
-        let quiet = {
-            let state = self.state.borrow();
-            state.focus.is_none() && state.problem.is_none()
-        };
-        if quiet && self.session.borrow().selection().is_none() {
-            self.show_hint(&if explode > 0.0 {
-                format!("Pulled apart · {}%", view_tools::percent(explode))
-            } else {
-                String::new()
-            });
-        }
-        self.repose();
-        self.request_render();
-    }
-
-    fn scene_changed(self: &Rc<Self>) {
-        let (titles, index) = {
-            let session = self.session.borrow();
-            let titles: Vec<String> = session
-                .drawable()
-                .map(|(_, g)| g.scenes.iter().map(|s| s.title.clone()).collect())
-                .unwrap_or_default();
-            (titles, session.scene_index())
-        };
-        self.widgets.header.show_scenes(&titles, index);
-        self.state.borrow_mut().problem = None;
-        self.show_problem_controls(None);
-        self.repose();
-        self.request_render();
-    }
-
-    /// Poses the design for what the window shows: focus mode, a problem
-    /// at its contact, or the current scene pulled apart. In focus mode,
-    /// returns its step and status for the panel.
-    fn repose(&self) -> Option<(Option<String>, String)> {
-        let session = self.session.borrow();
-        let (_, graph) = session.drawable()?;
-        let entry = session.scene_entry()?;
-        let explode = session.explode().get();
-        let mut state = self.state.borrow_mut();
-        let State {
-            posed,
-            problem,
-            opening,
-            focus,
-            ..
-        } = &mut *state;
-        if let Some(focus) = focus.as_mut() {
-            // From above, the section cuts the receiving part open: it is
-            // drawn solid.
-            let options = focus::Options {
-                xray: focus.options.xray && !focus.plan,
-                ..focus.options
-            };
-            let frame = focus.focus.frame(graph, entry, focus.progress, &options);
-            *posed = Some(frame.posed);
-            focus.looks = frame.looks;
-            focus.overlay = frame.overlay;
-            return Some((frame.step, frame.status));
-        }
-        let at_contact = problem
-            .as_ref()
-            .and_then(|problem| view::pose_at_contact(graph, &problem.contact, problem.amount));
-        *posed = Some(at_contact.unwrap_or_else(|| {
-            let overrides: Vec<(AssemblyId, f32)> =
-                opening.iter().map(|o| (o.assembly, o.amount)).collect();
-            graph.pose_with(entry, &overrides, explode)
-        }));
-        None
-    }
-
-    fn pick(self: &Rc<Self>, x: f64, y: f64) {
-        if self.edit_click(x, y) {
-            return;
-        }
-        let hit = {
-            let session = self.session.borrow();
-            let state = self.state.borrow();
-            let viewport = &self.widgets.viewport;
-            session
-                .drawable()
-                .zip(state.orbit)
-                .zip(state.posed.as_ref())
-                .and_then(|(((_, graph), orbit), posed)| {
-                    let ray = orbit.ray(
-                        crate::convert::f32_of(x),
-                        crate::convert::f32_of(y),
-                        crate::convert::f32_of_int(viewport.width()),
-                        crate::convert::f32_of_int(viewport.height()),
-                    );
-                    graph.pick(posed, ray)
-                })
-        };
-        let selection = hit.map(|hit| Selection::of_item(hit.item));
-        self.dispatch(Command::Select(selection));
-    }
-
-    fn update_orbit(self: &Rc<Self>, change: impl FnOnce(Orbit) -> Orbit) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.orbit = state.orbit.map(change);
-        }
-        self.request_render();
-    }
-
-    /// The stage colour for the current style.
-    fn backdrop(&self) -> Backdrop {
-        if adw::StyleManager::default().is_dark() {
-            Backdrop::Dark
-        } else {
-            Backdrop::Light
-        }
-    }
-
-    /// Draws on the next frame; several requests before then draw once.
-    fn request_render(self: &Rc<Self>) {
-        // The Model hidden behind an open file's tab draws nothing, so a
-        // screenshot asked for is taken without it.
-        if self.widgets.window.is_mapped() && !self.widgets.viewport.is_mapped() {
-            self.capture_if_asked();
-        }
-        {
-            let mut state = self.state.borrow_mut();
-            if state.render_queued {
-                return;
-            }
-            state.render_queued = true;
-        }
-        let window = self.clone();
-        self.widgets.viewport.add_tick_callback(move |_, _| {
-            window.render_now();
-            glib::ControlFlow::Break
-        });
-    }
-
-    /// How each node looks outside focus mode. Choosing something only
-    /// outlines it: the rest stays solid, so clicking around never switches
-    /// the view between solid and see-through. With X-ray on everything
-    /// but the selection is see-through; a posed problem fades what it
-    /// doesn't involve. `None` draws every node as usual.
-    fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let (_, graph) = session.drawable()?;
-        let count = graph.node_ids().count();
-        let kept: &[NodeId] = match state.problem.as_ref() {
-            Some(problem) => &problem.highlight.nodes,
-            None if state.xray => selection,
-            None => return None,
-        };
-        let rest = if state.xray { Look::XRay } else { Look::Dim };
-        let mut looks = vec![rest; count];
-        for node in kept {
-            if let Some(look) = looks.get_mut(node.index()) {
-                *look = Look::Normal;
-            }
-        }
-        Some(looks)
-    }
-
-    fn render_now(self: &Rc<Self>) {
-        let mut selection = self.selected_nodes();
-        // What a partner link in the Parts panel points at is outlined
-        // too, while the pointer is over it.
-        selection.extend(self.hovered_nodes());
-        // And what a name link in the Inspector or the Edit panel points at.
-        selection.extend(self.link_hover_nodes());
-        let backdrop = self.backdrop();
-        let looks = if self.state.borrow().focus.is_some() {
-            None
-        } else {
-            self.looks(&selection)
-        };
-        let ghost = self.render_ghost(backdrop);
-        let rendered = if let Some(rendered) = ghost {
-            rendered
-        } else {
-            let session = self.session.borrow();
-            let mut state = self.state.borrow_mut();
-            state.render_queued = false;
-            let (width, height) = state.size;
-            let State {
-                posed,
-                orbit,
-                renderer,
-                problem,
-                focus,
-                ..
-            } = &mut *state;
-            let (Some((_, graph)), Some(orbit), Some(posed), Ok(renderer)) =
-                (session.drawable(), *orbit, posed.as_ref(), renderer)
-            else {
-                return;
-            };
-            let focus = focus.as_ref();
-            // Outside focus mode, a selected joint member shows through
-            // the parts it sits in.
-            let outside = if focus.is_none() {
-                session.looks()
-            } else {
-                None
-            };
-            let plan = focus
-                .filter(|f| f.plan)
-                .and_then(|f| f.focus.plan().copied());
-            let orbit = match plan {
-                Some(plan) => {
-                    Orbit::plan(plan.bounds, crate::render::aspect(width, height), plan.yaw)
-                }
-                None => orbit,
-            };
-            // The shared wood is drawn only where it was measured; moved by
-            // the slider, the parts stay tinted.
-            let highlight = problem.as_ref().map(|problem| Highlighted {
-                nodes: &problem.highlight.nodes,
-                volumes: match problem.amount {
-                    None => &problem.highlight.volumes,
-                    Some(_) => &[],
-                },
-            });
-            // The space the pointer or an edit is on, lit, and what covers
-            // it see-through.
-            let marks = if focus.is_none() {
-                self.edit_marks(&session, graph, posed, &orbit)
-            } else {
-                edit_view::EditMarks::default()
-            };
-            let looks = if marks.covering.is_empty() {
-                looks
-            } else {
-                let mut looks =
-                    looks.unwrap_or_else(|| vec![Look::Normal; graph.node_ids().count()]);
-                for node in &marks.covering {
-                    if let Some(look) = looks.get_mut(node.index()) {
-                        *look = Look::XRay;
-                    }
-                }
-                Some(looks)
-            };
-            renderer.submit(&Frame {
-                scene: graph,
-                posed,
-                orbit,
-                selection: if focus.is_some() { &[] } else { &selection },
-                highlight,
-                section: plan
-                    .map(|p| p.section)
-                    .or_else(|| session.scene_entry().and_then(|entry| entry.section)),
-                looks: focus
-                    .map(|f| f.looks.as_slice())
-                    .or(outside.as_deref())
-                    .or(looks.as_deref()),
-                overlay: focus.map(|f| &f.overlay),
-                tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
-                lit: Some(&marks.lit),
-                tints: None,
-                backdrop,
-                width,
-                height,
-            })
-        };
-        let ticket = match rendered {
-            Ok(ticket) => ticket,
-            Err(error) => {
-                let message = format!("{error:#}");
-                self.show_status("Can't draw in 3D", &message);
-                return;
-            }
-        };
-        // The frame is shown once the GPU has it ready, on a later tick:
-        // the main loop never waits for the GPU. A newer frame ready first
-        // is shown instead, and this ticket is done with.
-        let window = self.clone();
-        self.widgets.viewport.add_tick_callback(move |_, _| {
-            let (ready, settled) = {
-                let mut state = window.state.borrow_mut();
-                let Ok(renderer) = &mut state.renderer else {
-                    return glib::ControlFlow::Break;
-                };
-                (renderer.take_ready(), renderer.settled(ticket))
-            };
-            match ready {
-                Ok(Some(frame)) => {
-                    let shown = crate::render::profile::time("gtk texture", || {
-                        window.widgets.viewport.show_live(frame)
-                    });
-                    if shown {
-                        crate::render::profile::frame_shown();
-                    }
-                    window.show_pins();
-                    window.place_ghost_verdict();
-                    window.place_grips();
-                    // Save the window once a frame of the view's real size
-                    // is up.
-                    let settled = {
-                        let state = window.state.borrow();
-                        state.size.0 > 1 && state.size == window.widgets.viewport.device_size()
-                    };
-                    if settled {
-                        // An edit script runs first; the frame it asks for
-                        // is the one saved.
-                        if window.run_edit_script() {
-                            window.request_render();
-                        } else {
-                            window.capture_if_asked();
-                        }
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    window.show_status("Can't draw in 3D", &message);
-                }
-            }
-            if settled {
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
-    }
-
-    /// Where a set of nodes shows in the 3D view, in logical pixels from
-    /// its top left (the middle of their bounds as posed); `None` when it
-    /// can't be worked out (nothing drawn yet, behind the camera).
-    fn screen_point(&self, nodes: &[NodeId]) -> Option<(f32, f32)> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let (_, graph) = session.drawable()?;
-        let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
-        self.project(&state, bounds.centre())
-    }
-
-    /// How much of the 3D view's right side the camera column takes (with
-    /// the space beside it), in logical pixels: what the editing's cards
-    /// and labels keep clear of at the right.
-    fn right_column(&self) -> i32 {
-        let camera = &self.widgets.camera.root;
-        if camera.is_visible() {
-            camera.width().saturating_add(EDGE)
-        } else {
-            0
-        }
-    }
-
-    /// Where a point of the scene shows in the 3D view, in logical pixels.
-    fn project(&self, state: &State, point: glam::Vec3) -> Option<(f32, f32)> {
-        let viewport = &self.widgets.viewport;
-        state.orbit?.project(
-            point,
-            crate::convert::f32_of_int(viewport.width()),
-            crate::convert::f32_of_int(viewport.height()),
-        )
-    }
-
-    /// Takes every pin off the model.
-    fn hide_pins(&self) {
-        let mut pins = self.pins.borrow_mut();
-        for pin in pins.pins.drain(..) {
-            self.widgets.design.remove_overlay(&pin.widget);
-        }
-        pins.made_for = None;
-        pins.edge = None;
-        self.widgets.edge_pin.set_visible(false);
-    }
-
-    /// Pins each problem where it happens (its shared wood, or the parts
-    /// it is about), the first few; a problem whose place is off screen is
-    /// named on the chip at the view's edge instead. A posed problem shows
-    /// only its own pin; focus mode and an older design show none.
-    ///
-    /// Runs on every frame: the pins are made only when the result, the
-    /// shown design or the posed problem changes; otherwise they are only
-    /// moved to where their places now show.
-    fn show_pins(self: &Rc<Self>) {
-        let key = {
-            let session = self.session.borrow();
-            let state = self.state.borrow();
-            // An edit's menu, card and ghost take the view.
-            let editing = session.edit().is_some() || session.change().is_some();
-            let hidden = state.focus.is_some()
-                || editing
-                || session.showing_older()
-                || session.view() != View::Design;
-            match session.shown() {
-                Some(shown) if !hidden => Some(PinsKey {
-                    latest: session.latest().cloned(),
-                    shown: Rc::clone(shown),
-                    posed_problem: match session.selection() {
-                        Some(Selection::Problem(index)) => Some(*index),
-                        _ => None,
-                    },
-                }),
-                _ => None,
-            }
-        };
-        let Some(key) = key else {
-            self.hide_pins();
-            return;
-        };
-        let current = self
-            .pins
-            .borrow()
-            .made_for
-            .as_ref()
-            .is_some_and(|made| made.same(&key));
-        if !current {
-            self.hide_pins();
-            self.make_pins(key);
-        }
-        self.place_pins();
-    }
-
-    /// Makes the pins for the current problems (each one's highlight
-    /// worked out once) and adds them to the view, not yet placed.
-    fn make_pins(self: &Rc<Self>, key: PinsKey) {
-        let found: Vec<(ProblemIndex, Mark, String, PinAnchor)> = {
-            let session = self.session.borrow();
-            let Some((_, graph)) = session.drawable() else {
-                return;
-            };
-            let problems = session.problems();
-            problems::pins(problems, key.posed_problem, problems::PIN_LIMIT)
-                .into_iter()
-                .filter_map(|pinned| {
-                    let problem = problems.get(pinned.index.0)?;
-                    let highlight = view::highlight(graph, problem.contact.as_ref()?);
-                    let anchor = match highlight.volumes.first() {
-                        Some(volume) => PinAnchor::Volume(volume.centre()),
-                        None => PinAnchor::Nodes(highlight.nodes),
-                    };
-                    Some((pinned.index, pinned.mark, problem.message.clone(), anchor))
-                })
-                .collect()
-        };
-        let pins: Vec<Pin> = found
-            .into_iter()
-            .map(|(index, mark, message, anchor)| {
-                let widget = self.pin(index, mark, &message);
-                widget.set_visible(false);
-                self.widgets.design.add_overlay(&widget);
-                Pin {
-                    widget,
-                    index,
-                    mark,
-                    message,
-                    anchor,
-                }
-            })
-            .collect();
-        let mut state = self.pins.borrow_mut();
-        state.pins = pins;
-        state.made_for = Some(key);
-    }
-
-    /// Moves each pin to where its place shows now, hiding those whose
-    /// place is off screen (or under a card) and naming the first of them
-    /// on the chip at the view's edge.
-    fn place_pins(&self) {
-        let (width, height) = (
-            crate::convert::f32_of_int(self.widgets.viewport.width()),
-            crate::convert::f32_of_int(self.widgets.viewport.height()),
-        );
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let graph = session.drawable().map(|(_, graph)| graph);
-        let mut pins = self.pins.borrow_mut();
-        let mut first_off: Option<usize> = None;
-        let mut off_count: usize = 0;
-        for (place, pin) in pins.pins.iter().enumerate() {
-            let point = match &pin.anchor {
-                PinAnchor::Volume(centre) => self.project(&state, *centre),
-                PinAnchor::Nodes(nodes) => graph
-                    .zip(state.posed.as_ref())
-                    .and_then(|(graph, posed)| graph.bounds_of(posed, nodes))
-                    .and_then(|bounds| self.project(&state, bounds.centre())),
-            };
-            let spot = point
-                .filter(|(x, y)| (0.0..width).contains(x) && (0.0..height).contains(y))
-                .and_then(|(x, y)| {
-                    // A hidden widget measures nothing.
-                    pin.widget.set_visible(true);
-                    // Clear of the cards and the parts list (edit_view).
-                    let wanted = ((x - 12.0).max(0.0), (y - 24.0).max(0.0));
-                    let size = edit_view::natural_size(pin.widget.upcast_ref());
-                    let (dx, dy) = self.clear_spot(wanted, size)?;
-                    Some((wanted.0 + dx, wanted.1 + dy))
-                });
-            match spot {
-                Some((x, y)) => {
-                    pin.widget
-                        .set_margin_start(crate::convert::int_of_f32(x.round()).max(0));
-                    pin.widget
-                        .set_margin_top(crate::convert::int_of_f32(y.round()).max(0));
-                    pin.widget.set_visible(true);
-                }
-                None => {
-                    pin.widget.set_visible(false);
-                    first_off.get_or_insert(place);
-                    off_count = off_count.saturating_add(1);
-                }
-            }
-        }
-        let edge = first_off
-            .and_then(|place| pins.pins.get(place))
-            .map(|pin| (pin.index, off_count.saturating_sub(1)));
-        if edge == pins.edge {
-            return;
-        }
-        pins.edge = edge;
-        let Some(pin) = first_off.and_then(|place| pins.pins.get(place)) else {
-            self.widgets.edge_pin.set_visible(false);
-            return;
-        };
-        let text = problems::off_screen_text(pin.mark, &pin.message, off_count.saturating_sub(1));
-        self.widgets.edge_label.set_label(&text);
-        self.widgets.edge_pin.set_visible(true);
-        self.widgets
-            .edge_pin
-            .set_action_target_value(Some(&u64::try_from(pin.index.0).unwrap_or(0).to_variant()));
-    }
-
-    /// One pin: its mark's "!" and the problem's words, choosing it
-    /// selects the problem (posed where it happens).
-    fn pin(self: &Rc<Self>, index: ProblemIndex, mark: Mark, message: &str) -> gtk::Box {
-        let warning = mark == Mark::Warning;
-        let button = gtk::Button::builder()
-            .label("!")
-            .css_classes(if warning {
-                vec!["stave-pin", "warning"]
-            } else {
-                vec!["stave-pin"]
-            })
-            .tooltip_text(message)
-            .build();
-        button.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Show the problem: {message}"
-        ))]);
-        let label = gtk::Label::builder()
-            .label(message)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(28)
-            .css_classes(if warning {
-                vec!["stave-pin-label", "warning"]
-            } else {
-                vec!["stave-pin-label"]
-            })
-            .build();
-        let window = Rc::downgrade(self);
-        button.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(Selection::Problem(index))));
-            }
-        });
-        let pin = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .build();
-        pin.append(&button);
-        pin.append(&label);
-        pin
-    }
-
-    fn show_status(&self, title: &str, description: &str) {
-        self.show_empty(title, description, false);
-    }
-
-    /// Shows the 3D view's empty state instead of the view.
-    fn show_empty(&self, title: &str, description: &str, offers_open: bool) {
-        self.widgets.empty.show(title, description, offers_open);
-        self.widgets.view_stack.set_visible_child_name("status");
-        self.capture_if_asked();
-    }
-
-    /// With `--window-screenshot`: saves the window shortly (once GTK has
-    /// drawn it) and closes it.
-    fn capture_if_asked(&self) {
-        let Some(path) = self.state.borrow_mut().window_screenshot.take() else {
-            return;
-        };
-        let window = self.widgets.window.clone();
-        // What `--type` typed is never saved, and closing doesn't ask.
-        let files = self.widgets.files.clone();
-        // An open finder would keep the window from closing.
-        let finder = self.widgets.finder.dialog.clone();
-        // The paintable follows the window's drawing from now on.
-        let paintable = gtk::WidgetPaintable::new(Some(&window));
-        let mut waited = 0;
-        glib::timeout_add_local(Duration::from_millis(300), move || {
-            // Wait until the window is on screen and drawn.
-            waited += 1;
-            // A tick makes the frame clock run, so GTK draws the window.
-            window.queue_draw();
-            window.add_tick_callback(|_, _| glib::ControlFlow::Break);
-            if (!window.is_mapped() || waited < 3) && waited < 25 {
-                return glib::ControlFlow::Continue;
-            }
-            // A view that hasn't drawn since it changed draws nothing yet:
-            // try again on the next round.
-            let Some(node) = window_node(&window, &paintable) else {
-                if waited < 25 {
-                    return glib::ControlFlow::Continue;
-                }
-                eprintln!("error: the window drew nothing");
-                files.forget_unsaved();
-                finder.force_close();
-                close_for_good(&window);
-                return glib::ControlFlow::Break;
-            };
-            if let Err(error) = save_node(&window, &node, &path) {
-                eprintln!("error: {error:#}");
-            }
-            files.forget_unsaved();
-            finder.force_close();
-            close_for_good(&window);
-            glib::ControlFlow::Break
-        });
-    }
-
-    // ---- the rest of the session's events ----
-
-    fn check_status_changed(&self) {
-        {
-            let session = self.session.borrow();
-            let status = session.check_status();
-            self.widgets
-                .header
-                .show_pill(&status.pill(), session.problems().len(), &status.line());
-            self.widgets
-                .workbench
-                .show_problem_count(session.problems().len());
-            self.widgets.output.add_line(&status.line());
-        }
-        self.build_changed();
-    }
-
-    fn build_changed(&self) {
-        let session = self.session.borrow();
-        self.widgets
-            .header
-            .show_build(session.build(), session.build_tooltip());
-        if let Some(action) = self.widgets.window.lookup_action("build")
-            && let Ok(action) = action.downcast::<gio::SimpleAction>()
-        {
-            action.set_enabled(session.build() == Build::Idle && session.buildable().is_ok());
-        }
-    }
-
-    // ---- events ----
-
-    fn install_actions(self: &Rc<Self>) {
-        let window = &self.widgets.window;
-        // The window's own action holds it weakly: a closed window is freed.
-        let add = |name: &str, handler: ActionHandler| {
-            let action = gio::SimpleAction::new(name, None);
-            let this = Rc::downgrade(self);
-            action.connect_activate(move |_, _| {
-                if let Some(this) = this.upgrade() {
-                    handler(&this);
-                }
-            });
-            window.add_action(&action);
-        };
-        add("new-project", Box::new(move |this| this.ask_new_project()));
-        add("back", Box::new(move |this| this.dispatch(Command::Back)));
-        add(
-            "forward",
-            Box::new(move |this| this.dispatch(Command::Forward)),
-        );
-        add("check", Box::new(move |this| this.dispatch(Command::Check)));
-        add("frame", Box::new(move |this| this.frame()));
-        add("export-view", Box::new(move |this| this.export_view()));
-        add(
-            "next-problem",
-            Box::new(move |this| this.dispatch(Command::NextProblem)),
-        );
-        add(
-            "previous-problem",
-            Box::new(move |this| this.dispatch(Command::PreviousProblem)),
-        );
-        add(
-            "find",
-            Box::new(move |this| this.widgets.finder.present(&this.widgets.window, "")),
-        );
-        add(
-            "search",
-            Box::new(move |this| {
-                // In the text, its own search bar; anywhere else, the
-                // finder.
-                if !this.widgets.files.focus_search() {
-                    this.widgets.finder.present(&this.widgets.window, "");
-                }
-            }),
-        );
-        add(
-            "editor",
-            // Shows the Code panel wherever it is docked, with the keyboard
-            // in the text.
-            Box::new(move |this| {
-                if this.session.borrow().editor() == Editor::Open {
-                    this.widgets.workbench.present(workbench::PanelId::Code);
-                    this.widgets.files.focus_text();
-                } else {
-                    this.dispatch(Command::ShowEditor(Editor::Open));
-                }
-            }),
-        );
-        let show_panel = gio::SimpleAction::new("show-panel", Some(glib::VariantTy::STRING));
-        let this = Rc::downgrade(self);
-        show_panel.connect_activate(move |_, word| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            let id = word
-                .and_then(glib::Variant::str)
-                .and_then(workbench::PanelId::from_word);
-            match id {
-                Some(workbench::PanelId::Code) => {
-                    let _ = WidgetExt::activate_action(&this.widgets.window, "win.editor", None);
-                }
-                Some(id) => this.widgets.workbench.present(id),
-                None => {}
-            }
-        });
-        self.widgets.window.add_action(&show_panel);
-        // "code:end": move the Code panel to the right edge.
-        let move_panel = gio::SimpleAction::new("move-panel", Some(glib::VariantTy::STRING));
-        let this = Rc::downgrade(self);
-        move_panel.connect_activate(move |_, target| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            let Some((id, side)) = target
-                .and_then(glib::Variant::str)
-                .and_then(|t| t.split_once(':'))
-            else {
-                return;
-            };
-            if let (Some(id), Some(side)) = (
-                workbench::PanelId::from_word(id),
-                workbench::Side::from_word(side),
-            ) {
-                this.widgets.workbench.move_to(id, side);
-            }
-        });
-        self.widgets.window.add_action(&move_panel);
-        add(
-            "reset-layout",
-            Box::new(move |this| this.widgets.workbench.reset()),
-        );
-        add(
-            "model",
-            Box::new(move |this| this.widgets.workbench.present(workbench::PanelId::Parts)),
-        );
-        add("save", Box::new(move |this| this.widgets.files.save()));
-        add("format", Box::new(move |this| this.widgets.files.format()));
-        add("open", Box::new(move |this| this.choose_folder()));
-        for view in View::ALL.into_iter().filter(|view| header::ready(*view)) {
-            add(
-                &format!("view-{}", view.word()),
-                Box::new(move |this| this.dispatch(Command::ShowView(view))),
-            );
-        }
-        add(
-            "escape",
-            Box::new(move |this| {
-                if this.cancel_edit() {
-                    return;
-                }
-                let focused = this.session.borrow().focus().is_some();
-                if focused {
-                    this.dispatch(Command::LeaveFocus);
-                } else {
-                    this.dispatch(Command::Select(None));
-                }
-            }),
-        );
-        // The chip at the view's edge names a problem off screen.
-        let off_screen = gio::SimpleAction::new("show-problem", Some(glib::VariantTy::UINT64));
-        let this = Rc::downgrade(self);
-        off_screen.connect_activate(move |_, parameter| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            let Some(index) = parameter
-                .and_then(|p| p.get::<u64>())
-                .and_then(|index| usize::try_from(index).ok())
-            else {
-                return;
-            };
-            this.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
-                index,
-            )))));
-        });
-        window.add_action(&off_screen);
-        // Open Recent: a folder named in the menu.
-        let recent = gio::SimpleAction::new("open-recent", Some(glib::VariantTy::STRING));
-        let this = Rc::downgrade(self);
-        recent.connect_activate(move |_, parameter| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            if let Some(path) = parameter.and_then(glib::Variant::str) {
-                this.go_to_folder(PathBuf::from(path));
-            }
-        });
-        window.add_action(&recent);
-        // A folder dragged in from Files.
-        let this = Rc::downgrade(self);
-        window.add_controller(app::folder_drop(move |path| {
-            if let Some(this) = this.upgrade() {
-                this.go_to_folder(path);
-            }
-        }));
-    }
-
-    /// Opens another project folder.
-    fn choose_folder(self: &Rc<Self>) {
-        let dialog = gtk::FileDialog::builder()
-            .title("Open a project folder")
-            .modal(true)
-            .build();
-        let window = self.clone();
-        dialog.select_folder(
-            Some(&self.widgets.window),
-            gio::Cancellable::NONE,
-            move |result| {
-                let Ok(folder) = result else { return };
-                let Some(path) = folder.path() else { return };
-                window.go_to_folder(path);
-            },
-        );
-    }
-
-    /// Shows a project folder: brings forward the window already showing
-    /// it, or opens it in this one once unsaved changes are dealt with. A
-    /// `.stave` file opens its folder.
-    fn go_to_folder(self: &Rc<Self>, path: PathBuf) {
-        let folder = match app::project_folder(&path) {
-            Ok(folder) => folder,
-            Err(error) => {
-                self.widgets.toasts.add_toast(
-                    adw::Toast::builder()
-                        .title(format!("{error:#}"))
-                        .timeout(5)
-                        .build(),
-                );
-                return;
-            }
-        };
-        if let Some(other) = self.shell.window_showing(&folder) {
-            other.widgets.window.present();
-            return;
-        }
-        let next = self.clone();
-        self.ask_about_unsaved(move || next.open_folder(folder));
-    }
-
-    /// Asks what to do with unsaved changes (save, throw away or stay),
-    /// then goes on, unless people chose to stay.
-    fn ask_about_unsaved(self: &Rc<Self>, then: impl FnOnce() + 'static) {
-        let files = &self.widgets.files;
-        let count = files.unsaved_count();
-        if count == 0 {
-            then();
-            return;
-        }
-        let dialog = adw::AlertDialog::builder()
-            .heading("Save your changes?")
-            .body(if count == 1 {
-                "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
-            } else {
-                format!("{count} files have changes that aren't saved. If you don't save them, they are lost.")
-            })
-            .close_response("cancel")
-            .default_response("save")
-            .build();
-        dialog.add_responses(&[
-            ("cancel", "_Cancel"),
-            ("discard", "_Don't Save"),
-            ("save", "_Save"),
-        ]);
-        dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        let window = self.clone();
-        let then = Cell::new(Some(then));
-        dialog.connect_response(None, move |_, response| {
-            let go_on = match response {
-                "save" => window.widgets.files.save_all(),
-                "discard" => true,
-                _ => false,
-            };
-            if go_on && let Some(then) = then.take() {
-                then();
-            }
-        });
-        dialog.present(Some(&self.widgets.window));
-    }
-
-    fn open_folder(self: &Rc<Self>, folder: PathBuf) {
-        self.shell.record_recent(&folder);
-        *self.session.borrow_mut() = Session::new(folder);
-        self.editing_folder_changed();
-        {
-            let mut state = self.state.borrow_mut();
-            state.uploaded = None;
-            state.posed = None;
-            state.orbit = None;
-            state.focus = None;
-            state.problem = None;
-            state.opening = None;
-        }
-        self.watch();
-        self.show_folder();
-        self.widgets.tree.show_tree(
-            inspect::PartsTree::default(),
-            stave_app::part_joints::PartJoints::default(),
-        );
-        self.show_status("Checking…", "");
-        self.dispatch(Command::Check);
-        self.view_changed();
-        self.selection_changed();
-    }
-
-    fn connect_events(self: &Rc<Self>) {
-        let widgets = &self.widgets;
-        let window = Rc::downgrade(self);
-        widgets.problems.connect_choose(move |index| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
-                    index,
-                )))));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.problems.connect_source(move |location| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::GoToSource(location));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.file_list.connect_open(move |path| {
-            let (Some(window), Some(line)) = (window.upgrade(), LineNumber::new(1)) else {
-                return;
-            };
-            window.dispatch(Command::GoToSource(SourceLocation {
-                path: path.display().to_string(),
-                line,
-            }));
-        });
-        let header = &widgets.header;
-
-        let window = Rc::downgrade(self);
-        header.switcher.connect_active_name_notify(move |group| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let Some(view) = group.active_name().and_then(|name| View::from_word(&name)) else {
-                return;
-            };
-            if window.session.borrow().view() != view {
-                window.dispatch(Command::ShowView(view));
-            }
-        });
-
-        let window = Rc::downgrade(self);
-        header.scenes.connect_row_activated(move |_, row| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let name = {
-                let session = window.session.borrow();
-                usize::try_from(row.index())
-                    .ok()
-                    .and_then(|index| Some(session.drawable()?.1.scenes.get(index)?.name.clone()))
-            };
-            window.widgets.header.scene.popdown();
-            if let Some(name) = name {
-                window.dispatch(Command::ShowScene(name));
-            }
-        });
-
-        let window = Rc::downgrade(self);
-        widgets.tree.connect_select(move |selection| {
-            if let Some(window) = window.upgrade() {
-                window.select_and_frame(Some(selection));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.tree.connect_source(move |location| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::GoToSource(location));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.tree.connect_focus(move |target| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Focus(target));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.tree.connect_hover(move |items| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            // The panel may say so while the window is busy with its state.
-            let changed = match window.state.try_borrow_mut() {
-                Ok(mut state) if state.hovered != items => {
-                    state.hovered = items;
-                    true
-                }
-                Ok(_) | Err(_) => false,
-            };
-            if changed {
-                window.request_render();
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.dock.connect_move(move |assembly| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(Selection::Assembly(assembly))));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.view_toolbar.xray.connect_toggled(move |button| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.state.borrow_mut().xray = button.is_active();
-            window.request_render();
-        });
-        self.connect_finder();
-        let window = Rc::downgrade(self);
-        widgets.inspector.connect_focus(move |target| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Focus(target));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.inspector.connect_source(move |location| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::GoToSource(location));
-            }
-        });
-        // Inspector links select and light what they name (`edit_view/links.rs`).
-        self.connect_links(&widgets.inspector.links);
-        let files = widgets.files.clone();
-        widgets
-            .inspector
-            .connect_unsaved(move |path| files.is_unsaved(Path::new(path)));
-        let window = Rc::downgrade(self);
-        widgets.motion.scale.connect_value_changed(move |scale| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.motion_moved(scale.value())
-        });
-
-        // Focus mode's panel and its controls in the 3D view's area.
-        let focus_panel = &widgets.inspector.focus;
-        let window = Rc::downgrade(self);
-        focus_panel.done.connect_clicked(move |_| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.dispatch(Command::LeaveFocus)
-        });
-        let window = Rc::downgrade(self);
-        focus_panel.connect_source(move |location| {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::GoToSource(location));
-            }
-        });
-        for scrub in [&widgets.step_card.scrub, &widgets.swing_card.scrub] {
-            let window = Rc::downgrade(self);
-            scrub.connect_changed(move |value| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                let value = narrow(value).clamp(0.0, 1.0);
-                window.update_focus(|focus| {
-                    focus.progress = value;
-                    focus.playing = false;
-                });
-            });
-        }
-        for play in [&widgets.step_card.play, &widgets.swing_card.play] {
-            let window = Rc::downgrade(self);
-            play.connect_clicked(move |_| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                window.toggle_play_focus()
-            });
-        }
-        let window = Rc::downgrade(self);
-        focus_panel.xray.connect_active_notify(move |check| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let on = check.is_active();
-            window.update_focus(|focus| focus.options.xray = on);
-        });
-        let window = Rc::downgrade(self);
-        focus_panel.tint.connect_active_notify(move |check| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let on = check.is_active();
-            window.update_focus(|focus| focus.options.tint_cut_faces = on);
-        });
-        let window = Rc::downgrade(self);
-        focus_panel.fade.connect_active_notify(move |check| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let on = check.is_active();
-            window.update_focus(|focus| focus.options.fade_others = on);
-        });
-        let window = Rc::downgrade(self);
-        widgets
-            .plan_switch
-            .from_above
-            .connect_toggled(move |button| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                let on = button.is_active();
-                window.update_focus(|focus| focus.plan = on);
-            });
-
-        // A problem's motion card.
-        let window = Rc::downgrade(self);
-        widgets.problem_card.scrub.connect_changed(move |value| {
-            if let Some(window) = window.upgrade() {
-                window.problem_moved(value);
-            }
-        });
-
-        // The view toolbar: Pull apart, its play button and its slider.
-        let toolbar = &widgets.view_toolbar;
-        let window = Rc::downgrade(self);
-        toolbar.pull.connect_toggled(move |button| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let on = button.is_active();
-            window.pull_apart(on);
-        });
-        let window = Rc::downgrade(self);
-        toolbar.play.connect_clicked(move |_| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.toggle_play_explode()
-        });
-        let window = Rc::downgrade(self);
-        toolbar.slider.connect_changed(move |value| {
-            if let Some(window) = window.upgrade() {
-                window.state.borrow_mut().exploding = false;
-                window.dispatch(Command::SetExplode(Explode::clamped(narrow(value))));
-            }
-        });
-
-        // The camera buttons.
-        let camera = &widgets.camera;
-        camera.fit.set_action_name(Some("win.frame"));
-        let window = Rc::downgrade(self);
-        camera.front.connect_clicked(move |_| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.look_from(0.0, FRONT_PITCH)
-        });
-        let window = Rc::downgrade(self);
-        camera.turn.connect_clicked(move |_| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let (yaw, pitch) = window
-                .state
-                .borrow()
-                .orbit
-                .map_or((0.0, FRONT_PITCH), |orbit| (orbit.yaw, orbit.pitch));
-            window.look_from(yaw + std::f32::consts::PI, pitch);
-        });
-
-        // The style changed: the 3D view's backdrop follows.
-        let window = Rc::downgrade(self);
-        adw::StyleManager::default().connect_dark_notify(move |manager| {
-            if let Some(window) = window.upgrade() {
-                window.show_backdrop(manager.is_dark());
-                window.request_render();
-                window.render_pictures();
-                window
-                    .widgets
-                    .files
-                    .restyle(adw::StyleManager::default().is_dark());
-            }
-        });
-        self.show_backdrop(adw::StyleManager::default().is_dark());
-
-        self.connect_files();
-        self.connect_viewport();
-    }
-
-    /// The editor tells the window where the cursor is, where to go,
-    /// when typing has paused and when a tab on the rail was chosen.
-    fn connect_files(self: &Rc<Self>) {
-        let files = &self.widgets.files;
-        let window = Rc::downgrade(self);
-        files.connect_link(move |found| {
-            if let Some(window) = window.upgrade() {
-                window.text_linked(found);
-            }
-        });
-        let window = Rc::downgrade(self);
-        files.connect_go(move |from, to| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            // Where the cursor was becomes the place Back returns to.
-            if let Some(from) = from {
-                window.dispatch(Command::Link(Some(Selection::Location(from))));
-            }
-            window.dispatch(Command::GoToSource(to));
-        });
-        let window = Rc::downgrade(self);
-        files.connect_check(move || {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Check);
-            }
-        });
-        let window = Rc::downgrade(self);
-        files.connect_show_in_3d(move |analysis, symbol| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let selection = {
-                let session = window.session.borrow();
-                session.drawable().and_then(|(design, _)| {
-                    link::selection_for(design, &analysis, symbol, session.selection())
-                })
-            };
-            match selection {
-                Some(selection) => window.select_and_frame(Some(selection)),
-                None => window.widgets.toasts.add_toast(
-                    adw::Toast::builder()
-                        .title("It isn't in the design the 3D view shows")
-                        .timeout(4)
-                        .build(),
-                ),
-            }
-        });
-        let window = Rc::downgrade(self);
-        files.connect_open(move || {
-            if let Some(window) = window.upgrade() {
-                window.dispatch(Command::ShowEditor(Editor::Open));
-            }
-        });
-        // The open files as tabs beside the Model, wherever the Code
-        // panel is docked.
-        if let Some(code) = self.widgets.workbench.panel(workbench::PanelId::Code) {
-            let page = Rc::downgrade(files);
-            tab_strip::set_page_tabs(code, move || {
-                page.upgrade()
-                    .map(|page| page.page_tabs())
-                    .unwrap_or_default()
-            });
-        }
-        let window = Rc::downgrade(self);
-        files.connect_notice(move |text| {
-            if let Some(window) = window.upgrade() {
-                window
-                    .widgets
-                    .toasts
-                    .add_toast(adw::Toast::builder().title(text).timeout(4).build());
-            }
-        });
-        let window = Rc::downgrade(self);
-        self.widgets.workbench.connect_save_failed(move |text| {
-            if let Some(window) = window.upgrade() {
-                window
-                    .widgets
-                    .toasts
-                    .add_toast(adw::Toast::builder().title(text).timeout(5).build());
-            }
-        });
-        // Closing the window asks about unsaved changes first.
-        let window = Rc::downgrade(self);
-        self.widgets.window.connect_close_request(move |_| {
-            let Some(window) = window.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            window.shell.remember_window(&window.widgets.window);
-            window.widgets.workbench.save();
-            if !window.widgets.files.has_unsaved() {
-                return glib::Propagation::Proceed;
-            }
-            let closing = window.clone();
-            window.ask_about_unsaved(move || {
-                closing.widgets.files.forget_unsaved();
-                closing.widgets.window.close();
-            });
-            glib::Propagation::Stop
-        });
-    }
-
-    /// The finder finds through `stave_app::finder` and goes where a hit
-    /// says: a part is selected (and framed), a problem posed, a place in
-    /// the text opened in the editor.
-    fn connect_finder(self: &Rc<Self>) {
-        let window = Rc::downgrade(self);
-        self.widgets.finder.connect_search(move |query| {
-            let Some(window) = window.upgrade() else {
-                return Vec::new();
-            };
-            let analysis = window.widgets.files.analysis();
-            let session = window.session.borrow();
-            finding::search(
-                finding::Sources {
-                    shown: session.shown().map(|c| &**c),
-                    latest: session.latest().map(|c| &**c),
-                    analysis: analysis.as_deref(),
-                },
-                query,
-            )
-        });
-        let window = Rc::downgrade(self);
-        self.widgets.finder.connect_hit(move |hit, choice| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            match (hit.goal, choice) {
-                // Resting on a part shows it, without going there.
-                (
-                    Goal::Select(
-                        selection @ (Selection::Part(_)
-                        | Selection::Hardware(_)
-                        | Selection::Assembly(_)),
-                    ),
-                    Choice::Preview,
-                ) => {
-                    window.state.borrow_mut().linking = true;
-                    window.dispatch(Command::Link(Some(selection)));
-                    window.state.borrow_mut().linking = false;
-                    window.frame();
-                }
-                (Goal::Select(_) | Goal::Open(_), Choice::Preview) => {}
-                (Goal::Select(selection), Choice::Go) => {
-                    window.select_and_frame(Some(selection));
-                }
-                (Goal::Select(selection), Choice::OpenText) => {
-                    let placed = {
-                        let session = window.session.borrow();
-                        session
-                            .shown()
-                            .and_then(|shown| link::placed_at(shown, &selection))
-                    };
-                    window.select_and_frame(Some(selection));
-                    if let Some(placed) = placed {
-                        window.dispatch(Command::GoToSource(placed));
-                    }
-                }
-                (Goal::Open(location), Choice::Go | Choice::OpenText) => {
-                    window.dispatch(Command::GoToSource(location));
-                }
-            }
-        });
-    }
-
-    fn connect_viewport(self: &Rc<Self>) {
-        let window = Rc::downgrade(self);
-        self.widgets.pictures.connect_resized(move || {
-            if let Some(window) = window.upgrade() {
-                window.schedule_pictures();
-            }
-        });
-        let viewport = &self.widgets.viewport;
-        let window = Rc::downgrade(self);
-        viewport.connect_resized(move |width, height| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let changed = {
-                let mut state = window.state.borrow_mut();
-                let changed = state.size != (width, height);
-                let first = state.size.0 <= 1 && width > 1;
-                state.size = (width, height);
-                // The first camera was framed before the view had a size.
-                if first && let Some(shown) = window.session.borrow().shown() {
-                    state.orbit = Self::frame_all(&state, shown);
-                }
-                (changed, first)
-            };
-            let (changed, first) = changed;
-            // ...and anything chosen by then is framed again at the real
-            // size.
-            if first && window.state.borrow().focus.is_none() {
-                window.frame_selection();
-            }
-            if first && window.state.borrow().focus.is_some() {
-                window.frame_focus();
-            }
-            if first {
-                window.apply_start_camera();
-            }
-            if changed {
-                window.request_render();
-            }
-        });
-
-        // Left drag turns; a left click selects.
-        let orbit_drag = gtk::GestureDrag::builder()
-            .button(gdk::BUTTON_PRIMARY)
-            .build();
-        let window = Rc::downgrade(self);
-        orbit_drag.connect_drag_begin(move |_, _, _| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            window.state.borrow_mut().drag_applied = (0.0, 0.0);
-            window.widgets.viewport.grab_focus();
-        });
-        let window = Rc::downgrade(self);
-        orbit_drag.connect_drag_update(move |_, x, y| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let (dx, dy) = window.drag_step(x, y);
-            window.update_orbit(|orbit| orbit.orbited(dx, dy));
-        });
-        let window = Rc::downgrade(self);
-        orbit_drag.connect_drag_end(move |gesture, x, y| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            if x.hypot(y) < CLICK_SLOP
-                && let Some((start_x, start_y)) = gesture.start_point()
-            {
-                window.pick(start_x + x, start_y + y);
-            }
-        });
-        viewport.add_controller(orbit_drag);
-
-        // Right or middle drag moves the view sideways.
-        for button in [gdk::BUTTON_SECONDARY, gdk::BUTTON_MIDDLE] {
-            let pan_drag = gtk::GestureDrag::builder().button(button).build();
-            let window = Rc::downgrade(self);
-            pan_drag.connect_drag_begin(move |_, _, _| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                window.state.borrow_mut().drag_applied = (0.0, 0.0);
-            });
-            let window = Rc::downgrade(self);
-            pan_drag.connect_drag_update(move |_, x, y| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                let (dx, dy) = window.drag_step(x, y);
-                let height = crate::convert::f32_of_int(window.widgets.viewport.height());
-                window.update_orbit(|orbit| orbit.panned(dx, dy, height));
-            });
-            viewport.add_controller(pan_drag);
-        }
-
-        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        let window = Rc::downgrade(self);
-        scroll.connect_scroll(move |_, _, dy| {
-            let Some(window) = window.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            window.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
-            glib::Propagation::Stop
-        });
-        viewport.add_controller(scroll);
-
-        // Escape and F anywhere in the window but a text field.
-        let keys = gtk::EventControllerKey::new();
-        let window = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, modifiers| {
-            let Some(window) = window.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            if !modifiers.is_empty()
-                || gtk::prelude::GtkWindowExt::focus(&window.widgets.window)
-                    .is_some_and(|w| w.is::<gtk::Text>() || w.is::<gtk::TextView>())
-            {
-                return glib::Propagation::Proceed;
-            }
-            match key {
-                gdk::Key::Escape => {
-                    let _ = WidgetExt::activate_action(&window.widgets.window, "win.escape", None);
-                    glib::Propagation::Stop
-                }
-                gdk::Key::f | gdk::Key::F => {
-                    window.frame();
-                    glib::Propagation::Stop
-                }
-                // Delete removes the selection, saying first what goes.
-                gdk::Key::Delete | gdk::Key::KP_Delete if window.remove_selected() => {
-                    glib::Propagation::Stop
-                }
-                _ => glib::Propagation::Proceed,
-            }
-        });
-        self.widgets.window.add_controller(keys);
-
-        // A mouse's Back and Forward buttons (8 and 9) anywhere in the
-        // window, before the widget under the pointer sees them.
-        let history = gtk::GestureClick::builder()
-            .button(0)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        let window = Rc::downgrade(self);
-        history.connect_pressed(move |gesture, _, _, _| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let action = match gesture.current_button() {
-                MOUSE_BACK => "win.back",
-                MOUSE_FORWARD => "win.forward",
-                _ => return,
-            };
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            let _ = WidgetExt::activate_action(&window.widgets.window, action, None);
-        });
-        self.widgets.window.add_controller(history);
-    }
-
-    /// The part of a drag not applied yet.
-    fn drag_step(&self, x: f64, y: f64) -> (f32, f32) {
-        let mut state = self.state.borrow_mut();
-        let (done_x, done_y) = state.drag_applied;
-        state.drag_applied = (x, y);
-        (
-            crate::convert::f32_of(x - done_x),
-            crate::convert::f32_of(y - done_y),
-        )
-    }
-
-    // ---- watching ----
-
-    /// Watches the project folder and checks again after a `.stave` file
-    /// is saved (once the folder is quiet).
-    fn watch(self: &Rc<Self>) {
-        let folder = self.session.borrow().folder().to_path_buf();
-        let (sender, receiver) = async_channel::unbounded::<()>();
-        let watcher = Watcher::start(&folder, move || {
-            // The window may be gone; then nobody needs to know.
-            let _ = sender.send_blocking(());
-        });
-        match watcher {
-            Ok(watcher) => {
-                self.watcher.replace(Some(watcher));
-            }
-            Err(error) => {
-                self.watcher.replace(None);
-                eprintln!("warning: {error}");
-                self.widgets.toasts.add_toast(
-                    adw::Toast::builder()
-                        .title("Not watching the folder for changes: check again with Ctrl+R")
-                        .timeout(6)
-                        .build(),
-                );
-                return;
-            }
-        }
-        let window = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            while receiver.recv().await.is_ok() {
-                let Some(window) = window.upgrade() else {
-                    break;
-                };
-                window.dispatch(Command::Check);
-            }
-        });
     }
 }
 
@@ -3895,14 +1044,21 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
     menu
 }
 
-fn build_widgets(
+/// Builds a project window's widgets into `window` (the component's
+/// root, made by [`Window::init_root`]), before the component is
+/// launched: a failure leaves nothing to launch.
+pub(in crate::ui) fn build_widgets(
+    window: &adw::ApplicationWindow,
     application: &adw::Application,
     folder: &Path,
-    shell: &app::Shell,
+    recent: &gio::Menu,
     options: &Options,
 ) -> Result<Widgets> {
+    if options.window_screenshot.is_some() {
+        settle_for_screenshot();
+    }
     let folder_name = app::folder_name(folder);
-    let header = Header::new(&folder_name, &main_menu(shell.recent_menu()));
+    let header = Header::new(&folder_name, &main_menu(recent));
 
     // The 3D view, its controls floating on it (`view_layout` keeps them
     // apart): the scene menu at the top left; the camera buttons, X-ray
@@ -4101,16 +1257,10 @@ fn build_widgets(
     let (width, height) = options.size.unwrap_or((1200, 800));
     let width = i32::try_from(width).unwrap_or(1200);
     let height = i32::try_from(height).unwrap_or(800);
-    let window = adw::ApplicationWindow::builder()
-        .application(application)
-        .title(format!("{folder_name} — Stave"))
-        .default_width(width)
-        .default_height(height)
-        .width_request(360)
-        .height_request(400)
-        .content(&toolbar)
-        .css_classes(["stave-window"])
-        .build();
+    window.set_application(Some(application));
+    window.set_title(Some(&format!("{folder_name} — Stave")));
+    window.set_default_size(width, height);
+    window.set_content(Some(&toolbar));
     if options.window_screenshot.is_some() {
         // A screenshot is exactly the size asked for, whatever the
         // display's own size.
@@ -4147,7 +1297,7 @@ fn build_widgets(
     let finder = Finder::new();
 
     Ok(Widgets {
-        window,
+        window: window.clone(),
         header,
         toasts,
         views,
@@ -4198,4 +1348,80 @@ fn breakpoint(width: f64) -> adw::Breakpoint {
 /// A control's `f64` value as the `f32` the scene works in.
 fn narrow(value: f64) -> f32 {
     crate::convert::f32_of(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn a_closed_window_says_so_and_is_freed_once_its_controller_goes() {
+        on_gtk_thread(closed_window_is_freed);
+    }
+
+    /// The application owns a window's controller while it is open: it
+    /// lives while held, closing takes it out of the application (which
+    /// is when the application drops its controller), and dropping the
+    /// controller then frees the window, its model and its runtime (the
+    /// 960f06d and 0603e47 bugs: a closed window kept alive, an open one
+    /// freed).
+    fn closed_window_is_freed() {
+        let application = adw::Application::new(
+            Some("org.stave.WindowTest.Freed"),
+            gio::ApplicationFlags::NON_UNIQUE,
+        );
+        // A window joins only an application that has started.
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let folder = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/wall_shelf"
+        ))
+        .canonicalize()
+        .unwrap();
+        // A layout of its own, which is never written: the people's own
+        // layout is left alone.
+        let options = Options {
+            layout: Some(std::env::temp_dir().join("stave-window-test-no-layout")),
+            ..Options::default()
+        };
+        let builder = Window::builder();
+        let root = builder.widget().clone();
+        let widgets =
+            build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+        let closed = Rc::new(Cell::new(false));
+        let heard = Rc::clone(&closed);
+        // What the application listens for to drop the controller.
+        let removed = application.connect_window_removed(move |_, _| heard.set(true));
+        let controller = builder
+            .launch(WindowInit {
+                widgets,
+                folder,
+                options,
+            })
+            .detach();
+        let window = root.downgrade();
+        drop(root);
+        let input = controller.sender().clone();
+        settle();
+        assert!(window.upgrade().is_some(), "the window lives while open");
+        assert!(!closed.get());
+        controller.widget().close();
+        settle();
+        assert!(closed.get(), "the window has left the application");
+        application.disconnect(removed);
+        drop(controller);
+        settle();
+        assert!(window.upgrade().is_none(), "the window is freed");
+        assert!(
+            input
+                .send(WindowInput::Rendering(
+                    update::rendering::RenderingInput::Frame
+                ))
+                .is_err(),
+            "the window's runtime, and with it its model, is gone"
+        );
+    }
 }

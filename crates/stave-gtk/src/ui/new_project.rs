@@ -607,15 +607,11 @@ pub(super) fn create_project(
 
 impl Window {
     /// Asks for a new project and, once it is written, opens it in this
-    /// window.
-    pub(super) fn ask_new_project(self: &Rc<Self>) {
-        let window = self.clone();
+    /// window (once unsaved changes are dealt with).
+    pub(super) fn ask_new_project(&mut self) {
+        let input = self.input();
         ask(self.widgets.window.upcast_ref(), move |folder| {
-            let next = window.clone();
-            window.ask_about_unsaved(move || {
-                next.open_folder(folder);
-                next.welcome_new_project();
-            });
+            input.emit(super::update::project::ProjectInput::NewProjectWritten(folder).into());
         });
     }
 

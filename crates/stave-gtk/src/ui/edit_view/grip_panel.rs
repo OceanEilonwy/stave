@@ -40,7 +40,7 @@ use super::grip_text::PanelModel;
 
 /// What the panel reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PanelAction {
+pub(in crate::ui) enum PanelAction {
     /// One of the sizes to pick from.
     Pick(ParamId),
     /// A value typed in its field, Enter pressed.

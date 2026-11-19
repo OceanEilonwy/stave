@@ -24,6 +24,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::ui::update::editing::EditingInput;
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::change::ChangeRequest;
@@ -817,40 +818,36 @@ impl ItemTools {
 impl Window {
     /// Puts the item's changes in the Details panel, under the
     /// selection's account, and connects them.
-    pub(in crate::ui) fn connect_item_tools(self: &Rc<Self>) {
+    pub(in crate::ui) fn connect_item_tools(&self) {
         let tools = &self.editing.tools;
         self.widgets.details.append(&tools.root);
-        let window = Rc::downgrade(self);
-        tools.connect(move |output| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            match output {
-                ItemToolsOutput::Rename(text) => window.rename_selected(&text),
-                ItemToolsOutput::Mirror => window.mirror_selected(),
-                ItemToolsOutput::Hold => window.hold_from_selected(),
-                ItemToolsOutput::Remove => {
-                    window.remove_selected();
-                }
-            }
-        });
-        let window = Rc::downgrade(self);
-        tools.repeat.connect_unfold(move || {
-            if let Some(window) = window.upgrade() {
-                window.update_item_tools();
-            }
-        });
-        let window = Rc::downgrade(self);
+        let input = self.input();
+        tools.connect(move |output| input.emit(EditingInput::ItemTools(output).into()));
+        let input = self.input();
+        tools
+            .repeat
+            .connect_unfold(move || input.emit(EditingInput::ItemRepeatUnfolded.into()));
+        let input = self.input();
         tools.repeat.row.connect_changed(move |count, axis| {
-            if let Some(window) = window.upgrade() {
-                window.repeat_selected(count, Some(axis));
-            }
+            input.emit(EditingInput::RepeatChanged { count, axis }.into());
         });
+    }
+
+    /// The item's tools asked for something.
+    pub(in crate::ui) fn item_tools_asked(&mut self, output: ItemToolsOutput) {
+        match output {
+            ItemToolsOutput::Rename(text) => self.rename_selected(&text),
+            ItemToolsOutput::Mirror => self.mirror_selected(),
+            ItemToolsOutput::Hold => self.hold_from_selected(),
+            ItemToolsOutput::Remove => {
+                self.remove_selected();
+            }
+        }
     }
 
     /// The item of the project the selection belongs to, by name.
     pub(in crate::ui) fn selected_item(&self) -> Option<String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let (design, _) = session.drawable()?;
         selected_item(design, session.selection()?)
     }
@@ -860,7 +857,7 @@ impl Window {
     pub(in crate::ui) fn update_item_tools(&self) {
         let tools = &self.editing.tools;
         let found = {
-            let session = self.session.borrow();
+            let session = &self.session;
             session.drawable().and_then(|(design, _)| {
                 let selection = session.selection()?;
                 let item = selected_item(design, selection)?;
@@ -888,7 +885,7 @@ impl Window {
             }
             // The offer reads the project, so it is worked out once per
             // item and result.
-            let offer = self.session.borrow().item_offer(&item);
+            let offer = self.session.item_offer(&item);
             tools.shown.replace(Some(Shown {
                 item: item.clone(),
                 design: address,
@@ -940,7 +937,7 @@ impl Window {
 
     /// Renames the selected item everywhere it is used: the change is
     /// tried and shown on its card.
-    pub(in crate::ui) fn rename_selected(self: &Rc<Self>, to: &str) {
+    pub(in crate::ui) fn rename_selected(&mut self, to: &str) {
         let Some(item) = self.selected_item() else {
             return;
         };
@@ -957,10 +954,9 @@ impl Window {
     /// Makes the selected item `count` pieces filling its space, split
     /// along `axis` (a first repeat needs it); on the chosen candidate's
     /// card, the candidate instead.
-    pub(in crate::ui) fn repeat_selected(self: &Rc<Self>, count: usize, axis: Option<Axis>) {
+    pub(in crate::ui) fn repeat_selected(&mut self, count: usize, axis: Option<Axis>) {
         let chosen = self
             .session
-            .borrow()
             .edit()
             .is_some_and(|edit| edit.chosen().is_some());
         if chosen {
@@ -985,13 +981,12 @@ impl Window {
     /// Does what the session offers for the selected item's other side
     /// ([`stave_app::item_offer::MirrorGesture`]): adds its mirror image,
     /// or makes a handed piece filling a space a mirrored pair.
-    pub(in crate::ui) fn mirror_selected(self: &Rc<Self>) {
+    pub(in crate::ui) fn mirror_selected(&mut self) {
         let Some(item) = self.change_target() else {
             return;
         };
         let Some(gesture) = self
             .session
-            .borrow()
             .item_offer(&item)
             .and_then(|offer| offer.mirror)
         else {
@@ -1007,7 +1002,7 @@ impl Window {
     /// Removes the selected item: the session lists what uses it, and the
     /// card (and its dialog) say what would go before anything does.
     /// `false` when nothing is selected that can be removed.
-    pub(in crate::ui) fn remove_selected(self: &Rc<Self>) -> bool {
+    pub(in crate::ui) fn remove_selected(&mut self) -> bool {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return true;
@@ -1027,20 +1022,19 @@ impl Window {
     fn change_target(&self) -> Option<String> {
         self.selected_item().or_else(|| {
             self.session
-                .borrow()
                 .change()
                 .and_then(|change| super::changes::change_item(change.request()))
         })
     }
 
     /// Starts a change of the design, reading the editor's unsaved text.
-    pub(in crate::ui) fn start_change(self: &Rc<Self>, command: EditCommand) {
+    pub(in crate::ui) fn start_change(&mut self, command: EditCommand) {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return;
         }
         {
-            let mut session = self.session.borrow_mut();
+            let session = &mut self.session;
             session.set_edit_files(std::sync::Arc::new(self.widgets.files.edit_files()));
         }
         self.editing.state.borrow_mut().select_after = None;
@@ -1050,7 +1044,7 @@ impl Window {
     /// The name of the item a commit of the change in progress leaves to
     /// select: the renamed or mirrored item by its new name.
     pub(in crate::ui) fn change_selects_after(&self) -> Option<String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let change = session.change()?;
         match change.request() {
             ChangeRequest::Rename { to, .. } => Some(to.as_str().to_owned()),
