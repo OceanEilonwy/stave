@@ -20,7 +20,7 @@ use stave_model::solved::{
 };
 
 use crate::joints::{GeomTable, local_slot, round_length};
-use crate::{Reported, Solved, Solver};
+use crate::{Fault, Solved, Solver};
 
 /// One mirrored joint: the joint, its source, and the plane its assembly
 /// is mirrored about.
@@ -197,7 +197,9 @@ impl Solver<'_> {
             }
         }
         for (part, cut) in outside {
-            let Ok(target) = self.rebind_outside_part(part, mirrored) else {
+            let target = self.rebind_outside_part(part, mirrored);
+            let (file, span) = self.joint_place(mirrored.joint);
+            let Some(target) = self.settled(target, file, span) else {
                 continue;
             };
             let Ok(made) = self.reflect_cut(part, target, &cut, mirrored, geoms) else {
@@ -250,14 +252,14 @@ impl Solver<'_> {
         geoms: &GeomTable,
     ) -> Solved<Cut> {
         let (Some(source_geom), Some(target_geom)) = (geoms.get(part), geoms.get(target)) else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let flipped = flips(
             &source_geom.orientation,
             &target_geom.orientation,
             mirrored.axis,
         )
-        .ok_or(Reported)?;
+        .ok_or(Fault::Internal("how a cut is mirrored"))?;
         let mut size = [Length::ZERO; 3];
         for axis in PartAxis::ALL {
             if let Some(slot) = size.get_mut(local_slot(axis)) {
@@ -282,13 +284,15 @@ impl Solver<'_> {
             },
             CutPlace::Crossing { other, footprint } => CutPlace::Crossing {
                 other: self.rebind_outside_part(*other, mirrored)?,
-                footprint: reframe.local_box(footprint).ok_or(Reported)?,
+                footprint: reframe.local_box(footprint).ok_or(Fault::Overflow)?,
             },
-            CutPlace::Member { .. } => return Err(Reported),
+            CutPlace::Member { .. } => return Err(Fault::Internal("a mirrored joint's cut").into()),
         };
-        let kind = reframe.kind(cut.face, &cut.kind).ok_or(Reported)?;
+        let kind = reframe
+            .kind(cut.face, &cut.kind)
+            .ok_or(Fault::Internal("how a cut is mirrored"))?;
         let CutSource::Joint { pair, .. } = cut.source else {
-            return Err(Reported);
+            return Err(Fault::Internal("the joint a mirrored cut comes from").into());
         };
         Ok(Cut {
             source: CutSource::Joint {

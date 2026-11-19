@@ -53,7 +53,7 @@ use super::edit_panel::EditPanel;
 use super::edit_writer::BufferWriter;
 use super::option_search::OptionSearch;
 use super::{EDGE, Window};
-use crate::render::{Backdrop, Frame, Image};
+use crate::render::{Backdrop, Frame, Ticket};
 
 /// How long one step of the menu's check runs before the window draws
 /// what it found so far; a step that finds nothing new gets twice as long.
@@ -269,6 +269,7 @@ pub(super) fn card_verdict(progress: &Progress, checking: bool) -> Option<Verdic
                 merged: Vec::new(),
                 help: None,
                 fixes: Vec::new(),
+                cause: None,
             };
             let problem = Problem::new(diagnostic, Vec::new()).ok()?;
             Refusal::new(vec![problem]).ok().map(Verdict::Refused)
@@ -1351,7 +1352,7 @@ impl Window {
     /// covers the space it goes in see-through. `None` draws the design
     /// as usual (and puts its scene back in the renderer first if a ghost
     /// had it).
-    pub(super) fn render_ghost(&self, backdrop: Backdrop) -> Option<anyhow::Result<Image>> {
+    pub(super) fn render_ghost(&self, backdrop: Backdrop) -> Option<anyhow::Result<Ticket>> {
         if let Some(image) = self.render_removal(backdrop) {
             return Some(image);
         }
@@ -1413,7 +1414,7 @@ impl Window {
                 *slot = tint;
             }
         }
-        Some(renderer.render(&Frame {
+        Some(renderer.submit(&Frame {
             scene: graph,
             posed: &ghost.posed,
             orbit,

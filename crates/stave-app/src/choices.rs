@@ -389,6 +389,7 @@ mod tests {
                 merged: Vec::new(),
                 help: None,
                 fixes: Vec::new(),
+                cause: None,
             },
             more: 0,
         };

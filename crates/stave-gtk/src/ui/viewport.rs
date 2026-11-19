@@ -4,6 +4,7 @@
 //! HiDPI screen too.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -13,7 +14,7 @@ mod imp {
     use super::*;
 
     /// Called with the new size in device pixels.
-    pub type ResizeHandler = Box<dyn Fn(u32, u32)>;
+    pub type ResizeHandler = Rc<dyn Fn(u32, u32)>;
 
     #[derive(Default)]
     pub struct Viewport {
@@ -42,7 +43,10 @@ mod imp {
     impl Viewport {
         fn report_size(&self) {
             let (width, height) = self.obj().device_size();
-            if let Some(handler) = self.on_resize.borrow().as_ref() {
+            // Cloned out so that the handler may set a new one, or come
+            // back here through a synchronous allocation.
+            let handler = self.on_resize.borrow().clone();
+            if let Some(handler) = handler {
                 handler(width, height);
             }
         }
@@ -166,9 +170,36 @@ impl Viewport {
         self.queue_draw();
     }
 
+    /// Shows a frame of the live view straight from the GPU's mapped
+    /// buffer: GTK reads the padded rows where they are, so they are not
+    /// copied on the CPU, and the buffer goes back to the renderer when the
+    /// next frame replaces this one. False when its size can't be a
+    /// texture's.
+    pub fn show_live(&self, frame: crate::render::LiveFrame) -> bool {
+        let (Ok(width), Ok(height), Ok(stride)) = (
+            i32::try_from(frame.width()),
+            i32::try_from(frame.height()),
+            usize::try_from(frame.stride()),
+        ) else {
+            return false;
+        };
+        let bytes = glib::Bytes::from_owned(frame);
+        // Alpha is 1 everywhere, so the bytes are premultiplied already:
+        // the format GTK draws without converting.
+        let texture = gtk::gdk::MemoryTexture::new(
+            width,
+            height,
+            gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
+            &bytes,
+            stride,
+        );
+        self.show_frame(texture.upcast());
+        true
+    }
+
     /// Calls `handler` with the size in device pixels whenever it may have
     /// changed (on every allocation and change of scale).
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
-        self.imp().on_resize.replace(Some(Box::new(handler)));
+        self.imp().on_resize.replace(Some(Rc::new(handler)));
     }
 }

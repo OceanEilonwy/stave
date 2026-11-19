@@ -20,7 +20,7 @@
 //! The Code panel holds the open files, so a file always opens wherever
 //! the Code panel is.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -434,6 +434,9 @@ pub enum Remember {
     From(PathBuf),
 }
 
+/// What is told a short line (a failure to save).
+type Told = Rc<dyn Fn(&str)>;
+
 /// The dock and its panels.
 pub struct Workbench {
     /// The dock above the status bar, for the window's content.
@@ -455,6 +458,10 @@ pub struct Workbench {
     /// The layout last applied or saved, to bring a closed panel back
     /// where it was.
     last: RefCell<Layout>,
+    /// Told, once, when the layout can't be written.
+    on_save_failed: RefCell<Option<Told>>,
+    /// A failure to write the layout has been told.
+    save_failed: Cell<bool>,
     /// The spot each of the 3D view's tool groups is docked in, shared
     /// with the view, which places them.
     tools: Rc<RefCell<Spots>>,
@@ -601,11 +608,14 @@ impl Workbench {
             problems_count,
             output_button,
             remembers,
-            last: RefCell::new(layout.clone()),
+            // `apply` below puts the real one here.
+            last: RefCell::new(Layout::default()),
             tools: Rc::new(RefCell::new(layout.tools.clone())),
             on_tools: RefCell::new(None),
+            on_save_failed: RefCell::new(None),
+            save_failed: Cell::new(false),
         });
-        workbench.apply(&layout);
+        workbench.apply(layout);
         for (button, id) in [
             (&workbench.problems_button, PanelId::Problems),
             (&workbench.output_button, PanelId::Output),
@@ -638,7 +648,7 @@ impl Workbench {
 
     /// Puts every panel where `layout` says, closing the ones it leaves
     /// out, and shows the edges it shows.
-    pub fn apply(&self, layout: &Layout) {
+    pub fn apply(&self, layout: Layout) {
         for widget in self.panels.values() {
             detach(widget);
         }
@@ -663,8 +673,8 @@ impl Workbench {
                 && !layout.frames(side).is_empty();
             self.dock.set_reveal_area(side.area(), shown);
         }
-        self.last.replace(layout.clone());
         self.tools.replace(layout.tools.clone());
+        self.last.replace(layout);
         if let Some(callback) = self.on_tools.borrow().as_ref() {
             callback();
         }
@@ -832,20 +842,38 @@ impl Workbench {
     /// Remembers the layout for next time (not while taking screenshots).
     pub fn save(&self) {
         let layout = self.layout();
-        self.last.replace(layout.clone());
-        if !self.remembers {
+        let text = self.remembers.then(|| layout.to_text());
+        self.last.replace(layout);
+        let Some(text) = text else {
             return;
-        }
+        };
         let path = layout_path();
-        if let Some(folder) = path.parent() {
-            let _ = std::fs::create_dir_all(folder);
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, text));
+        if let Err(error) = written {
+            eprintln!("warning: can't write '{}': {error}", path.display());
+            // Cloned out so that `told` may set a new handler.
+            let told = self.on_save_failed.borrow().clone();
+            if !self.save_failed.replace(true)
+                && let Some(told) = told
+            {
+                told(&format!(
+                    "Stave couldn't save the panel layout for next time: {error}"
+                ));
+            }
         }
-        let _ = std::fs::write(path, layout.to_text());
+    }
+
+    /// Tells `told` when the layout can't be written (once).
+    pub fn connect_save_failed(&self, told: impl Fn(&str) + 'static) {
+        self.on_save_failed.replace(Some(Rc::new(told)));
     }
 
     /// The compact board again, the tool groups back in their spots.
     pub fn reset(&self) {
-        self.apply(&Layout::default());
+        self.apply(Layout::default());
         self.save();
     }
 

@@ -15,6 +15,16 @@ use stave_app::session::{Activity, Build, Pill, Tone, View};
 
 use super::icons::{self, PathIcon};
 
+/// `true` for a view that is made: one the switcher and its shortcut may
+/// lead to. A view that isn't made stays out of reach rather than show a
+/// page that does nothing.
+pub fn ready(view: View) -> bool {
+    match view {
+        View::Design => true,
+        View::CutList => false,
+    }
+}
+
 /// The title bar's widgets.
 pub struct Header {
     /// The bar itself.
@@ -116,6 +126,9 @@ impl Header {
             switcher.add(toggle);
         }
         switcher.set_active_name(Some(View::Design.word()));
+        // The Cut list view isn't made yet, so the design is the only
+        // view: the switcher stays hidden until there is a second one.
+        switcher.set_visible(View::ALL.into_iter().filter(|view| ready(*view)).count() > 1);
 
         let scene_label = gtk::Label::new(Some("Rest"));
         let scene_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -214,6 +227,10 @@ impl Header {
             .build();
         build.update_property(&[gtk::accessible::Property::Label("Build plan")]);
         build.set_action_name(Some("win.build"));
+        // The build plan isn't made yet: pressing the button would only
+        // say so. It stays hidden (and `win.build` unregistered) until it
+        // builds a plan.
+        build.set_visible(false);
 
         let bar = adw::HeaderBar::builder()
             .title_widget(&switcher)

@@ -19,7 +19,7 @@
 //! from `stave_schema`, the libraries a project imports from
 //! `stave_modules`, the tools from the standard library's tool kinds.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -452,61 +452,75 @@ pub(super) fn create_project(
 }
 
 impl Window {
-    /// Asks for a new project and, once it is written, opens it.
+    /// Asks for a new project and, once it is written, opens it in this
+    /// window.
     pub(super) fn ask_new_project(self: &Rc<Self>) {
-        let form = NewProjectDialog::new();
-        {
-            let form_weak = Rc::downgrade(&form);
-            let window = self.widgets.window.clone();
-            form.folder_button.connect_clicked(move |_| {
-                let chooser = gtk::FileDialog::builder()
-                    .title("Choose the folder for the new project")
-                    .modal(true)
-                    .build();
-                let form = form_weak.clone();
-                chooser.select_folder(Some(&window), gio::Cancellable::NONE, move |result| {
-                    if let (Ok(folder), Some(form)) = (result, form.upgrade())
-                        && let Some(path) = folder.path()
-                    {
-                        form.set_folder(path);
-                    }
-                });
+        let window = self.clone();
+        ask(self.widgets.window.upcast_ref(), move |folder| {
+            let next = window.clone();
+            window.ask_about_unsaved(move || {
+                next.open_folder(folder);
+                next.welcome_new_project();
             });
-        }
-        {
-            let form_weak = Rc::downgrade(&form);
-            let window = self.clone();
-            form.create.connect_clicked(move |_| {
-                let Some(form) = form_weak.upgrade() else {
-                    return;
-                };
-                let project = match form.answers().project() {
-                    Ok(project) => project,
-                    Err(words) => return form.show_error(Some(&words)),
-                };
-                let Some(folder) = form.folder.borrow().clone() else {
-                    return form.show_error(Some("Choose a folder to write the project into"));
-                };
-                match create_project(&folder, &project) {
-                    Ok(_) => {
-                        form.show_error(None);
-                        form.dialog.close();
-                        let next = window.clone();
-                        window.ask_about_unsaved(move || {
-                            next.open_folder(folder);
-                            next.light_first_space(ENVELOPE_REGION);
-                            next.show_hint("Click inside the box to add the first piece");
-                        });
-                    }
-                    Err(words) => form.show_error(Some(&words)),
+        });
+    }
+
+    /// A project just made: the envelope lit as the first space to click.
+    pub(super) fn welcome_new_project(&self) {
+        self.light_first_space(ENVELOPE_REGION);
+        self.show_hint("Click inside the box to add the first piece");
+    }
+}
+
+/// Asks for a new project over `parent` and writes it; `created` gets the
+/// folder it was written into.
+pub(super) fn ask(parent: &gtk::Window, created: impl Fn(PathBuf) + 'static) {
+    let form = NewProjectDialog::new();
+    {
+        let form_weak = Rc::downgrade(&form);
+        let window = parent.clone();
+        form.folder_button.connect_clicked(move |_| {
+            let chooser = gtk::FileDialog::builder()
+                .title("Choose the folder for the new project")
+                .modal(true)
+                .build();
+            let form = form_weak.clone();
+            chooser.select_folder(Some(&window), gio::Cancellable::NONE, move |result| {
+                if let (Ok(folder), Some(form)) = (result, form.upgrade())
+                    && let Some(path) = folder.path()
+                {
+                    form.set_folder(path);
                 }
             });
-        }
-        // The dialog keeps its fields alive while it shows.
-        let keep = RefCell::new(Some(form.clone()));
-        form.dialog.connect_closed(move |_| {
-            keep.borrow_mut().take();
         });
-        form.dialog.present(Some(&self.widgets.window));
     }
+    {
+        let form_weak = Rc::downgrade(&form);
+        form.create.connect_clicked(move |_| {
+            let Some(form) = form_weak.upgrade() else {
+                return;
+            };
+            let project = match form.answers().project() {
+                Ok(project) => project,
+                Err(words) => return form.show_error(Some(&words)),
+            };
+            let Some(folder) = form.folder.borrow().clone() else {
+                return form.show_error(Some("Choose a folder to write the project into"));
+            };
+            match create_project(&folder, &project) {
+                Ok(_) => {
+                    form.show_error(None);
+                    form.dialog.close();
+                    created(folder);
+                }
+                Err(words) => form.show_error(Some(&words)),
+            }
+        });
+    }
+    // The dialog keeps its fields alive while it shows.
+    let keep = Cell::new(Some(form.clone()));
+    form.dialog.connect_closed(move |_| {
+        keep.take();
+    });
+    form.dialog.present(Some(parent));
 }

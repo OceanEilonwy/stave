@@ -1,0 +1,32 @@
+// expect: error[out-of-range] 'shelf_depth' must be within 120mm..200mm, found 600mm
+// fix: patch "Use 200mm" { set shelf_depth = 200mm }
+stave 1
+
+project "Out of range param" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+// A shelf deeper than the range allows. The shelf's width reads the param,
+// so a failed param must not look like a placement cycle as well.
+param shelf_depth = 600mm within 120mm..200mm
+
+part back : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  shelf_depth
+  place {
+    orient(length: right, width: back)
+    against(back.top)
+    flush(back.left)
+    flush(back.front)
+  }
+}

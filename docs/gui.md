@@ -258,6 +258,46 @@ when that check is done, gives
 `Notice::BuildPlanNotBuilt` ("The build plan (PDF) isn't built yet"): the
 PDF doesn't exist yet, and the button says so honestly.
 
+## Starting Stave
+
+Stave is one application, `io.github.OceanEilonwy.Stave` (`ui/app.rs`),
+with a window per project folder. `stave-gtk FOLDER...` opens each folder
+in a window (a `.stave` file opens its folder); started again while it
+runs, or asked by Files to open a folder, it hands the folders to the
+Stave already running (`HANDLES_OPEN`), which opens a window for each or
+brings forward the one already showing it. The command line's other
+window options apply to the first window of a Stave that was not
+running. `--window-screenshot` always runs on its own (`NON_UNIQUE`) and
+needs one folder.
+
+Started with no folder (from the app grid or the dock), Stave shows the
+**start page** (`ui/start_page.rs`): an `AdwStatusPage` with Open
+Folder… and New Project… and, under them, the recent projects
+(`gtk::RecentManager`, the folders Stave opened that are still there,
+newest first). Opening a project opens its window and closes the start
+page. A folder (or a `.stave` file) dropped from Files onto the start
+page or a project window opens it; in a project window it replaces the
+project there, after asking about unsaved changes, as Open Project… does.
+
+Ctrl+W closes the window (`window.close`, asking about unsaved changes)
+and Ctrl+Q closes every window (`app.quit`), each asking. The shortcuts
+dialog (`adw::ShortcutsDialog`) lists every key: the actions' keys come
+from the one table `app::ACCELERATORS` that also binds them, and the keys
+widgets handle themselves (F, Esc, Delete in the 3D view; F12, Alt+F12,
+Shift+F12 in the editor) from `app::OTHER_KEYS`.
+
+Stave remembers the window's size, whether it was maximised and the
+style chosen in the menu, in `~/.config/stave/window` (a GLib key file,
+`ui/remember.rs`; a key file rather than GSettings so that `cargo run`
+needs no installed schema), and the panel layout in
+`~/.config/stave/layout`. `--size` and `--theme` override them for one
+run; screenshots neither read nor write them. A failure to write either
+file is said once, in a toast. The first window is 1200x800.
+
+The desktop file, the AppStream metainfo and the icons are in `data/`;
+`tools/install-desktop` installs them, with the binary, under
+`~/.local` (it does not build).
+
 ## The window
 
 ```
@@ -415,7 +455,9 @@ compact board back, the tool groups in their usual spots.
   the problems chip and the hammer. Back and forward are not in the bar:
   they are `win.back`/`win.forward` (Alt+←/→, the View menu, the mouse's
   side buttons), each offered only when it can go. The switcher is an
-  `AdwToggleGroup` named by `View::word` (Ctrl+1, Ctrl+2). The problems chip is the status pill
+  `AdwToggleGroup` named by `View::word` (Ctrl+1, Ctrl+2). Until the Cut
+  list is made (`header::ready`), the switcher is hidden and only
+  `win.view-design` (Ctrl+1) exists. The problems chip is the status pill
   between previous and next arrows (`win.next-problem`, F8;
   `win.previous-problem`, Shift+F8; the arrows show when there is more
   than one problem); its tooltip is the status line ("Checked 5 files · 1
@@ -424,14 +466,19 @@ compact board back, the tool groups in their usual spots.
   the class goes on the chip round the pill, `.stave-problems-chip.errors
   button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
-  (`buildable()`), its tooltip saying why (`build_tooltip()`). The
-  Project menu starts a new project ("New Project…", `win.new-project`,
-  see [A new project](#a-new-project)), opens a project folder (Ctrl+O),
-  saves (Ctrl+S), checks again (Ctrl+R), builds the plan (Ctrl+B) and
-  exports the view as glTF ("Export View as glTF…", `win.export-view`,
-  with `stave_app::export_view::save_glb`, the same file `stave export`
-  writes); the View menu frames everything and sets the style (follow
-  system, light, dark).
+  (`buildable()`), its tooltip saying why (`build_tooltip()`). Until the
+  build plan is made, the hammer is hidden and `win.build` isn't
+  registered: a button that only says it does nothing teaches a beginner
+  not to trust the window. The Project menu starts a new project ("New
+  Project…", `win.new-project`, see [A new project](#a-new-project)),
+  opens a project folder (Ctrl+O) or a recent one ("Open Recent",
+  `win.open-recent`), saves (Ctrl+S), checks again (Ctrl+R) and exports
+  the view as glTF ("Export View as glTF…", `win.export-view`, with
+  `stave_app::export_view::save_glb`, the same file `stave export`
+  writes); the View menu frames everything, brings back closed panels and
+  sets the style (follow system, light, dark: `app.style`, remembered);
+  Help has "Keyboard Shortcuts" (`app.shortcuts`, Ctrl+?) and "About
+  Stave" (`app.about`).
 - **Parts panel, "joint chips"** (`TreeSidebar`, top left; rows from
   `inspect::parts_tree`, joints from `part_joints::PartJoints`): a flat
   list grouped by assembly instead of a deep tree. Each group has a slim
@@ -797,8 +844,10 @@ the session's.
   "Standard · joinery"), the best matches first. Each shows its name, its
   description and its fit as the card words it (a spinner and "Checking
   whether it fits…", a tick and "Fits", "Checked once you choose …", or
-  greyed with a "can't" sign, "Can't be used here" and the checker's
-  first error). ↑ and ↓ move, Enter chooses (a refused option can't be
+  greyed with a "can't" sign, "Can't be used here" and the reason
+  `OptionRefusal::line` gives: the checker's first error, or for a kind
+  that can never be used for this component its plain sentence, "Shelf
+  gives its joint a depth, and glued_edge has no depth"). ↑ and ↓ move, Enter chooses (a refused option can't be
   chosen: the foot says so instead), Escape or × closes, and the keyboard
   goes back to the card.
 - **The options, checked.** Once a candidate is chosen, and after each
@@ -1296,7 +1345,8 @@ a shelf's joinery's short list: dado, the default, which fits; screw,
 which the case uses, refused here and greyed; "Search all 18…") and
 `edit_option_search.png` and `edit_option_search_dark.png`
 (`option_search.edit`: the shelf's joinery searched for "edge": groove
-fits, the other four greyed with the checker's reason).
+fits, the other four greyed with their reason; glued_edge's is "Shelf
+gives its joint a depth, and glued_edge has no depth").
 
 ### The acceptance run
 
@@ -1442,7 +1492,9 @@ colours) are a stylesheet in `edit_card.rs`, installed once per display.
   problem's details and the joint kind's link in focus mode send
   `GoToSource` (the kind's link may name a `std/...` file, opened read
   only).
-- **Cut list**: the `cut-list` page is a "Cut list is coming" status page.
+- **Cut list**: the `cut-list` page is a "Cut list is coming" status page,
+  out of reach (switcher hidden, no Ctrl+2) until it is made. No page of
+  the window sends the reader to a command.
 
 ## The editor
 

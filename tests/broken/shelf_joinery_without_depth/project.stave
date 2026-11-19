@@ -1,0 +1,33 @@
+// expect: error[type-mismatch] 'glued_edge' can't be the joinery of Shelf
+stave 1
+
+// A shelf housed in the sides of a case, with glued_edge chosen as its
+// joinery. The Shelf cuts its joint a set depth into the sides, and an
+// edge joint has no depth: glued_edge can never be a shelf's joinery,
+// whatever the sizes. The error is at the choice, not in the Shelf.
+
+import "std:casework"
+
+project "Shelf joined edge to edge" {
+  units: mm
+}
+
+param overall_width  = 940mm
+param overall_height = 1780mm
+param overall_depth  = 580mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+
+assembly case : casework.Case {
+  space:       envelope
+  panel_stock: oak_19
+}
+
+assembly shelf : casework.Shelf {
+  space:       case.inside
+  sides:       [case.side[left], case.side[right]]
+  panel_stock: oak_19
+  joinery:     glued_edge
+}

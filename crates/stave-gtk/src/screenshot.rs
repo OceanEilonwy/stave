@@ -405,7 +405,7 @@ fn render_bounds(
         posed,
         orbit,
         selection: &[],
-        highlight,
+        highlight: highlight.map(Into::into),
         section: view.section,
         looks: view.looks,
         overlay: view.overlay,

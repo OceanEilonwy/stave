@@ -235,7 +235,7 @@ impl Solver<'_> {
     ) -> Solved<Value> {
         let find = |name: &str| args.iter().find(|arg| arg.name == name).map(|a| &a.value);
         let (Some(a), Some(b)) = (find("a"), find("b")) else {
-            return Err(crate::Reported);
+            return Err(crate::Fault::Earlier.into());
         };
         let a = self.one_part(question, a, env)?;
         let b = self.one_part(question, b, env)?;
@@ -243,7 +243,9 @@ impl Solver<'_> {
         meeting
             .answer(question)
             .map(Value::Bool)
-            .ok_or(crate::Reported)
+            .ok_or(crate::Failure::Fault(crate::Fault::Internal(
+                "how two parts meet",
+            )))
     }
 }
 

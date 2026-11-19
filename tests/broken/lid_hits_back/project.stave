@@ -2,9 +2,9 @@
 // fix: patch "Open no further than 109.9deg" { set Lid.hinges.opening_angle = 109.9deg }
 stave 1
 
-// The lid is set 10mm in from the back of the box, so its hinge pins sit
-// on top of the back instead of just outside its outside edge: past
-// upright, the lid's back edge drops onto the back.
+// The lid is set 10mm in from the 19mm back (its 9mm leaves still sit on
+// the back), so its hinge pins sit on top of the back instead of just
+// outside its outside edge: past upright, its back edge drops onto it.
 
 project "Lid hits the back" {
   units: mm
@@ -21,7 +21,7 @@ part base : pine_12 {
   }
 }
 
-part back : pine_12 {
+part back : pine_19 {
   length: 300mm
   width:  100mm
   place {

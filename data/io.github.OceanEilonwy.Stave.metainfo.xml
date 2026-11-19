@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.OceanEilonwy.Stave</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>Stave</name>
+  <summary>Design furniture in words and check it can be built</summary>
+  <description>
+    <p>
+      Stave is woodworking design for beginners. A project is a short text
+      file that says what the parts are, what wood they are cut from and how
+      they are joined. Stave shows the design in 3D and checks it the way a
+      compiler checks a program: parts that run into each other, a door that
+      hits a side when it swings, a joint that a tool you have can't cut.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>See the design in 3D, open its doors and drawers, and pull it apart along its joints</li>
+      <li>Focus on one joint or piece of hardware to see how it goes together</li>
+      <li>Problems pinned where they happen, each with a plain explanation and a way to fix it</li>
+      <li>Edit by clicking in the 3D view or in the text, side by side</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.OceanEilonwy.Stave.desktop</launchable>
+  <url type="homepage">https://github.com/OceanEilonwy/stave</url>
+  <url type="bugtracker">https://github.com/OceanEilonwy/stave/issues</url>
+  <url type="vcs-browser">https://github.com/OceanEilonwy/stave</url>
+  <developer id="io.github.oceaneilonwy">
+    <name>The Stave contributors</name>
+  </developer>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A clothing cabinet, with one door's hinge stile selected</caption>
+      <image>https://raw.githubusercontent.com/OceanEilonwy/stave/main/docs/screenshots/window/main_light.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <categories>
+    <category>Graphics</category>
+    <category>Engineering</category>
+  </categories>
+  <keywords>
+    <keyword>woodworking</keyword>
+    <keyword>furniture</keyword>
+    <keyword>joinery</keyword>
+    <keyword>cut list</keyword>
+  </keywords>
+  <releases>
+    <release version="0.1.0" date="2026-11-19">
+      <description>
+        <p>The first release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

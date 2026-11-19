@@ -14,15 +14,15 @@
 //! where to go ([`FilesPage::connect_go`]) and when typing has paused
 //! ([`FilesPage::connect_check`]), and it calls back with a place to show.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 use stave_app::check::Checked;
+use stave_app::format::Formatted;
 use stave_app::session::{LineNumber, SourceLocation};
 use stave_ide::{
     Analysis, Buffers, Document, FilePosition, Location, Overlay, SymbolId, TokenClass,
@@ -68,7 +68,7 @@ type LinkCallback = Rc<dyn Fn(CursorName)>;
 #[derive(Clone)]
 pub enum CursorName {
     /// A name that means this symbol.
-    Name(Arc<Analysis>, SymbolId),
+    Name(Rc<Analysis>, SymbolId),
     /// A name that means nothing (a typo): the link lets go.
     Unresolved,
     /// Anything else (a keyword, a field name, a number, a space, or text
@@ -76,7 +76,7 @@ pub enum CursorName {
     Other,
 }
 type GoCallback = Rc<dyn Fn(Option<SourceLocation>, SourceLocation)>;
-type SymbolCallback = Rc<dyn Fn(Arc<Analysis>, SymbolId)>;
+type SymbolCallback = Rc<dyn Fn(Rc<Analysis>, SymbolId)>;
 
 #[derive(Default)]
 struct Callbacks {
@@ -92,38 +92,100 @@ struct Callbacks {
 struct Tab {
     document: Document,
     buffer: gtk::TextBuffer,
-    lines: LineStarts,
+    /// Where each line starts, shared (not copied) with whatever reads it
+    /// on a pointer motion or a cursor move.
+    lines: Rc<LineStarts>,
+    /// Which edit of the page last changed this document's text (see
+    /// [`State::edits`]): the text is unchanged while it stays the same.
+    revision: u64,
     button: gtk::Button,
     label: gtk::Label,
     /// The dot for the file's worst problem.
     dot: gtk::Box,
 }
 
-/// A problem the last check found, where it is.
-#[derive(Debug, Clone)]
-struct Problem {
-    document: Document,
+/// Whether the analysis was built from a document's text, worked out once
+/// per analysis and edit rather than by comparing the texts on every
+/// cursor move.
+#[derive(Debug, Clone, Copy)]
+struct FreshMemo {
+    /// [`State::analysis_generation`] when it was worked out.
+    analysis: u64,
+    /// [`Tab::revision`] when it was worked out.
+    revision: u64,
+    /// The analysis's file for the text, when it read the same text.
+    file: Option<stave_lang::FileId>,
+}
+
+/// A problem in the open file, borrowed from the diagnostic it is part of.
+struct Problem<'a> {
     span: Span,
     severity: Severity,
-    message: String,
-    help: Option<String>,
+    message: &'a str,
+    help: Option<&'a str>,
+}
+
+impl<'a> Problem<'a> {
+    fn new(span: Span, diagnostic: &'a stave_lang::Diagnostic) -> Self {
+        Problem {
+            span,
+            severity: diagnostic.severity,
+            message: &diagnostic.message,
+            help: diagnostic.help.as_deref(),
+        }
+    }
+
+    /// Whether the text at an offset is part of it (an empty span covers
+    /// the character after it too, so it can be hovered).
+    fn covers(&self, offset: u32) -> bool {
+        self.span.start() <= offset
+            && (offset < self.span.end()
+                || (self.span.start() == self.span.end()
+                    && offset <= self.span.end().saturating_add(1)))
+    }
+}
+
+/// Every place the check's problems point at in one of its files: where
+/// each is, and the places that explain it (the kind's rule in a standard
+/// file).
+fn check_labels(checked: &Checked, file: stave_lang::FileId) -> impl Iterator<Item = Problem<'_>> {
+    checked
+        .opened
+        .diagnostics
+        .iter()
+        .flat_map(move |diagnostic| {
+            diagnostic
+                .labels
+                .iter()
+                .filter(move |label| label.file == file)
+                .map(move |label| Problem::new(label.span, diagnostic))
+        })
 }
 
 #[derive(Default)]
 struct State {
     folder: PathBuf,
     buffers: Buffers,
-    analysis: Option<Arc<Analysis>>,
+    analysis: Option<Rc<Analysis>>,
     generation: u64,
+    /// The generation of the analysis in `analysis`.
+    analysis_generation: u64,
+    /// Counts the page's text changes and opened tabs: each gives its tab
+    /// a new [`Tab::revision`].
+    edits: u64,
+    /// Whether the analysis read the text showing, for the last
+    /// (analysis, revision) asked about.
+    fresh_memo: Cell<Option<FreshMemo>>,
     analysing: bool,
     analyse_again: bool,
     tabs: Vec<Tab>,
     active: Option<usize>,
-    problems: Vec<Problem>,
-    /// The text the last check read for each document it has a problem
-    /// in: its problems are underlined only while the document still
-    /// reads so (their spans are offsets into that text).
-    checked_texts: std::collections::BTreeMap<Document, String>,
+    /// The last check, kept by the session too: shared, not copied.
+    checked: Option<Rc<Checked>>,
+    /// The check's file for each document it has a problem in. Its
+    /// problems are underlined only while the document still reads as the
+    /// check read it (their spans are offsets into that text).
+    checked_files: std::collections::BTreeMap<Document, stave_lang::FileId>,
     /// Changes made by the page itself: don't report them.
     quiet: bool,
     /// The exact place to put the cursor when the next place shown is
@@ -137,7 +199,7 @@ struct State {
     /// leaving it hides the card at once.
     hover_span: Option<Span>,
     /// The worst problem in each file, by its source path.
-    marks: stave_app::problems::Marks,
+    marks: Rc<stave_app::problems::Marks>,
     wish: Option<Wish>,
     /// The symbol whose uses the panel lists.
     listed: Option<SymbolId>,
@@ -331,7 +393,7 @@ impl FilesPage {
     }
 
     /// A lens's "show in 3D" was clicked.
-    pub fn connect_show_in_3d(&self, callback: impl Fn(Arc<Analysis>, SymbolId) + 'static) {
+    pub fn connect_show_in_3d(&self, callback: impl Fn(Rc<Analysis>, SymbolId) + 'static) {
         self.callbacks.borrow_mut().on_show_in_3d = Some(Rc::new(callback));
     }
 
@@ -340,7 +402,8 @@ impl FilesPage {
         self.callbacks.borrow_mut().on_open = Some(Rc::new(callback));
     }
 
-    /// Something to tell people (a failed save).
+    /// Something brief to tell people (a file changed on disk, a copy
+    /// saved). Failed saves get a dialog instead.
     pub fn connect_notice(&self, callback: impl Fn(String) + 'static) {
         self.callbacks.borrow_mut().on_notice = Some(Rc::new(callback));
     }
@@ -367,9 +430,11 @@ impl FilesPage {
             state.folder = folder.to_path_buf();
             state.buffers = Buffers::new();
             state.analysis = None;
+            state.fresh_memo.set(None);
             state.tabs.clear();
             state.active = None;
-            state.problems.clear();
+            state.checked = None;
+            state.checked_files.clear();
             state.listed = None;
         }
         while let Some(child) = self.tab_list.first_child() {
@@ -435,14 +500,17 @@ impl FilesPage {
         self.state.borrow().buffers.dirty().count()
     }
 
-    /// Saves every document with unsaved changes.
+    /// Saves every document with unsaved changes. `false` when one
+    /// couldn't be saved: a dialog has said which and what to do, and
+    /// whatever was waiting on the save (closing the window, opening
+    /// another folder) must not go on.
     pub fn save_all(self: &Rc<Self>) -> bool {
         let result = self.state.borrow_mut().buffers.save_all();
         self.refresh_markers();
         match result {
             Ok(()) => true,
             Err(error) => {
-                self.notice(error.to_string());
+                self.save_failed(&error);
                 false
             }
         }
@@ -460,10 +528,95 @@ impl FilesPage {
             return;
         }
         let result = self.state.borrow_mut().buffers.save(&document);
-        if let Err(error) = result {
-            self.notice(error.to_string());
-        }
         self.refresh_markers();
+        if let Err(error) = result {
+            self.save_failed(&error);
+        }
+    }
+
+    /// A save failed: says so in a dialog that stays until it is
+    /// answered, naming the file and what to do, with a way to try again
+    /// or to save a copy somewhere else. The changes stay in the editor.
+    fn save_failed(self: &Rc<Self>, error: &stave_ide::SaveError) {
+        let folder = self.state.borrow().folder.clone();
+        let failure = stave_app::save_failure::describe(error, &folder);
+        // The document whose save failed, to try again or copy.
+        let document = match error {
+            stave_ide::SaveError::Unwritable { path, .. } => Some(Document::File(path.clone())),
+            stave_ide::SaveError::ReadOnly(_) | stave_ide::SaveError::NotOpen(_) => None,
+        };
+        let dialog = adw::AlertDialog::builder()
+            .heading(&failure.heading)
+            .body(&failure.body)
+            .close_response("cancel")
+            .build();
+        dialog.add_response("cancel", "_Cancel");
+        if let Some(document) = document {
+            dialog.add_responses(&[("retry", "_Try Again"), ("copy", "Save a _Copy…")]);
+            dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("copy"));
+            let page = Rc::downgrade(self);
+            dialog.connect_response(None, move |_, response| {
+                let Some(page) = page.upgrade() else { return };
+                match response {
+                    "retry" => page.save_again(&document),
+                    "copy" => page.save_copy(&document),
+                    _ => {}
+                }
+            });
+        }
+        dialog.present(Some(&self.root));
+    }
+
+    /// Tries a failed save again; a second failure says so again.
+    fn save_again(self: &Rc<Self>, document: &Document) {
+        let result = self.state.borrow_mut().buffers.save(document);
+        self.refresh_markers();
+        match result {
+            Ok(()) => self.notice(format!("Saved {}", document.file_name())),
+            Err(error) => self.save_failed(&error),
+        }
+    }
+
+    /// Asks where, then writes a copy of a document's text there. The
+    /// document itself stays open, unsaved, where it was.
+    fn save_copy(self: &Rc<Self>, document: &Document) {
+        let Some(text) = self
+            .state
+            .borrow()
+            .buffers
+            .text(document)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save a Copy")
+            .initial_name(document.file_name())
+            .modal(true)
+            .build();
+        let parent = self.root.root().and_downcast::<gtk::Window>();
+        let page = Rc::downgrade(self);
+        dialog.save(parent.as_ref(), gio::Cancellable::NONE, move |result| {
+            let Ok(file) = result else { return };
+            let Some(path) = file.path() else { return };
+            let Some(page) = page.upgrade() else { return };
+            match stave_app::save_failure::save_copy(&path, &text) {
+                Ok(()) => page.notice(format!(
+                    "Saved a copy as {}; the open file still has unsaved changes",
+                    path.display()
+                )),
+                Err(failure) => {
+                    let dialog = adw::AlertDialog::builder()
+                        .heading(&failure.heading)
+                        .body(&failure.body)
+                        .close_response("close")
+                        .build();
+                    dialog.add_response("close", "_Close");
+                    dialog.present(Some(&page.root));
+                }
+            }
+        });
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
@@ -476,12 +629,8 @@ impl FilesPage {
             return;
         }
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
-        let mut sources = stave_lang::SourceMap::new();
-        let Ok(file) = sources.add(document.source_path(), text.as_str()) else {
-            return;
-        };
-        match stave_lang::format_file(file, &text) {
-            Ok(formatted) if formatted != text.as_str() => {
+        match stave_app::format::format_text(&document.source_path(), &text) {
+            Ok(Formatted::Changed(formatted)) => {
                 let cursor = buffer.iter_at_mark(&buffer.get_insert());
                 let (line, column) = (cursor.line(), cursor.line_offset());
                 buffer.begin_user_action();
@@ -496,7 +645,7 @@ impl FilesPage {
                     buffer.place_cursor(&iter);
                 }
             }
-            Ok(_) => self.notice("The file is already laid out".to_owned()),
+            Ok(Formatted::Unchanged) => self.notice("The file is already laid out".to_owned()),
             Err(error) => self.notice(error.to_string()),
         }
     }
@@ -504,7 +653,9 @@ impl FilesPage {
     /// Lets go of unsaved changes (the window is closing and people chose
     /// not to save them).
     pub fn forget_unsaved(&self) {
-        self.state.borrow_mut().buffers = Buffers::new();
+        let mut state = self.state.borrow_mut();
+        state.buffers = Buffers::new();
+        state.fresh_memo.set(None);
     }
 
     /// Ctrl+F in the text: opens its search bar. `false` when the
@@ -518,48 +669,38 @@ impl FilesPage {
     }
 
     /// The latest analysis of the project, for the finder.
-    pub fn analysis(&self) -> Option<Arc<Analysis>> {
+    pub fn analysis(&self) -> Option<Rc<Analysis>> {
         self.state.borrow().analysis.clone()
     }
 
     /// Takes the latest check's marks for the dots on the tabs.
-    pub fn show_marks(&self, marks: stave_app::problems::Marks) {
+    pub fn show_marks(&self, marks: Rc<stave_app::problems::Marks>) {
         self.state.borrow_mut().marks = marks;
         self.refresh_markers();
     }
 
     /// Takes the last check's problems for the underlines and the cards,
     /// and reloads documents changed on disk by something else.
-    pub fn show_result(self: &Rc<Self>, checked: Option<&Checked>) {
+    pub fn show_result(self: &Rc<Self>, checked: Option<Rc<Checked>>) {
         let reloaded = self.reload_from_disk();
         {
             let mut state = self.state.borrow_mut();
-            state.problems.clear();
-            state.checked_texts.clear();
-            if let Some(checked) = checked {
-                // Every place a problem points at: where it is, and the
-                // places that explain it (the kind's rule in a standard
-                // file), each underlined when its file is open.
+            state.checked_files.clear();
+            if let Some(checked) = &checked {
+                // Every file a problem points at, each underlined when it
+                // is open (see `check_labels`).
                 for diagnostic in &checked.opened.diagnostics {
                     for label in &diagnostic.labels {
-                        let Some(source) = checked.opened.sources.get(label.file) else {
-                            continue;
-                        };
-                        let document = Document::from_source_path(source.path());
-                        state
-                            .checked_texts
-                            .entry(document.clone())
-                            .or_insert_with(|| source.text().to_owned());
-                        state.problems.push(Problem {
-                            document,
-                            span: label.span,
-                            severity: diagnostic.severity,
-                            message: diagnostic.message.clone(),
-                            help: diagnostic.help.clone(),
-                        });
+                        if let Some(source) = checked.opened.sources.get(label.file) {
+                            state
+                                .checked_files
+                                .entry(Document::from_source_path(source.path()))
+                                .or_insert(label.file);
+                        }
                     }
                 }
             }
+            state.checked = checked;
         }
         if reloaded {
             self.analyse_now();
@@ -738,16 +879,24 @@ impl FilesPage {
         Some((tab.document.clone(), tab.buffer.clone()))
     }
 
-    fn active_document(&self) -> Option<Document> {
-        self.active_tab().map(|(document, _)| document)
+    /// The text buffer showing, for callers that don't need its document.
+    fn active_buffer(&self) -> Option<gtk::TextBuffer> {
+        let state = self.state.borrow();
+        Some(state.tabs.get(state.active?)?.buffer.clone())
     }
 
-    fn active_lines(&self) -> LineStarts {
+    fn active_document(&self) -> Option<Document> {
+        let state = self.state.borrow();
+        Some(state.tabs.get(state.active?)?.document.clone())
+    }
+
+    /// Where the lines of the text showing start: shared, not copied.
+    fn active_lines(&self) -> Rc<LineStarts> {
         let state = self.state.borrow();
         state
             .active
             .and_then(|i| state.tabs.get(i))
-            .map(|t| t.lines.clone())
+            .map(|t| Rc::clone(&t.lines))
             .unwrap_or_default()
     }
 
@@ -760,13 +909,30 @@ impl FilesPage {
     }
 
     /// The analysis, when it was built from the text showing, with the
-    /// file it calls that text.
-    fn fresh(&self) -> Option<(Arc<Analysis>, stave_lang::FileId)> {
+    /// file it calls that text. The texts are compared once per analysis
+    /// and edit, not on every cursor move.
+    fn fresh(&self) -> Option<(Rc<Analysis>, stave_lang::FileId)> {
         let state = self.state.borrow();
         let analysis = state.analysis.clone()?;
         let tab = state.tabs.get(state.active?)?;
-        let text = state.buffers.text(&tab.document)?;
-        let file = same_text(&analysis, &tab.document, text)?;
+        let memo = state.fresh_memo.get().filter(|memo| {
+            memo.analysis == state.analysis_generation && memo.revision == tab.revision
+        });
+        let file = match memo {
+            Some(memo) => memo.file,
+            None => {
+                let file = state
+                    .buffers
+                    .text(&tab.document)
+                    .and_then(|text| same_text(&analysis, &tab.document, text));
+                state.fresh_memo.set(Some(FreshMemo {
+                    analysis: state.analysis_generation,
+                    revision: tab.revision,
+                    file,
+                }));
+                file
+            }
+        }?;
         Some((analysis, file))
     }
 
@@ -843,9 +1009,12 @@ impl FilesPage {
             }
         });
         let mut state = self.state.borrow_mut();
+        state.edits = state.edits.wrapping_add(1);
+        let revision = state.edits;
         state.tabs.push(Tab {
             document: document.clone(),
-            lines: LineStarts::new(&text),
+            lines: Rc::new(LineStarts::new(&text)),
+            revision,
             buffer,
             button,
             label: tab_label,
@@ -897,9 +1066,10 @@ impl FilesPage {
             Some((wanted, offset)) if wanted == *location => offset,
             _ => {
                 // Already on that line: leave the cursor where it is.
-                let (current, _) = lines.position(self.cursor());
+                let cursor = self.editor.cursor(&lines);
+                let (current, _) = lines.position(cursor);
                 if current == line {
-                    self.cursor()
+                    cursor
                 } else {
                     lines.offset(line, 0)
                 }
@@ -917,8 +1087,11 @@ impl FilesPage {
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
         let (was_dirty, dirty) = {
             let mut state = self.state.borrow_mut();
+            state.edits = state.edits.wrapping_add(1);
+            let revision = state.edits;
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.document == *document) {
-                tab.lines = LineStarts::new(&text);
+                tab.lines = Rc::new(LineStarts::new(&text));
+                tab.revision = revision;
             }
             let was_dirty = state.buffers.is_dirty(document);
             if state.buffers.edit(document, &text).is_err() {
@@ -999,7 +1172,8 @@ impl FilesPage {
                     && folder == state.folder
                     && generation == state.generation
                 {
-                    state.analysis = Some(Arc::new(analysis));
+                    state.analysis = Some(Rc::new(analysis));
+                    state.analysis_generation = generation;
                 }
                 std::mem::take(&mut state.analyse_again)
             };
@@ -1056,39 +1230,35 @@ impl FilesPage {
                     .collect::<Vec<_>>()
             })
             .collect();
-        problems.extend(self.check_problems(&document).into_iter().map(|p| {
-            (
-                Run {
-                    start: p.span.start(),
-                    end: p.span.end(),
-                },
-                p.severity,
-            )
-        }));
+        if let Some((checked, file)) = self.checked_file(&document) {
+            problems.extend(check_labels(&checked, file).map(|p| {
+                (
+                    Run {
+                        start: p.span.start(),
+                        end: p.span.end(),
+                    },
+                    p.severity,
+                )
+            }));
+        }
         self.editor.underline(&buffer, &lines, &problems);
         let relink = fresh.is_some() && std::mem::take(&mut self.state.borrow_mut().relink);
         self.cursor_moved_now(relink);
     }
 
-    /// The last check's problems in a document, while it still reads as
-    /// the check read it (after an edit their spans would point at the
-    /// wrong text; the next check brings them back).
-    fn check_problems(&self, document: &Document) -> Vec<Problem> {
+    /// The last check and its file for a document with problems, while
+    /// the document still reads as the check read it (after an edit the
+    /// problems' spans would point at the wrong text; the next check
+    /// brings them back).
+    fn checked_file(&self, document: &Document) -> Option<(Rc<Checked>, stave_lang::FileId)> {
         let state = self.state.borrow();
-        let current = state.buffers.text(document);
-        let checked = state.checked_texts.get(document).map(String::as_str);
-        if current.is_none() || current != checked {
-            return Vec::new();
-        }
-        state
-            .problems
-            .iter()
-            .filter(|p| p.document == *document)
-            .cloned()
-            .collect()
+        let checked = state.checked.as_ref()?;
+        let file = *state.checked_files.get(document)?;
+        let read = checked.opened.sources.get(file)?.text();
+        (state.buffers.text(document)? == read).then(|| (Rc::clone(checked), file))
     }
 
-    fn show_lenses(self: &Rc<Self>, analysis: &Arc<Analysis>, file: stave_lang::FileId) {
+    fn show_lenses(self: &Rc<Self>, analysis: &Rc<Analysis>, file: stave_lang::FileId) {
         let lenses: Vec<LensLine> = analysis
             .lenses(file)
             .into_iter()
@@ -1113,14 +1283,14 @@ impl FilesPage {
     /// The breadcrumbs, the line, the marked uses, and (after a rest) the
     /// link to the 3D view follow the cursor.
     fn cursor_moved_now(self: &Rc<Self>, report: bool) {
-        let Some((_, buffer)) = self.active_tab() else {
+        let Some(buffer) = self.active_buffer() else {
             return;
         };
         let cursor_iter = buffer.iter_at_mark(&buffer.get_insert());
         self.line
             .set_label(&format!("Line {}", cursor_iter.line().saturating_add(1)));
         let lines = self.active_lines();
-        let offset = self.cursor();
+        let offset = self.editor.cursor(&lines);
         let Some((analysis, file)) = self.fresh() else {
             return;
         };
@@ -1210,11 +1380,8 @@ impl FilesPage {
         for (index, tab) in state.tabs.iter().enumerate() {
             let dirty = state.buffers.is_dirty(&tab.document);
             let name = tab.document.file_name();
-            tab.label.set_label(&if dirty {
-                format!("{name} •")
-            } else {
-                name.clone()
-            });
+            tab.label
+                .set_label(&if dirty { format!("{name} •") } else { name });
             if Some(index) == state.active {
                 tab.button.add_css_class("active");
             } else {
@@ -1285,7 +1452,8 @@ impl FilesPage {
             line,
         };
         let from = self.active_document().and_then(|document| {
-            let (line, _) = self.active_lines().position(self.cursor());
+            let lines = self.active_lines();
+            let (line, _) = lines.position(self.editor.cursor(&lines));
             Some(SourceLocation {
                 path: document.source_path(),
                 line: LineNumber::from_usize(usize::try_from(line).ok()?.saturating_add(1))?,
@@ -1411,7 +1579,7 @@ impl FilesPage {
 
     fn peek_widget(
         self: &Rc<Self>,
-        analysis: &Arc<Analysis>,
+        analysis: &Rc<Analysis>,
         symbol: &stave_ide::Symbol,
         location: &Location,
     ) -> gtk::Box {
@@ -1553,37 +1721,25 @@ impl FilesPage {
             .width_request(280)
             .build();
         let mut anchor: Option<Span> = None;
-        let fast: Vec<Problem> = analysis
+        let fast = analysis
             .diagnostics(file)
-            .filter_map(|d| {
-                Some(Problem {
-                    document: document.clone(),
-                    span: d.primary()?.span,
-                    severity: d.severity,
-                    message: d.message.clone(),
-                    help: d.help.clone(),
-                })
-            })
-            .collect();
-        for problem in fast.iter().chain(self.check_problems(&document).iter()) {
-            let covers = problem.span.start() <= offset
-                && (offset < problem.span.end()
-                    || (problem.span.start() == problem.span.end()
-                        && offset <= problem.span.end().saturating_add(1)));
-            if !covers {
-                continue;
-            }
+            .filter_map(|d| Some(Problem::new(d.primary()?.span, d)));
+        let checked = self.checked_file(&document);
+        let slow = checked
+            .iter()
+            .flat_map(|(checked, file)| check_labels(checked, *file));
+        for problem in fast.chain(slow).filter(|p| p.covers(offset)) {
             let (word, class) = match problem.severity {
                 Severity::Error => ("Error", "error"),
                 Severity::Warning => ("Warning", "warning"),
                 Severity::Note => ("Note", "note"),
             };
             card.append(&label(word, &["stave-hover-kind", class]));
-            let message = label(&problem.message, &["stave-hover-message"]);
+            let message = label(problem.message, &["stave-hover-message"]);
             message.set_wrap(true);
             message.set_max_width_chars(48);
             card.append(&message);
-            if let Some(help) = &problem.help {
+            if let Some(help) = problem.help {
                 let help = label(&format!("Help: {help}"), &["stave-hover-help"]);
                 help.set_wrap(true);
                 help.set_max_width_chars(48);
@@ -1680,7 +1836,7 @@ impl FilesPage {
         };
         if let Some(word) = &wish.cursor {
             let lines = self.active_lines();
-            let (line, _) = lines.position(self.cursor());
+            let (line, _) = lines.position(self.editor.cursor(&lines));
             let start = lines.offset(line, 0);
             if let Some(found) = analysis
                 .text(file)
@@ -1697,18 +1853,17 @@ impl FilesPage {
         let page = self.clone();
         // Once the text is laid out.
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
-            if let Some(text) = &wish.typing {
-                let (_, buffer) = page.active_tab().unzip();
-                if let Some(buffer) = buffer {
-                    // A key at a time, so undo groups it as it groups typing.
-                    let mut key = [0; 4];
-                    for character in text.chars() {
-                        buffer.insert_interactive_at_cursor(character.encode_utf8(&mut key), true);
-                    }
+            if let Some(text) = &wish.typing
+                && let Some(buffer) = page.active_buffer()
+            {
+                // A key at a time, so undo groups it as it groups typing.
+                let mut key = [0; 4];
+                for character in text.chars() {
+                    buffer.insert_interactive_at_cursor(character.encode_utf8(&mut key), true);
                 }
             }
             if wish.undo
-                && let Some((_, buffer)) = page.active_tab()
+                && let Some(buffer) = page.active_buffer()
             {
                 buffer.undo();
             }

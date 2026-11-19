@@ -1,0 +1,67 @@
+// expect: error[require] 'leaf_fits' fails: a hinge leaf wider than the edge it is housed in hangs off the wood
+stave 1
+
+// A 75mm butt hinge has leaves 22.5mm wide, but the back of the box is
+// only 12mm thick: the leaf housed in its top edge would hang 10.5mm into
+// the box, its mortise open to the inside and its screw holes over air.
+// std's butt_hinge says so with its leaf_fits rule.
+
+project "Hinge leaf off the edge" {
+  units: mm
+}
+
+stock pine_12 { species: pine, form: solid, thickness: 12mm, max_length: 2400mm }
+
+part base : pine_12 {
+  length: 300mm
+  width:  200mm
+  place {
+    ground
+  }
+}
+
+part back : pine_12 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+region outline = opening(
+  left:   base.left,
+  right:  base.right,
+  bottom: base.bottom,
+  top:    back.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Lid {
+  param outline  : Region
+  param hinge_on : Part
+
+  part panel : pine_12 {
+    length: outline.across
+    width:  outline.deep
+    place {
+      against(outline.top)
+      flush(outline.left)
+      flush(outline.front)
+    }
+  }
+
+  hardware hinges[left, right] : butt_hinge(panel, on: hinge_on, face: bottom, length: 75mm) {
+    place {
+      spaced(ends(inset: 30mm), from: panel.left, to: panel.right)
+    }
+  }
+}
+
+assembly lid : Lid {
+  outline:  outline
+  hinge_on: back
+}

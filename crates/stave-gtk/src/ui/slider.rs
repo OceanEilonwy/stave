@@ -9,7 +9,7 @@
 //! never does, so the window can move it without hearing back.
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -52,7 +52,31 @@ pub struct Slider {
     state: Rc<RefCell<State>>,
 }
 
+/// A slider held weakly, for its own widget's handlers: the widget keeps
+/// its controllers, so a strong hold there would keep it forever.
+struct WeakSlider {
+    root: glib::WeakRef<gtk::DrawingArea>,
+    state: Weak<RefCell<State>>,
+}
+
+impl WeakSlider {
+    /// The slider, while it is still there.
+    fn upgrade(&self) -> Option<Slider> {
+        Some(Slider {
+            root: self.root.upgrade()?,
+            state: self.state.upgrade()?,
+        })
+    }
+}
+
 impl Slider {
+    fn downgrade(&self) -> WeakSlider {
+        WeakSlider {
+            root: self.root.downgrade(),
+            state: Rc::downgrade(&self.state),
+        }
+    }
+
     /// A slider from 0 to 1, `height` pixels tall, with a handle
     /// `handle` pixels across and a ring `ring` pixels wide.
     pub fn new(label: &str, height: i32, handle: f64, ring: f64) -> Slider {
@@ -91,13 +115,19 @@ impl Slider {
 
         // Press or drag anywhere on it to set the value.
         let drag = gtk::GestureDrag::new();
-        let this = self.clone();
+        let this = self.downgrade();
         drag.connect_drag_begin(move |_, x, _| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             this.root.grab_focus();
             this.set_from_x(x);
         });
-        let this = self.clone();
+        let this = self.downgrade();
         drag.connect_drag_update(move |gesture, dx, _| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             if let Some((x, _)) = gesture.start_point() {
                 this.set_from_x(x + dx);
             }
@@ -106,8 +136,11 @@ impl Slider {
 
         // Arrow keys move it by a hundredth, Page keys by a tenth.
         let keys = gtk::EventControllerKey::new();
-        let this = self.clone();
+        let this = self.downgrade();
         keys.connect_key_pressed(move |_, key, _, _| {
+            let Some(this) = this.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             let (lower, upper, value) = {
                 let state = this.state.borrow();
                 (state.lower, state.upper, state.value)
@@ -334,5 +367,27 @@ fn draw(
         context.set_source_rgba(accent_red, accent_green, accent_blue, 0.5);
         context.set_line_width(2.0);
         let _ = context.stroke();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dropped_slider_is_freed() {
+        crate::ui::gtk_test::on_gtk_thread(slider_is_freed);
+    }
+
+    /// Its own widget's handlers hold it weakly, so letting go of the
+    /// slider frees the widget, its state and the callback.
+    fn slider_is_freed() {
+        let slider = Slider::new("Together … apart", 24, 12.0, 1.0);
+        slider.connect_changed(|_| {});
+        let root = slider.root.downgrade();
+        let state = Rc::downgrade(&slider.state);
+        drop(slider);
+        assert!(root.upgrade().is_none(), "the widget is freed");
+        assert!(state.upgrade().is_none(), "the state is freed");
     }
 }

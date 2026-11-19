@@ -79,6 +79,7 @@ mod names;
 mod sequence;
 mod tiers;
 mod walls;
+mod whole;
 
 pub use tiers::{BoxOverlap, Cancelled, Fast, check_fast, check_slow};
 
@@ -878,6 +879,7 @@ impl<'a> Checker<'a> {
                     merged: Vec::new(),
                     help: Some(help),
                     fixes: Vec::new(),
+                    cause: None,
                 },
                 Some(contact),
             ));

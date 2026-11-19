@@ -427,21 +427,27 @@ open in the editor the change stays unsaved there.
   comments, not `///`); the card shows raw param names.
 - **Only the four edge joints say where they apply.** `chigiri`,
   `splined_edge`, `tongue_and_groove` and `glued_edge` ask
-  `edge_to_edge` and refuse a corner in woodworking words. For the
-  other kinds the card checks a setting's options and greys the ones
-  that can't work, but the reason a beginner reads is whatever the
-  checker happens to hit first. As the Case's
-  corner joint (940 x 1780 x 580mm, `oak_19`) these are refused with
-  errors about order, types, fields or a failing require rather than
-  "this joint isn't for a corner": `rabbet` (error[order]); `half_lap`,
-  `lap_splice` and `kanawa_tsugi` (error[type-mismatch]: "'piece' needs a
-  part, found parts"); `socket` and `suitsuki_zan` (error[unknown-field]);
-  `round_tenon` and `mortise_tenon` (a `require` of the kind fails).
-  They need siblings of `edge_to_edge` that are not written yet (end to
-  end for `lap_splice` and `kanawa_tsugi`, an edge meeting a face for
-  `rabbet`, parts that cross for `half_lap`); `socket`, `round_tenon`
-  and `mortise_tenon` lack a rule about roundness or sizes, not about
-  how the parts meet.
+  `edge_to_edge` and refuse a corner in woodworking words. A kind that
+  can never be a component's joinery because it doesn't take what the
+  component hands it says so plainly, at the choice (grammar, "Kind
+  values"): as the Case's joinery, `half_lap`, `lap_splice` and
+  `kanawa_tsugi` ("Case hands its joint two parts as piece ..., and
+  half_lap takes one part there") and `suitsuki_zan` ("... has no
+  into"); as a Shelf's, Back's, Divider's or HangingRail's, every kind
+  without a `depth`; as an Apron's or Stretcher's, every kind without a
+  `length`. Those come last in a setting's options. For the other kinds
+  the reason a beginner reads is still whatever the checker happens to
+  hit first. As the Case's corner joint (940 x 1780 x 580mm, `oak_19`):
+  `rabbet` (error[order]: "case.top_joints: push(case.side[left], along:
+  thickness) is blocked by case.top"); `socket` (error[unknown-field]:
+  "a part has no field 'diameter'", the kind reading a round part's
+  diameter off a board); `round_tenon` and `mortise_tenon` (a `require`
+  of the kind fails). They need siblings of `edge_to_edge` that are not
+  written yet (an edge meeting a face for `rabbet`; end to end for
+  `lap_splice` and `kanawa_tsugi` and parts that cross for `half_lap`,
+  wherever a component hands them one part each); `socket`,
+  `round_tenon` and `mortise_tenon` lack a rule about roundness or
+  sizes, not about how the parts meet.
 - **Some kinds check clean as a case's corner joint though a woodworker
   wouldn't use them there**: `glued_face`, `groove` and `cope_and_stick`
   are listed as fitting the Case's joinery, so the card offers them
