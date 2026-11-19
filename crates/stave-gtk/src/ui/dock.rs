@@ -3,7 +3,9 @@
 //! at the bottom right, and one chip per moving assembly ("Move: door_l,
 //! door_r, drawer[top]") at the bottom left, which selects it so its
 //! slider shows. Chips of assemblies with problems are ringed in the
-//! problem's colour. They step aside while a problem is posed or a joint
+//! problem's colour and carry the Parts tree's mark (a round dot for an
+//! error, a square one for a warning), and say the problem to a screen
+//! reader. They step aside while a problem is posed or a joint
 //! is in focus.
 //!
 //! The chips are a relm4 component, [`DockComponent`]: whether the
@@ -16,6 +18,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::{fill_in, tr};
 use stave_app::problems::Mark;
 use stave_model::solved::AssemblyId;
 
@@ -83,21 +86,35 @@ pub enum DockOutput {
     Move(AssemblyId),
 }
 
-/// A chip: the assembly's name, ringed for its problem, marked current.
+/// A chip: the tree's mark and the assembly's name, ringed for its
+/// problem and saying it to a screen reader, marked current.
 fn chip(
     chip: &MoveChip,
     current: Option<AssemblyId>,
     input: &relm4::Sender<DockInput>,
 ) -> gtk::Button {
+    // The tree's mark beside the name: a round dot for an error, a
+    // square one for a warning, so the chip's ring is not the only sign.
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&super::style::mark_dot(chip.mark));
+    content.append(&gtk::Label::new(Some(&chip.name)));
     let button = gtk::Button::builder()
-        .label(&chip.name)
-        .tooltip_text(format!("Open or close {}", chip.name))
+        .child(&content)
+        .tooltip_text(fill_in(
+            &tr("Open or close {name}"),
+            &[("name", &chip.name)],
+        ))
         .css_classes(["stave-move"])
         .build();
-    match chip.mark {
-        Some(Mark::Error | Mark::Involved) => button.add_css_class("error"),
-        Some(Mark::Warning) => button.add_css_class("warning"),
-        None => {}
+    let problem = match chip.mark {
+        Some(Mark::Error) => Some(("error", tr("Has an error"))),
+        Some(Mark::Involved) => Some(("error", tr("Is part of an error"))),
+        Some(Mark::Warning) => Some(("warning", tr("Has a warning"))),
+        None => None,
+    };
+    if let Some((class, words)) = problem {
+        button.add_css_class(class);
+        button.update_property(&[gtk::accessible::Property::Description(&words)]);
     }
     if current == Some(chip.assembly) {
         button.add_css_class("current");
@@ -128,7 +145,7 @@ impl Component for DockComponent {
             set_visible: model.offered && model.has_moves,
 
             gtk::Label {
-                set_label: "Move:",
+                set_label: &tr("Move:"),
                 set_valign: gtk::Align::Start,
                 add_css_class: "stave-dock-label",
             },
@@ -419,5 +436,58 @@ mod tests {
             "each output after its update, the inner click after the rebuild"
         );
         assert_eq!(chips(&dock).len(), 1);
+    }
+
+    #[test]
+    fn a_chip_shows_its_problem_by_shape_too() {
+        on_gtk_thread(chips_show_marks);
+    }
+
+    /// Each chip with a problem carries the tree's mark (round for an
+    /// error, square for a warning) and says the problem to a screen
+    /// reader; a chip with none shows no mark.
+    fn chips_show_marks() {
+        let dock = dock();
+        dock.show_moves(
+            &[
+                (
+                    AssemblyId::from_usize(0),
+                    "door_l".to_owned(),
+                    Some(Mark::Error),
+                ),
+                (
+                    AssemblyId::from_usize(1),
+                    "door_r".to_owned(),
+                    Some(Mark::Warning),
+                ),
+                (AssemblyId::from_usize(2), "drawer".to_owned(), None),
+            ],
+            None,
+        );
+        settle();
+        let marks: Vec<_> = chips(&dock)
+            .iter()
+            .map(|chip| {
+                let dot = chip
+                    .first_child()
+                    .and_then(|content| content.first_child())
+                    .expect("the chip's mark");
+                assert!(dot.has_css_class("stave-mark"));
+                (
+                    dot.is_visible(),
+                    dot.has_css_class("error"),
+                    dot.has_css_class("warning"),
+                    gtk::test_accessible_has_property(chip, gtk::AccessibleProperty::Description),
+                )
+            })
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                (true, true, false, true),
+                (true, false, true, true),
+                (false, false, false, false),
+            ]
+        );
     }
 }

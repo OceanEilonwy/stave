@@ -157,8 +157,8 @@ impl Component for InspectorComponent {
             set_interpolate_size: true,
 
             add_named[Some(Page::Empty.name())] = &adw::StatusPage {
-                set_title: "Nothing selected",
-                set_description: Some("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written."),
+                set_title: &tr("Nothing selected"),
+                set_description: Some(&tr("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written.")),
                 add_css_class: "compact",
             },
             add_named[Some(Page::Details.name())] = &gtk::ScrolledWindow {
@@ -373,7 +373,7 @@ impl Drawer<'_> {
         let joined = connections_in(inspection, ConnectionSection::Joined);
         if !joined.is_empty() {
             let (section_box, body) =
-                sections::section("Joined to", &joined.len().to_string(), true);
+                sections::section(&tr("Joined to"), &joined.len().to_string(), true);
             for connection in joined {
                 body.append(&self.connection_row(connection));
             }
@@ -381,7 +381,7 @@ impl Drawer<'_> {
         }
         let cuts = connections_in(inspection, ConnectionSection::Cuts);
         if !cuts.is_empty() {
-            let (section_box, body) = sections::section("Cuts", &cuts.len().to_string(), true);
+            let (section_box, body) = sections::section(&tr("Cuts"), &cuts.len().to_string(), true);
             for connection in cuts {
                 body.append(&self.connection_row(connection));
             }
@@ -389,7 +389,8 @@ impl Drawer<'_> {
         }
         let how = connections_in(inspection, ConnectionSection::HowItWorks);
         if !how.is_empty() {
-            let (section_box, body) = sections::section(inspection.connections_title, "", true);
+            let (section_box, body) =
+                sections::section(&tr(inspection.connections_title), "", true);
             for connection in how {
                 body.append(&self.connection_row(connection));
             }
@@ -416,7 +417,7 @@ impl Drawer<'_> {
                 holder.append(
                     &gtk::Label::builder()
                         .label("●")
-                        .tooltip_text("This file has changes that aren't saved")
+                        .tooltip_text(tr("This file has changes that aren't saved"))
                         .css_classes(["stave-unsaved-dot"])
                         .build(),
                 );
@@ -432,7 +433,7 @@ impl Drawer<'_> {
             gtk::Button::builder()
                 .label(&source.label)
                 .css_classes(["flat", "stave-link", "stave-source-link"])
-                .tooltip_text("Show it in the editor")
+                .tooltip_text(tr("Show it in the editor"))
                 .build(),
         );
         let location = source.location.clone();
@@ -446,11 +447,11 @@ impl Drawer<'_> {
     /// as links.
     fn field_row(&self, field: &Field) -> gtk::Box {
         if field.links.is_empty() {
-            return sections::row(field.label, &sections::value(&field.value));
+            return sections::row(&tr(field.label), &sections::value(&field.value));
         }
         let links = self.links.links(&field.links);
         links.set_tooltip_text(Some(&field.value));
-        sections::row(field.label, &links)
+        sections::row(&tr(field.label), &links)
     }
 
     /// A joint, hardware or cut row: its name on the left (opening focus
@@ -478,9 +479,9 @@ impl Drawer<'_> {
                     .css_classes(["flat", "stave-row-lead-button"])
                     .tooltip_text(match connection.section {
                         ConnectionSection::Joined | ConnectionSection::HowItWorks => {
-                            "See how it goes together"
+                            tr("See how it goes together")
                         }
-                        ConnectionSection::Cuts => "See the hardware that makes it",
+                        ConnectionSection::Cuts => tr("See the hardware that makes it"),
                     })
                     .build();
                 self.on_click(&button, move || InspectorInput::FocusAsked(target));
@@ -513,7 +514,8 @@ impl Drawer<'_> {
     /// problem), or a count of none.
     fn checks_section(&self, inspection: &Inspection) -> gtk::Box {
         let count = inspection.checks.len();
-        let (section_box, body) = sections::section("Checks", &problems_note(count), count > 0);
+        let (section_box, body) =
+            sections::section(&tr("Checks"), &problems_note(count), count > 0);
         if count == 0 {
             section_box.add_css_class("empty");
             return section_box;
@@ -531,7 +533,7 @@ impl Drawer<'_> {
             let button = gtk::Button::builder()
                 .child(&content)
                 .css_classes(["flat", "stave-check-row", class])
-                .tooltip_text("Show this problem")
+                .tooltip_text(tr("Show this problem"))
                 .build();
             let problem = check.problem;
             self.on_click(&button, move || {
@@ -554,7 +556,7 @@ fn connections_in(inspection: &Inspection, section: ConnectionSection) -> Vec<&C
 
 /// "Defined in": the declaration, highlighted.
 fn source_section(source: &Snippet) -> gtk::Box {
-    let (section_box, section) = sections::section("Defined in", &source.label, true);
+    let (section_box, section) = sections::section(&tr("Defined in"), &source.label, true);
     // One label per line, each ending in "…" where it doesn't fit, so
     // no letter is ever cut in half.
     let code = gtk::Box::builder()
@@ -582,7 +584,7 @@ fn source_section(source: &Snippet) -> gtk::Box {
     }
     section.append(&code);
     section.append(&sections::words(
-        "The text is the source of truth. Positions are worked out from these relationships; none are stored.",
+        &tr("The text is the source of truth. Positions are worked out from these relationships; none are stored."),
         &["stave-footnote"],
     ));
     section_box
