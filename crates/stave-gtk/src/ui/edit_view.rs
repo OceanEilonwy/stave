@@ -22,8 +22,6 @@
 //! away.
 
 use stave_app::i18n::{fill_in, tr};
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -56,7 +54,6 @@ use super::edit_menu::{
     Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem,
 };
 use super::edit_panel::EditPanel;
-use super::edit_writer::BufferWriter;
 use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearchOutput};
 use super::update::editing::EditingInput;
 use super::{EDGE, Window, WindowInput};
@@ -102,9 +99,6 @@ pub(super) struct EditView {
     search_open: Option<String>,
     /// On the part's card: add onto the face that was clicked.
     face_button: gtk::Button,
-    /// Whether the editor shows, for the writer (a commit opens the file
-    /// in a tab when it does).
-    editor_open: Rc<Cell<bool>>,
     /// The grips of the selection, on the model.
     grips: grips::GripView,
     state: EditState,
@@ -203,7 +197,6 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            editor_open: Rc::new(Cell::new(false)),
             grips: grips::GripView::new(),
             state: EditState::default(),
             changes,
@@ -555,12 +548,13 @@ impl Window {
         self.connect_grips();
     }
 
-    /// Add writes through the editor's buffers.
+    /// Add writes through the editor's buffers as they are now, opening a
+    /// tab for what it writes while the editor shows. `Window::dispatch`
+    /// installs a fresh one before every Add.
     fn install_edit_writer(&mut self) {
-        self.session.set_edit_writer(Box::new(BufferWriter::new(
-            &self.widgets.files,
-            self.editing.editor_open.clone(),
-        )));
+        let editor_open = self.session.editor() == Editor::Open;
+        self.session
+            .set_edit_writer(Box::new(self.widgets.files.writer(editor_open)));
     }
 
     /// Another folder is open: a fresh session, nothing being edited.
@@ -893,9 +887,6 @@ impl Window {
             let name = name.or_else(|| self.change_selects_after());
             let state = &mut self.editing.state;
             state.select_after = name;
-            self.editing
-                .editor_open
-                .set(self.session.editor() == Editor::Open);
         }
         // The events draw the card from the try that follows, so it no
         // longer shows Checking.
