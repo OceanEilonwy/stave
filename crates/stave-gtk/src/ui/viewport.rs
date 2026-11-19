@@ -166,6 +166,33 @@ impl Viewport {
         self.queue_draw();
     }
 
+    /// Shows a frame of the live view straight from the GPU's mapped
+    /// buffer: GTK reads the padded rows where they are, so they are not
+    /// copied on the CPU, and the buffer goes back to the renderer when the
+    /// next frame replaces this one. False when its size can't be a
+    /// texture's.
+    pub fn show_live(&self, frame: crate::render::LiveFrame) -> bool {
+        let (Ok(width), Ok(height), Ok(stride)) = (
+            i32::try_from(frame.width()),
+            i32::try_from(frame.height()),
+            usize::try_from(frame.stride()),
+        ) else {
+            return false;
+        };
+        let bytes = glib::Bytes::from_owned(frame);
+        // Alpha is 1 everywhere, so the bytes are premultiplied already:
+        // the format GTK draws without converting.
+        let texture = gtk::gdk::MemoryTexture::new(
+            width,
+            height,
+            gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
+            &bytes,
+            stride,
+        );
+        self.show_frame(texture.upcast());
+        true
+    }
+
     /// Calls `handler` with the size in device pixels whenever it may have
     /// changed (on every allocation and change of scale).
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {

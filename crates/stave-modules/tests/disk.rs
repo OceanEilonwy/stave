@@ -169,11 +169,24 @@ fn std_folders_are_the_embedded_modules() {
 #[test]
 fn broken_corpus_loads() {
     // Each design is one module, plus the three standard ones, plus the
-    // local folders it imports (the designs for module errors have some).
+    // local folders it imports (the designs for module errors have some),
+    // plus the standard modules outside the prelude it imports (a design
+    // that chooses a kind for std:casework's Case).
     for folder in stave_folders(&repository().join("tests/broken")) {
         let set = ModuleSet::load(&folder).unwrap();
         let local = stave_folders(&folder).len();
-        assert_eq!(set.modules.len(), 4 + local, "{}", folder.display());
+        let source = std::fs::read_to_string(folder.join("project.stave")).unwrap();
+        let standard = STD_MODULES
+            .iter()
+            .filter(|module| !PRELUDE_MODULES.contains(module))
+            .filter(|module| source.contains(&format!("import \"std:{module}\"")))
+            .count();
+        assert_eq!(
+            set.modules.len(),
+            4 + local + standard,
+            "{}",
+            folder.display()
+        );
     }
 }
 

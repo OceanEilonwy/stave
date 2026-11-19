@@ -685,6 +685,7 @@ impl Window {
         // The project as the editor shows it, unsaved changes included.
         let overlay = self.widgets.files.overlay_for_check();
         let window = Rc::downgrade(self);
+        crate::render::profile::edit_started();
         glib::spawn_future_local(async move {
             let outcome = gio::spawn_blocking(move || check::run_with(&folder, &overlay))
                 .await
@@ -692,6 +693,7 @@ impl Window {
                     message: "checking the design crashed".to_owned(),
                     elapsed: Duration::ZERO,
                 });
+            crate::render::profile::edit_checked();
             let Some(window) = window.upgrade() else {
                 return;
             };
@@ -2081,7 +2083,10 @@ impl Window {
                         .map(|((_, graph), posed)| (graph.clone(), posed.clone()))
                 };
                 let Some((graph, posed)) = view else {
-                    window.toast("Couldn't save the view: there is nothing to save yet");
+                    window.show_export_failure(&stave_app::save_failure::SaveFailure {
+                        heading: "Couldn't Export the View".to_owned(),
+                        body: "There is nothing in the 3D view to save yet. Wait for the design to show, then try again.".to_owned(),
+                    });
                     return;
                 };
                 let exporting = adw::Toast::builder()
@@ -2093,22 +2098,48 @@ impl Window {
                 glib::spawn_future_local(async move {
                     let target = path.clone();
                     let saved = gio::spawn_blocking(move || {
-                        stave_app::export_view::save_glb(&graph, &posed, &target)
-                            .map_err(|error| error.to_string())
+                        stave_app::export_view::save_glb(&graph, &posed, &target).map_err(
+                            |error| stave_app::save_failure::describe_export(&error, &target),
+                        )
                     })
                     .await
-                    .unwrap_or_else(|_| Err("exporting crashed".to_owned()));
+                    .unwrap_or_else(|_| {
+                        Err(stave_app::save_failure::SaveFailure {
+                            heading: "Couldn't Export the View".to_owned(),
+                            body: "Stave stopped part way through making the file. Nothing was saved; try again.".to_owned(),
+                        })
+                    });
                     exporting.dismiss();
                     let Some(window) = window.upgrade() else {
                         return;
                     };
-                    window.toast(&match saved {
-                        Ok(()) => format!("Saved {}", path.display()),
-                        Err(error) => format!("Couldn't save the view: {error}"),
-                    });
+                    match saved {
+                        Ok(()) => window.toast(&format!("Saved the view as {}", path.display())),
+                        Err(failure) => window.show_export_failure(&failure),
+                    }
                 });
             },
         );
+    }
+
+    /// Shows a failed export of the view. It stays until it is answered,
+    /// and offers another place to save to.
+    fn show_export_failure(self: &Rc<Self>, failure: &stave_app::save_failure::SaveFailure) {
+        let alert = adw::AlertDialog::builder()
+            .heading(&failure.heading)
+            .body(&failure.body)
+            .close_response("cancel")
+            .default_response("again")
+            .build();
+        alert.add_responses(&[("cancel", "_Cancel"), ("again", "Save _Elsewhere…")]);
+        alert.set_response_appearance("again", adw::ResponseAppearance::Suggested);
+        let again = Rc::clone(self);
+        alert.connect_response(None, move |_, response| {
+            if response == "again" {
+                again.export_view();
+            }
+        });
+        alert.present(Some(&self.widgets.window));
     }
 
     /// A short message at the bottom of the window.
@@ -2350,7 +2381,7 @@ impl Window {
                 }
                 Some(looks)
             };
-            renderer.render(&Frame {
+            renderer.submit(&Frame {
                 scene: graph,
                 posed,
                 orbit,
@@ -2372,34 +2403,65 @@ impl Window {
                 height,
             })
         };
-        match rendered {
-            Ok(image) => {
-                if let Some(texture) = texture(image) {
-                    self.widgets.viewport.show_frame(texture);
-                }
-                self.show_pins();
-                self.place_ghost_verdict();
-                self.place_grips();
-                // Save the window once a frame of the view's real size is up.
-                let settled = {
-                    let state = self.state.borrow();
-                    state.size.0 > 1 && state.size == self.widgets.viewport.device_size()
-                };
-                if settled {
-                    // An edit script runs first; the frame it asks for is
-                    // the one saved.
-                    if self.run_edit_script() {
-                        self.request_render();
-                    } else {
-                        self.capture_if_asked();
-                    }
-                }
-            }
+        let ticket = match rendered {
+            Ok(ticket) => ticket,
             Err(error) => {
                 let message = format!("{error:#}");
                 self.show_status("Can't draw in 3D", &message);
+                return;
             }
-        }
+        };
+        // The frame is shown once the GPU has it ready, on a later tick:
+        // the main loop never waits for the GPU. A newer frame ready first
+        // is shown instead, and this ticket is done with.
+        let window = self.clone();
+        self.widgets.viewport.add_tick_callback(move |_, _| {
+            let (ready, settled) = {
+                let mut state = window.state.borrow_mut();
+                let Ok(renderer) = &mut state.renderer else {
+                    return glib::ControlFlow::Break;
+                };
+                (renderer.take_ready(), renderer.settled(ticket))
+            };
+            match ready {
+                Ok(Some(frame)) => {
+                    let shown = crate::render::profile::time("gtk texture", || {
+                        window.widgets.viewport.show_live(frame)
+                    });
+                    if shown {
+                        crate::render::profile::frame_shown();
+                    }
+                    window.show_pins();
+                    window.place_ghost_verdict();
+                    window.place_grips();
+                    // Save the window once a frame of the view's real size
+                    // is up.
+                    let settled = {
+                        let state = window.state.borrow();
+                        state.size.0 > 1 && state.size == window.widgets.viewport.device_size()
+                    };
+                    if settled {
+                        // An edit script runs first; the frame it asks for
+                        // is the one saved.
+                        if window.run_edit_script() {
+                            window.request_render();
+                        } else {
+                            window.capture_if_asked();
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    window.show_status("Can't draw in 3D", &message);
+                }
+            }
+            if settled {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     /// Where a set of nodes shows in the 3D view, in logical pixels from
@@ -3583,8 +3645,15 @@ fn texture(image: crate::render::Image) -> Option<gdk::Texture> {
     let width = i32::try_from(image.width).ok()?;
     let height = i32::try_from(image.height).ok()?;
     let bytes = glib::Bytes::from_owned(image.rgba);
-    let texture =
-        gdk::MemoryTexture::new(width, height, gdk::MemoryFormat::R8g8b8a8, &bytes, stride);
+    // Alpha is 1 everywhere, so the bytes are premultiplied already: the
+    // format GTK draws without converting.
+    let texture = gdk::MemoryTexture::new(
+        width,
+        height,
+        gdk::MemoryFormat::R8g8b8a8Premultiplied,
+        &bytes,
+        stride,
+    );
     Some(texture.upcast())
 }
 

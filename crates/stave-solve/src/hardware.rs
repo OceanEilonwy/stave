@@ -25,7 +25,7 @@ use crate::joints::Binding;
 use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
 use crate::rules::{AdjustSetting, Call, Offset};
-use crate::{Memo, Reported, Solved, Solver};
+use crate::{Failure, Fault, Memo, Solved, Solver};
 
 /// What a role of a placed piece of hardware is bound to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,13 +77,13 @@ impl Frame {
         let origin = self.origin_on(direction.axis());
         Ok(if direction.is_positive() {
             (
-                origin.checked_add(low).ok_or(Reported)?,
-                origin.checked_add(high).ok_or(Reported)?,
+                origin.checked_add(low).ok_or(Fault::Overflow)?,
+                origin.checked_add(high).ok_or(Fault::Overflow)?,
             )
         } else {
             (
-                origin.checked_sub(high).ok_or(Reported)?,
-                origin.checked_sub(low).ok_or(Reported)?,
+                origin.checked_sub(high).ok_or(Fault::Overflow)?,
+                origin.checked_sub(low).ok_or(Fault::Overflow)?,
             )
         })
     }
@@ -93,11 +93,11 @@ impl Frame {
         let direction = self.direction(axis);
         let offset = world
             .checked_sub(self.origin_on(direction.axis()))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         if direction.is_positive() {
             Ok(offset)
         } else {
-            offset.checked_neg().ok_or(Reported)
+            offset.checked_neg().ok_or(Failure::Fault(Fault::Overflow))
         }
     }
 
@@ -121,7 +121,7 @@ impl Frame {
             } else {
                 origin.checked_sub(value)
             }
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
             if let Some(slot) = out.get_mut(world_index(direction.axis())) {
                 *slot = world;
             }
@@ -219,8 +219,8 @@ impl Outline {
     fn moved(&self, across: ExactLength, depth: ExactLength) -> Solved<Outline> {
         let shift = |[a, d]: [ExactLength; 2]| -> Solved<[ExactLength; 2]> {
             Ok([
-                a.checked_add(across).ok_or(Reported)?,
-                d.checked_add(depth).ok_or(Reported)?,
+                a.checked_add(across).ok_or(Fault::Overflow)?,
+                d.checked_add(depth).ok_or(Fault::Overflow)?,
             ])
         };
         Ok(match self {
@@ -386,20 +386,36 @@ struct Plane {
 impl Solver<'_> {
     /// Places a piece of hardware (once).
     pub(crate) fn place_hardware(&mut self, hardware: HardwareId) -> Solved<Placed> {
+        let (file, span, name) = match self.model.hardware.get(hardware.index()) {
+            Some(inst) => {
+                let (file, span) = self.place_of(DefId::Hardware(inst.def));
+                (file, span, inst.name.clone())
+            }
+            None => (self.project_file, self.project_span, String::new()),
+        };
         match self.hardware.get(hardware.index()) {
             Some(Memo::Done(placed)) => return Ok(placed.clone()),
-            Some(Memo::Failed | Memo::Busy) => return Err(Reported),
-            _ => {}
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => {
+                return Err(self
+                    .error(
+                        Code::PlacementCycle,
+                        format!("{name} is placed against itself"),
+                        file,
+                        span,
+                        "place it against something placed earlier, such as the part it mounts on",
+                    )
+                    .into());
+            }
+            Some(Memo::Todo) | None => {}
         }
         if let Some(slot) = self.hardware.get_mut(hardware.index()) {
             *slot = Memo::Busy;
         }
         let result = self.compute_hardware(hardware);
+        let (memo, result) = self.remember(result, file, span);
         if let Some(slot) = self.hardware.get_mut(hardware.index()) {
-            *slot = match &result {
-                Ok(placed) => Memo::Done(placed.clone()),
-                Err(_) => Memo::Failed,
-            };
+            *slot = memo;
         }
         result
     }
@@ -408,13 +424,13 @@ impl Solver<'_> {
         if let Some(inst) = self.model.hardware.get(hardware.index())
             && self.poisoned(DefId::Hardware(inst.def))
         {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a piece of hardware").into());
         };
         let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a piece of hardware's declaration").into());
         };
         let array = def.array.as_ref().map(|_| {
             (
@@ -437,24 +453,26 @@ impl Solver<'_> {
             DefId::Hardware(inst.def),
         )?;
         let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind_name = binding.name.clone();
         if !kind.base.is_mounted_hardware() {
-            return Err(self.error(
-                Code::TypeMismatch,
-                format!(
-                    "'{name}' needs a slide, hinge or pull kind, found a {} kind",
-                    kind.base.word()
-                ),
-                env.file,
-                def.call.kind.span,
-                "mount hardware with a kind of base slide, hinge or pull",
-            ));
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!(
+                        "'{name}' needs a slide, hinge or pull kind, found a {} kind",
+                        kind.base.word()
+                    ),
+                    env.file,
+                    def.call.kind.span,
+                    "mount hardware with a kind of base slide, hinge or pull",
+                )
+                .into());
         }
         // Reported where the kind is resolved.
         let Some(hardware_kind) = kind.hardware.clone() else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let roles = self.hardware_roles(&kind, &binding)?;
         let entries = self.hardware_entries(&binding, &kind, env.file, span)?;
@@ -538,7 +556,7 @@ impl Solver<'_> {
     ) -> Solved<Vec<(BodyId, FrameShapes)>> {
         let mut frame_bodies: Vec<(BodyId, FrameShapes)> = Vec::new();
         for (index, body) in kind.bodies.iter().enumerate() {
-            let id = BodyId::new(index).ok_or(Reported)?;
+            let id = BodyId::new(index).ok_or(Fault::Internal("a member's number"))?;
             let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
             let boxes = self.in_kind(binding, kind, |solver, kind_env| {
                 shapes
@@ -557,10 +575,10 @@ impl Solver<'_> {
     /// help search places it again with other settings.
     pub(crate) fn rest(&mut self, hardware: HardwareId, binding: &Binding) -> Solved<Rest> {
         let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a piece of hardware").into());
         };
         let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a piece of hardware's declaration").into());
         };
         let array = def.array.as_ref().map(|_| {
             (
@@ -576,14 +594,14 @@ impl Solver<'_> {
         };
         let name = inst.name.clone();
         let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind_name = binding.name.clone();
         let Some(hardware_kind) = kind.hardware.clone() else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let piece_box = self.drawn_box(piece)?;
         let piece_orientation = self.part_orientation(piece)?;
@@ -608,7 +626,7 @@ impl Solver<'_> {
         };
         let along_axis = length_direction.axis();
         let Some(across_axis) = along_axis.third(face_axis) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the axes a piece of hardware is laid out on").into());
         };
         let mut frame = Frame {
             origin: [ExactLength::ZERO; 3],
@@ -633,8 +651,8 @@ impl Solver<'_> {
                 AxisRule::Term(MountTerm::Centre { part }) => {
                     let part = self.role_part(binding, *part)?;
                     let part_box = self.drawn_box(part)?;
-                    let centre =
-                        midpoint(part_box.min(world), part_box.max(world)).ok_or(Reported)?;
+                    let centre = midpoint(part_box.min(world), part_box.max(world))
+                        .ok_or(Fault::Overflow)?;
                     if let Some(slot) = frame.origin.get_mut(world_index(world)) {
                         *slot = centre;
                     }
@@ -673,7 +691,7 @@ impl Solver<'_> {
             }
         });
         let terms = self.sort_terms(&def.place, &env, &name, label.as_deref(), true)?;
-        let piece_role = RoleIndex::new(0).ok_or(Reported)?;
+        let piece_role = RoleIndex::new(0).ok_or(Fault::Internal("a role's number"))?;
         // `place { }` positions the box around the members on the piece.
         let carried: Option<FrameBox> = frame_bodies
             .iter()
@@ -689,7 +707,9 @@ impl Solver<'_> {
             let frame_axis = [FrameAxis::Along, FrameAxis::Across, FrameAxis::Depth]
                 .into_iter()
                 .find(|axis| frame.direction(*axis).axis() == world)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Internal(
+                    "the axes a piece of hardware is laid out on",
+                ))?;
             match (term, open.contains(&frame_axis)) {
                 (Some(term), false) => {
                     let why = if world == face_axis {
@@ -697,7 +717,7 @@ impl Solver<'_> {
                     } else {
                         "the hardware's kind already fixes it"
                     };
-                    self.report(
+                    let reported = self.report(
                         Diagnostic::error(
                             Code::AxisSetTwice,
                             format!("{name}: position along '{}' is set twice", world.word()),
@@ -705,7 +725,7 @@ impl Solver<'_> {
                         )
                         .with_help(format!("remove this term: {why}")),
                     );
-                    return Err(Reported);
+                    return Err(reported.into());
                 }
                 (Some(term), true) => {
                     let Some(carried) = carried else {
@@ -718,10 +738,10 @@ impl Solver<'_> {
                             env.file,
                             term.span,
                             "give the kind a member with: piece and a shape, or set the axis in its mount",
-                        ));
+                        ).into());
                     };
                     let (low, high) = carried.range(frame_axis);
-                    let size = high.checked_sub(low).ok_or(Reported)?;
+                    let size = high.checked_sub(low).ok_or(Fault::Overflow)?;
                     let count = self.hardware_siblings(hardware);
                     let siblings = Siblings {
                         index: inst.ctx.element.unwrap_or(0),
@@ -734,14 +754,14 @@ impl Solver<'_> {
                     } else {
                         placed_low.checked_add(high)
                     }
-                    .ok_or(Reported)?;
+                    .ok_or(Fault::Overflow)?;
                     if let Some(slot) = frame.origin.get_mut(world_index(world)) {
                         *slot = origin;
                     }
                 }
                 (None, true) => {
                     let place_span = def.place_span.unwrap_or(def.decl.span);
-                    return Err(self.axis_not_set(&name, world, env.file, place_span));
+                    return Err(self.axis_not_set(&name, world, env.file, place_span).into());
                 }
                 (None, false) => {}
             }
@@ -751,7 +771,7 @@ impl Solver<'_> {
         let mut bodies = Vec::new();
         for (id, boxes) in &frame_bodies {
             let Some(body) = kind.bodies.get(id.index()) else {
-                return Err(Reported);
+                return Err(Fault::Internal("a member of a kind").into());
             };
             let mut offsets: Vec<(FrameAxis, ExactLength)> = Vec::new();
             for placement in &body.mount {
@@ -771,7 +791,7 @@ impl Solver<'_> {
                         .filter(|(on, _)| *on == axis)
                         .map(|(_, by)| *by)
                         .try_fold(ExactLength::ZERO, |sum, by| sum.checked_add(by))
-                        .ok_or(Reported)
+                        .ok_or(Fault::Overflow)
                 };
                 let outline = match outline {
                     Some(outline) => Some(
@@ -785,8 +805,8 @@ impl Solver<'_> {
                     moved = moved.with(
                         *axis,
                         (
-                            low.checked_add(*offset).ok_or(Reported)?,
-                            high.checked_add(*offset).ok_or(Reported)?,
+                            low.checked_add(*offset).ok_or(Fault::Overflow)?,
+                            high.checked_add(*offset).ok_or(Fault::Overflow)?,
                         ),
                     );
                 }
@@ -825,18 +845,23 @@ impl Solver<'_> {
     ) -> Solved<Vec<PlacedMember>> {
         let mut members = Vec::with_capacity(bodies.len());
         for placed in bodies {
-            let body = kind.bodies.get(placed.body.index()).ok_or(Reported)?;
+            let body = kind
+                .bodies
+                .get(placed.body.index())
+                .ok_or(Fault::Internal("a member of a kind"))?;
             let Some(carrier) = member_carrier(kind, roles, placed.body) else {
-                return Err(self.error(
-                    Code::MissingField,
-                    format!(
-                        "member '{}' has no 'with:' and nothing in its kind moves it",
-                        body.name.as_str()
-                    ),
-                    kind.decl.file,
-                    body.span,
-                    "give it with: a role or another member, or pin it in the kind's mechanism",
-                ));
+                return Err(self
+                    .error(
+                        Code::MissingField,
+                        format!(
+                            "member '{}' has no 'with:' and nothing in its kind moves it",
+                            body.name.as_str()
+                        ),
+                        kind.decl.file,
+                        body.span,
+                        "give it with: a role or another member, or pin it in the kind's mechanism",
+                    )
+                    .into());
             };
             let shapes = placed
                 .shapes
@@ -866,7 +891,7 @@ impl Solver<'_> {
             let mut out = Vec::new();
             for used in &uses {
                 let Value::Kind(fastener) = solver.eval(&used.fastener, kind_env)? else {
-                    return Err(Reported);
+                    return Err(Fault::Earlier.into());
                 };
                 let count = match &used.count {
                     Some(count) => solver.eval_count(count, kind_env)?,
@@ -874,8 +899,10 @@ impl Solver<'_> {
                 };
                 let mut size = |name: &str| -> Solved<Length> {
                     match solver.kind_entry(&fastener, name, file, used.span)? {
-                        Value::Length(length) => length.to_nearest_length().ok_or(Reported),
-                        _ => Err(Reported),
+                        Value::Length(length) => length
+                            .to_nearest_length()
+                            .ok_or(Failure::Fault(Fault::Overflow)),
+                        _ => Err(Fault::Earlier.into()),
                     }
                 };
                 let diameter = size("diameter")?;
@@ -909,7 +936,7 @@ impl Solver<'_> {
             .map(|(role, value)| match value {
                 Value::Part(part) => Ok((role.name.clone(), RoleBound::Part(*part))),
                 Value::Region(region) => Ok((role.name.clone(), RoleBound::Region(*region))),
-                _ => Err(Reported),
+                _ => Err(Fault::Earlier.into()),
             })
             .collect()
     }
@@ -934,7 +961,7 @@ impl Solver<'_> {
             entries.insert(param.decl.name.clone(), value);
         }
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let kind_eval = Env {
             ctx,
@@ -953,7 +980,7 @@ impl Solver<'_> {
     fn role_part(&mut self, binding: &Binding, role: RoleIndex) -> Solved<PartId> {
         match binding.roles.get(role.index()) {
             Some(Value::Part(part)) => Ok(*part),
-            _ => Err(Reported),
+            _ => Err(Fault::Earlier.into()),
         }
     }
 
@@ -962,7 +989,7 @@ impl Solver<'_> {
         match binding.roles.get(role.index()).cloned() {
             Some(Value::Part(part)) => self.drawn_box(part),
             Some(Value::Region(region)) => Ok(self.region_value(region)?.bounds),
-            _ => Err(Reported),
+            _ => Err(Fault::Earlier.into()),
         }
     }
 
@@ -985,16 +1012,18 @@ impl Solver<'_> {
         let low = part_box
             .min(axis)
             .checked_sub(region_box.min(axis))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         let high = region_box
             .max(axis)
             .checked_sub(part_box.max(axis))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         let positive = abs(high)? < abs(low)?;
         Face::ALL
             .into_iter()
             .find(|face| face.axis() == axis && face.is_positive() == positive)
-            .ok_or(Reported)
+            .ok_or(Failure::Fault(Fault::Internal(
+                "the face a piece of hardware sits on",
+            )))
     }
 
     /// The plane a `from(anchor, inset: d)` names across a world axis, and
@@ -1022,7 +1051,7 @@ impl Solver<'_> {
         } else {
             plane.at.checked_sub(inset)
         }
-        .ok_or(Reported)?;
+        .ok_or(Fault::Overflow)?;
         Ok((plane, at))
     }
 
@@ -1045,10 +1074,14 @@ impl Solver<'_> {
             },
             inward_positive: !high,
         };
-        let middle = |b: &ExactBox| midpoint(b.min(axis), b.max(axis)).ok_or(Reported);
+        let middle = |b: &ExactBox| midpoint(b.min(axis), b.max(axis)).ok_or(Fault::Overflow);
         let nearer_high = |part_box: &ExactBox, target: ExactLength| -> Solved<bool> {
-            let low = abs(target.checked_sub(part_box.min(axis)).ok_or(Reported)?)?;
-            let high = abs(target.checked_sub(part_box.max(axis)).ok_or(Reported)?)?;
+            let low = abs(target
+                .checked_sub(part_box.min(axis))
+                .ok_or(Fault::Overflow)?)?;
+            let high = abs(target
+                .checked_sub(part_box.max(axis))
+                .ok_or(Fault::Overflow)?)?;
             Ok(high < low)
         };
         let across_the_face = |solver: &mut Self, what: &str| -> Solved<()> {
@@ -1059,7 +1092,7 @@ impl Solver<'_> {
                     file,
                     span,
                     "an edge or an end of the mount face places across or along it, not into it",
-                ));
+                ).into());
             }
             Ok(())
         };
@@ -1102,21 +1135,23 @@ impl Solver<'_> {
                         file,
                         span,
                         "name a direction the part's length runs in, or turn the part so its length runs that way",
-                    ));
+                    ).into());
                 }
                 if toward.axis() != axis {
-                    return Err(self.error(
-                        Code::TypeMismatch,
-                        format!(
-                            "an end toward {} places along '{}', not along '{}'",
-                            toward.word(),
-                            toward.axis().word(),
-                            axis.word()
-                        ),
-                        file,
-                        span,
-                        "measure along from an end, and across from an edge",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            format!(
+                                "an end toward {} places along '{}', not along '{}'",
+                                toward.word(),
+                                toward.axis().word(),
+                                axis.word()
+                            ),
+                            file,
+                            span,
+                            "measure along from an end, and across from an edge",
+                        )
+                        .into());
                 }
                 let part_box = self.drawn_box(part_id)?;
                 Ok(side(&part_box, toward.is_positive()))
@@ -1161,8 +1196,8 @@ impl Solver<'_> {
                 let range = self.frame_range(extent, env)?;
                 let around = |value: ExactLength| -> Solved<(ExactLength, ExactLength)> {
                     Ok((
-                        value.checked_sub(radius).ok_or(Reported)?,
-                        value.checked_add(radius).ok_or(Reported)?,
+                        value.checked_sub(radius).ok_or(Fault::Overflow)?,
+                        value.checked_add(radius).ok_or(Fault::Overflow)?,
                     ))
                 };
                 let frame_box = FrameBox {
@@ -1194,7 +1229,7 @@ impl Solver<'_> {
                     let values: Vec<ExactLength> = points_out.iter().map(pick).collect();
                     match (values.iter().min(), values.iter().max()) {
                         (Some(low), Some(high)) => Ok((*low, *high)),
-                        _ => Err(Reported),
+                        _ => Err(Fault::Earlier),
                     }
                 };
                 let outline =
@@ -1222,8 +1257,8 @@ impl Solver<'_> {
                 let grow = self.kind_length(thickness, env)?;
                 let span = |a: ExactLength, b: ExactLength| -> Solved<(ExactLength, ExactLength)> {
                     Ok((
-                        a.min(b).checked_sub(grow).ok_or(Reported)?,
-                        a.max(b).checked_add(grow).ok_or(Reported)?,
+                        a.min(b).checked_sub(grow).ok_or(Fault::Overflow)?,
+                        a.max(b).checked_add(grow).ok_or(Fault::Overflow)?,
                     ))
                 };
                 Ok((
@@ -1260,7 +1295,7 @@ impl Solver<'_> {
             let RoleBound::Part(part) = bound else {
                 continue;
             };
-            let role = RoleIndex::new(index).ok_or(Reported)?;
+            let role = RoleIndex::new(index).ok_or(Fault::Internal("a role's number"))?;
             let carried: Vec<&PlacedBody> = bodies
                 .iter()
                 .filter(|placed| {
@@ -1294,7 +1329,7 @@ impl Solver<'_> {
                         "its {} must touch {part_name}: place {piece_name} so its mount face lies where the kind needs it, or name the face that does with face: ...",
                         members.join(" and ")
                     ),
-                ));
+                ).into());
             }
         }
         Ok(())
@@ -1318,10 +1353,10 @@ impl Solver<'_> {
         let mut out = Vec::new();
         for cut in cuts {
             let Some((_, RoleBound::Part(part))) = roles.get(cut.part.index()).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             let Some(placed) = bodies.iter().find(|placed| placed.body == cut.body) else {
-                return Err(Reported);
+                return Err(Fault::Internal("a member a cut is made by").into());
             };
             let operations = cut.operations.clone();
             let kinds = self.in_kind(binding, kind, |solver, kind_env| {
@@ -1347,7 +1382,7 @@ impl Solver<'_> {
                         format!(
                             "its {member} must touch or enter {part_name} for the kind's cut there"
                         ),
-                    ));
+                    ).into());
                 };
                 for kind_of_cut in &kinds {
                     out.push(HardwareCut {
@@ -1379,7 +1414,7 @@ impl Solver<'_> {
             kind.params.len(),
         );
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let env = Env {
             ctx,
@@ -1393,14 +1428,14 @@ impl Solver<'_> {
     pub(crate) fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
         match self.eval(expr, env)? {
             Value::Length(length) => Ok(length),
-            _ => Err(Reported),
+            _ => Err(Fault::Earlier.into()),
         }
     }
 
     pub(crate) fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
         match self.eval(expr, env)? {
             Value::Angle(angle) => Ok(angle),
-            _ => Err(Reported),
+            _ => Err(Fault::Earlier.into()),
         }
     }
 
@@ -1421,7 +1456,7 @@ impl Solver<'_> {
         let (low, high) = match range {
             RangeDef::Centred(size) => {
                 let half = half(self.kind_length(size, env)?)?;
-                (half.checked_neg().ok_or(Reported)?, half)
+                (half.checked_neg().ok_or(Fault::Overflow)?, half)
             }
             RangeDef::Between { low, high } => {
                 (self.kind_length(low, env)?, self.kind_length(high, env)?)
@@ -1438,7 +1473,7 @@ impl Solver<'_> {
             depth,
         } = shape
         else {
-            return Err(Reported);
+            return Err(Fault::Internal("a box shape").into());
         };
         Ok(FrameBox {
             along: self.frame_range(along, env)?,
@@ -1581,12 +1616,14 @@ pub(crate) fn crossing_face(shape: &ExactBox, part: &ExactBox, frame: &Frame) ->
 }
 
 fn half(value: ExactLength) -> Solved<ExactLength> {
-    value.checked_div(Rational::from(2i64)).ok_or(Reported)
+    value
+        .checked_div(Rational::from(2i64))
+        .ok_or(Failure::Fault(Fault::Overflow))
 }
 
 fn abs(value: ExactLength) -> Solved<ExactLength> {
     if value < ExactLength::ZERO {
-        value.checked_neg().ok_or(Reported)
+        value.checked_neg().ok_or(Failure::Fault(Fault::Overflow))
     } else {
         Ok(value)
     }

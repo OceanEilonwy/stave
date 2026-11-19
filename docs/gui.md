@@ -716,8 +716,10 @@ the session's.
   "Standard · joinery"), the best matches first. Each shows its name, its
   description and its fit as the card words it (a spinner and "Checking
   whether it fits…", a tick and "Fits", "Checked once you choose …", or
-  greyed with a "can't" sign, "Can't be used here" and the checker's
-  first error). ↑ and ↓ move, Enter chooses (a refused option can't be
+  greyed with a "can't" sign, "Can't be used here" and the reason
+  `OptionRefusal::line` gives: the checker's first error, or for a kind
+  that can never be used for this component its plain sentence, "Shelf
+  gives its joint a depth, and glued_edge has no depth"). ↑ and ↓ move, Enter chooses (a refused option can't be
   chosen: the foot says so instead), Escape or × closes, and the keyboard
   goes back to the card.
 - **The options, checked.** Once a candidate is chosen, and after each
@@ -1156,7 +1158,8 @@ a shelf's joinery's short list: dado, the default, which fits; screw,
 which the case uses, refused here and greyed; "Search all 18…") and
 `edit_option_search.png` and `edit_option_search_dark.png`
 (`option_search.edit`: the shelf's joinery searched for "edge": groove
-fits, the other four greyed with the checker's reason).
+fits, the other four greyed with their reason; glued_edge's is "Shelf
+gives its joint a depth, and glued_edge has no depth").
 
 ### The acceptance run
 
