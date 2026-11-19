@@ -201,7 +201,8 @@ pub struct JoinedTo {
 /// An assembly's (or the carcass's) heading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
-    /// `CARCASS`, `DOOR_L`.
+    /// "Carcass", or the assembly's name as written: `door_l`. The window
+    /// may draw it in capitals; the words stay as written.
     pub title: String,
     /// The grey note: "110° on side_l", or "12 parts · 6 joints".
     pub note: String,
@@ -819,7 +820,7 @@ fn carcass_heading(design: &SolvedDesign) -> Heading {
         .filter(|j| j.assembly.is_none())
         .count();
     Heading {
-        title: tr("CARCASS"),
+        title: tr("Carcass"),
         note: counts_note(parts, joints),
         motion: None,
         motion_words: None,
@@ -895,7 +896,7 @@ fn assembly_heading(design: &SolvedDesign, id: AssemblyId) -> Heading {
         _ => (counts_note(parts, joints), None),
     };
     Heading {
-        title: name.to_uppercase(),
+        title: name,
         note,
         motion: extent.map(|extent| match extent {
             DriveValue::Turn(_) => Motion::Turn,
@@ -1206,7 +1207,7 @@ mod tests {
         let design = cabinet();
         let joints = PartJoints::new(design);
         let carcass = joints.heading(None).expect("the carcass heading");
-        assert_eq!(carcass.title, "CARCASS");
+        assert_eq!(carcass.title, "Carcass");
         assert_eq!(carcass.note, "12 parts · 6 joints");
         assert_eq!(carcass.motion, None);
         let door = design
@@ -1215,7 +1216,7 @@ mod tests {
             .find(|a| a.name == "door_l")
             .expect("door_l");
         let heading = joints.heading(Some(door.id)).expect("door_l's heading");
-        assert_eq!(heading.title, "DOOR_L");
+        assert_eq!(heading.title, "door_l");
         assert_eq!(heading.note, "110° on side_l");
         assert_eq!(heading.motion, Some(Motion::Turn));
         assert_eq!(
@@ -1250,8 +1251,8 @@ mod tests {
         assert_eq!(
             said,
             vec![
-                "CARCASS [base; side_l, side_r; top; back; divider; shelf; rod; foot[4]]",
-                "DOOR_L [stile[hinge, latch]; rail[bottom, top]; panel]",
+                "Carcass [base; side_l, side_r; top; back; divider; shelf; rod; foot[4]]",
+                "door_l [stile[hinge, latch]; rail[bottom, top]; panel]",
                 "folded drawer[bottom, top] -",
                 "folded door_r mirror of door_l",
             ]
