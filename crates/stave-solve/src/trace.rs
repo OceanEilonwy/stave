@@ -196,8 +196,8 @@ fn trace_require(
         .ok_or(TraceError::UnknownItem)?;
     let def = model
         .defs
-        .require(inst.def)
-        .ok_or(TraceError::UnknownItem)?;
+        .sound_require(inst.def)
+        .map_err(|_| TraceError::UnknownItem)?;
     let env = Env {
         ctx: inst.ctx,
         file: def.decl.file,
@@ -773,7 +773,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
     fn share(&mut self, region: RegionId) -> Step<(RExpr, Env<'static>)> {
         let model = self.solver.model;
         let inst = model.regions.get(region.index()).ok_or(Halt)?;
-        let def = model.defs.region(inst.def).ok_or(Halt)?;
+        let def = model.defs.sound_region(inst.def).map_err(|_| Halt)?;
         let RExprKind::Builtin(call) = &def.value.kind else {
             return Err(Halt);
         };
@@ -839,7 +839,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let mut current = param;
         for _ in 0..PEEL_LIMIT {
             let inst = model.params.get(current.index())?;
-            let def = model.defs.param(inst.def)?;
+            let def = model.defs.sound_param(inst.def).ok()?;
             match inst.source {
                 ParamSource::SameAs(other) => current = other,
                 ParamSource::Default => {
@@ -859,7 +859,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     index,
                     ctx,
                 } => {
-                    let assembly_def = model.defs.assembly(assembly)?;
+                    let assembly_def = model.defs.sound_assembly(assembly).ok()?;
                     let AssemblyKind::Instance { args, .. } = &assembly_def.kind else {
                         return None;
                     };
@@ -893,7 +893,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             let next = match model.item(*def, current.1.ctx) {
                 Some(ItemSlot::Param(param)) => self.param_source(*param),
                 Some(ItemSlot::Let(binding)) => model.lets.get(binding.index()).and_then(|inst| {
-                    let def = model.defs.let_def(inst.def)?;
+                    let def = model.defs.sound_let_def(inst.def).ok()?;
                     Some((
                         def.value.clone(),
                         Env {
@@ -935,7 +935,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         if let ParamSource::SameAs(other) = inst.source {
             return self.param(other);
         }
-        let def = model.defs.param(inst.def).ok_or(Halt)?;
+        let def = model.defs.sound_param(inst.def).map_err(|_| Halt)?;
         let levels = self.levels(inst.instance);
         let freedom = freedom_of(def);
         if freedom == Freedom::Locked {
@@ -962,7 +962,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             return Ok(Affine::other("a value that is not a number"));
         };
         let inst = model.params.get(param.index()).ok_or(Halt)?;
-        let def = model.defs.param(inst.def).ok_or(Halt)?;
+        let def = model.defs.sound_param(inst.def).map_err(|_| Halt)?;
         let env = Env {
             ctx: Ctx {
                 instance: inst.instance,
@@ -1011,7 +1011,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let model = self.solver.model;
         let result = (|| {
             let inst = model.lets.get(binding.index()).ok_or(Halt)?;
-            let def = model.defs.let_def(inst.def).ok_or(Halt)?;
+            let def = model.defs.sound_let_def(inst.def).map_err(|_| Halt)?;
             let env = Env {
                 ctx: inst.ctx,
                 file: def.decl.file,
@@ -1454,7 +1454,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         if inst.mirror_of.is_some() {
             return self.assembly_mirror_plane(inst.assembly.ok_or(Halt)?);
         }
-        let def = model.defs.part(inst.def).ok_or(Halt)?;
+        let def = model.defs.sound_part(inst.def).map_err(|_| Halt)?;
         let PartKind::Mirror(mirror) = &def.kind else {
             return Err(Halt);
         };
@@ -1469,7 +1469,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let mut current = assembly;
         for _ in 0..=model.assemblies.len() {
             let inst = model.assemblies.get(current.index()).ok_or(Halt)?;
-            let def = model.defs.assembly(inst.def).ok_or(Halt)?;
+            let def = model.defs.sound_assembly(inst.def).map_err(|_| Halt)?;
             if let (Some(_), AssemblyKind::Mirror(mirror)) = (inst.mirror_of, &def.kind) {
                 let env = Env {
                     ctx: inst.ctx,
@@ -1895,7 +1895,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
     fn compute_region(&mut self, region: RegionId) -> Step<Bounds> {
         let model = self.solver.model;
         let inst = model.regions.get(region.index()).ok_or(Halt)?;
-        let def = model.defs.region(inst.def).ok_or(Halt)?;
+        let def = model.defs.sound_region(inst.def).map_err(|_| Halt)?;
         if let Some(source) = inst.mirror_of {
             let assembly = inst.assembly.ok_or(Halt)?;
             let (axis, _) = self

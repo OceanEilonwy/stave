@@ -505,10 +505,9 @@ impl<'m> Solver<'m> {
             DefId::Recipe(id) => return Ok(Value::Recipe(id)),
             DefId::Kind(id) => {
                 let is_tool = self
-                    .model
-                    .defs
-                    .kind(id)
-                    .is_some_and(|k| k.base() == stave_lang::ast::BaseKind::Tool);
+                    .sound(self.model.defs.sound_kind(id), "a kind's declaration")?
+                    .base()
+                    == stave_lang::ast::BaseKind::Tool;
                 return Ok(if is_tool {
                     Value::Tool(id)
                 } else {
@@ -547,9 +546,10 @@ impl<'m> Solver<'m> {
                 let Some(inst) = self.model.requires.get(require.index()) else {
                     return Err(Fault::Internal("a require").into());
                 };
-                let Some(def) = self.model.defs.require(inst.def) else {
-                    return Err(Fault::Internal("a require's declaration").into());
-                };
+                let def = self.sound(
+                    self.model.defs.sound_require(inst.def),
+                    "a require's declaration",
+                )?;
                 let env = Env {
                     ctx: inst.ctx,
                     file: def.decl.file,
@@ -581,12 +581,10 @@ impl<'m> Solver<'m> {
         let Some(inst) = self.model.params.get(param.index()) else {
             return Err(Fault::Internal("a param").into());
         };
-        let Some(def) = self.model.defs.param(inst.def) else {
-            return Err(Fault::Internal("a param's declaration").into());
-        };
-        if self.poisoned(DefId::Param(inst.def)) {
-            return Err(self.skip().into());
-        }
+        let def = self.sound(
+            self.model.defs.sound_param(inst.def),
+            "a param's declaration",
+        )?;
         if let Some(slot) = self.params.get_mut(param.index()) {
             *slot = Memo::Busy;
         }
@@ -640,28 +638,30 @@ impl<'m> Solver<'m> {
                 index,
                 ctx,
             } => {
+                // No `?`: the memo below must be settled.
                 let arg = self
-                    .model
-                    .defs
-                    .assembly(assembly)
+                    .sound(
+                        self.model.defs.sound_assembly(assembly),
+                        "a component's declaration",
+                    )
                     .and_then(|a| match &a.kind {
                         stave_model::defs::AssemblyKind::Instance { args, .. } => {
-                            args.get(index).map(|(_, e)| e)
+                            args.get(index).map(|(_, e)| e).ok_or(Fault::Earlier.into())
                         }
-                        _ => None,
+                        _ => Err(Fault::Earlier.into()),
                     });
                 let file = self
                     .model
                     .defs
-                    .assembly(assembly)
-                    .map(|a| a.decl.file)
+                    .decl(DefId::Assembly(assembly))
+                    .map(|decl| decl.file)
                     .unwrap_or(def.decl.file);
                 let array = self.model.defs.array(DefId::Assembly(assembly)).map(|_| {
                     let len = self.array_len(DefId::Assembly(assembly), ctx);
                     (DefId::Assembly(assembly), len)
                 });
                 match arg {
-                    Some(arg) => {
+                    Ok(arg) => {
                         let env = Env {
                             ctx,
                             file,
@@ -694,7 +694,7 @@ impl<'m> Solver<'m> {
                             .map(|()| value)
                         })
                     }
-                    None => Err(Fault::Earlier.into()),
+                    Err(failure) => Err(failure),
                 }
             }
         };
@@ -787,12 +787,10 @@ impl<'m> Solver<'m> {
         let Some(inst) = self.model.lets.get(binding.index()) else {
             return Err(Fault::Internal("a let").into());
         };
-        let Some(def) = self.model.defs.let_def(inst.def) else {
-            return Err(Fault::Internal("a let's declaration").into());
-        };
-        if self.poisoned(DefId::Let(inst.def)) {
-            return Err(self.skip().into());
-        }
+        let def = self.sound(
+            self.model.defs.sound_let_def(inst.def),
+            "a let's declaration",
+        )?;
         if let Some(slot) = self.lets.get_mut(binding.index()) {
             *slot = Memo::Busy;
         }
@@ -824,15 +822,13 @@ impl<'m> Solver<'m> {
         file: FileId,
         span: Span,
     ) -> Solved<Value> {
-        if self.poisoned(DefId::Kind(kind_env.kind)) {
-            return Err(self.skip().into());
-        }
+        let kind = self.sound(
+            self.model.defs.sound_kind(kind_env.kind),
+            "a kind's declaration",
+        )?;
         if let Some(value) = kind_env.params().get(index) {
             return Ok(value);
         }
-        let Some(kind) = self.model.defs.kind(kind_env.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
         let Some(param) = kind.params.get(index) else {
             return Err(Fault::Internal("a kind's setting").into());
         };
@@ -898,12 +894,10 @@ impl<'m> Solver<'m> {
         file: FileId,
         span: Span,
     ) -> Solved<Option<Value>> {
-        if self.poisoned(DefId::Kind(kind_env.kind)) {
-            return Err(self.skip().into());
-        }
-        let Some(kind) = self.model.defs.kind(kind_env.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(kind_env.kind),
+            "a kind's declaration",
+        )?;
         match kind.base_entry(field) {
             None => Ok(None),
             Some(BaseEntry::Param(index)) => self.kind_param(kind_env, index, file, span).map(Some),
@@ -918,9 +912,10 @@ impl<'m> Solver<'m> {
 
     /// A field of the kind of `kind_env`, worked out in the kind's file.
     fn kind_field(&mut self, kind_env: &KindEnv<'_>, value: &RExpr) -> Solved<Value> {
-        let Some(kind) = self.model.defs.kind(kind_env.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(kind_env.kind),
+            "a kind's declaration",
+        )?;
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_env.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -941,15 +936,13 @@ impl<'m> Solver<'m> {
         file: FileId,
         span: Span,
     ) -> Solved<Value> {
-        if self.poisoned(DefId::Kind(kind_value.kind)) {
-            return Err(self.skip().into());
-        }
+        let kind = self.sound(
+            self.model.defs.sound_kind(kind_value.kind),
+            "a kind's declaration",
+        )?;
         if let Some(value) = kind_value.setting(name) {
             return Ok(value.clone());
         }
-        let Some(kind) = self.model.defs.kind(kind_value.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
         let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
         if let Some(index) = kind.param(name) {
             return self.kind_param(&kind_env, index, file, span);
@@ -1268,12 +1261,7 @@ impl<'m> Solver<'m> {
         field: StockField,
         span: Span,
     ) -> Solved<Value> {
-        if self.poisoned(DefId::Stock(stock)) {
-            return Err(self.skip().into());
-        }
-        let Some(def) = self.model.defs.stock(stock) else {
-            return Err(Fault::Internal("a stock's declaration").into());
-        };
+        let def = self.sound(self.model.defs.sound_stock(stock), "a stock's declaration")?;
         // The expression, and the field it is written in (a dowel's
         // thickness and width are its diameter).
         let (expr, written) = match field {
@@ -1400,9 +1388,7 @@ impl<'m> Solver<'m> {
         stock: StockId,
         field: StockField,
     ) -> Solved<Option<ExactLength>> {
-        let Some(def) = self.model.defs.stock(stock) else {
-            return Err(Fault::Internal("a stock's declaration").into());
-        };
+        let def = self.sound(self.model.defs.sound_stock(stock), "a stock's declaration")?;
         let present = match field {
             StockField::Thickness => def.section.is_some(),
             StockField::Diameter => matches!(def.section, Some(StockSectionDef::Dowel { .. })),
@@ -1436,12 +1422,10 @@ impl<'m> Solver<'m> {
         &mut self,
         profile: stave_model::ids::ProfileId,
     ) -> Solved<Vec<(ExactLength, ExactLength)>> {
-        if self.poisoned(DefId::Profile(profile)) {
-            return Err(self.skip().into());
-        }
-        let Some(def) = self.model.defs.profile(profile) else {
-            return Err(Fault::Internal("a profile's declaration").into());
-        };
+        let def = self.sound(
+            self.model.defs.sound_profile(profile),
+            "a profile's declaration",
+        )?;
         let Some(ctx) = self.module_ctx(DefId::Profile(profile)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -2167,8 +2151,8 @@ impl<'m> Solver<'m> {
             RExprKind::Symbol(Symbol::Def(DefId::Param(param))) => self
                 .model
                 .defs
-                .param(*param)
-                .is_some_and(|def| def.domain.is_some()),
+                .sound_param(*param)
+                .is_ok_and(|def| def.domain.is_some()),
             RExprKind::Unary { operand, .. } => self.reads_ranged_param(operand),
             RExprKind::Binary { lhs, rhs, .. } => {
                 self.reads_ranged_param(lhs) || self.reads_ranged_param(rhs)
@@ -2283,18 +2267,8 @@ impl<'m> Solver<'m> {
                 .get(region.index())
                 .map(|r| r.name.clone())
                 .unwrap_or_default(),
-            Value::Stock(stock) => self
-                .model
-                .defs
-                .stock(*stock)
-                .map(|s| s.decl.name.clone())
-                .unwrap_or_default(),
-            Value::Kind(kind) => self
-                .model
-                .defs
-                .kind(kind.kind)
-                .map(|k| k.decl.name.clone())
-                .unwrap_or_default(),
+            Value::Stock(stock) => self.def_name(DefId::Stock(*stock)),
+            Value::Kind(kind) => self.def_name(DefId::Kind(kind.kind)),
             other => other.to_string(),
         }
     }

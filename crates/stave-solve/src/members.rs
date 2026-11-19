@@ -235,7 +235,8 @@ impl Solver<'_> {
             RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
                 .model
                 .defs
-                .kind(*kind)
+                .sound_kind(*kind)
+                .ok()
                 .and_then(|k| k.params.get(*index))
                 .map(|param| param.decl.name.clone()),
             _ => None,

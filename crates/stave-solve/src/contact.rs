@@ -404,7 +404,7 @@ impl Solver<'_> {
         let comparison = self.failing_comparison(condition, env).unwrap_or(condition);
         let mut indexes = Vec::new();
         params_read(comparison, &mut indexes);
-        let names: Vec<&str> = match self.model.defs.kind(kind.kind) {
+        let names: Vec<&str> = match self.model.defs.sound_kind(kind.kind).ok() {
             Some(def) => indexes
                 .iter()
                 .filter_map(|index| def.params.get(*index))

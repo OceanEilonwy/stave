@@ -598,7 +598,7 @@ impl Solver<'_> {
 
     /// Where a kind's mechanism is written.
     fn mechanism_place(&self, kind: KindId) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
-        let def: &KindDef = self.model.defs.kind(kind)?;
+        let def: &KindDef = self.model.defs.sound_kind(kind).ok()?;
         Some((def.decl.file, def.mechanism()?.span))
     }
 
@@ -608,7 +608,7 @@ impl Solver<'_> {
         hardware: HardwareId,
     ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
         let inst = self.model.hardware.get(hardware.index())?;
-        let def = self.model.defs.hardware_def(inst.def)?;
+        let def = self.model.defs.sound_hardware_def(inst.def).ok()?;
         Some((def.decl.file, def.call.span))
     }
 
@@ -980,12 +980,7 @@ impl Solver<'_> {
         ) {
             Ok(mechanism) => Ok(Some(AssemblyMechanism { mechanism, bodies })),
             Err(error) => {
-                let kind_name = self
-                    .model
-                    .defs
-                    .kind(base.kind)
-                    .map(|k| k.decl.name.clone())
-                    .unwrap_or_default();
+                let kind_name = self.def_name(stave_model::defs::DefId::Kind(base.kind));
                 Err(self.counted_error(base.kind, &kind_name, &error))
             }
         }
