@@ -346,9 +346,10 @@ behind their shims.
   application can't end between the signal and its first window.
 - **The project windows**: the shell's model holds an
   `OpenWindow { id, folder, controller: Controller<Window> }` for each.
-  The window's root sends `WindowOutput::Closed` from its `destroy`
-  signal and the shell drops that controller, which shuts the window's
-  component down. Nothing else holds a window, so a closed window is
+  When GTK takes a window out of the application (GtkApplication's
+  `window-removed`, which closing emits; a window's `destroy` comes only
+  once its last reference goes, so it can't be the signal) the shell
+  drops that controller, which shuts the window's component down. Nothing else holds a window, so a closed window is
   freed and an open one can't be (the 960f06d and 0603e47 classes).
   The root is made by `Window::init_root`; the shell takes it from
   `Window::builder().widget()`, fills it with the fallible
@@ -363,7 +364,7 @@ behind their shims.
   shell brings the window showing it forward, or answers
   `ProjectInput::OpenHere`), `Opened` (recent projects; which window
   shows what), `Closing { size, maximized, hold }` (remembered; the hold
-  keeps the application up until it is saved) and `Closed`. The shell
+  keeps the application up until it is saved). The shell
   talks to a window with `WindowInput`s (`ProjectInput::Notice`,
   `ProjectInput::Welcome`).
 
