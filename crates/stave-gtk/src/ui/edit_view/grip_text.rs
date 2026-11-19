@@ -1,6 +1,7 @@
 //! The words and numbers the grips show (`docs/gui.md`, "Grips"): what a
 //! grip's label says, how a value typed becomes an amount of the grip's
-//! kind, and what the panel beside a drag says. Nothing here decides what
+//! kind, what the size section of the Edit panel says while a drag is
+//! open, and the one-line readout at the top of the view. Nothing here decides what
 //! a grip may do: that is the session's (`stave_app::gripping`), and
 //! where a drag snaps, how far it goes and whether a typed value is
 //! written as typed are `stave_app::grip_values`; these only put the
@@ -25,8 +26,8 @@ use stave_model::trace::{Amount, Freedom};
 pub(super) enum GripLook {
     /// A plain number: a round handle, a solid dimension line, its value.
     Moves,
-    /// A size worked out from params: a square handle, a dashed line,
-    /// "follows overall_width".
+    /// A size worked out from params: a round handle as any other, a
+    /// dashed line; "follows overall_width" is said in words.
     Follows,
     /// Nothing it follows can change, or it can't move either way: a
     /// padlock and no handle, a dotted line.
@@ -335,6 +336,24 @@ pub(super) fn change_words(path: &str, from: Amount, to: Amount) -> String {
     format!("{path} {} to {}", amount_words(from), amount_words(to))
 }
 
+/// From one value to another, short: "940 → 1040 mm" (the unit once
+/// when both are millimetres), "20 → -30 mm", "3 → 4".
+pub(super) fn arrow_words(from: Amount, to: Amount) -> String {
+    let (from, to) = (amount_words(from), amount_words(to));
+    match (from.strip_suffix("mm"), to.strip_suffix("mm")) {
+        (Some(from), Some(to)) => format!("{from} → {to} mm"),
+        _ => format!("{from} → {to}"),
+    }
+}
+
+/// What a grip is beside its value, from its label's words: "follows
+/// overall_width", "solved", "stuck: …"; `None` for a plain size.
+pub(super) fn about_words(listed: &ListedGrip) -> Option<String> {
+    label_words(listed)
+        .split_once(" · ")
+        .map(|(_, about)| about.to_owned())
+}
+
 /// The verdict's look in the panel: its class and its words, which never
 /// rest on colour alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +371,10 @@ pub(super) struct PanelChoice {
     pub(super) param: ParamId,
     /// "overall_width 500mm to 520mm", or why it can't.
     pub(super) words: String,
+    /// The size's name: "overall_width".
+    pub(super) name: String,
+    /// What it would go from and to ("500 → 520 mm"), or why it can't.
+    pub(super) value: String,
     /// `false` when it can't give the size.
     pub(super) possible: bool,
     /// `true` when it is the one picked.
@@ -365,6 +388,8 @@ pub(super) struct PanelModel {
     pub(super) title: String,
     /// The value it is moved to and what it was: "420mm (was 400mm)".
     pub(super) value: Option<String>,
+    /// What the grip is beside its value: "follows overall_width".
+    pub(super) about: Option<String>,
     /// What changes and to what: "Changes overall_width 900mm to 950mm".
     pub(super) changes: Vec<String>,
     /// Several plain params could give the size: pick one.
@@ -375,6 +400,9 @@ pub(super) struct PanelModel {
     pub(super) verdict: PanelVerdict,
     /// Apply writes it: only when it fits.
     pub(super) can_apply: bool,
+    /// The one line at the top of the view: the size's name and from what
+    /// to what ("overall_width", "940 → 1040 mm").
+    pub(super) readout: Option<(String, String)>,
 }
 
 /// The verdict for where a change stands.
@@ -476,12 +504,16 @@ fn drag_panel(
             Ok(change) => PanelChoice {
                 param: choice.param,
                 words: change_words(&choice.name, change.from, change.to),
+                name: choice.name.clone(),
+                value: arrow_words(change.from, change.to),
                 possible: true,
                 picked: detail.picked == Some(choice.param),
             },
             Err(why) => PanelChoice {
                 param: choice.param,
                 words: format!("{}: {why}", choice.name),
+                name: choice.name.clone(),
+                value: why.to_string(),
                 possible: false,
                 picked: false,
             },
@@ -495,14 +527,30 @@ fn drag_panel(
         };
     }
     let fits = matches!(progress, Progress::Tried(Verdict::Fits(_))) && !checking;
+    // The readout: the size that changes, from and to; before one is
+    // picked, the grip's own size.
+    let readout = detail
+        .changes
+        .first()
+        .map(|change| (change.path.clone(), arrow_words(change.from, change.to)))
+        .or_else(|| {
+            let target = detail.target?;
+            let words = match was {
+                Some(was) => arrow_words(was, detail.reached.unwrap_or(target)),
+                None => amount_words(target),
+            };
+            Some((detail.label.clone(), words))
+        });
     PanelModel {
         title: detail.label.clone(),
         value,
+        about: listed.and_then(about_words),
         changes,
         choices,
         stop,
         verdict,
         can_apply: fits,
+        readout,
     }
 }
 
@@ -527,11 +575,13 @@ pub(super) fn panel_model(
             Some(PanelModel {
                 title: change.summary().to_owned(),
                 value: None,
+                about: None,
                 changes: Vec::new(),
                 choices: Vec::new(),
                 stop: None,
                 verdict: panel_verdict(change.progress(), checking),
                 can_apply: fits,
+                readout: None,
             })
         }
         _ => None,
