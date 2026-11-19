@@ -1,19 +1,24 @@
 //! The docked window (docs/superpowers/specs/2026-11-18-docked-window-design.md):
-//! a libpanel dock whose every part is a panel: the 3D view, its controls,
-//! Parts, Files, Details, Code and Problems. Each can be dragged to an
-//! edge, into the centre (which splits into columns and rows), or into
-//! another panel's tabs; closed; and brought back. Nothing floats over the
-//! model but the problem pins.
+//! a libpanel dock whose every part is a panel: the 3D view (the Model),
+//! Parts, Files, Details, Edit, Code, Problems and Output. Each can be
+//! dragged to an edge, into the centre (which splits into columns and
+//! rows), or into another panel's tabs; closed; and brought back.
 //!
-//! The default layout is the canvas's board B: Parts (with Files) above
-//! Details on the left; the 3D view in the centre with its controls under
-//! it; Code and Problems along the bottom; the right edge empty and hidden.
+//! The default layout is the compact board (H2): Parts in a frame above
+//! Files on the left; the Model in the centre with the Code panel as the
+//! next tab of the same frame, its open files shown as tabs beside Model
+//! (`tab_strip`); Details with the Edit panel as tabs on the right; and
+//! Problems and Output along the bottom, whose edge starts hidden. The
+//! status bar's "Problems N" and "Output" buttons open the bottom edge on
+//! their panel, and its toggles show or hide each edge.
+//!
 //! Where the panels are is remembered per user in `~/.config/stave/layout`
-//! (never in a `.stave` file); [`Layout`] is that record, read leniently so
-//! an old or broken file only means the default.
+//! (never in a `.stave` file), with the spot each of the 3D view's tool
+//! groups is docked in (`view_layout::Spots`); [`Layout`] is that record,
+//! read leniently so an old or broken file only means the default.
 //!
-//! The Code panel holds the open files as its own tabs, so a file always
-//! opens wherever the Code panel is.
+//! The Code panel holds the open files, so a file always opens wherever
+//! the Code panel is.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -25,12 +30,12 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use panel::prelude::*;
 
+use super::view_layout::{Group, Spot, Spots};
+
 /// One of the window's panels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PanelId {
-    /// The 3D view, with its tools in a strip along its foot (scene, Pull
-    /// apart, X-ray, the sliders, a posed problem's swing, focus mode's
-    /// steps) and the camera buttons on the view.
+    /// The 3D view (the "Model" tab), its tool groups floating on it.
     View,
     /// The parts tree.
     Parts,
@@ -38,7 +43,8 @@ pub enum PanelId {
     Files,
     /// What the selection is (the old floating card's pages).
     Details,
-    /// The open files, as tabs, and the editor.
+    /// The open files and the editor; the files show as tabs in the strip
+    /// of whatever frame holds it.
     Code,
     /// The problems, as a list.
     Problems,
@@ -46,11 +52,13 @@ pub enum PanelId {
     /// the design, or a hold being set up; how to start one while there
     /// is none.
     Edit,
+    /// What the checks said, one line each.
+    Output,
 }
 
 impl PanelId {
     /// Every panel, in the order the menu lists them.
-    pub const ALL: [PanelId; 7] = [
+    pub const ALL: [PanelId; 8] = [
         PanelId::View,
         PanelId::Parts,
         PanelId::Files,
@@ -58,6 +66,7 @@ impl PanelId {
         PanelId::Edit,
         PanelId::Code,
         PanelId::Problems,
+        PanelId::Output,
     ];
 
     /// The word the layout file and the actions use.
@@ -70,6 +79,7 @@ impl PanelId {
             PanelId::Code => "code",
             PanelId::Problems => "problems",
             PanelId::Edit => "edit",
+            PanelId::Output => "output",
         }
     }
 
@@ -81,20 +91,22 @@ impl PanelId {
     /// The panel's tab title.
     pub fn title(self) -> &'static str {
         match self {
-            PanelId::View => "3D View",
+            PanelId::View => "Model",
             PanelId::Parts => "Parts",
             PanelId::Files => "Files",
             PanelId::Details => "Details",
             PanelId::Code => "Code",
             PanelId::Problems => "Problems",
             PanelId::Edit => "Edit",
+            PanelId::Output => "Output",
         }
     }
 
-    /// The panel's tab icon.
+    /// The panel's tab icon (the Model's is the tab strip's own cube).
     fn icon_name(self) -> &'static str {
         match self {
-            PanelId::View => "view-reveal-symbolic",
+            PanelId::View => super::tab_strip::MODEL_ICON,
+            PanelId::Output => "utilities-terminal-symbolic",
             PanelId::Parts => "view-list-symbolic",
             PanelId::Files => "folder-symbolic",
             PanelId::Details => "dialog-information-symbolic",
@@ -215,29 +227,34 @@ pub struct Layout {
     pub places: BTreeMap<PanelId, Place>,
     /// The edges that show.
     pub revealed: BTreeMap<Side, bool>,
+    /// The spot each of the 3D view's tool groups is docked in.
+    pub tools: Spots,
 }
 
 impl Default for Layout {
-    /// Board B: Parts and Files above Details on the left (the Edit panel
-    /// a tab beside Details), the 3D view in the centre, Code and Problems
-    /// at the bottom, nothing on the right.
+    /// The compact board: Parts above Files on the left, in two frames;
+    /// the Model in the centre with Code as the next tab of its frame;
+    /// Details and Edit as tabs on the right; Problems and Output at the
+    /// bottom, which starts hidden; the tool groups in their usual spots.
     fn default() -> Layout {
         Layout {
             places: BTreeMap::from([
                 (PanelId::View, Place::new(Side::Centre, 0, 0, 0)),
+                (PanelId::Code, Place::new(Side::Centre, 0, 0, 1)),
                 (PanelId::Parts, Place::new(Side::Start, 0, 0, 0)),
-                (PanelId::Files, Place::new(Side::Start, 0, 0, 1)),
-                (PanelId::Details, Place::new(Side::Start, 0, 1, 0)),
-                (PanelId::Edit, Place::new(Side::Start, 0, 1, 1)),
-                (PanelId::Code, Place::new(Side::Bottom, 0, 0, 0)),
-                (PanelId::Problems, Place::new(Side::Bottom, 0, 0, 1)),
+                (PanelId::Files, Place::new(Side::Start, 0, 1, 0)),
+                (PanelId::Details, Place::new(Side::End, 0, 0, 0)),
+                (PanelId::Edit, Place::new(Side::End, 0, 0, 1)),
+                (PanelId::Problems, Place::new(Side::Bottom, 0, 0, 0)),
+                (PanelId::Output, Place::new(Side::Bottom, 0, 0, 1)),
             ]),
             revealed: BTreeMap::from([
                 (Side::Start, true),
-                (Side::End, false),
+                (Side::End, true),
                 (Side::Top, false),
-                (Side::Bottom, true),
+                (Side::Bottom, false),
             ]),
+            tools: Spots::default(),
         }
     }
 }
@@ -245,7 +262,8 @@ impl Default for Layout {
 impl Layout {
     /// The layout as the file holds it: one line per open panel
     /// (`view centre 0 0 0`: side, column, frame, tab), one per closed one
-    /// (`closed files`) and one per edge (`show end false`).
+    /// (`closed files`), one per edge (`show end false`) and one per tool
+    /// group on the 3D view (`tool camera right`).
     pub fn to_text(&self) -> String {
         let mut text =
             String::from("# Where Stave's panels are. Delete this file to start again.\n");
@@ -268,6 +286,14 @@ impl Layout {
         for (side, shown) in &self.revealed {
             let _ = writeln!(text, "show {} {shown}", side.word());
         }
+        for group in Group::ALL {
+            let _ = writeln!(
+                text,
+                "tool {} {}",
+                group.word(),
+                self.tools.spot_of(group).word()
+            );
+        }
         text
     }
 
@@ -276,14 +302,24 @@ impl Layout {
     /// file doesn't mention at all (one newer than the file) goes where
     /// the default puts it, the Edit panel as a tab beside Details
     /// wherever the file put Details; a file naming no panel gives the
-    /// default.
+    /// default panels. Tool groups it doesn't place (an older file names
+    /// none) stay in their usual spots.
     pub fn from_text(text: &str) -> Layout {
         let mut places = BTreeMap::new();
         let mut closed = Vec::new();
         let mut revealed = Layout::default().revealed;
+        let mut tools = Spots::default();
         for line in text.lines() {
             let words: Vec<&str> = line.split_whitespace().collect();
             let (id, side, numbers) = match words.as_slice() {
+                ["tool", group, spot] => {
+                    if let (Some(group), Some(spot)) =
+                        (Group::from_word(group), Spot::from_word(spot))
+                    {
+                        tools.dock(group, spot);
+                    }
+                    continue;
+                }
                 ["show", side, shown] => {
                     if let (Some(side), Ok(shown)) = (Side::from_word(side), shown.parse())
                         && side != Side::Centre
@@ -309,7 +345,10 @@ impl Layout {
             }
         }
         if places.is_empty() {
-            return Layout::default();
+            return Layout {
+                tools,
+                ..Layout::default()
+            };
         }
         let beside_details = places.get(&PanelId::Details).map(|details| {
             let last_tab = places
@@ -336,7 +375,11 @@ impl Layout {
                 places.entry(id).or_insert(place);
             }
         }
-        Layout { places, revealed }
+        Layout {
+            places,
+            revealed,
+            tools,
+        }
     }
 
     /// The panels at a side, frame by frame (keyed by column and frame),
@@ -364,9 +407,9 @@ const DOCK_UI: &str = r#"<interface>
   <object class="PanelDock" id="dock">
     <property name="vexpand">true</property>
     <property name="hexpand">true</property>
-    <property name="start-width">300</property>
-    <property name="end-width">460</property>
-    <property name="bottom-height">280</property>
+    <property name="start-width">272</property>
+    <property name="end-width">340</property>
+    <property name="bottom-height">220</property>
     <child><object class="PanelGrid" id="grid"></object></child>
     <child type="start"><object class="PanelPaned" id="start"><property name="orientation">vertical</property></object></child>
     <child type="end"><object class="PanelPaned" id="end"><property name="orientation">vertical</property></object></child>
@@ -385,7 +428,7 @@ fn layout_path() -> PathBuf {
 pub enum Remember {
     /// The user's own file: read at the start, written as it changes.
     Yours,
-    /// Board B, and nothing written (screenshots look the same anywhere).
+    /// The default layout, and nothing written (screenshots look the same anywhere).
     Nothing,
     /// This file, read once; nothing written.
     From(PathBuf),
@@ -401,16 +444,37 @@ pub struct Workbench {
     panels: BTreeMap<PanelId, panel::Widget>,
     /// The status bar's start, for a line about the selection.
     pub status: gtk::Label,
+    /// The status bar's "Problems N" button: opens the bottom edge on
+    /// the Problems panel.
+    problems_button: gtk::Button,
+    problems_count: gtk::Label,
+    /// The status bar's "Output" button.
+    output_button: gtk::Button,
     /// Whether the layout is written to the user's file.
     remembers: bool,
     /// The layout last applied or saved, to bring a closed panel back
     /// where it was.
     last: RefCell<Layout>,
+    /// The spot each of the 3D view's tool groups is docked in, shared
+    /// with the view, which places them.
+    tools: Rc<RefCell<Spots>>,
+    /// Told when the tool groups move (a reset, a layout applied).
+    on_tools: RefCell<Option<Box<dyn Fn()>>>,
+}
+
+/// A tab-like button on the status bar that opens a panel on the bottom
+/// edge.
+fn status_tab(title: &str, tooltip: &str) -> gtk::Button {
+    gtk::Button::builder()
+        .label(title)
+        .tooltip_text(tooltip)
+        .css_classes(["flat", "stave-status-tab"])
+        .build()
 }
 
 impl Workbench {
     /// A dock with each panel's content in its panel, laid out as last
-    /// time (or as board B).
+    /// time (or as the compact board).
     pub fn new(
         contents: Vec<(PanelId, gtk::Widget)>,
         remember: Remember,
@@ -466,8 +530,23 @@ impl Workbench {
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["stave-status-text"])
             .build();
+        // The bottom panels folded into the status bar: "Problems N" and
+        // "Output" open the bottom edge on their panel (and fold it away
+        // again while it shows).
+        let problems_count = gtk::Label::builder()
+            .label("0")
+            .css_classes(["stave-status-count"])
+            .build();
+        let problems_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        problems_content.append(&gtk::Label::new(Some("Problems")));
+        problems_content.append(&problems_count);
+        let problems_button = status_tab("Problems", "Show the problems");
+        problems_button.set_child(Some(&problems_content));
+        let output_button = status_tab("Output", "Show what the checks said");
         let statusbar = panel::Statusbar::new();
-        statusbar.add_prefix(0, &status);
+        statusbar.add_prefix(0, &problems_button);
+        statusbar.add_prefix(1, &output_button);
+        statusbar.add_prefix(2, &status);
         // Brings back any panel that was closed, and resets the layout.
         let panels_menu = gio::Menu::new();
         let shows = gio::Menu::new();
@@ -518,10 +597,34 @@ impl Workbench {
             paneds,
             panels,
             status,
+            problems_button,
+            problems_count,
+            output_button,
             remembers,
             last: RefCell::new(layout.clone()),
+            tools: Rc::new(RefCell::new(layout.tools.clone())),
+            on_tools: RefCell::new(None),
         });
         workbench.apply(&layout);
+        for (button, id) in [
+            (&workbench.problems_button, PanelId::Problems),
+            (&workbench.output_button, PanelId::Output),
+        ] {
+            let weak = Rc::downgrade(&workbench);
+            button.connect_clicked(move |_| {
+                if let Some(workbench) = weak.upgrade() {
+                    workbench.toggle(id);
+                }
+            });
+        }
+        let weak = Rc::downgrade(&workbench);
+        workbench
+            .dock
+            .connect_notify_local(Some("reveal-bottom"), move |_, _| {
+                if let Some(workbench) = weak.upgrade() {
+                    workbench.show_status_tabs();
+                }
+            });
         // A panel dropped somewhere new is remembered at once, so closing
         // it later brings it back there.
         let weak = Rc::downgrade(&workbench);
@@ -561,6 +664,92 @@ impl Workbench {
             self.dock.set_reveal_area(side.area(), shown);
         }
         self.last.replace(layout.clone());
+        self.tools.replace(layout.tools.clone());
+        if let Some(callback) = self.on_tools.borrow().as_ref() {
+            callback();
+        }
+        self.show_status_tabs();
+    }
+
+    /// Narrows the left and right edges while `breakpoint` applies, so the
+    /// Model keeps room in a narrow window.
+    pub fn narrow_edges(&self, breakpoint: &adw::Breakpoint) {
+        breakpoint.add_setter(&self.dock, "start-width", Some(&220.to_value()));
+        breakpoint.add_setter(&self.dock, "end-width", Some(&260.to_value()));
+    }
+
+    /// The spots the 3D view's tool groups are docked in, shared with
+    /// the view that places them.
+    pub fn tools(&self) -> Rc<RefCell<Spots>> {
+        self.tools.clone()
+    }
+
+    /// Calls `callback` when the tool groups move with the layout.
+    pub fn connect_tools(&self, callback: impl Fn() + 'static) {
+        self.on_tools.replace(Some(Box::new(callback)));
+    }
+
+    /// Docks a tool group in a spot (the group there takes its old spot)
+    /// and remembers it.
+    pub fn dock_tool(&self, group: Group, spot: Spot) {
+        self.tools.borrow_mut().dock(group, spot);
+        self.save();
+    }
+
+    /// How many problems the status bar's Problems button counts.
+    pub fn show_problem_count(&self, count: usize) {
+        self.problems_count.set_label(&count.to_string());
+        if count == 0 {
+            self.problems_count.remove_css_class("some");
+        } else {
+            self.problems_count.add_css_class("some");
+        }
+    }
+
+    /// Opens the bottom edge on a panel, or folds it away when that panel
+    /// already shows there.
+    fn toggle(&self, id: PanelId) {
+        let showing = self.is_shown(id)
+            && self
+                .panels
+                .get(&id)
+                .and_then(|widget| widget.position())
+                .and_then(|position| Side::of_area(position.area()))
+                .is_some_and(|side| side != Side::Centre && self.dock.reveals_area(side.area()));
+        if showing {
+            if let Some(side) = self
+                .panels
+                .get(&id)
+                .and_then(|widget| widget.position())
+                .and_then(|position| Side::of_area(position.area()))
+            {
+                self.dock.set_reveal_area(side.area(), false);
+            }
+        } else {
+            self.present(id);
+        }
+        self.show_status_tabs();
+    }
+
+    /// Marks the status bar's Problems or Output button while its panel
+    /// shows at the bottom.
+    fn show_status_tabs(&self) {
+        let bottom = self.dock.reveals_area(panel::Area::Bottom);
+        for (button, id) in [
+            (&self.problems_button, PanelId::Problems),
+            (&self.output_button, PanelId::Output),
+        ] {
+            let at_bottom = self
+                .panels
+                .get(&id)
+                .and_then(|widget| widget.position())
+                .is_some_and(|position| position.area() == panel::Area::Bottom);
+            if bottom && at_bottom && self.is_shown(id) {
+                button.add_css_class("shown");
+            } else {
+                button.remove_css_class("shown");
+            }
+        }
     }
 
     /// Adds these panels to a frame, in order.
@@ -633,7 +822,11 @@ impl Workbench {
             .into_iter()
             .map(|side| (side, self.dock.reveals_area(side.area())))
             .collect();
-        Layout { places, revealed }
+        Layout {
+            places,
+            revealed,
+            tools: self.tools.borrow().clone(),
+        }
     }
 
     /// Remembers the layout for next time (not while taking screenshots).
@@ -650,7 +843,7 @@ impl Workbench {
         let _ = std::fs::write(path, layout.to_text());
     }
 
-    /// Board B again.
+    /// The compact board again, the tool groups back in their spots.
     pub fn reset(&self) {
         self.apply(&Layout::default());
         self.save();
@@ -786,8 +979,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_is_board_b() {
+    fn the_default_is_the_compact_board() {
         let layout = Layout::default();
+        // Parts above Files, each in its own frame.
+        assert_eq!(
+            layout.frames(Side::Start).into_values().collect::<Vec<_>>(),
+            vec![vec![PanelId::Parts], vec![PanelId::Files]]
+        );
+        // The Model, then Code, in one frame: open files sit beside it.
+        assert_eq!(
+            layout.frames(Side::Centre),
+            BTreeMap::from([((0, 0), vec![PanelId::View, PanelId::Code])])
+        );
+        assert_eq!(
+            layout.frames(Side::End).into_values().collect::<Vec<_>>(),
+            vec![vec![PanelId::Details, PanelId::Edit]]
+        );
+        assert_eq!(
+            layout
+                .frames(Side::Bottom)
+                .into_values()
+                .collect::<Vec<_>>(),
+            vec![vec![PanelId::Problems, PanelId::Output]]
+        );
+        assert_eq!(layout.revealed.get(&Side::Start), Some(&true));
+        assert_eq!(layout.revealed.get(&Side::End), Some(&true));
+        assert_eq!(layout.revealed.get(&Side::Bottom), Some(&false));
+        assert_eq!(layout.tools, Spots::default());
+        assert!(layout.to_text().contains("tool camera right\n"));
+    }
+
+    /// Board B, the default before the compact board, as its file was
+    /// written.
+    const BOARD_B: &str = "# Where Stave's panels are. Delete this file to start again.
+view centre 0 0 0
+parts start 0 0 0
+files start 0 0 1
+details start 0 1 0
+code bottom 0 0 0
+problems bottom 0 0 1
+edit start 0 1 1
+show start true
+show end false
+show top false
+show bottom true
+";
+
+    #[test]
+    fn a_board_b_file_still_reads_as_board_b() {
+        let layout = Layout::from_text(BOARD_B);
         assert_eq!(
             layout.frames(Side::Start).into_values().collect::<Vec<_>>(),
             vec![
@@ -799,15 +1039,37 @@ mod tests {
             layout.frames(Side::Centre),
             BTreeMap::from([((0, 0), vec![PanelId::View])])
         );
+        // Output, newer than the file, joins the bottom where it shows.
         assert_eq!(
             layout
                 .frames(Side::Bottom)
                 .into_values()
                 .collect::<Vec<_>>(),
-            vec![vec![PanelId::Code, PanelId::Problems]]
+            vec![vec![PanelId::Code, PanelId::Problems, PanelId::Output]]
         );
         assert!(layout.frames(Side::End).is_empty());
         assert_eq!(layout.revealed.get(&Side::End), Some(&false));
+        assert_eq!(layout.revealed.get(&Side::Bottom), Some(&true));
+        // No tool lines: the groups stay in their usual spots.
+        assert_eq!(layout.tools, Spots::default());
+    }
+
+    #[test]
+    fn the_tool_groups_spots_read_back_as_written() {
+        let mut layout = Layout::default();
+        layout.tools.dock(Group::Camera, Spot::BottomLeft);
+        layout.tools.dock(Group::Scene, Spot::Right);
+        let text = layout.to_text();
+        assert!(text.contains("tool camera bottom-left\n"));
+        assert!(text.contains("tool scene right\n"));
+        assert_eq!(Layout::from_text(&text), layout);
+        // Unknown groups and spots are left out; the rest still apply.
+        let layout = Layout::from_text(
+            "view centre 0 0 0\ntool ruler right\ntool camera middle\ntool motion top-left\n",
+        );
+        assert_eq!(layout.tools.spot_of(Group::Motion), Spot::TopLeft);
+        assert_eq!(layout.tools.spot_of(Group::Scene), Spot::BottomRight);
+        assert_eq!(layout.tools.spot_of(Group::Camera), Spot::Right);
     }
 
     #[test]
@@ -903,7 +1165,9 @@ mod tests {
 
     /// The Edit panel through the same dock as the others: a tab beside
     /// Details by default, which stays in front; brought forward; moved to
-    /// the right edge; its place in the layout that is remembered.
+    /// the left edge; its place in the layout that is remembered. Also the
+    /// Model and Code sharing a frame, the status bar opening the bottom
+    /// edge, and a tool group's spot kept with the layout.
     fn edit_panel_docks() {
         let contents = PanelId::ALL
             .into_iter()
@@ -926,29 +1190,58 @@ mod tests {
             context.iteration(false);
         }
         let layout = workbench.layout();
+        assert_eq!(layout, Layout::default());
         assert_eq!(
             layout.places.get(&PanelId::Edit),
-            Some(&Place::new(Side::Start, 0, 1, 1))
+            Some(&Place::new(Side::End, 0, 0, 1))
         );
         assert!(workbench.share_a_frame(PanelId::Edit, PanelId::Details));
         assert!(workbench.is_shown(PanelId::Details), "Details shows first");
         assert!(!workbench.is_shown(PanelId::Edit));
+        // The Model shows first in its frame; a file chosen elsewhere
+        // doesn't cover it, a file opened does.
+        assert!(workbench.share_a_frame(PanelId::View, PanelId::Code));
+        assert!(workbench.is_shown(PanelId::View));
+        workbench.bring_forward_beside_view(PanelId::Code);
+        assert!(workbench.is_shown(PanelId::View));
+        workbench.present(PanelId::Code);
+        assert!(workbench.is_shown(PanelId::Code));
+        workbench.present(PanelId::View);
+        // The status bar's Problems button opens the hidden bottom edge
+        // on Problems, and folds it away again.
+        assert!(!workbench.dock.reveals_area(panel::Area::Bottom));
+        workbench.toggle(PanelId::Problems);
+        assert!(workbench.dock.reveals_area(panel::Area::Bottom));
+        assert!(workbench.is_shown(PanelId::Problems));
+        workbench.toggle(PanelId::Output);
+        assert!(workbench.is_shown(PanelId::Output));
+        workbench.toggle(PanelId::Output);
+        assert!(!workbench.dock.reveals_area(panel::Area::Bottom));
         // An edit starts: its tab comes to the front.
         workbench.bring_forward_beside_view(PanelId::Edit);
         assert!(workbench.is_shown(PanelId::Edit));
-        // Dragged to the right edge (as its tab's menu moves it).
-        workbench.move_to(PanelId::Edit, Side::End);
+        // Dragged to the left edge (as its tab's menu moves it).
+        workbench.move_to(PanelId::Edit, Side::Start);
         let layout = workbench.layout();
         assert_eq!(
             layout.places.get(&PanelId::Edit),
-            Some(&Place::new(Side::End, 0, 0, 0))
+            Some(&Place::new(Side::Start, 0, 0, 1))
         );
-        assert_eq!(layout.revealed.get(&Side::End), Some(&true));
+        assert_eq!(layout.revealed.get(&Side::Start), Some(&true));
         assert!(!workbench.share_a_frame(PanelId::Edit, PanelId::Details));
-        assert!(layout.to_text().contains("edit end 0 0 0"));
+        assert!(layout.to_text().contains("edit start 0 0 1"));
         assert_eq!(Layout::from_text(&layout.to_text()), layout);
+        // A tool group docked elsewhere is part of the layout.
+        workbench.dock_tool(Group::Motion, Spot::TopLeft);
+        assert_eq!(
+            workbench.layout().tools.spot_of(Group::Motion),
+            Spot::TopLeft
+        );
+        workbench.reset();
+        assert_eq!(workbench.layout().tools, Spots::default());
+        workbench.move_to(PanelId::Edit, Side::Start);
         // Beside the 3D View, it isn't brought over the model.
-        workbench.move_to(PanelId::View, Side::End);
+        workbench.move_to(PanelId::View, Side::Start);
         workbench.present(PanelId::View);
         workbench.bring_forward_beside_view(PanelId::Edit);
         assert!(workbench.is_shown(PanelId::View));

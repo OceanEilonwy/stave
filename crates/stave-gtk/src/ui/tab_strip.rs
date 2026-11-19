@@ -4,12 +4,76 @@
 //! it, dragging it docks the panel elsewhere (libpanel's drop targets take
 //! a dragged `panel::Widget`), and the menu at the end holds the shown
 //! panel's own menu ("Move to the Right", ...).
+//!
+//! A panel can show its own tabs in place of its one tab
+//! ([`set_page_tabs`]): the Code panel's open files appear this way, one
+//! tab each (name, and a yellow ● while unsaved), beside the Model's tab
+//! in the frame they share. Clicking one shows the panel on that file.
+
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 use panel::prelude::*;
 use panel::subclass::prelude::*;
+
+use super::icons::{self, PathIcon};
+
+/// The icon name that gives a tab the Model's cube.
+pub const MODEL_ICON: &str = "stave-model";
+
+/// One of a panel's own tabs.
+pub struct PageTab {
+    /// The tab's words.
+    pub title: String,
+    /// Its tooltip.
+    pub tooltip: String,
+    /// It has unsaved changes: a yellow ● after the words.
+    pub unsaved: bool,
+    /// The worst problem in it, as a dot before the words.
+    pub mark: Option<stave_app::problems::Mark>,
+    /// It is the panel's current one.
+    pub active: bool,
+    /// Shows it (the panel is brought to the front first).
+    pub show: Rc<dyn Fn()>,
+}
+
+type PageTabs = Rc<dyn Fn() -> Vec<PageTab>>;
+
+thread_local! {
+    /// Each panel's own tabs, by the panel's id.
+    static PAGE_TABS: RefCell<BTreeMap<String, PageTabs>> = RefCell::new(BTreeMap::new());
+    /// Every strip, to remake them when a panel's tabs change.
+    static STRIPS: RefCell<Vec<glib::WeakRef<TabStrip>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Lets the panel with this id show its own tabs (when `tabs` gives any)
+/// in place of its one tab, in whatever frame holds it.
+pub fn set_page_tabs(id: &str, tabs: impl Fn() -> Vec<PageTab> + 'static) {
+    PAGE_TABS.with(|all| all.borrow_mut().insert(id.to_owned(), Rc::new(tabs)));
+    page_tabs_changed();
+}
+
+/// A panel's own tabs changed: every strip makes its tabs again.
+pub fn page_tabs_changed() {
+    let strips: Vec<TabStrip> = STRIPS.with(|strips| {
+        let mut strips = strips.borrow_mut();
+        strips.retain(|strip| strip.upgrade().is_some());
+        strips.iter().filter_map(glib::WeakRef::upgrade).collect()
+    });
+    for strip in strips {
+        strip.refresh();
+    }
+}
+
+/// A panel's own tabs, if it has any.
+fn page_tabs(id: &str) -> Vec<PageTab> {
+    let tabs = PAGE_TABS.with(|all| all.borrow().get(id).cloned());
+    tabs.map(|tabs| tabs()).unwrap_or_default()
+}
 
 mod imp {
     use std::cell::RefCell;
@@ -80,6 +144,8 @@ mod imp {
             self.end.append(&self.menu);
             self.tabs.set_parent(&*obj);
             self.end.set_parent(&*obj);
+            let weak = obj.downgrade();
+            STRIPS.with(|strips| strips.borrow_mut().push(weak));
         }
 
         fn dispose(&self) {
@@ -162,9 +228,17 @@ impl TabStrip {
         };
         let shown = frame.visible_child();
         for index in 0..frame.n_pages() {
-            if let Some(page) = frame.page(index) {
-                imp.tabs
-                    .append(&tab(&frame, &page, shown.as_ref() == Some(&page)));
+            let Some(page) = frame.page(index) else {
+                continue;
+            };
+            let is_shown = shown.as_ref() == Some(&page);
+            let own = page_tabs(&page.id());
+            if own.is_empty() {
+                imp.tabs.append(&tab(&frame, &page, is_shown));
+            } else {
+                for own in own {
+                    imp.tabs.append(&own_tab(&frame, &page, is_shown, own));
+                }
             }
         }
         let menu = shown.as_ref().and_then(|page| page.menu_model());
@@ -182,8 +256,14 @@ fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
         .css_classes(["stave-tab-title"])
         .build();
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    if let Some(icon) = page.icon_name() {
-        inner.append(&gtk::Image::from_icon_name(&icon));
+    match page.icon_name() {
+        Some(icon) if icon == MODEL_ICON => {
+            let cube = PathIcon::new(icons::PARTS, 14);
+            cube.set_valign(gtk::Align::Center);
+            inner.append(&cube);
+        }
+        Some(icon) => inner.append(&gtk::Image::from_icon_name(&icon)),
+        None => {}
     }
     inner.append(&label);
     let show = gtk::Button::builder()
@@ -218,8 +298,61 @@ fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
         .build();
     root.append(&show);
     root.append(&close);
-    // Dragging a tab carries its panel; libpanel's drop targets (the
-    // edges, the middle, other frames) take it.
+    carry_on_drag(&root, page);
+    root
+}
+
+/// One of a panel's own tabs (an open file): its problem dot, its words
+/// and a yellow ● while unsaved; clicking shows the panel on it, dragging
+/// docks the whole panel elsewhere.
+fn own_tab(frame: &panel::Frame, page: &panel::Widget, page_shown: bool, own: PageTab) -> gtk::Box {
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let dot = super::style::mark_dot(own.mark);
+    inner.append(&dot);
+    inner.append(
+        &gtk::Label::builder()
+            .label(&own.title)
+            .css_classes(["stave-tab-title", "stave-file-tab-name"])
+            .build(),
+    );
+    if own.unsaved {
+        let unsaved = gtk::Box::builder()
+            .css_classes(["stave-mark", "unsaved"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Not saved (Ctrl+S saves)")
+            .build();
+        unsaved.update_property(&[gtk::accessible::Property::Label("not saved")]);
+        inner.append(&unsaved);
+    }
+    let show = gtk::Button::builder()
+        .child(&inner)
+        .css_classes(["flat", "stave-tab-show", "stave-file-tab"])
+        .tooltip_text(&own.tooltip)
+        .build();
+    let frame_weak = frame.downgrade();
+    let page_weak = page.downgrade();
+    let show_own = own.show.clone();
+    show.connect_clicked(move |_| {
+        if let (Some(frame), Some(page)) = (frame_weak.upgrade(), page_weak.upgrade()) {
+            frame.set_visible_child(&page);
+        }
+        show_own();
+    });
+    let root = gtk::Box::builder()
+        .css_classes(if page_shown && own.active {
+            vec!["stave-tab", "shown"]
+        } else {
+            vec!["stave-tab"]
+        })
+        .build();
+    root.append(&show);
+    carry_on_drag(&root, page);
+    root
+}
+
+/// Dragging a tab carries its panel; libpanel's drop targets (the edges,
+/// the middle, other frames) take it.
+fn carry_on_drag(root: &gtk::Box, page: &panel::Widget) {
     let drag = gtk::DragSource::builder()
         .actions(gdk::DragAction::MOVE)
         .build();
@@ -235,5 +368,4 @@ fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
         }
     });
     root.add_controller(drag);
-    root
 }
