@@ -150,6 +150,9 @@ impl From<RenderingInput> for WindowInput {
     }
 }
 
+/// The name of the window's key controller for Delete.
+pub(in crate::ui) const DELETE_KEYS: &str = "delete-keys";
+
 /// Wires the view's actions, the header's view and scene, the view's
 /// toolbars, its gestures and keys, and the style to [`RenderingInput`]s.
 pub(in crate::ui) fn wire(window: &mut Window) {
@@ -298,9 +301,16 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     shortcuts.set_scope(gtk::ShortcutScope::Local);
     root.add_controller(shortcuts);
 
-    // Delete anywhere in the window but a text field.
+    // Delete anywhere in the window but a text field. Whether there is
+    // something to remove is decided at once, as before relm4: from the
+    // copy the window keeps after each message, and from the editor's
+    // analysis (while the text doesn't read Delete says so), so a Delete
+    // with nothing to remove is passed on to other widgets.
     let keys = gtk::EventControllerKey::new();
+    keys.set_name(Some(DELETE_KEYS));
     let sender = input.clone();
+    let removable = Rc::clone(&window.state.removable);
+    let files = Rc::downgrade(&widgets.files);
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
         let Some(root) = controller
             .widget()
@@ -317,8 +327,16 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         match key {
             // Delete removes the selection, saying first what goes.
             gdk::Key::Delete | gdk::Key::KP_Delete => {
-                sender.emit(EditingInput::RemoveSelected.into());
-                glib::Propagation::Stop
+                let blocked = files
+                    .upgrade()
+                    .and_then(|files| files.analysis())
+                    .is_some_and(|analysis| edit_view::block_line(&analysis).is_some());
+                if removable.get() || blocked {
+                    sender.emit(EditingInput::RemoveSelected.into());
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
             }
             _ => glib::Propagation::Proceed,
         }
@@ -443,10 +461,18 @@ impl Window {
     /// `message` makes of the frame's time.
     pub(in crate::ui) fn on_next_frame(&self, message: impl Fn(i64) -> WindowInput + 'static) {
         let input = self.input();
-        self.widgets.viewport.add_tick_callback(move |_, clock| {
-            input.emit(message(clock.frame_time()));
-            glib::ControlFlow::Break
-        });
+        let must_draw = frames_must_draw(&self.widgets.viewport.display());
+        self.widgets
+            .viewport
+            .add_tick_callback(move |viewport, clock| {
+                // The message is handled after this frame, so a frame asked
+                // for only by this tick would draw nothing.
+                if must_draw {
+                    viewport.queue_draw();
+                }
+                input.emit(message(clock.frame_time()));
+                glib::ControlFlow::Break
+            });
     }
 
     pub(in crate::ui) fn view_changed(&mut self) {
@@ -1349,6 +1375,19 @@ impl Window {
             crate::convert::f32_of(y - done_y),
         )
     }
+}
+
+/// `true` when every frame the view asks for must draw something: on
+/// GTK's Broadway backend (used for `--window-screenshot` without a
+/// screen). Its after-paint handler marks every frame as sent to the
+/// browser and, when the round trip comes back, reports it submitted at
+/// 1/30 s. Since GTK 4.24 the frame clock has already marked a frame that
+/// drew nothing as skipped by then, so the report warns "Duplicate call
+/// to gdk_frame_timings_submitted() with different values". Other
+/// backends report only frames they really sent, so there a frame that
+/// draws nothing is free and is left to draw nothing.
+fn frames_must_draw(display: &gdk::Display) -> bool {
+    display.type_().name() == "GdkBroadwayDisplay"
 }
 
 #[cfg(test)]
