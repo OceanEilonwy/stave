@@ -1173,42 +1173,60 @@ pub struct Extension {
     pub by: Length,
 }
 
-/// How far an assembly step moves.
+/// What an assembly step does, with what each kind of step takes: a push
+/// may say how far and at what angle, a rotate always says how far it
+/// turns, a drive says neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepAmount {
-    /// A distance (push).
-    Length(Length),
-    /// An angle (rotate).
-    Angle(Angle),
-}
-
-/// What an assembly step does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepKind {
-    /// Move along an axis until seated (or exactly `by`).
-    Push,
-    /// Turn about an axis.
-    Rotate,
-    /// Knock in a part the joint makes.
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepMotion {
+    /// Move along the axis until seated, or exactly `by`.
+    Push {
+        /// `by:`: how far, when written.
+        by: Option<Length>,
+        /// `angle:`: the push's tilt off the axis, when written.
+        angle: Option<Angle>,
+    },
+    /// Turn about the axis.
+    Rotate {
+        /// `by:`: how far it turns.
+        by: Angle,
+    },
+    /// Knock in a part the joint makes, along the axis.
     Drive,
 }
 
 /// One step of `insert:`, bound to parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssemblyStep {
-    /// What it does.
-    pub kind: StepKind,
     /// The part that moves.
     pub part: PartId,
-    /// The moving part's own axis, as placed in the finished joint.
+    /// The moving part's own axis, as placed in the finished joint: what a
+    /// push or drive moves along, or what a rotate turns about.
     #[serde(serialize_with = "serialize_part_axis")]
     pub axis: PartAxis,
-    /// `by:`
-    pub by: Option<StepAmount>,
-    /// `angle:` of a push.
-    pub angle: Option<Angle>,
+    /// What it does.
+    #[serde(flatten)]
+    pub motion: StepMotion,
+}
+
+impl AssemblyStep {
+    /// The step as the source writes it, with `part` naming the moving
+    /// part and `axis` the axis it moves along or turns about:
+    /// `push(rail, along: width)`.
+    pub fn source_text(&self, part: &str, axis: PartAxis) -> String {
+        let axis = axis.word();
+        match self.motion {
+            StepMotion::Push { by, angle } => {
+                let by = by.map(|by| format!(", by: {by}")).unwrap_or_default();
+                let angle = angle
+                    .map(|angle| format!(", angle: {angle}"))
+                    .unwrap_or_default();
+                format!("push({part}, along: {axis}{by}{angle})")
+            }
+            StepMotion::Drive => format!("drive({part}, along: {axis})"),
+            StepMotion::Rotate { by } => format!("rotate({part}, by: {by}, about: {axis})"),
+        }
+    }
 }
 
 /// A `require` evaluated at the current values.

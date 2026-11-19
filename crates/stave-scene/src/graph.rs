@@ -11,7 +11,7 @@ use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, BodyRef, HardwareId, PairMember, Part, PartId, PoseValue,
-    RegionId, SceneId, SceneItem, SolvedDesign, StepKind, WorldBox,
+    RegionId, SceneId, SceneItem, SolvedDesign, StepMotion, WorldBox,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -900,6 +900,21 @@ impl SceneGraph {
     }
 }
 
+/// A pair's last step that slides a part (a push or a drive; a turn moves
+/// nothing out), with the push's tilt when it has one.
+fn last_slide(
+    pair: &stave_model::solved::JointPair,
+) -> Option<(
+    &stave_model::solved::AssemblyStep,
+    Option<stave_lang::units::Angle>,
+)> {
+    pair.insert.iter().rev().find_map(|step| match step.motion {
+        StepMotion::Push { angle, .. } => Some((step, angle)),
+        StepMotion::Drive => Some((step, None)),
+        StepMotion::Rotate { .. } => None,
+    })
+}
+
 /// The world direction an assembly step moves its part in, as a unit
 /// vector in the render frame (a push turned by `angle` leans toward the
 /// next axis).
@@ -980,12 +995,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
     for joint in &design.joints {
         for pair in &joint.pairs {
             // A turn moves nothing out: the last push (or drive) does.
-            let Some(step) = pair
-                .insert
-                .iter()
-                .rev()
-                .find(|step| !matches!(step.kind, StepKind::Rotate))
-            else {
+            let Some((step, tilt)) = last_slide(pair) else {
                 continue;
             };
             let Some(part) = design.part(step.part) else {
@@ -1014,11 +1024,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
                 .collect();
             let count = f32::from(u16::try_from(centres.len().max(1)).unwrap_or(u16::MAX));
             let centre = centres.iter().fold(Vec3::ZERO, |a, b| a + *b) / count;
-            let direction = away_from(
-                step_direction(part, step.axis, step.angle),
-                middle(part),
-                centre,
-            );
+            let direction = away_from(step_direction(part, step.axis, tilt), middle(part), centre);
             moves.push(Move {
                 mover: part.id,
                 direction,
@@ -1264,12 +1270,7 @@ impl Exploded {
                         ) else {
                             continue;
                         };
-                        let Some(step) = pair
-                            .insert
-                            .iter()
-                            .rev()
-                            .find(|step| !matches!(step.kind, StepKind::Rotate))
-                        else {
+                        let Some((step, tilt)) = last_slide(pair) else {
                             continue;
                         };
                         let (Some(moving), Some(outside)) =
@@ -1278,7 +1279,7 @@ impl Exploded {
                             continue;
                         };
                         let direction = away_from(
-                            step_direction(moving, step.axis, step.angle),
+                            step_direction(moving, step.axis, tilt),
                             bounds.centre(),
                             middle(outside),
                         );

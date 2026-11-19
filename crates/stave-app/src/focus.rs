@@ -33,7 +33,7 @@ use stave_model::defs::KindDef;
 use stave_model::mechanism::{Holding, Mechanism, MechanismEntry, MemberIndex, MotionShape};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, CutKind, CutPlace, CutSource, Depth, Hardware, HardwareBase,
-    HardwareId, JointId, Part, PartId, RoleValue, SolvedDesign, StepAmount, StepKind, WorldBox,
+    HardwareId, JointId, Part, PartId, RoleValue, SolvedDesign, StepMotion, WorldBox,
 };
 use stave_scene::focus::{
     Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
@@ -374,21 +374,7 @@ fn gap_text(gap: Length) -> String {
 /// `push(rung[front], along: length)`.
 fn step_text(design: &SolvedDesign, step: &stave_model::solved::AssemblyStep) -> String {
     let part = part_name(design, step.part);
-    let by = match step.by {
-        Some(StepAmount::Length(length)) => format!(", by: {length}"),
-        Some(StepAmount::Angle(angle)) => format!(", by: {angle}"),
-        None => String::new(),
-    };
-    let angle = step
-        .angle
-        .map(|angle| format!(", angle: {angle}"))
-        .unwrap_or_default();
-    let axis = step.axis.word();
-    match step.kind {
-        StepKind::Push => format!("push({part}, along: {axis}{by}{angle})"),
-        StepKind::Drive => format!("drive({part}, along: {axis}{by}{angle})"),
-        StepKind::Rotate => format!("rotate({part}{by}, about: {axis})"),
-    }
+    step.source_text(&part, step.axis)
 }
 
 /// A length for the panel: millimetres to the nearest tenth, without a
@@ -692,7 +678,7 @@ fn joint_focus(
         .members_zone(&pins)
         .or_else(|| graph.joint_zone(&moving, &receiving));
     let turning = pair.insert.iter().find(|step| {
-        step.kind == StepKind::Rotate
+        matches!(step.motion, StepMotion::Rotate { .. })
             && design.part(step.part).is_some_and(|part| {
                 part.pose.orientation.direction(step.axis).axis() == stave_lang::placement::Axis::Up
             })

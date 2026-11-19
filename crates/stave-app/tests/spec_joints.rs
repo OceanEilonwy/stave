@@ -11,7 +11,8 @@ use common::{
     the_diagnostic,
 };
 use stave_lang::placement::PartAxis;
-use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepKind};
+use stave_lang::units::Angle;
+use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepMotion};
 
 /// A side standing at the left end of the base and a shelf against it.
 const SIDE_AND_SHELF: &str = "part side : pine_19 {
@@ -767,17 +768,47 @@ fn insert_steps_move_a_part_along_its_own_axes() {
         "kind k : joint {\n  insert: [push(piece, along: width), push(piece, along: length, by: 5mm), push(piece, along: width, angle: 45deg), rotate(piece, by: 90deg, about: length)]\n}\njoint j : k(shelf, into: side)",
     );
     let steps = &joint(design(&opened), "j").pairs[0].insert;
-    let summary: Vec<(StepKind, PartAxis)> = steps.iter().map(|s| (s.kind, s.axis)).collect();
+    let summary: Vec<(StepMotion, PartAxis)> = steps.iter().map(|s| (s.motion, s.axis)).collect();
     assert_eq!(
         summary,
         [
-            (StepKind::Push, PartAxis::Width),
-            (StepKind::Push, PartAxis::Length),
-            (StepKind::Push, PartAxis::Width),
-            (StepKind::Rotate, PartAxis::Length),
+            (
+                StepMotion::Push {
+                    by: None,
+                    angle: None
+                },
+                PartAxis::Width
+            ),
+            (
+                StepMotion::Push {
+                    by: Some(mm("5")),
+                    angle: None
+                },
+                PartAxis::Length
+            ),
+            (
+                StepMotion::Push {
+                    by: None,
+                    angle: Some(Angle::from_deg(45))
+                },
+                PartAxis::Width
+            ),
+            (
+                StepMotion::Rotate {
+                    by: Angle::from_deg(90)
+                },
+                PartAxis::Length
+            ),
         ]
     );
-    assert!(steps[1].by.is_some() && steps[2].angle.is_some());
+}
+
+#[test]
+fn a_rotate_without_by_is_reported() {
+    let opened = with_parts(
+        "kind k : joint {\n  insert: [push(piece, along: width), rotate(piece, about: length)]\n}\njoint j : k(shelf, into: side)",
+    );
+    only_error(&opened, "missing-field", "'rotate' is missing 'by'");
 }
 
 #[test]

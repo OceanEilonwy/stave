@@ -5,22 +5,21 @@ use std::rc::Rc;
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis};
-use stave_lang::units::{ExactLength, Length, Rational};
+use stave_lang::units::{Angle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExprKind,
-    SelectorDef, Size, StockField, Symbol, Word,
+    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExpr,
+    RExprKind, SelectorDef, Size, StepMotionDef, StockField, Symbol, Word,
 };
 use stave_model::ids::{JointId, KindId, PartId, RecipeId, StockId};
 use stave_model::solved::{
     AssemblyStep, Contact, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, LocalPoint, Mark,
-    Orientation, Slope, StepAmount, StepKind,
+    Orientation, Slope, StepMotion,
 };
 use stave_model::value::{ExactBox, KindValue, Value};
 use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
-use stave_schema::placement::AssemblyStepKind;
 use stave_schema::words::{Grain, StockForm};
 
 use crate::eval::{Env, KindEnv, ParamCache, midpoint};
@@ -1689,38 +1688,37 @@ impl Solver<'_> {
             let Some(part) = Self::member_part(pair, step.part) else {
                 continue;
             };
-            let by = match &step.by {
-                Some(expr) => Some(match self.eval(expr, env)? {
-                    Value::Length(l) => StepAmount::Length(round_length(l)?),
-                    Value::Angle(a) => {
-                        StepAmount::Angle(a.to_nearest_angle().ok_or(Fault::Overflow)?)
-                    }
-                    _ => return Err(Fault::Earlier.into()),
-                }),
-                None => None,
-            };
-            let angle = match &step.angle {
-                Some(expr) => Some(
-                    self.eval_angle(expr, env)?
-                        .to_nearest_angle()
-                        .ok_or(Fault::Overflow)?,
-                ),
-                None => None,
-            };
-            let kind = match step.kind {
-                AssemblyStepKind::Push => StepKind::Push,
-                AssemblyStepKind::Rotate => StepKind::Rotate,
-                AssemblyStepKind::Drive => StepKind::Drive,
+            let motion = match &step.motion {
+                StepMotionDef::Push { by, angle } => StepMotion::Push {
+                    by: match by {
+                        Some(expr) => Some(round_length(self.eval_length(expr, env)?)?),
+                        None => None,
+                    },
+                    angle: match angle {
+                        Some(expr) => Some(self.step_angle(expr, env)?),
+                        None => None,
+                    },
+                },
+                StepMotionDef::Rotate { by } => StepMotion::Rotate {
+                    by: self.step_angle(by, env)?,
+                },
+                StepMotionDef::Drive => StepMotion::Drive,
             };
             steps.push(AssemblyStep {
-                kind,
                 part,
                 axis: step.axis,
-                by,
-                angle,
+                motion,
             });
         }
         Ok(steps)
+    }
+
+    /// An assembly step's angle, to the nearest representable angle.
+    fn step_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<Angle> {
+        Ok(self
+            .eval_angle(expr, env)?
+            .to_nearest_angle()
+            .ok_or(Fault::Overflow)?)
     }
 
     /// Places a part a joint makes, for one pair.

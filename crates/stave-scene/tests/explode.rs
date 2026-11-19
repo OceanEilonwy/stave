@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use glam::Vec3;
-use stave_model::solved::{PartId, SolvedDesign, StepKind};
+use stave_model::solved::{PartId, SolvedDesign, StepMotion};
 use stave_scene::{BuildOptions, Item, SceneGraph};
 
 fn solve(folder: &str) -> SolvedDesign {
@@ -90,7 +90,7 @@ fn movers(design: &SolvedDesign) -> Vec<(PartId, Vec<PartId>)> {
                 .insert
                 .iter()
                 .rev()
-                .find(|step| !matches!(step.kind, StepKind::Rotate))
+                .find(|step| !matches!(step.motion, StepMotion::Rotate { .. }))
             else {
                 continue;
             };

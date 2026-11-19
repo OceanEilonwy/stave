@@ -1331,18 +1331,46 @@ pub enum JointMember {
 /// One step of `insert:`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepDef {
-    /// `push`, `rotate` or `drive`.
-    pub kind: AssemblyStepKind,
     /// The part that moves.
     pub part: JointMember,
-    /// `along:` or `about:`: an axis of the moving part.
+    /// `along:` (push, drive) or `about:` (rotate): an axis of the moving
+    /// part.
     pub axis: PartAxis,
-    /// `by:` (a length for push, an angle for rotate).
-    pub by: Option<RExpr>,
-    /// `angle:` of a push.
-    pub angle: Option<RExpr>,
+    /// What it does, with what that kind of step takes.
+    pub motion: StepMotionDef,
     /// The whole step.
     pub span: Span,
+}
+
+/// What an assembly step does: `push`, `rotate` or `drive`, each with only
+/// the arguments it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepMotionDef {
+    /// `push(part, along: axis, by: length, angle: angle)`.
+    Push {
+        /// `by:`, a length, when written.
+        by: Option<RExpr>,
+        /// `angle:`, when written.
+        angle: Option<RExpr>,
+    },
+    /// `rotate(part, by: angle, about: axis)`.
+    Rotate {
+        /// `by:`, an angle; a rotate always has one.
+        by: RExpr,
+    },
+    /// `drive(part, along: axis)`.
+    Drive,
+}
+
+impl StepMotionDef {
+    /// The step's word: `push`, `rotate` or `drive`.
+    pub fn kind(&self) -> AssemblyStepKind {
+        match self {
+            StepMotionDef::Push { .. } => AssemblyStepKind::Push,
+            StepMotionDef::Rotate { .. } => AssemblyStepKind::Rotate,
+            StepMotionDef::Drive => AssemblyStepKind::Drive,
+        }
+    }
 }
 
 /// `extend(role, by: d)`

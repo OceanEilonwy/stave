@@ -9,7 +9,7 @@
 use stave_geom::sequence::{Member, Step, disassemble, pair_members, pair_steps};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Severity};
-use stave_model::solved::{AssemblyStep, JointPair, PartId, StepAmount, StepKind};
+use stave_model::solved::{AssemblyStep, JointPair, PartId, StepMotion};
 
 use crate::{Checker, Item};
 
@@ -51,15 +51,15 @@ impl Checker<'_> {
                     };
                     // A push along another of the part's axes that does
                     // come apart, for the help line.
-                    let alternative = match step.kind {
-                        StepKind::Push | StepKind::Drive if step.angle.is_none() => PartAxis::ALL
+                    let alternative = match step.motion {
+                        StepMotion::Push { angle: None, .. } | StepMotion::Drive => PartAxis::ALL
                             .into_iter()
                             .filter(|axis| *axis != step.axis)
                             .find(|axis| {
                                 self.steps_of(pair, &members, Some((blocked.step, *axis)))
                                     .is_some_and(|steps| disassemble(&parts, &steps).is_ok())
                             }),
-                        StepKind::Push | StepKind::Drive | StepKind::Rotate => None,
+                        StepMotion::Push { angle: Some(_), .. } | StepMotion::Rotate { .. } => None,
                     };
                     found.push((joint.id, step.clone(), *other, alternative));
                 }
@@ -84,26 +84,7 @@ impl Checker<'_> {
     /// A step as the source writes it: `push(rail, along: width)`.
     fn step_text(&self, step: &AssemblyStep, axis: PartAxis) -> String {
         let part = self.part_name(step.part);
-        let by = match step.by {
-            Some(StepAmount::Length(length)) => format!(", by: {length}"),
-            Some(StepAmount::Angle(angle)) => format!(", by: {angle}"),
-            None => String::new(),
-        };
-        match step.kind {
-            StepKind::Push | StepKind::Drive => {
-                let word = if step.kind == StepKind::Push {
-                    "push"
-                } else {
-                    "drive"
-                };
-                let angle = step
-                    .angle
-                    .map(|a| format!(", angle: {a}"))
-                    .unwrap_or_default();
-                format!("{word}({part}, along: {}{by}{angle})", axis.word())
-            }
-            StepKind::Rotate => format!("rotate({part}{by}, about: {})", axis.word()),
-        }
+        step.source_text(&part, axis)
     }
 
     fn report_order(
@@ -119,19 +100,19 @@ impl Checker<'_> {
             self.part_name(step.part),
             self.part_name(other),
         );
-        let help = match (alternative, step.kind) {
+        let help = match (alternative, step.motion) {
             (Some(axis), _) => format!(
                 "{part} comes free along its {}: write {}",
                 axis.word(),
                 self.step_text(step, axis)
             ),
-            (None, StepKind::Rotate) => format!(
+            (None, StepMotion::Rotate { .. }) => format!(
                 "check that {part} is cut to turn where it does, or turn it about another axis"
             ),
-            (None, StepKind::Push | StepKind::Drive) if step.angle.is_some() => format!(
+            (None, StepMotion::Push { angle: Some(_), .. }) => format!(
                 "{part} can't slide out of {other_name} on this diagonal either way; check the cuts that make its way out (slots, flats, rounds) and the insert steps of '{joint_name}'"
             ),
-            (None, StepKind::Push | StepKind::Drive) => format!(
+            (None, StepMotion::Push { angle: None, .. } | StepMotion::Drive) => format!(
                 "{part} can't come out of {other_name} along any one of its axes; check the cuts and insert steps of '{joint_name}'"
             ),
         };
