@@ -98,6 +98,10 @@ pub struct FinderComponent {
     filter: Option<Kind>,
     rows: Vec<Row>,
     waiting: Waiting,
+    /// Whether the owner listens for chosen hits
+    /// ([`FinderInput::ListenForHits`]): until it does, choosing a hit
+    /// does nothing and the finder stays open.
+    hits_heard: bool,
 }
 
 /// A filter's toggle and the kind it shows (`None`: all of them).
@@ -137,6 +141,10 @@ pub enum FinderInput {
     RowSelected(gtk::ListBoxRow),
     /// People pressed Escape.
     Close,
+    /// The owner now listens for [`FinderOutput::Hit`]. Until it does,
+    /// choosing a hit does nothing: the finder neither closes nor tells
+    /// anyone.
+    ListenForHits,
 }
 
 /// What the finder tells its owner.
@@ -295,7 +303,8 @@ impl FinderComponent {
 
     /// Chooses what a row stands for: a verb closes the finder and runs
     /// (resting on one does nothing); a hit is previewed, or the finder
-    /// closes and goes there.
+    /// closes and goes there. With nobody listening for hits, a hit does
+    /// nothing and the finder stays open.
     fn choose(
         &self,
         row: Row,
@@ -313,7 +322,7 @@ impl FinderComponent {
                 }
             },
             Row::Hit(index) => {
-                let Some(hit) = self.hits.get(index).cloned() else {
+                let Some(hit) = self.hits.get(index).cloned().filter(|_| self.hits_heard) else {
                     return;
                 };
                 match choice {
@@ -549,6 +558,7 @@ impl Component for FinderComponent {
             FinderInput::Close => {
                 root.close();
             }
+            FinderInput::ListenForHits => self.hits_heard = true,
         }
         self.update_view(widgets, sender);
     }
@@ -633,9 +643,11 @@ impl Finder {
         self.callbacks.search.set(Some(Rc::new(callback)));
     }
 
-    /// Calls `callback` with a hit and what was asked of it.
+    /// Calls `callback` with a hit and what was asked of it. Until one is
+    /// connected, choosing a hit leaves the finder open, as it always did.
     pub fn connect_hit(&self, callback: impl Fn(Hit, Choice) + 'static) {
         self.callbacks.hit.set(Some(Rc::new(callback)));
+        self.bridge.send(FinderInput::ListenForHits);
     }
 
     /// Calls `callback` with the query to list the verbs it names.
@@ -922,6 +934,48 @@ mod tests {
         assert_eq!(heard.borrow().len(), 1, "a verb previews nothing");
 
         finder.dialog.force_close();
+        window.destroy();
+        settle();
+    }
+
+    #[test]
+    fn with_nobody_listening_for_hits_a_hit_leaves_the_finder_open() {
+        on_gtk_thread(unheard_hit_stays_open);
+    }
+
+    /// As before the finder was a component: Enter on a hit with no hit
+    /// callback connected does nothing, and the finder stays open. Once a
+    /// callback is connected, Enter closes it and goes there.
+    fn unheard_hit_stays_open() {
+        let finder = Finder::new();
+        finder.connect_search(|_| vec![file("doors")]);
+        let closed = Rc::new(Cell::new(0_u32));
+        let count = Rc::clone(&closed);
+        finder
+            .dialog
+            .connect_closed(move |_| count.set(count.get() + 1));
+        let (window, parent) = window();
+        finder.present(&parent, "d");
+        settle();
+        let list: gtk::ListBox = find(&finder);
+        let entry: gtk::SearchEntry = find(&finder);
+        // FILES, doors: Enter on doors.
+        let Some(doors) = list.row_at_index(1) else {
+            panic!("doors is listed");
+        };
+        list.select_row(Some(&doors));
+        entry.emit_activate();
+        settle();
+        assert_eq!(closed.get(), 0, "the finder stays open");
+
+        let heard: Rc<RefCell<Vec<(String, Choice)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        finder.connect_hit(move |hit, choice| log.borrow_mut().push((hit.label, choice)));
+        entry.emit_activate();
+        settle();
+        assert_eq!(*heard.borrow(), [("doors".to_owned(), Choice::Go)]);
+        assert_eq!(closed.get(), 1, "and now Enter closes it");
+
         window.destroy();
         settle();
     }

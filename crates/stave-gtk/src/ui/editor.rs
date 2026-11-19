@@ -760,7 +760,10 @@ pub enum EditorSearchInput {
     /// Open the bar with the selection (one line of it) as the text to
     /// find, or the last one (Ctrl+F in the text).
     StartSearch,
-    /// Open the bar and find this text from the cursor at once.
+    /// Open the bar on this text and highlight its matches, leaving the
+    /// selection where it is: [`Editor::find`] has already selected the
+    /// first match from the cursor, at once, so whatever its caller does
+    /// next acts on the match.
     Find(String),
     /// Close the bar and its highlights, and give the text the keyboard.
     CloseSearch,
@@ -838,6 +841,22 @@ impl EditorSearch {
         });
     }
 
+    /// Opens the bar on `text`, whose first match from the cursor the
+    /// editor has already selected: the selection stays.
+    fn show_found(
+        &mut self,
+        text: &str,
+        widgets: &EditorSearchWidgets,
+        root: &gtk::Revealer,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.open(widgets, root, sender);
+        widgets.entry.set_text(text);
+        self.settings
+            .set_search_text(Some(text).filter(|t| !t.is_empty()));
+        self.refresh_count(&widgets.entry);
+    }
+
     /// The text to find changed: find it from the start of the selection,
     /// so a longer text keeps the match it had.
     fn text_changed(&mut self, entry: &gtk::SearchEntry) {
@@ -856,21 +875,7 @@ impl EditorSearch {
         let Some(context) = self.context.clone() else {
             return;
         };
-        let buffer = self.view.buffer();
-        let (start, end) = buffer.selection_bounds().unwrap_or_else(|| {
-            let cursor = buffer.iter_at_mark(&buffer.get_insert());
-            (cursor, cursor)
-        });
-        let found = match (forward, again) {
-            (true, true) => context.forward(&start),
-            (true, false) => context.forward(&end),
-            (false, _) => context.backward(&start),
-        };
-        if let Some((from, to, _)) = found {
-            buffer.select_range(&from, &to);
-            self.view
-                .scroll_to_mark(&buffer.get_insert(), 0.2, false, 0.0, 0.0);
-        }
+        select_match(&self.view, &context, forward, again);
         self.refresh_count(entry);
     }
 
@@ -990,10 +995,7 @@ impl Component for EditorSearch {
     ) -> ComponentParts<Self> {
         let model = EditorSearch {
             view,
-            settings: sourceview5::SearchSettings::builder()
-                .wrap_around(true)
-                .case_sensitive(false)
-                .build(),
+            settings: search_settings(),
             context: None,
             count: String::new(),
         };
@@ -1010,11 +1012,7 @@ impl Component for EditorSearch {
     ) {
         match message {
             EditorSearchInput::StartSearch => self.open(widgets, root, &sender),
-            EditorSearchInput::Find(text) => {
-                self.open(widgets, root, &sender);
-                widgets.entry.set_text(&text);
-                self.text_changed(&widgets.entry);
-            }
+            EditorSearchInput::Find(text) => self.show_found(&text, widgets, root, &sender),
             EditorSearchInput::CloseSearch => self.close(root),
             EditorSearchInput::BufferShown => {
                 if Self::is_open(root) {
@@ -1028,6 +1026,39 @@ impl Component for EditorSearch {
             EditorSearchInput::Counted => self.refresh_count(&widgets.entry),
         }
         self.update_view(widgets, sender);
+    }
+}
+
+/// How the search bar searches: round past the end, ignoring case.
+fn search_settings() -> sourceview5::SearchSettings {
+    sourceview5::SearchSettings::builder()
+        .wrap_around(true)
+        .case_sensitive(false)
+        .build()
+}
+
+/// Selects the next (or previous) match `context` finds in the view's
+/// text and scrolls to it; `again` starts from the selection's start, to
+/// keep the match there.
+fn select_match(
+    view: &gtk::TextView,
+    context: &sourceview5::SearchContext,
+    forward: bool,
+    again: bool,
+) {
+    let buffer = view.buffer();
+    let (start, end) = buffer.selection_bounds().unwrap_or_else(|| {
+        let cursor = buffer.iter_at_mark(&buffer.get_insert());
+        (cursor, cursor)
+    });
+    let found = match (forward, again) {
+        (true, true) => context.forward(&start),
+        (true, false) => context.forward(&end),
+        (false, _) => context.backward(&start),
+    };
+    if let Some((from, to, _)) = found {
+        buffer.select_range(&from, &to);
+        view.scroll_to_mark(&buffer.get_insert(), 0.2, false, 0.0, 0.0);
     }
 }
 
@@ -1370,9 +1401,23 @@ impl Editor {
         self.search.send(EditorSearchInput::StartSearch);
     }
 
-    /// Opens the search bar and finds `text` from the cursor, when the
-    /// main loop next runs.
+    /// Finds `text` from the cursor and selects it at once, as before, so
+    /// what the caller does next (follow, uses, peek, hover at the cursor)
+    /// acts on the match; the search bar opens on `text` when the main
+    /// loop next runs. Selecting moves the cursor, so the text's own
+    /// "mark-set" handlers run inside this call, as they always did; the
+    /// search component is not running then, and anything they tell the
+    /// bar is queued.
     pub fn find(&self, text: &str) {
+        if !text.is_empty()
+            && let Ok(buffer) = self.view.buffer().downcast::<sourceview5::Buffer>()
+        {
+            let settings = search_settings();
+            settings.set_search_text(Some(text));
+            let context = sourceview5::SearchContext::new(&buffer, Some(&settings));
+            context.set_highlight(false);
+            select_match(&self.view, &context, true, true);
+        }
         self.search.send(EditorSearchInput::Find(text.to_owned()));
     }
 
@@ -1774,6 +1819,50 @@ mod tests {
     }
 
     #[test]
+    fn find_selects_the_match_before_it_returns() {
+        on_gtk_thread(find_selects_at_once);
+    }
+
+    /// The Files page's `--search` wish finds the text and then, in the
+    /// same call, follows, lists the uses of, peeks at or hovers over what
+    /// is at the cursor: the match must be selected before `find` returns.
+    /// The bar opening when the main loop runs leaves the match selected.
+    fn find_selects_at_once() {
+        let editor = Editor::new();
+        let text = "shelf\npart side\nshelf\n";
+        let lines = LineStarts::new(text);
+        let buffer = editor.new_buffer(text);
+        editor.show_buffer(&buffer, true);
+        if let Some(line) = buffer.iter_at_line(1) {
+            buffer.place_cursor(&line);
+        }
+        let second = text
+            .rfind("shelf")
+            .and_then(|at| u32::try_from(at).ok())
+            .unwrap_or_default();
+
+        editor.find("shelf");
+        assert_eq!(
+            editor.cursor(&lines),
+            second,
+            "the cursor is on the next shelf as soon as find returns"
+        );
+        assert!(!editor.has_search(), "the bar opens when the loop runs");
+
+        settle();
+        assert!(editor.has_search(), "the bar is open");
+        assert_eq!(
+            editor.cursor(&lines),
+            second,
+            "opening the bar did not move on to another match"
+        );
+        let selected = buffer
+            .selection_bounds()
+            .map(|(start, end)| buffer.text(&start, &end, false).to_string());
+        assert_eq!(selected.as_deref(), Some("shelf"));
+    }
+
+    #[test]
     fn closing_the_search_from_inside_its_own_step_is_queued_not_re_entered() {
         on_gtk_thread(search_is_queued);
     }
@@ -1788,7 +1877,7 @@ mod tests {
         let buffer = editor.new_buffer("door\nshelf\ndoor\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");
-        assert!(!editor.has_search(), "finding is only queued");
+        assert!(!editor.has_search(), "opening the bar is only queued");
         settle();
         assert!(editor.has_search(), "the bar is open");
         let selected = |buffer: &gtk::TextBuffer| {
