@@ -30,8 +30,8 @@ use stave_lang::placement::{Axis, Face, PartAxis, PerAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_model::Model;
 use stave_model::defs::{
-    AssemblyKind, DefId, Domain, Member, PartKind, RExpr, RExprKind, Setting, Size, StockField,
-    Symbol, Word,
+    AssemblyKind, BuiltinCall, DefId, Domain, Member, OpeningFaces, PartKind, RExpr, RExprKind,
+    Size, SplitBy, StockField, Symbol, Word,
 };
 use stave_model::ids::{
     AssemblyId, InstanceId, LetId, ParamId, PartId, RegionId, RequireId, StockId,
@@ -42,7 +42,6 @@ use stave_model::trace::{
     Source, Term, Trace,
 };
 use stave_model::value::{RegionOrigin, Spacing, Value};
-use stave_schema::functions::Builtin;
 
 use crate::Solver;
 use crate::eval::Env;
@@ -573,10 +572,6 @@ enum MountForm {
     Inset { reveal: Affine },
 }
 
-fn arg<'a>(args: &'a [Setting], name: &str) -> Option<&'a RExpr> {
-    args.iter().find(|a| a.name == name).map(|a| &a.value)
-}
-
 // ---------------------------------------------------------------------------
 // The tracer
 // ---------------------------------------------------------------------------
@@ -779,14 +774,16 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let model = self.solver.model;
         let inst = model.regions.get(region.index()).ok_or(Halt)?;
         let def = model.defs.region(inst.def).ok_or(Halt)?;
-        let RExprKind::Builtin {
-            function: Builtin::Split,
-            args,
-        } = &def.value.kind
+        let RExprKind::Builtin(call) = &def.value.kind else {
+            return Err(Halt);
+        };
+        let BuiltinCall::Split {
+            by: SplitBy::Shares(shares),
+            ..
+        } = &**call
         else {
             return Err(Halt);
         };
-        let shares = arg(args, "shares").ok_or(Halt)?;
         let env = Env {
             ctx: inst.ctx,
             file: def.decl.file,
@@ -1127,14 +1124,11 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     | BinaryOp::In => Ok(Affine::other("a comparison")),
                 }
             }
-            RExprKind::Builtin {
-                function: Builtin::Between,
-                args,
-            } => self.between(args, env),
-            RExprKind::Builtin {
-                function: Builtin::Extent,
-                args,
-            } => self.extent(args, env),
+            RExprKind::Builtin(call) => match &**call {
+                BuiltinCall::Between { a, b } => self.between(a, b, env),
+                BuiltinCall::Extent { items, .. } => self.extent(items, env),
+                _ => Ok(Affine::other("a value that is not a number")),
+            },
             RExprKind::Unary {
                 op: UnaryOp::Not, ..
             }
@@ -1145,7 +1139,6 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | RExprKind::Symbol(_)
             | RExprKind::SelfElement(_)
             | RExprKind::Index { .. }
-            | RExprKind::Builtin { .. }
             | RExprKind::KindValue { .. }
             | RExprKind::List(_)
             | RExprKind::Wall(_)
@@ -1268,19 +1261,16 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 base,
                 member: Member::KindEntry(name),
             } => self.kind_entry(base, name, &env),
-            RExprKind::Builtin {
-                function: Builtin::Mid,
-                args,
-            } => {
-                let (Some(item), Some(axis)) = (arg(args, "item"), arg(args, "axis")) else {
-                    return Err(Halt);
-                };
-                let Value::Word(Word::Axis(axis)) = self.value(axis, &env)? else {
-                    return Err(Halt);
-                };
-                let (low, high) = self.item_extent(item, axis, &env)?;
-                low.plus(&high)?.half()
-            }
+            RExprKind::Builtin(call) => match &**call {
+                BuiltinCall::Mid { item, axis } => {
+                    let Value::Word(Word::Axis(axis)) = self.value(axis, &env)? else {
+                        return Err(Halt);
+                    };
+                    let (low, high) = self.item_extent(item, axis, &env)?;
+                    low.plus(&high)?.half()
+                }
+                _ => Ok(Affine::other("a face")),
+            },
             _ => Ok(Affine::other("a face")),
         }
     }
@@ -1328,10 +1318,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         Ok(Affine::not_linear(Reason::Measured, &refs))
     }
 
-    fn between(&mut self, args: &[Setting], env: &Env<'static>) -> Step<Affine> {
-        let (Some(a), Some(b)) = (arg(args, "a"), arg(args, "b")) else {
-            return Err(Halt);
-        };
+    fn between(&mut self, a: &RExpr, b: &RExpr, env: &Env<'static>) -> Step<Affine> {
         let mut ends = Vec::new();
         for side in [a, b] {
             match self.value(side, env)? {
@@ -1351,10 +1338,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         Ok(Affine::not_linear(Reason::Measured, &refs))
     }
 
-    fn extent(&mut self, args: &[Setting], env: &Env<'static>) -> Step<Affine> {
-        let Some(items) = arg(args, "items") else {
-            return Err(Halt);
-        };
+    fn extent(&mut self, items: &RExpr, env: &Env<'static>) -> Step<Affine> {
         let parts = self.value(items, env)?.parts().ok_or(Halt)?;
         self.parts_measured(&parts)
     }
@@ -1604,15 +1588,15 @@ impl<'s, 'm> Tracer<'s, 'm> {
             _ => return Err(Halt),
         };
         let (written, written_env) = self.peel(spacing, *env);
-        let name = match value {
-            Spacing::Evenly => return Ok((value, Affine::zero())),
-            Spacing::Ends(_) => "inset",
-            Spacing::Pitch(_) | Spacing::Gap(_) => "distance",
-        };
+        if value == Spacing::Evenly {
+            return Ok((value, Affine::zero()));
+        }
         let distance = match &written.kind {
-            RExprKind::Builtin { args, .. } => match arg(args, name) {
-                Some(expr) => self.affine(expr, &written_env)?,
-                None => Affine::zero(),
+            RExprKind::Builtin(call) => match &**call {
+                BuiltinCall::Ends { inset: distance }
+                | BuiltinCall::Pitch { distance }
+                | BuiltinCall::Gap { distance } => self.affine(distance, &written_env)?,
+                _ => Affine::other("a spacing"),
             },
             RExprKind::Word(_) => Affine::zero(),
             _ => Affine::other("a spacing"),
@@ -1948,18 +1932,17 @@ impl<'s, 'm> Tracer<'s, 'm> {
     /// The regions an expression makes or names.
     fn regions_of(&mut self, expr: &RExpr, env: &Env<'static>) -> Step<Vec<Bounds>> {
         let (expr, env) = self.peel(expr, *env);
-        let RExprKind::Builtin { function, args } = &expr.kind else {
+        let RExprKind::Builtin(call) = &expr.kind else {
             return match self.value(&expr, &env)? {
                 Value::Region(region) => Ok(vec![self.region(region)?]),
                 _ => Ok(vec![Bounds::other("a region")]),
             };
         };
-        match function {
-            Builtin::Opening => {
+        match &**call {
+            BuiltinCall::Opening(faces) => {
                 let mut planes = Vec::new();
-                for name in ["left", "right", "bottom", "top", "front", "back"] {
-                    let plane = arg(args, name).ok_or(Halt)?;
-                    planes.push(self.anchor(plane, &env)?);
+                for face in OpeningFaces::ORDER {
+                    planes.push(self.anchor(faces.face(face), &env)?);
                 }
                 let mut planes = planes.into_iter();
                 let mut next = || planes.next().ok_or(Halt);
@@ -1969,23 +1952,19 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     (next()?, next()?),
                 )])
             }
-            Builtin::Split => self.split(args, &env),
-            Builtin::Cover => self.cover(args, &env),
+            BuiltinCall::Split { region, axis, by } => self.split(region, axis, by, &env),
+            BuiltinCall::Cover {
+                region,
+                mount,
+                thickness,
+            } => self.cover(region, mount, thickness, &env),
             // The root box: from the origin, as wide, tall and deep as
             // its three lengths.
-            _ if ["across", "up", "deep"]
-                .iter()
-                .all(|name| arg(args, name).is_some()) =>
-            {
-                let mut ends = Vec::new();
-                for name in ["across", "up", "deep"] {
-                    let size = arg(args, name).ok_or(Halt)?;
-                    ends.push((Affine::zero(), self.affine(size, &env)?));
-                }
-                let mut ends = ends.into_iter();
-                let mut next = || ends.next().ok_or(Halt);
-                Ok(vec![Bounds::new(next()?, next()?, next()?)])
-            }
+            BuiltinCall::RegionBox { across, up, deep } => Ok(vec![Bounds::new(
+                (Affine::zero(), self.affine(across, &env)?),
+                (Affine::zero(), self.affine(up, &env)?),
+                (Affine::zero(), self.affine(deep, &env)?),
+            )]),
             // Any other function makes something that is not a region.
             _ => Ok(vec![Bounds::other("a region")]),
         }
@@ -2012,16 +1991,19 @@ impl<'s, 'm> Tracer<'s, 'm> {
         }
     }
 
-    fn split(&mut self, args: &[Setting], env: &Env<'static>) -> Step<Vec<Bounds>> {
-        let (Some(region), Some(axis)) = (arg(args, "region"), arg(args, "axis")) else {
-            return Err(Halt);
-        };
+    fn split(
+        &mut self,
+        region: &RExpr,
+        axis: &RExpr,
+        by: &SplitBy,
+        env: &Env<'static>,
+    ) -> Step<Vec<Bounds>> {
         let bounds = self.one_region(region, env)?;
         let Value::Word(Word::Axis(axis)) = self.value(axis, env)? else {
             return Err(Halt);
         };
         let (low, high) = bounds.get(axis)?.clone();
-        if let Some(at) = arg(args, "at") {
+        if let SplitBy::At(at) = by {
             let part = self.solver.eval_part(at, env).map_err(|_| Halt)?;
             let start = self.part_min(part, axis)?;
             let end = start.plus(&self.size_along(part, axis)?)?;
@@ -2031,9 +2013,9 @@ impl<'s, 'm> Tracer<'s, 'm> {
             ]);
         }
         let count = env.array.map(|(_, n)| n).filter(|n| *n > 0).ok_or(Halt)?;
-        let shares = match arg(args, "shares") {
-            Some(expr) => self.shares(expr, env, count)?,
-            None => Ok(vec![Rational::ONE; count]),
+        let shares = match by {
+            SplitBy::Shares(expr) => self.shares(expr, env, count)?,
+            SplitBy::Equal | SplitBy::At(_) => Ok(vec![Rational::ONE; count]),
         };
         let size = high.minus(&low)?;
         let shares = match shares {
@@ -2099,36 +2081,43 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     fn mount(&mut self, expr: &RExpr, env: &Env<'static>) -> Step<Option<MountForm>> {
         let (written, written_env) = self.peel(expr, *env);
-        let RExprKind::Builtin { function, args } = &written.kind else {
+        let RExprKind::Builtin(call) = &written.kind else {
             return Ok(None);
         };
-        let length = |this: &mut Self, name: &str| -> Step<Option<Affine>> {
-            arg(args, name)
+        let length = |this: &mut Self, expr: &Option<RExpr>| -> Step<Option<Affine>> {
+            expr.as_ref()
                 .map(|e| this.affine(e, &written_env))
                 .transpose()
         };
-        Ok(match function {
-            Builtin::Overlay => Some(MountForm::Overlay(Box::new(Overlays {
-                left: length(self, "left")?.unwrap_or_else(Affine::zero),
-                right: length(self, "right")?.unwrap_or_else(Affine::zero),
-                top: length(self, "top")?.unwrap_or_else(Affine::zero),
-                bottom: length(self, "bottom")?.unwrap_or_else(Affine::zero),
-                meeting: length(self, "meeting")?,
+        Ok(match &**call {
+            BuiltinCall::Overlay {
+                left,
+                right,
+                top,
+                bottom,
+                meeting,
+            } => Some(MountForm::Overlay(Box::new(Overlays {
+                left: length(self, left)?.unwrap_or_else(Affine::zero),
+                right: length(self, right)?.unwrap_or_else(Affine::zero),
+                top: length(self, top)?.unwrap_or_else(Affine::zero),
+                bottom: length(self, bottom)?.unwrap_or_else(Affine::zero),
+                meeting: length(self, meeting)?,
             }))),
-            Builtin::Inset => length(self, "reveal")?.map(|reveal| MountForm::Inset { reveal }),
+            BuiltinCall::Inset { reveal } => Some(MountForm::Inset {
+                reveal: self.affine(reveal, &written_env)?,
+            }),
             // Any other function is not a mount.
             _ => None,
         })
     }
 
-    fn cover(&mut self, args: &[Setting], env: &Env<'static>) -> Step<Vec<Bounds>> {
-        let (Some(region), Some(mount), Some(thickness)) = (
-            arg(args, "region"),
-            arg(args, "mount"),
-            arg(args, "thickness"),
-        ) else {
-            return Err(Halt);
-        };
+    fn cover(
+        &mut self,
+        region: &RExpr,
+        mount: &RExpr,
+        thickness: &RExpr,
+        env: &Env<'static>,
+    ) -> Step<Vec<Bounds>> {
         let b = self.one_region(region, env)?;
         let origin = self.region_origin(region, env)?;
         let thickness = self.affine(thickness, env)?;

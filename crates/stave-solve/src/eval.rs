@@ -8,7 +8,8 @@ use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    ArrayDef, DefId, Index, Member, RExpr, RExprKind, StockField, Symbol, Text, TextPart, Word,
+    ArrayDef, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind, SplitBy,
+    StockField, Symbol, Text, TextPart, Word,
 };
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
@@ -279,7 +280,7 @@ impl<'m> Solver<'m> {
                     "wall(...) is read only as one side of a kind's require",
                 )
                 .into()),
-            RExprKind::Builtin { function, args } => self.builtin(*function, args, env, span),
+            RExprKind::Builtin(call) => self.builtin(call, env, span),
             RExprKind::KindValue { kind, settings } => {
                 let base = self.eval(kind, env)?;
                 let Value::Kind(mut value) = base else {
@@ -1421,39 +1422,22 @@ impl<'m> Solver<'m> {
     // Built-in functions
     // -----------------------------------------------------------------------
 
-    fn arg<'a>(args: &'a [stave_model::defs::Setting], name: &str) -> Option<&'a RExpr> {
-        args.iter().find(|a| a.name == name).map(|a| &a.value)
-    }
-
-    fn builtin(
-        &mut self,
-        function: Builtin,
-        args: &[stave_model::defs::Setting],
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Value> {
-        let length = |this: &mut Self, name: &str| -> Solved<Option<ExactLength>> {
-            match Self::arg(args, name) {
+    fn builtin(&mut self, call: &BuiltinCall, env: &Env<'_>, span: Span) -> Solved<Value> {
+        let length = |this: &mut Self, expr: &Option<RExpr>| -> Solved<Option<ExactLength>> {
+            match expr {
                 Some(expr) => this.eval_length(expr, env).map(Some),
                 None => Ok(None),
             }
         };
-        match function {
-            Builtin::Between => {
-                let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
-                    return Err(Fault::Earlier.into());
-                };
+        match call {
+            BuiltinCall::Between { a, b } => {
                 let a = self.eval(a, env)?;
                 let b = self.eval(b, env)?;
                 self.between(&a, &b, env, span).map(Value::Length)
             }
-            Builtin::Extent => {
-                let (Some(items), Some(axis)) = (Self::arg(args, "items"), Self::arg(args, "axis"))
-                else {
-                    return Err(Fault::Earlier.into());
-                };
+            BuiltinCall::Extent { items, axis, of } => {
                 let items = self.eval(items, env)?;
-                let axis = match (self.eval(axis, env)?, Self::arg(args, "of")) {
+                let axis = match (self.eval(axis, env)?, of) {
                     (Value::Word(Word::Axis(axis)), None) => axis,
                     // An axis of another part, or of a contact patch: the
                     // world axis it runs along.
@@ -1502,11 +1486,7 @@ impl<'m> Solver<'m> {
                     _ => Ok(Value::Length(ExactLength::ZERO)),
                 }
             }
-            Builtin::Mid => {
-                let (Some(item), Some(axis)) = (Self::arg(args, "item"), Self::arg(args, "axis"))
-                else {
-                    return Err(Fault::Earlier.into());
-                };
+            BuiltinCall::Mid { item, axis } => {
                 let item = self.eval(item, env)?;
                 let Value::Word(Word::Axis(axis)) = self.eval(axis, env)? else {
                     return Err(Fault::Earlier.into());
@@ -1540,19 +1520,11 @@ impl<'m> Solver<'m> {
                     owner,
                 }))
             }
-            Builtin::Opening => {
+            BuiltinCall::Opening(faces) => {
                 let mut planes = Vec::new();
-                for (name, face) in [
-                    ("left", Face::Left),
-                    ("right", Face::Right),
-                    ("bottom", Face::Bottom),
-                    ("top", Face::Top),
-                    ("front", Face::Front),
-                    ("back", Face::Back),
-                ] {
-                    let Some(expr) = Self::arg(args, name) else {
-                        return Err(Fault::Earlier.into());
-                    };
+                for face in OpeningFaces::ORDER {
+                    let expr = faces.face(face);
+                    let name = face.word();
                     let anchor = self.eval_anchor(expr, env)?;
                     if anchor.axis != face.axis() {
                         return Err(self
@@ -1583,44 +1555,42 @@ impl<'m> Solver<'m> {
                     origin: RegionOrigin::Plain,
                 }]))
             }
-            // Read only as one side of a kind's rule, measured by the
-            // fit check: the resolver makes it `RExprKind::Wall`.
-            Builtin::Wall => Err(Fault::Earlier.into()),
-            Builtin::Contact => {
-                let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
-                    return Err(Fault::Earlier.into());
-                };
+            BuiltinCall::Contact { a, b } => {
                 let a = self.one_part(Builtin::Contact, a, env)?;
                 let b = self.one_part(Builtin::Contact, b, env)?;
                 self.contact(a, b, env, span).map(Value::Patch)
             }
-            Builtin::EdgeToEdge => self.eval_meeting(Builtin::EdgeToEdge, args, env),
-            Builtin::Split => self.split(args, env, span),
-            Builtin::Cover => self.cover(args, env, span),
-            Builtin::Overlay => {
+            BuiltinCall::EdgeToEdge { a, b } => self.eval_meeting(Builtin::EdgeToEdge, a, b, env),
+            BuiltinCall::Split { region, axis, by } => self.split(region, axis, by, env, span),
+            BuiltinCall::Cover {
+                region,
+                mount,
+                thickness,
+            } => self.cover(region, mount, thickness, env),
+            BuiltinCall::Overlay {
+                left,
+                right,
+                top,
+                bottom,
+                meeting,
+            } => {
                 let zero = ExactLength::ZERO;
                 Ok(Value::Mount(Mount::Overlay {
-                    left: length(self, "left")?.unwrap_or(zero),
-                    right: length(self, "right")?.unwrap_or(zero),
-                    top: length(self, "top")?.unwrap_or(zero),
-                    bottom: length(self, "bottom")?.unwrap_or(zero),
-                    meeting: length(self, "meeting")?,
+                    left: length(self, left)?.unwrap_or(zero),
+                    right: length(self, right)?.unwrap_or(zero),
+                    top: length(self, top)?.unwrap_or(zero),
+                    bottom: length(self, bottom)?.unwrap_or(zero),
+                    meeting: length(self, meeting)?,
                 }))
             }
-            Builtin::Inset => Ok(Value::Mount(Mount::Inset {
-                reveal: length(self, "reveal")?.ok_or(Fault::Earlier)?,
+            BuiltinCall::Inset { reveal } => Ok(Value::Mount(Mount::Inset {
+                reveal: self.eval_length(reveal, env)?,
             })),
-            Builtin::Turned => match Self::arg(args, "profile")
-                .map(|e| self.eval(e, env))
-                .transpose()?
-            {
-                Some(Value::Profile(profile)) => Ok(Value::Turned(profile)),
+            BuiltinCall::Turned { profile } => match self.eval(profile, env)? {
+                Value::Profile(profile) => Ok(Value::Turned(profile)),
                 _ => Err(Fault::Earlier.into()),
             },
-            Builtin::Joined => {
-                let Some(expr) = Self::arg(args, "by") else {
-                    return Err(Fault::Earlier.into());
-                };
+            BuiltinCall::Joined { by: expr } => {
                 let kinds = match self.eval(expr, env)? {
                     Value::Kind(kind) => vec![kind],
                     Value::List(items) => {
@@ -1671,14 +1641,7 @@ impl<'m> Solver<'m> {
                         .into()),
                 }
             }
-            Builtin::Spliced => {
-                let (Some(by), Some(at), Some(from)) = (
-                    Self::arg(args, "by"),
-                    Self::arg(args, "at"),
-                    Self::arg(args, "from"),
-                ) else {
-                    return Err(Fault::Earlier.into());
-                };
+            BuiltinCall::Spliced { by, at, from } => {
                 let by = match self.eval(by, env)? {
                     Value::Kind(kind) => kind,
                     other => {
@@ -1759,36 +1722,35 @@ impl<'m> Solver<'m> {
                     from,
                 }))
             }
-            Builtin::Box => Ok(Value::Envelope(Envelope::Box {
-                length: length(self, "length")?.ok_or(Fault::Earlier)?,
-                width: length(self, "width")?.ok_or(Fault::Earlier)?,
-                thickness: length(self, "thickness")?.ok_or(Fault::Earlier)?,
+            BuiltinCall::Box {
+                length,
+                width,
+                thickness,
+            } => Ok(Value::Envelope(Envelope::Box {
+                length: self.eval_length(length, env)?,
+                width: self.eval_length(width, env)?,
+                thickness: self.eval_length(thickness, env)?,
             })),
-            Builtin::RegionBox => self.region_box(args, env),
-            Builtin::Cylinder => Ok(Value::Envelope(Envelope::Cylinder {
-                diameter: length(self, "diameter")?.ok_or(Fault::Earlier)?,
-                length: length(self, "length")?.ok_or(Fault::Earlier)?,
+            BuiltinCall::RegionBox { across, up, deep } => self.region_box(across, up, deep, env),
+            BuiltinCall::Cylinder { diameter, length } => Ok(Value::Envelope(Envelope::Cylinder {
+                diameter: self.eval_length(diameter, env)?,
+                length: self.eval_length(length, env)?,
             })),
-            Builtin::Model => {
-                // node("name") is lowered as a model call with a `name` argument.
-                if let Some(name) = Self::arg(args, "name") {
-                    return self.eval(name, env);
-                }
-                let source = match Self::arg(args, "source")
-                    .map(|e| self.eval(e, env))
-                    .transpose()?
-                {
-                    Some(Value::Text(text)) => text,
+            BuiltinCall::Node { name } => self.eval(name, env),
+            BuiltinCall::Model {
+                source,
+                align,
+                sha256,
+            } => {
+                let source = match self.eval(source, env)? {
+                    Value::Text(text) => text,
                     _ => return Err(Fault::Earlier.into()),
                 };
-                let align = match Self::arg(args, "align")
-                    .map(|e| self.eval(e, env))
-                    .transpose()?
-                {
+                let align = match align.as_ref().map(|e| self.eval(e, env)).transpose()? {
                     Some(Value::Text(node)) => Some(node),
                     _ => None,
                 };
-                let sha256 = match Self::arg(args, "sha256") {
+                let sha256 = match sha256 {
                     Some(expr) => match self.eval(expr, env)? {
                         Value::Text(text) => match text.parse::<value::Sha256>() {
                             Ok(digest) => Some(digest),
@@ -1812,14 +1774,14 @@ impl<'m> Solver<'m> {
                     sha256,
                 }))
             }
-            Builtin::Ends => Ok(Value::Spacing(Spacing::Ends(
-                length(self, "inset")?.unwrap_or(ExactLength::ZERO),
+            BuiltinCall::Ends { inset } => {
+                Ok(Value::Spacing(Spacing::Ends(self.eval_length(inset, env)?)))
+            }
+            BuiltinCall::Pitch { distance } => Ok(Value::Spacing(Spacing::Pitch(
+                self.eval_length(distance, env)?,
             ))),
-            Builtin::Pitch => Ok(Value::Spacing(Spacing::Pitch(
-                length(self, "distance")?.ok_or(Fault::Earlier)?,
-            ))),
-            Builtin::Gap => Ok(Value::Spacing(Spacing::Gap(
-                length(self, "distance")?.ok_or(Fault::Earlier)?,
+            BuiltinCall::Gap { distance } => Ok(Value::Spacing(Spacing::Gap(
+                self.eval_length(distance, env)?,
             ))),
         }
     }
@@ -1945,12 +1907,19 @@ impl<'m> Solver<'m> {
 
     /// `box(across:, up:, deep:)`: the root region, from its low corner at
     /// the origin. Each size is more than zero.
-    fn region_box(&mut self, args: &[stave_model::defs::Setting], env: &Env<'_>) -> Solved<Value> {
+    fn region_box(
+        &mut self,
+        across: &RExpr,
+        up: &RExpr,
+        deep: &RExpr,
+        env: &Env<'_>,
+    ) -> Solved<Value> {
         let mut sizes = [ExactLength::ZERO; 3];
-        for (slot, name) in sizes.iter_mut().zip(Builtin::REGION_BOX_ARGUMENTS) {
-            let Some(expr) = Self::arg(args, name) else {
-                return Err(Fault::Earlier.into());
-            };
+        for ((slot, name), expr) in sizes
+            .iter_mut()
+            .zip(Builtin::REGION_BOX_ARGUMENTS)
+            .zip([across, up, deep])
+        {
             let size = self.eval_length(expr, env)?;
             if size <= ExactLength::ZERO {
                 return Err(self
@@ -1980,21 +1949,19 @@ impl<'m> Solver<'m> {
 
     fn split(
         &mut self,
-        args: &[stave_model::defs::Setting],
+        region: &RExpr,
+        axis: &RExpr,
+        by: &SplitBy,
         env: &Env<'_>,
         span: Span,
     ) -> Solved<Value> {
-        let (Some(region), Some(axis)) = (Self::arg(args, "region"), Self::arg(args, "axis"))
-        else {
-            return Err(Fault::Earlier.into());
-        };
         let region = self.region_argument(region, env)?;
         let Value::Word(Word::Axis(axis)) = self.eval(axis, env)? else {
             return Err(Fault::Earlier.into());
         };
         let bounds = region.bounds;
         let (low, high) = (bounds.min(axis), bounds.max(axis));
-        if let Some(at) = Self::arg(args, "at") {
+        if let SplitBy::At(at) = by {
             let part = self.eval_part(at, env)?;
             let part_box = self.drawn_box(part)?;
             let (p0, p1) = (part_box.min(axis), part_box.max(axis));
@@ -2033,9 +2000,9 @@ impl<'m> Solver<'m> {
                 .into());
         };
         let size = high.checked_sub(low).ok_or(Fault::Overflow)?;
-        let shares = match Self::arg(args, "shares") {
-            Some(expr) => self.shares(expr, env, count)?,
-            None => vec![Rational::from(1_i64); count],
+        let shares = match by {
+            SplitBy::Shares(expr) => self.shares(expr, env, count)?,
+            SplitBy::Equal | SplitBy::At(_) => vec![Rational::from(1_i64); count],
         };
         let total = shares
             .iter()
@@ -2152,17 +2119,11 @@ impl<'m> Solver<'m> {
 
     fn cover(
         &mut self,
-        args: &[stave_model::defs::Setting],
+        region: &RExpr,
+        mount: &RExpr,
+        thickness: &RExpr,
         env: &Env<'_>,
-        _span: Span,
     ) -> Solved<Value> {
-        let (Some(region), Some(mount), Some(thickness)) = (
-            Self::arg(args, "region"),
-            Self::arg(args, "mount"),
-            Self::arg(args, "thickness"),
-        ) else {
-            return Err(Fault::Earlier.into());
-        };
         let region = self.region_argument(region, env)?;
         let Value::Mount(mount) = self.eval(mount, env)? else {
             return Err(Fault::Earlier.into());

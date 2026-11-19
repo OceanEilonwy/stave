@@ -230,13 +230,10 @@ impl Solver<'_> {
     pub(crate) fn eval_meeting(
         &mut self,
         question: Builtin,
-        args: &[stave_model::defs::Setting],
+        a: &stave_model::defs::RExpr,
+        b: &stave_model::defs::RExpr,
         env: &Env<'_>,
     ) -> Solved<Value> {
-        let find = |name: &str| args.iter().find(|arg| arg.name == name).map(|a| &a.value);
-        let (Some(a), Some(b)) = (find("a"), find("b")) else {
-            return Err(crate::Fault::Earlier.into());
-        };
         let a = self.one_part(question, a, env)?;
         let b = self.one_part(question, b, env)?;
         let meeting = self.meeting(a, b)?;
@@ -261,14 +258,12 @@ fn meeting_question(
 ) -> Option<(&stave_model::defs::RExpr, &stave_model::defs::RExpr)> {
     use stave_model::defs::RExprKind;
     match &expr.kind {
-        RExprKind::Builtin { function, args } if function.asks_how_parts_meet() => {
-            let a = args.iter().find(|arg| arg.name == "a")?;
-            let b = args.iter().find(|arg| arg.name == "b")?;
-            Some((&a.value, &b.value))
-        }
-        RExprKind::Builtin { args, .. } | RExprKind::KindValue { settings: args, .. } => {
-            args.iter().find_map(|arg| meeting_question(&arg.value))
-        }
+        RExprKind::Builtin(call) => call
+            .meeting_question()
+            .or_else(|| call.arguments().find_map(meeting_question)),
+        RExprKind::KindValue { settings, .. } => settings
+            .iter()
+            .find_map(|setting| meeting_question(&setting.value)),
         RExprKind::Member { base, .. } | RExprKind::Index { base, .. } => meeting_question(base),
         RExprKind::Unary { operand, .. } => meeting_question(operand),
         RExprKind::Binary { lhs, rhs, .. } => {

@@ -784,13 +784,10 @@ pub fn split_grips(
         .get(region.index())
         .ok_or(GripsError::NotInDesign)?;
     let def = model.defs.region(inst.def).ok_or(GripsError::NotInDesign)?;
-    let is_split = matches!(
-        def.value.kind,
-        RExprKind::Builtin {
-            function: Builtin::Split,
-            ..
-        }
-    );
+    let is_split = match &def.value.kind {
+        RExprKind::Builtin(call) => call.function() == Builtin::Split,
+        _ => false,
+    };
     if !is_split || def.array.is_none() {
         return Err(GripsError::NotASplit);
     }

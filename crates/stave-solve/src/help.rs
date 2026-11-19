@@ -82,7 +82,7 @@ fn compares_for_equality(condition: &RExpr) -> bool {
         | RExprKind::SelfElement(_)
         | RExprKind::Member { .. }
         | RExprKind::Index { .. }
-        | RExprKind::Builtin { .. }
+        | RExprKind::Builtin(_)
         | RExprKind::KindValue { .. }
         | RExprKind::Unary { .. }
         | RExprKind::List(_)

@@ -14,8 +14,8 @@ use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm, Wor
 
 use super::{ArrayShape, Body, Cx, Resolver};
 use crate::defs::{
-    CutName, DefId, Index, Member, RExpr, RExprKind, Setting, StockField, Symbol, Text, TextPart,
-    Word,
+    BuiltinCall, CutName, DefId, Index, Member, OpeningFaces, RExpr, RExprKind, Setting, SplitBy,
+    StockField, Symbol, Text, TextPart, Word,
 };
 use crate::types::{KindTy, Ty};
 
@@ -1115,20 +1115,24 @@ impl Resolver<'_> {
     }
 
     fn node(&mut self, cx: &Cx, args: &[ast::Arg], span: Span) -> RExpr {
-        let mut settings = Vec::new();
-        for arg in args {
-            let value = self.value(cx, &arg.value, &Expect::ty(Ty::Text).named("node"));
-            settings.push(Setting {
-                name: "name".into(),
-                name_span: arg.span,
-                value,
-            });
-        }
-        RExpr {
-            kind: RExprKind::Builtin {
-                function: Builtin::Model,
-                args: settings,
+        let [
+            ast::Arg {
+                name: None, value, ..
             },
+        ] = args
+        else {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("'{MODEL_NODE}' needs the name of one node"),
+                cx.file,
+                span,
+                format!("write the node's name alone, as in model(\"cabinet.glb\", align: {MODEL_NODE}(\"mount\"))"),
+            );
+            return RExpr::error(span);
+        };
+        let name = self.value(cx, value, &Expect::ty(Ty::Text).named(MODEL_NODE));
+        RExpr {
+            kind: RExprKind::Builtin(Box::new(BuiltinCall::Node { name })),
             ty: Ty::Text,
             span,
         }
@@ -1391,11 +1395,11 @@ impl Resolver<'_> {
             _ if builtin == Builtin::Split => Ty::Regions,
             name => Ty::from_type_name(name),
         };
+        let Some(call) = builtin_call(builtin, settings, span) else {
+            return RExpr::error(span);
+        };
         RExpr {
-            kind: RExprKind::Builtin {
-                function: builtin,
-                args: settings,
-            },
+            kind: RExprKind::Builtin(Box::new(call)),
             ty,
             span,
         }
@@ -1517,12 +1521,125 @@ impl Resolver<'_> {
     }
 }
 
+/// The typed call for a built-in whose arguments have been checked, each
+/// taken from `settings` by its parameter's name. A required argument that
+/// is missing was reported, and stands as an error expression at the
+/// call. `None` for `wall(...)`, which is resolved on its own.
+fn builtin_call(builtin: Builtin, settings: Vec<Setting>, span: Span) -> Option<BuiltinCall> {
+    let mut settings = settings;
+    let mut optional = |name: &str| {
+        settings
+            .iter()
+            .position(|setting| setting.name == name)
+            .map(|index| settings.swap_remove(index).value)
+    };
+    let mut required = |name: &str| optional(name).unwrap_or_else(|| RExpr::error(span));
+    Some(match builtin {
+        Builtin::Between => BuiltinCall::Between {
+            a: required("a"),
+            b: required("b"),
+        },
+        Builtin::Extent => BuiltinCall::Extent {
+            items: required("items"),
+            axis: required("axis"),
+            of: optional("of"),
+        },
+        Builtin::Mid => BuiltinCall::Mid {
+            item: required("item"),
+            axis: required("axis"),
+        },
+        Builtin::Opening => BuiltinCall::Opening(OpeningFaces {
+            left: required(Face::Left.word()),
+            right: required(Face::Right.word()),
+            bottom: required(Face::Bottom.word()),
+            top: required(Face::Top.word()),
+            front: required(Face::Front.word()),
+            back: required(Face::Back.word()),
+        }),
+        Builtin::Split => {
+            let region = required("region");
+            let axis = required("axis");
+            // Both `at:` and `shares:` was reported; `at:` is kept.
+            let by = match (optional("at"), optional("shares")) {
+                (Some(at), _) => SplitBy::At(at),
+                (None, Some(shares)) => SplitBy::Shares(shares),
+                (None, None) => SplitBy::Equal,
+            };
+            BuiltinCall::Split { region, axis, by }
+        }
+        Builtin::Cover => BuiltinCall::Cover {
+            region: required("region"),
+            mount: required("mount"),
+            thickness: required("thickness"),
+        },
+        Builtin::Overlay => BuiltinCall::Overlay {
+            left: optional("left"),
+            right: optional("right"),
+            top: optional("top"),
+            bottom: optional("bottom"),
+            meeting: optional("meeting"),
+        },
+        Builtin::Inset => BuiltinCall::Inset {
+            reveal: required("reveal"),
+        },
+        Builtin::Turned => BuiltinCall::Turned {
+            profile: required("profile"),
+        },
+        Builtin::Joined => BuiltinCall::Joined { by: required("by") },
+        Builtin::Spliced => BuiltinCall::Spliced {
+            by: required("by"),
+            at: required("at"),
+            from: required("from"),
+        },
+        Builtin::Box => BuiltinCall::Box {
+            length: required("length"),
+            width: required("width"),
+            thickness: required("thickness"),
+        },
+        Builtin::RegionBox => {
+            let [across, up, deep] = Builtin::REGION_BOX_ARGUMENTS;
+            BuiltinCall::RegionBox {
+                across: required(across),
+                up: required(up),
+                deep: required(deep),
+            }
+        }
+        Builtin::Cylinder => BuiltinCall::Cylinder {
+            diameter: required("diameter"),
+            length: required("length"),
+        },
+        Builtin::Model => BuiltinCall::Model {
+            source: required("source"),
+            align: optional("align"),
+            sha256: optional("sha256"),
+        },
+        Builtin::Ends => BuiltinCall::Ends {
+            inset: required("inset"),
+        },
+        Builtin::Pitch => BuiltinCall::Pitch {
+            distance: required("distance"),
+        },
+        Builtin::Gap => BuiltinCall::Gap {
+            distance: required("distance"),
+        },
+        Builtin::Contact => BuiltinCall::Contact {
+            a: required("a"),
+            b: required("b"),
+        },
+        Builtin::EdgeToEdge => BuiltinCall::EdgeToEdge {
+            a: required("a"),
+            b: required("b"),
+        },
+        Builtin::Wall => return None,
+    })
+}
+
 /// `true` when an expression reads `wall(cut)` anywhere.
 pub(crate) fn reads_wall(expr: &RExpr) -> bool {
     match &expr.kind {
         RExprKind::Wall(_) => true,
         RExprKind::Member { base, .. } | RExprKind::Index { base, .. } => reads_wall(base),
-        RExprKind::Builtin { args, .. } => args.iter().any(|a| reads_wall(&a.value)),
+        RExprKind::Builtin(call) => call.arguments().any(reads_wall),
         RExprKind::KindValue { kind, settings } => {
             reads_wall(kind) || settings.iter().any(|a| reads_wall(&a.value))
         }

@@ -10,7 +10,7 @@
 use stave_lang::Fix;
 use stave_lang::ast::{Span, UnaryOp};
 use stave_lang::units::{Angle, ExactAngle, ExactLength, Length, Rational};
-use stave_model::defs::{AssemblyKind, DefId, DriveDef, RExpr, RExprKind, Symbol};
+use stave_model::defs::{AssemblyKind, BuiltinCall, DefId, DriveDef, RExpr, RExprKind, Symbol};
 use stave_model::solved::AssemblyId;
 use stave_model::types::Ty;
 use stave_schema::functions::Builtin;
@@ -69,15 +69,36 @@ fn literal_angle(expr: &RExpr) -> Option<ExactAngle> {
     }
 }
 
-/// The settings of a call to `function`, when `expr` is one.
-fn builtin_args(expr: &RExpr, function: Builtin) -> Option<&[stave_model::defs::Setting]> {
+/// The call, when `expr` is a call to `function`.
+fn builtin_call(expr: &RExpr, function: Builtin) -> Option<&BuiltinCall> {
     match &expr.kind {
-        RExprKind::Builtin {
-            function: found,
-            args,
-        } if *found == function => Some(args),
+        RExprKind::Builtin(call) if call.function() == function => Some(call),
         _ => None,
     }
+}
+
+/// The overlay written on one edge of `overlay(...)`, by the edge's name
+/// as [`OverlayChange`] carries it, and whether any edge is written.
+fn overlay_edge<'e>(call: &'e BuiltinCall, edge: &str) -> (Option<&'e RExpr>, bool) {
+    let BuiltinCall::Overlay {
+        left,
+        right,
+        top,
+        bottom,
+        meeting,
+    } = call
+    else {
+        return (None, false);
+    };
+    let found = match edge {
+        "left" => left,
+        "right" => right,
+        "top" => top,
+        "bottom" => bottom,
+        "meeting" => meeting,
+        _ => &None,
+    };
+    (found.as_ref(), call.arguments().next().is_some())
 }
 
 /// `text` (written at `span`) with the text at `inner` replaced, or, when
@@ -121,7 +142,7 @@ impl Checker<'_> {
             return None;
         };
         if let Some((param, value)) = args.iter().find(|(_, value)| value.ty == Ty::Mount) {
-            builtin_args(value, Builtin::Overlay)?;
+            builtin_call(value, Builtin::Overlay)?;
             let name = &defs.param(*param)?.decl.name;
             let path = defs.patch_path(DefId::Assembly(inst.def), root)?;
             return Some(OverlaySite {
@@ -138,10 +159,9 @@ impl Checker<'_> {
             .filter_map(|item| match item {
                 DefId::Region(id) => {
                     let region = defs.region(*id)?;
-                    let overlay = builtin_args(&region.value, Builtin::Cover)?
-                        .iter()
-                        .map(|setting| &setting.value)
-                        .find(|value| builtin_args(value, Builtin::Overlay).is_some())?;
+                    let overlay = builtin_call(&region.value, Builtin::Cover)?
+                        .arguments()
+                        .find(|value| builtin_call(value, Builtin::Overlay).is_some())?;
                     Some((*item, region, overlay))
                 }
                 _ => None,
@@ -164,11 +184,11 @@ impl Checker<'_> {
         let site = self.overlay_site(assembly)?;
         let defs = &self.model.defs;
         let text = defs.source_text(site.file, site.value.span)?;
-        let args = builtin_args(site.overlay, Builtin::Overlay)?;
+        let call = builtin_call(site.overlay, Builtin::Overlay)?;
         let (edge, new) = match change {
             OverlayChange::Smaller { edge, by } => {
-                let old = match args.iter().find(|setting| setting.name == edge) {
-                    Some(setting) => literal_length(&setting.value)?,
+                let old = match overlay_edge(call, edge).0 {
+                    Some(value) => literal_length(value)?,
                     None => ExactLength::ZERO,
                 };
                 (edge, old.checked_sub(by.to_exact())?)
@@ -176,13 +196,14 @@ impl Checker<'_> {
             OverlayChange::Meeting(value) => ("meeting", value.to_exact()),
         };
         let new_text = length_source(new)?;
-        let edited = match args.iter().find(|setting| setting.name == edge) {
-            Some(setting) => splice(text, site.value.span, setting.value.span, &new_text)?,
+        let (written, any_written) = overlay_edge(call, edge);
+        let edited = match written {
+            Some(value) => splice(text, site.value.span, value.span, &new_text)?,
             None => {
                 // Before the call's closing bracket.
                 let close = site.overlay.span.end().checked_sub(1)?;
                 let at = Span::new(close, close);
-                let separator = if args.is_empty() { "" } else { ", " };
+                let separator = if any_written { ", " } else { "" };
                 splice(
                     text,
                     site.value.span,

@@ -280,13 +280,8 @@ pub enum RExprKind {
         /// The index.
         index: Index,
     },
-    /// A built-in function call.
-    Builtin {
-        /// The function.
-        function: Builtin,
-        /// Its arguments, by parameter name (positional ones included).
-        args: Vec<Setting>,
-    },
+    /// A built-in function call, its arguments checked and in place.
+    Builtin(Box<BuiltinCall>),
     /// A kind value with settings: `side_mount_slide(length: 450mm)`.
     KindValue {
         /// The kind, or a kind value to add settings to.
@@ -318,6 +313,353 @@ pub enum RExprKind {
     Wall(CutName),
     /// Something that could not be resolved; already reported.
     Error,
+}
+
+/// A built-in function call with each argument in its own field, as the
+/// resolver checked it. A required argument that was missing or could not
+/// be resolved is an [`RExprKind::Error`] expression, already reported.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BuiltinCall {
+    /// `between(a, b)`
+    Between {
+        /// The first part, face or region.
+        a: RExpr,
+        /// The second.
+        b: RExpr,
+    },
+    /// `extent(items, axis)` or `extent(items, axis, of: part)`
+    Extent {
+        /// The parts measured.
+        items: RExpr,
+        /// The axis: a world axis, or with `of:` one of its own axes.
+        axis: RExpr,
+        /// The part or contact patch whose axis `axis` names.
+        of: Option<RExpr>,
+    },
+    /// `mid(item, axis)`
+    Mid {
+        /// The part or region.
+        item: RExpr,
+        /// The axis across which the mid-plane lies.
+        axis: RExpr,
+    },
+    /// `opening(left:, right:, bottom:, top:, front:, back:)`
+    Opening(OpeningFaces),
+    /// `split(region, axis)`, with `at:` or `shares:`
+    Split {
+        /// The region split.
+        region: RExpr,
+        /// The axis it is split along.
+        axis: RExpr,
+        /// How the pieces are sized.
+        by: SplitBy,
+    },
+    /// `cover(region, mount, thickness:)`
+    Cover {
+        /// The region covered.
+        region: RExpr,
+        /// How the cover sits on it.
+        mount: RExpr,
+        /// The cover's thickness.
+        thickness: RExpr,
+    },
+    /// `overlay(left:, right:, top:, bottom:, meeting:)`; an edge left
+    /// out overlays by nothing.
+    Overlay {
+        /// Overlay on the left edge.
+        left: Option<RExpr>,
+        /// Overlay on the right edge.
+        right: Option<RExpr>,
+        /// Overlay on the top edge.
+        top: Option<RExpr>,
+        /// Overlay on the bottom edge.
+        bottom: Option<RExpr>,
+        /// Overlay on an edge shared with a neighbouring front.
+        meeting: Option<RExpr>,
+    },
+    /// `inset(reveal:)`
+    Inset {
+        /// The gap round the front.
+        reveal: RExpr,
+    },
+    /// `turned(profile)`
+    Turned {
+        /// The profile turned.
+        profile: RExpr,
+    },
+    /// `joined(by:)`
+    Joined {
+        /// The joint kind or kinds.
+        by: RExpr,
+    },
+    /// `spliced(by:, at:, from:)`
+    Spliced {
+        /// The joint kind each splice is made with.
+        by: RExpr,
+        /// Where each splice is, from `from`.
+        at: RExpr,
+        /// The end the positions are measured from.
+        from: RExpr,
+    },
+    /// `box(length:, width:, thickness:)`: an envelope.
+    Box {
+        /// Its length.
+        length: RExpr,
+        /// Its width.
+        width: RExpr,
+        /// Its thickness.
+        thickness: RExpr,
+    },
+    /// `box(across:, up:, deep:)`: the project's root region.
+    RegionBox {
+        /// Its size across.
+        across: RExpr,
+        /// Its size up.
+        up: RExpr,
+        /// Its size deep.
+        deep: RExpr,
+    },
+    /// `cylinder(diameter:, length:)`
+    Cylinder {
+        /// Its diameter.
+        diameter: RExpr,
+        /// Its length.
+        length: RExpr,
+    },
+    /// `model(source, align:, sha256:)`
+    Model {
+        /// The model file.
+        source: RExpr,
+        /// The node put on the kind's origin.
+        align: Option<RExpr>,
+        /// The file's SHA-256, when pinned.
+        sha256: Option<RExpr>,
+    },
+    /// `node("name")`, written only as `model(align:)`: the name itself.
+    Node {
+        /// The node's name.
+        name: RExpr,
+    },
+    /// `ends(inset:)`
+    Ends {
+        /// How far in from each end.
+        inset: RExpr,
+    },
+    /// `pitch(d)`
+    Pitch {
+        /// The distance from one to the next.
+        distance: RExpr,
+    },
+    /// `gap(d)`
+    Gap {
+        /// The gap between neighbours.
+        distance: RExpr,
+    },
+    /// `contact(a, b)`
+    Contact {
+        /// The first part.
+        a: RExpr,
+        /// The second part.
+        b: RExpr,
+    },
+    /// `edge_to_edge(a, b)`
+    EdgeToEdge {
+        /// The first part.
+        a: RExpr,
+        /// The second part.
+        b: RExpr,
+    },
+}
+
+/// The six planes of `opening(...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpeningFaces {
+    /// `left:`
+    pub left: RExpr,
+    /// `right:`
+    pub right: RExpr,
+    /// `bottom:`
+    pub bottom: RExpr,
+    /// `top:`
+    pub top: RExpr,
+    /// `front:`
+    pub front: RExpr,
+    /// `back:`
+    pub back: RExpr,
+}
+
+impl OpeningFaces {
+    /// The plane given for a face.
+    pub fn face(&self, face: Face) -> &RExpr {
+        match face {
+            Face::Left => &self.left,
+            Face::Right => &self.right,
+            Face::Bottom => &self.bottom,
+            Face::Top => &self.top,
+            Face::Front => &self.front,
+            Face::Back => &self.back,
+        }
+    }
+
+    /// The faces in the order an opening's bounds are made: low and high
+    /// across, up, then deep.
+    pub const ORDER: [Face; 6] = [
+        Face::Left,
+        Face::Right,
+        Face::Bottom,
+        Face::Top,
+        Face::Front,
+        Face::Back,
+    ];
+}
+
+/// How `split(...)` sizes its pieces.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SplitBy {
+    /// Neither `at:` nor `shares:`: equal pieces, one per array element.
+    Equal,
+    /// `at: part`: the two pieces either side of the part.
+    At(RExpr),
+    /// `shares: [n, ...]`: one relative size per piece.
+    Shares(RExpr),
+}
+
+impl BuiltinCall {
+    /// The function called.
+    pub fn function(&self) -> Builtin {
+        match self {
+            BuiltinCall::Between { .. } => Builtin::Between,
+            BuiltinCall::Extent { .. } => Builtin::Extent,
+            BuiltinCall::Mid { .. } => Builtin::Mid,
+            BuiltinCall::Opening(_) => Builtin::Opening,
+            BuiltinCall::Split { .. } => Builtin::Split,
+            BuiltinCall::Cover { .. } => Builtin::Cover,
+            BuiltinCall::Overlay { .. } => Builtin::Overlay,
+            BuiltinCall::Inset { .. } => Builtin::Inset,
+            BuiltinCall::Turned { .. } => Builtin::Turned,
+            BuiltinCall::Joined { .. } => Builtin::Joined,
+            BuiltinCall::Spliced { .. } => Builtin::Spliced,
+            BuiltinCall::Box { .. } => Builtin::Box,
+            BuiltinCall::RegionBox { .. } => Builtin::RegionBox,
+            BuiltinCall::Cylinder { .. } => Builtin::Cylinder,
+            BuiltinCall::Model { .. } | BuiltinCall::Node { .. } => Builtin::Model,
+            BuiltinCall::Ends { .. } => Builtin::Ends,
+            BuiltinCall::Pitch { .. } => Builtin::Pitch,
+            BuiltinCall::Gap { .. } => Builtin::Gap,
+            BuiltinCall::Contact { .. } => Builtin::Contact,
+            BuiltinCall::EdgeToEdge { .. } => Builtin::EdgeToEdge,
+        }
+    }
+
+    /// The two parts of a question about how two parts meet
+    /// (`edge_to_edge(a, b)`), or `None` for a call that asks none.
+    pub fn meeting_question(&self) -> Option<(&RExpr, &RExpr)> {
+        match self {
+            BuiltinCall::EdgeToEdge { a, b } => Some((a, b)),
+            BuiltinCall::Between { .. }
+            | BuiltinCall::Extent { .. }
+            | BuiltinCall::Mid { .. }
+            | BuiltinCall::Opening(_)
+            | BuiltinCall::Split { .. }
+            | BuiltinCall::Cover { .. }
+            | BuiltinCall::Overlay { .. }
+            | BuiltinCall::Inset { .. }
+            | BuiltinCall::Turned { .. }
+            | BuiltinCall::Joined { .. }
+            | BuiltinCall::Spliced { .. }
+            | BuiltinCall::Box { .. }
+            | BuiltinCall::RegionBox { .. }
+            | BuiltinCall::Cylinder { .. }
+            | BuiltinCall::Model { .. }
+            | BuiltinCall::Node { .. }
+            | BuiltinCall::Ends { .. }
+            | BuiltinCall::Pitch { .. }
+            | BuiltinCall::Gap { .. }
+            | BuiltinCall::Contact { .. } => None,
+        }
+    }
+
+    /// Every argument given, in the order the function's parameters are
+    /// listed, for walking the expressions inside a call.
+    pub fn arguments(&self) -> impl Iterator<Item = &RExpr> {
+        let slots: [Option<&RExpr>; 6] = match self {
+            BuiltinCall::Between { a, b }
+            | BuiltinCall::Contact { a, b }
+            | BuiltinCall::EdgeToEdge { a, b } => [Some(a), Some(b), None, None, None, None],
+            BuiltinCall::Extent { items, axis, of } => {
+                [Some(items), Some(axis), of.as_ref(), None, None, None]
+            }
+            BuiltinCall::Mid { item, axis } => [Some(item), Some(axis), None, None, None, None],
+            BuiltinCall::Opening(faces) => [
+                Some(&faces.left),
+                Some(&faces.right),
+                Some(&faces.bottom),
+                Some(&faces.top),
+                Some(&faces.front),
+                Some(&faces.back),
+            ],
+            BuiltinCall::Split { region, axis, by } => {
+                let by = match by {
+                    SplitBy::Equal => None,
+                    SplitBy::At(expr) | SplitBy::Shares(expr) => Some(expr),
+                };
+                [Some(region), Some(axis), by, None, None, None]
+            }
+            BuiltinCall::Cover {
+                region,
+                mount,
+                thickness,
+            } => [Some(region), Some(mount), Some(thickness), None, None, None],
+            BuiltinCall::Overlay {
+                left,
+                right,
+                top,
+                bottom,
+                meeting,
+            } => [
+                left.as_ref(),
+                right.as_ref(),
+                top.as_ref(),
+                bottom.as_ref(),
+                meeting.as_ref(),
+                None,
+            ],
+            BuiltinCall::Inset { reveal: one }
+            | BuiltinCall::Turned { profile: one }
+            | BuiltinCall::Joined { by: one }
+            | BuiltinCall::Node { name: one }
+            | BuiltinCall::Ends { inset: one }
+            | BuiltinCall::Pitch { distance: one }
+            | BuiltinCall::Gap { distance: one } => [Some(one), None, None, None, None, None],
+            BuiltinCall::Spliced { by, at, from } => {
+                [Some(by), Some(at), Some(from), None, None, None]
+            }
+            BuiltinCall::Box {
+                length,
+                width,
+                thickness,
+            } => [Some(length), Some(width), Some(thickness), None, None, None],
+            BuiltinCall::RegionBox { across, up, deep } => {
+                [Some(across), Some(up), Some(deep), None, None, None]
+            }
+            BuiltinCall::Cylinder { diameter, length } => {
+                [Some(diameter), Some(length), None, None, None, None]
+            }
+            BuiltinCall::Model {
+                source,
+                align,
+                sha256,
+            } => [
+                Some(source),
+                align.as_ref(),
+                sha256.as_ref(),
+                None,
+                None,
+                None,
+            ],
+        };
+        slots.into_iter().flatten()
+    }
 }
 
 impl RExpr {

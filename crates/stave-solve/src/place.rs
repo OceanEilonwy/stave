@@ -9,8 +9,8 @@ use stave_lang::placement::{Axis, Corner, Direction, Face, PartAxis, PerAxis, Pe
 use stave_lang::units::{ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    DefId, PartBodyDef, PartKind, PlaceTerm, PlaceTermKind, RExpr, RExprKind, Size, StockField,
-    Word,
+    BuiltinCall, DefId, PartBodyDef, PartKind, PlaceTerm, PlaceTermKind, RExpr, RExprKind, Size,
+    StockField, Word,
 };
 use stave_model::ids::{AssemblyId, PartId, RegionId, StockId};
 use stave_model::instance::ItemSlot;
@@ -18,7 +18,6 @@ use stave_model::solved::Orientation;
 use stave_model::value::{
     AnchorOwner, AnchorValue, ExactBox, RegionOrigin, RegionValue, Spacing, Value,
 };
-use stave_schema::functions::Builtin;
 use stave_schema::words::StockForm;
 
 use crate::eval::{Env, midpoint};
@@ -145,13 +144,10 @@ pub(crate) fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
 
 /// `true` for `box(across:, up:, deep:)`, the root region.
 pub(crate) fn is_region_box(value: &RExpr) -> bool {
-    matches!(
-        value.kind,
-        RExprKind::Builtin {
-            function: Builtin::RegionBox,
-            ..
-        }
-    )
+    match &value.kind {
+        RExprKind::Builtin(call) => matches!(**call, BuiltinCall::RegionBox { .. }),
+        _ => false,
+    }
 }
 
 /// Reflects an extent through a plane: `low..high` becomes
@@ -720,19 +716,13 @@ impl<'m> Solver<'m> {
                 member: stave_model::defs::Member::Face(face),
                 ..
             } => Ok(face.axis()),
-            RExprKind::Builtin {
-                function: Builtin::Mid,
-                args,
-            } => {
-                match args
-                    .iter()
-                    .find(|a| a.name == "axis")
-                    .map(|a| &a.value.kind)
-                {
-                    Some(RExprKind::Word(Word::Axis(axis))) => Ok(*axis),
+            RExprKind::Builtin(call) => match &**call {
+                BuiltinCall::Mid { axis, .. } => match &axis.kind {
+                    RExprKind::Word(Word::Axis(axis)) => Ok(*axis),
                     _ => Ok(self.eval_anchor(expr, env)?.axis),
-                }
-            }
+                },
+                _ => Ok(self.eval_anchor(expr, env)?.axis),
+            },
             _ => Ok(self.eval_anchor(expr, env)?.axis),
         }
     }
