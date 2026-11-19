@@ -56,6 +56,7 @@
 //! order they were found in.
 
 #![forbid(unsafe_code)]
+#![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 
 mod loader;
 mod source;

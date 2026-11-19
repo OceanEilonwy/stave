@@ -21,6 +21,8 @@
 //!    and joints. [`Solver::rebind_pieces`] then points what named the
 //!    part (joint pairs, hardware, assemblies, scenes) at the right piece.
 
+use std::borrow::Cow;
+
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
@@ -34,7 +36,7 @@ use stave_model::solved::{
     self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, DesignDraft,
     End, Joint, JointOrigin, JointPair, PartOrigin, PieceIndex, RoleBinding, WorldBox,
 };
-use stave_model::value::{KindValue, Splicing, Value};
+use stave_model::value::{KindValue, ParamSettings, Splicing, Value};
 use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::words::{Grain, StockForm};
@@ -80,7 +82,7 @@ struct Piece {
 /// The splice kind, bound.
 struct Method {
     value: KindValue,
-    settings: Vec<(String, Value)>,
+    settings: ParamSettings,
     glue: bool,
     methods: Vec<String>,
 }
@@ -948,7 +950,7 @@ impl Solver<'_> {
         let kind_id = method.value.kind;
         let kind = self.sound(self.model.defs.sound_kind(kind_id), "a kind's declaration")?;
         let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
-        let env = KindEnv::new(kind_id, roles, method.settings.clone());
+        let env = KindEnv::new(kind_id, roles, Cow::Owned(method.settings.clone()));
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };

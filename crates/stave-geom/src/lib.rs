@@ -45,8 +45,10 @@
 //! winding is correct for both handednesses without a special case.
 
 #![forbid(unsafe_code)]
+#![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 #![warn(missing_docs)]
 
+mod axes;
 mod build;
 pub mod clearance;
 pub mod collide;

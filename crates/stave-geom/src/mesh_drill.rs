@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 use glam::{Vec2, Vec3};
 
+use crate::axes::on_part;
 use crate::build::{Builder, Frame, GrainAxes, LATHE_SEGMENTS};
 use crate::mesh::merge;
 use crate::solid::{Rod, Slant, across};
@@ -34,16 +35,6 @@ use crate::{Geometry, Vertex, render};
 
 /// Lengths below this (millimetres) count as zero.
 const EPSILON: f32 = 1e-4;
-
-/// The slot of a part axis in a local vector.
-fn slot(axis: stave_lang::placement::PartAxis) -> usize {
-    use stave_lang::placement::PartAxis;
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
 
 /// A position as exact bits, for finding the same point twice.
 type Key = [u32; 3];
@@ -77,9 +68,7 @@ struct Hole {
 
 /// A local unit vector along a part axis.
 fn unit(axis: stave_lang::placement::PartAxis) -> Vec3 {
-    let mut vector = Vec3::ZERO;
-    vector[slot(axis)] = 1.0;
-    vector
+    on_part(axis, 1.0)
 }
 
 impl Hole {

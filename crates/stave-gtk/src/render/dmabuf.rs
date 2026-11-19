@@ -159,6 +159,8 @@ impl Exporter {
             }
         };
         Ok(Frame {
+            width: image.width,
+            height: image.height,
             image: Some(image),
             pool: Arc::clone(&self.pool),
             refused: Arc::clone(&self.refused),
@@ -175,6 +177,10 @@ impl Exporter {
 /// A frame of the live view in a dmabuf. Dropping it (or GTK releasing the
 /// texture made of it) gives its image back for reuse.
 pub struct Frame {
+    /// Pixels across.
+    width: u32,
+    /// Pixels down.
+    height: u32,
     /// `None` only while dropping.
     image: Option<Image>,
     pool: Pool,
@@ -192,6 +198,11 @@ impl std::fmt::Debug for Frame {
 }
 
 impl Frame {
+    /// Its size in pixels, across and down.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     /// The texture to copy the frame into.
     pub(super) fn texture(&self) -> Option<&wgpu::Texture> {
         self.image.as_ref().map(|image| &image.texture)

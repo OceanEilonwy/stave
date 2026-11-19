@@ -44,6 +44,7 @@ use stave_model::mechanism::MemberIndex;
 use stave_model::mechanism::TurnLine;
 use stave_model::solved::{Body, MemberShape, Part, Point, Pose, PoseValue, WorldBox};
 
+use crate::axes::AlongWorld;
 use crate::mechanism::MechanismPath;
 use stave_model::mechanism::MotionShape;
 
@@ -153,8 +154,8 @@ impl WorldSlant {
         let mut low = Point::default();
         let mut high = Point::default();
         for axis in Axis::ALL {
-            let k = axis_index(axis);
-            let reach = self.radius() * (1.0 - direction[k] * direction[k]).max(0.0).sqrt();
+            let share = direction.along_world(axis);
+            let reach = self.radius() * (1.0 - share * share).max(0.0).sqrt();
             let reach = render::integer_from_f64(reach.ceil()).unwrap_or(0);
             let (x, y) = (self.from.get(axis).nm(), self.to.get(axis).nm());
             low = low.with(axis, Length::from_nm(x.min(y).saturating_sub(reach)));
@@ -1151,8 +1152,12 @@ fn nearest_axis_of(point: DVec3, low: DVec3, high: DVec3) -> Axis {
     Axis::ALL
         .into_iter()
         .map(|axis| {
-            let k = axis_index(axis);
-            let gap = (point[k] - low[k]).abs().min((high[k] - point[k]).abs());
+            let (at, low, high) = (
+                point.along_world(axis),
+                low.along_world(axis),
+                high.along_world(axis),
+            );
+            let gap = (at - low).abs().min((high - at).abs());
             (gap, axis)
         })
         .min_by(|x, y| x.0.total_cmp(&y.0))
@@ -1564,17 +1569,9 @@ pub(crate) fn point_vector(point: Point) -> DVec3 {
     )
 }
 
-fn axis_index(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
-}
-
 pub(crate) fn axis_vector(axis: Axis) -> DVec3 {
     let mut v = DVec3::ZERO;
-    v[axis_index(axis)] = 1.0;
+    v.set_along_world(axis, 1.0);
     v
 }
 

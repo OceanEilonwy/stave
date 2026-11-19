@@ -188,7 +188,7 @@ impl Checker<'_> {
             .reduce(|x, y| stave_geom::collide::union(&x, &y))
     }
 
-    pub(crate) fn report_group(&mut self, group: Group) {
+    pub(crate) fn report_group(&mut self, group: &Group) {
         let Some(deepest) = deepest(&group.found).copied() else {
             return;
         };

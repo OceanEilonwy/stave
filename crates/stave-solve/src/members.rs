@@ -20,7 +20,7 @@ use stave_model::defs::{BodyId, Carrier, KindDef, LayoutDef, RExpr, RExprKind, S
 use stave_model::value::{KindValue, Patch, Spacing, Value};
 
 use crate::eval::{Env, midpoint};
-use crate::hardware::{Frame, FrameBox, Outline, PlacedShape, positive_direction};
+use crate::hardware::{Frame, FrameBox, ORIGIN, Outline, PlacedShape, positive_direction};
 use crate::place::{add, divide, scale, sub};
 use crate::{Fault, Solved, Solver};
 
@@ -171,15 +171,13 @@ impl Solver<'_> {
             for low_end in lows {
                 // The shapes' low end along sits where the spacing puts it.
                 let along = sub(add(start, low_end)?, low)?;
-                let mut origin = [ExactLength::ZERO; 3];
+                let mut origin = ORIGIN;
                 for (axis, value) in [
                     (length_axis, along),
                     (width_axis, across),
                     (patch.normal(), plane),
                 ] {
-                    if let Some(slot) = origin.get_mut(crate::hardware::world_index(axis)) {
-                        *slot = value;
-                    }
+                    origin[axis] = value;
                 }
                 let frame = Frame {
                     origin,
@@ -329,7 +327,7 @@ fn placed_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stave_lang::placement::Axis;
+    use stave_lang::placement::{Axis, PerAxis};
     use stave_lang::units::Length;
     use stave_model::defs::FrameAxis;
 
@@ -363,7 +361,7 @@ mod tests {
     #[test]
     fn a_frame_on_a_patch_uses_its_axes() {
         let frame = Frame {
-            origin: [mm(0); 3],
+            origin: PerAxis::from_fn(|_| mm(0)),
             along: positive_direction(Axis::Deep),
             across: positive_direction(Axis::Across),
             depth: stave_lang::placement::Direction::Up,

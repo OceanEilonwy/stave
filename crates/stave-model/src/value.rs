@@ -317,6 +317,47 @@ pub struct RegionValue {
     pub origin: RegionOrigin,
 }
 
+/// The settings of a kind's params, each under the param's index in
+/// [`KindDef::params`](crate::defs::KindDef::params): a setting's name is
+/// looked up once, where it is given, and read by index after.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ParamSettings(Vec<Option<Value>>);
+
+impl ParamSettings {
+    /// The setting of the param at `param`, when one is given.
+    pub fn get(&self, param: usize) -> Option<&Value> {
+        self.0.get(param).and_then(Option::as_ref)
+    }
+
+    /// Whether the param at `param` is set.
+    pub fn is_set(&self, param: usize) -> bool {
+        self.get(param).is_some()
+    }
+
+    /// Sets the param at `param`, replacing any setting it had.
+    pub fn set(&mut self, param: usize, value: Value) {
+        if self.0.len() <= param {
+            self.0.resize_with(param.saturating_add(1), || None);
+        }
+        if let Some(slot) = self.0.get_mut(param) {
+            *slot = Some(value);
+        }
+    }
+
+    /// Each setting given, with its param's index, in the kind's order.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &Value)> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(param, value)| Some((param, value.as_ref()?)))
+    }
+
+    /// Whether no param is set.
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+}
+
 /// A kind with settings filled in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindValue {
@@ -324,8 +365,8 @@ pub struct KindValue {
     pub kind: KindId,
     /// Its name as written where it was named (`hw.brass_knob_26`).
     pub name: String,
-    /// Settings of the kind's params, by name, in the order given.
-    pub settings: Vec<(String, Value)>,
+    /// Settings of the kind's params, by param index.
+    pub settings: ParamSettings,
     /// `glue:`, for a joint kind, when given.
     pub glue: Option<bool>,
     /// `methods:`, for a joint kind: the recipes given, in order.
@@ -338,18 +379,10 @@ impl KindValue {
         KindValue {
             kind,
             name,
-            settings: Vec::new(),
+            settings: ParamSettings::default(),
             glue: None,
             methods: Vec::new(),
         }
-    }
-
-    /// A setting by name.
-    pub fn setting(&self, name: &str) -> Option<&Value> {
-        self.settings
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v)
     }
 }
 

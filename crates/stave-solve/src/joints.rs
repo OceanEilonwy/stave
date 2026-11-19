@@ -1,6 +1,7 @@
 //! Joints: binding kind calls, finding pairs, what joints add to their
 //! parts, the parts they make and the cuts they describe.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use stave_lang::ast::{BaseKind, Span};
@@ -16,7 +17,7 @@ use stave_model::solved::{
     AssemblyStep, Contact, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, LocalPoint, Mark,
     Orientation, Slope, StepMotion,
 };
-use stave_model::value::{ExactBox, KindValue, Value};
+use stave_model::value::{ExactBox, KindValue, ParamSettings, Value};
 use stave_schema::CutOperation;
 use stave_schema::kinds::JointSetting;
 use stave_schema::kinds::RoleType;
@@ -33,7 +34,8 @@ pub(crate) struct Binding {
     /// The kind's name as written where it was named.
     pub name: String,
     pub roles: Vec<Value>,
-    pub settings: Vec<(String, Value)>,
+    /// Its param settings, from the kind value and the call.
+    pub settings: ParamSettings,
     pub glue: bool,
     pub methods: Vec<RecipeId>,
     pub face: Option<Face>,
@@ -288,7 +290,7 @@ impl Solver<'_> {
                 }
                 continue;
             }
-            if kind_def.param(&setting.name).is_none() {
+            let Some(param) = kind_def.param(&setting.name) else {
                 return Err(self
                     .error(
                         Code::UnknownField,
@@ -306,8 +308,8 @@ impl Solver<'_> {
                         .unwrap_or_else(|| "name one of the kind's roles or params".to_owned()),
                     )
                     .into());
-            }
-            if settings.iter().any(|(n, _)| *n == setting.name) {
+            };
+            if settings.is_set(param) {
                 return Err(self
                     .error(
                         Code::DuplicateName,
@@ -318,12 +320,13 @@ impl Solver<'_> {
                     )
                     .into());
             }
-            settings.push((setting.name.clone(), value));
+            settings.set(param, value);
         }
         // A setting must be within its param's `within`.
         if let Some(ctx) = self.module_ctx(DefId::Kind(kind)) {
-            for (name, value) in &settings {
-                if let Some(param) = kind_def.params.iter().find(|p| p.decl.name == *name) {
+            for (index, value) in settings.iter() {
+                if let Some(param) = kind_def.params.get(index) {
+                    let name = &param.decl.name;
                     let written = call.named.iter().find(|s| s.name == *name);
                     let span = written.map_or(call.span, |s| s.value.span);
                     // A setting written in this call is set by a patch
@@ -597,7 +600,7 @@ impl Solver<'_> {
             } else {
                 parts.iter().map(|p| Value::Part(*p)).collect()
             };
-            let env = KindEnv::new(binding.kind, roles, binding.settings.clone());
+            let env = KindEnv::new(binding.kind, roles, Cow::Owned(binding.settings.clone()));
             let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
                 return Err(Fault::Internal("the file an item is declared in").into());
             };

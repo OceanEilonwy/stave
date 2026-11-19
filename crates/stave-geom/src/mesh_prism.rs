@@ -27,10 +27,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::Vec3;
-use stave_lang::placement::PartAxis;
+use stave_lang::placement::{PartAxis, PerPartAxis};
 use stave_lang::units::Length;
 
 use crate::Geometry;
+use crate::axes::AlongPart;
 use crate::build::{Builder, Frame, GrainAxes};
 use crate::render;
 use crate::solid::{ConvexPolygon, Point2, Prism, Solid, across};
@@ -213,14 +214,6 @@ fn piece_holds(piece: &ConvexPolygon, at: [f64; 2]) -> bool {
     })
 }
 
-fn slot(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
-
 /// The face axis every prism of a solid shares, when it is a board with
 /// no holes or round features and has at least one prism.
 pub(crate) fn shared_axis(solid: &Solid) -> Option<PartAxis> {
@@ -246,16 +239,12 @@ pub(crate) fn board(
     frame: &Frame,
     solid: &Solid,
     grain: GrainAxes,
-    size: [i64; 3],
+    size: PerPartAxis<i64>,
     axis: PartAxis,
 ) -> Geometry {
     let [first, second] = across(axis);
-    let (fs, ss, cs) = (slot(first), slot(second), slot(axis));
-    let extent = [
-        size.get(fs).copied().unwrap_or(0),
-        size.get(ss).copied().unwrap_or(0),
-    ];
-    let depth = size.get(cs).copied().unwrap_or(0);
+    let extent = [size[first], size[second]];
+    let depth = size[axis];
     let prisms: Vec<&Prism> = solid.prisms().iter().collect();
 
     // Lines, in a fixed order.
@@ -372,9 +361,9 @@ pub(crate) fn board(
 
     let local = |p: Flat, z: i64| {
         let mut v = Vec3::ZERO;
-        v[fs] = render::mm(Length::from_nm(p[0]));
-        v[ss] = render::mm(Length::from_nm(p[1]));
-        v[cs] = render::mm(Length::from_nm(z));
+        v.set_along(first, render::mm(Length::from_nm(p[0])));
+        v.set_along(second, render::mm(Length::from_nm(p[1])));
+        v.set_along(axis, render::mm(Length::from_nm(z)));
         v
     };
     let on_edge = |p: Flat, q: Flat| {
@@ -410,8 +399,8 @@ pub(crate) fn board(
                 render::mm(Length::from_nm(to[0].saturating_sub(from[0]))),
                 render::mm(Length::from_nm(to[1].saturating_sub(from[1]))),
             ];
-            normal[fs] = run[1];
-            normal[ss] = -run[0];
+            normal.set_along(first, run[1]);
+            normal.set_along(second, -run[0]);
             let world = frame.vector(normal);
             builder.set_cut(!on_edge(p, q));
             let quad = [(p, *z0), (q, *z0), (q, *z1), (p, *z1)].map(|(point, z)| {
@@ -436,13 +425,13 @@ pub(crate) fn board(
                 continue;
             }
             let mut normal = Vec3::ZERO;
-            normal[cs] = if below { 1.0 } else { -1.0 };
+            normal.set_along(axis, if below { 1.0 } else { -1.0 });
             let world = frame.vector(normal);
             let at = middles.get(index).copied().unwrap_or([0.0, 0.0]);
             let mut centre = Vec3::ZERO;
-            centre[fs] = render::narrow(at[0] / 1e6);
-            centre[ss] = render::narrow(at[1] / 1e6);
-            centre[cs] = render::mm(Length::from_nm(*level));
+            centre.set_along(first, render::narrow(at[0] / 1e6));
+            centre.set_along(second, render::narrow(at[1] / 1e6));
+            centre.set_along(axis, render::mm(Length::from_nm(*level)));
             let m = builder.vertex(frame.point(centre), world, grain.apply(centre));
             let ring: Vec<u32> = cell
                 .iter()

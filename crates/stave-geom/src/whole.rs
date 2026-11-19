@@ -138,11 +138,7 @@ pub fn severed(part: &Part, design: &SolvedDesign, solid: &Solid) -> Option<Seve
     if solid.profile().is_some() || pieces(solid) <= 1 {
         return None;
     }
-    let mut trial = Part {
-        cuts: Vec::with_capacity(part.cuts.len()),
-        boards: None,
-        ..part.clone()
-    };
+    let mut trial = part.blank(part.cuts.len());
     let every = part.cuts.len();
     let count = pieces_with(&mut trial, 0..every, part, design);
     if count <= 1 {

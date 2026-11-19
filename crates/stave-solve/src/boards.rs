@@ -14,6 +14,8 @@
 //! width; the cuts other joints make on a part made of boards stay on the
 //! part, and are assigned to its boards when the work plan exists.
 
+use std::borrow::Cow;
+
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
@@ -28,7 +30,7 @@ use stave_model::solved::{
     self, BoardIndex, BoardMethod, Contact, Cut, CutKind, CutPlace, CutSource, End, Orientation,
     PartOrigin, RequireResult, Seam,
 };
-use stave_model::value::{ExactBox, KindValue, Value};
+use stave_model::value::{ExactBox, KindValue, ParamSettings, Value};
 use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::words::{Grain, StockForm};
@@ -81,7 +83,7 @@ pub(crate) struct BoardPart {
 struct Method {
     kind: KindId,
     name: String,
-    settings: Vec<(String, Value)>,
+    settings: ParamSettings,
     glue: bool,
     /// `true` for a kind with one `Parts` role.
     across: bool,
@@ -674,7 +676,7 @@ impl Solver<'_> {
         } else {
             parts.iter().map(|p| Value::Part(*p)).collect()
         };
-        let env = KindEnv::new(method.kind, roles, method.settings.clone());
+        let env = KindEnv::new(method.kind, roles, Cow::Owned(method.settings.clone()));
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };

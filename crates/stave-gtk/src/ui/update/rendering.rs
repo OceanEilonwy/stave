@@ -934,6 +934,13 @@ impl Window {
     }
 
     pub(in crate::ui) fn render_now(&mut self) {
+        // Until the view has a size there is nothing to draw: a frame of
+        // one pixel would be shown stretched over the whole view, one flat
+        // colour, until the real one is ready. The first size draws.
+        if self.state.size.0 <= 1 {
+            self.state.render_queued = false;
+            return;
+        }
         let backdrop = self.backdrop();
         let ghost = self.render_ghost(backdrop);
         let rendered = if let Some(rendered) = ghost {
@@ -1030,6 +1037,9 @@ impl Window {
         let (ready, settled) = (renderer.take_ready(), renderer.settled(ticket));
         match ready {
             Ok(Some(frame)) => {
+                // The size the frame was drawn at, which may be older than
+                // the view's.
+                let drawn = frame.size();
                 let shown = crate::render::profile::time("gtk texture", || {
                     self.widgets.viewport.show_live(frame)
                 });
@@ -1041,10 +1051,13 @@ impl Window {
                 self.show_pins();
                 self.place_ghost_verdict();
                 self.place_grips();
-                // Save the window once a frame of the view's real size is
-                // up.
-                let size = self.state.size;
-                if size.0 > 1 && size == self.widgets.viewport.device_size() {
+                // Save the window once a frame drawn at the view's real
+                // size is up (not one drawn before the view had its size,
+                // shown stretched).
+                if drawn.0 > 1
+                    && drawn == self.state.size
+                    && drawn == self.widgets.viewport.device_size()
+                {
                     // An edit script runs first; the frame it asks for is
                     // the one saved.
                     if self.run_edit_script() {

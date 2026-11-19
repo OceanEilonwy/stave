@@ -139,12 +139,13 @@ impl Solver<'_> {
             return HelpSearch::NotSearched;
         };
         let file = kind.decl.file;
-        let lists: Vec<(&str, &[RExpr])> = kind
+        let lists: Vec<(usize, &str, &[RExpr])> = kind
             .params
             .iter()
-            .filter_map(|param| match &param.domain {
+            .enumerate()
+            .filter_map(|(index, param)| match &param.domain {
                 Some(Domain::OneOf { values, .. }) => {
-                    Some((param.decl.name.as_str(), values.as_slice()))
+                    Some((index, param.decl.name.as_str(), values.as_slice()))
                 }
                 Some(Domain::Range { .. }) | None => None,
             })
@@ -157,19 +158,8 @@ impl Solver<'_> {
         };
         let mut found = Vec::new();
         let mut searched = Vec::new();
-        for (param, values) in lists {
-            let current = self.quietly(|solver| {
-                let index = solver
-                    .model
-                    .defs
-                    .sound_kind(given.kind)
-                    .ok()
-                    .and_then(|kind| kind.param(param));
-                match index {
-                    Some(index) => solver.kind_param(given, index, file, span).ok(),
-                    None => None,
-                }
-            });
+        for (index, param, values) in lists {
+            let current = self.quietly(|solver| solver.kind_param(given, index, file, span).ok());
             let mut texts = Vec::new();
             for value_expr in values {
                 let Some(value) = self.quietly(|solver| solver.eval(value_expr, &module_env).ok())
@@ -180,14 +170,9 @@ impl Solver<'_> {
                 if current.as_ref() == Some(&value) {
                     continue;
                 }
-                let mut settings: Vec<(String, Value)> = given
-                    .settings
-                    .iter()
-                    .filter(|(name, _)| *name != param)
-                    .cloned()
-                    .collect();
-                settings.push((param.to_owned(), value.clone()));
-                let mut trial = KindEnv::new(given.kind, &*given.roles, settings);
+                let mut settings = given.settings.clone().into_owned();
+                settings.set(index, value.clone());
+                let mut trial = KindEnv::new(given.kind, &*given.roles, Cow::Owned(settings));
                 trial.made = Cow::Borrowed(&given.made);
                 trial.mount = given.mount;
                 if self.quietly(|solver| fits(solver, &trial)) {
