@@ -724,6 +724,14 @@ impl Component for Window {
         } = init;
         let renderer = Renderer::new()
             .map(|mut renderer| {
+                // A window screenshot is drawn by a software renderer,
+                // which can read a dmabuf only by mapping it, and the
+                // GPU's memory often can't be mapped ("Failed to mmap
+                // dmabuf"): the view would be saved empty. Its frames go
+                // by readback, in ordinary memory.
+                if options.window_screenshot.is_some() {
+                    return renderer;
+                }
                 // The live view's frames go to GTK as dmabufs where both
                 // sides can, and by readback otherwise.
                 let display = gtk::prelude::WidgetExt::display(&widgets.window);

@@ -336,6 +336,17 @@ pub enum LiveFrame {
     Dmabuf(dmabuf::Frame),
 }
 
+impl LiveFrame {
+    /// Its size in pixels, across and down: the view's size when it was
+    /// drawn.
+    pub fn size(&self) -> (u32, u32) {
+        match self {
+            LiveFrame::Mapped(frame) => (frame.width(), frame.height()),
+            LiveFrame::Dmabuf(frame) => frame.size(),
+        }
+    }
+}
+
 /// A finished frame of the live view, still in the GPU's mapped readback
 /// buffer: sRGB RGBA, rows top to bottom, each [`MappedFrame::stride`]
 /// bytes apart, with alpha 1 everywhere (so straight and premultiplied
