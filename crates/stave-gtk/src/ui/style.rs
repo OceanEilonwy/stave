@@ -33,11 +33,8 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 .stave-sidebar { padding: 12px 10px; }
 .stave-tree { background: none; font-size: 13px; }
 .stave-tree > row { padding: 0; border-radius: 6px; min-height: 0; margin: 0 0 1px 0; }
-.stave-tree .stave-entry { padding: 5px 8px 5px 20px; border-spacing: 8px; }
-.stave-tree .stave-entry.nested { padding-left: 34px; }
-.stave-tree .stave-entry.nested2 { padding-left: 48px; }
-.stave-tree .stave-assembly { padding: 5px 8px; border-spacing: 8px; font-weight: 600; }
-.stave-tree .stave-assembly.nested { padding-left: 22px; }
+.stave-tree .stave-entry { padding: 5px 8px 5px 4px; border-spacing: 8px; }
+.stave-tree .stave-assembly { padding: 5px 8px 5px 4px; border-spacing: 8px; font-weight: 600; }
 .stave-tree .stave-detail { font-size: 12px; }
 .stave-tree .stave-assembly .stave-detail { font-weight: 500; }
 .stave-tree .stave-heading { padding: 10px 8px 6px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
@@ -149,7 +146,7 @@ expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 .stave-panel { border-radius: 14px; }
 .stave-model-head { padding: 8px 10px 0 14px; }
 .stave-model-note { padding: 6px 14px 12px 14px; font-size: 12px; }
-.stave-tree .stave-joint { padding: 4px 8px 4px 34px; border-spacing: 8px; font-size: 12.5px; }
+.stave-tree .stave-joint { padding: 4px 8px 4px 18px; border-spacing: 8px; font-size: 12.5px; }
 .stave-joint-word { font-size: 10px; font-weight: 700; padding: 1px 4px; border-radius: 3px; }
 .stave-mark { min-width: 8px; min-height: 8px; border-radius: 4px; }
 .stave-mark.warning { border-radius: 2px; }

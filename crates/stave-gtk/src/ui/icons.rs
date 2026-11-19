@@ -68,10 +68,6 @@ pub const SCENE: Shape = stroke(
 );
 /// A small downward chevron (the scene menu).
 pub const CHEVRON_DOWN: Shape = stroke(2.2, &["M4 6L8 10L12 6"]);
-/// An open tree row's chevron.
-pub const EXPANDED: Shape = stroke(2.0, &["M4 6L8 10L12 6"]);
-/// A closed tree row's chevron.
-pub const COLLAPSED: Shape = stroke(2.0, &["M6 4L10 8L6 12"]);
 /// No problems: a tick.
 pub const CHECK: Shape = stroke(1.8, &["M3.5 8.5L6.5 11.5L12.5 4.5"]);
 /// Warnings only: an exclamation mark in a triangle, a different shape

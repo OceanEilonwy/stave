@@ -409,7 +409,10 @@ menu puts board B back.
   block, coloured like the editor, without its indent, the part it is
   about tinted and underlined (wavy for where it is, straight for a place
   that explains it), then each `note:` and the `help:` line (green).
-  Choosing a row selects the problem (posed in the 3D view). While the 3D
+  Choosing a row selects the problem (posed in the 3D view). A new
+  check keeps the rows of problems that are unchanged at the start and
+  end of the list and replaces only the run between, so the list does
+  not jump while someone types. While the 3D
   view shows an older design (`showing_older()`), a line over the list
   says so: "The 3D view shows the last version without errors until
   these are fixed." There is no banner over the window.
@@ -475,7 +478,23 @@ menu puts board B back.
   carries them; selecting one selects that pair's pins (the card's "JOINT
   MEMBER": which joint placed it, its pair, what it is, how many, and the
   joint's line in "Defined in the text"), drawn with the parts it sits in
-  see-through. The assembly holding the selection opens. Every
+  see-through. It is a real tree (`gtk::ListView` over a
+  `gtk::TreeListModel`, each row a `gtk::TreeExpander`, the list's
+  accessible role `Tree`, each row's level and its mark in words for a
+  screen reader): an assembly opens and shuts with its arrow, Enter or a
+  double click, Right and Left (mirrored right to left) or + and −;
+  Right on an open assembly goes to its first row and Left on a row goes
+  to its assembly. The arrow keys only move through the list: clicking a
+  row or pressing Enter chooses it (selects and frames it, focuses on a
+  joint, opens a library's text), so walking the list moves neither the
+  camera nor the editor. Choosing something inside a shut assembly
+  elsewhere (the 3D view, the finder) opens the assemblies it is in; what
+  is open is otherwise as the user left it. A new check updates the rows
+  in place (`sync_store`: rows with the same part, assembly, joint or
+  heading are kept and only their look changes; only the run that
+  differs is replaced), so the scroll position, the keyboard's row and
+  what is open survive it, and a check that changed nothing touches no
+  row. Every
   row carries its `Mark` (`problems::marks`): a red dot for an error, an
   amber one for a warning, a red ring for a part a problem only involves;
   an assembly carries the worst inside it. Under the chosen part, the
