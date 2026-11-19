@@ -500,7 +500,7 @@ impl ProblemCard {
             )
         };
         self.scrub.set_range(0.0, full.max(0.1));
-        self.scrub.set_blocked_from(Some(contact));
+        self.scrub.set_blocked(Some((contact, &card.blocked)));
         self.scrub.set_value(value);
         self.scrub
             .root
