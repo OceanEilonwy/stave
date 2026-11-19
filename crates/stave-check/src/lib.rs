@@ -79,6 +79,7 @@ mod names;
 mod sequence;
 mod tiers;
 mod walls;
+mod whole;
 
 pub use tiers::{BoxOverlap, Cancelled, Fast, check_fast, check_slow};
 

@@ -3085,10 +3085,10 @@ error[require]: 'socket_wall' fails: the socket comes too close to a face of the
 
 ### Cuts stay in their part
 
-Four backstops hold for every kind, whatever its rules, because no kind
-should be able to get them wrong. The first three are reported at the
-joint's or hardware's call, in layer 4, the fourth at the part's
-`lengths:`:
+Five backstops hold for every kind, whatever its rules, because no kind
+should be able to get them wrong. All but the splice backstop are
+reported at the joint's or hardware's call, in layer 4; that one at the
+part's `lengths:`:
 
 - **Cuts only remove wood** (`error[cut-size]`). A `tenon` wider or
   thicker than the part across its end (for a tongue, along its edge), or
@@ -3125,6 +3125,20 @@ joint's or hardware's call, in layer 4, the fourth at the part's
   both pieces' wood belongs to the splice: `shelf_dados: its dado in
   side_l crosses the splice between side_l.piece[1] and side_l.piece[2]`.
   How near a cut may come to a splice is the splice kind's `wall()` rule.
+- **A part stays one piece** (`error[wall]`). Once every cut is made, a
+  board's wood must be one connected piece: pieces that touch only along
+  an edge are two. Each of two housings cut from opposite faces may keep
+  to its own depth and still meet the other across the board, and a cut
+  that goes `through` right across a part parts it; the cut list would
+  still list one part. Reported at the cut that, made after the cuts
+  before it, first parts the wood: `shelves: its housing for shelf_r
+  meets the housing for shelf_l and cuts divider in two` (help: `together
+  the two cuts go right through divider and leave no wood between them;
+  make one of them shallower, or move one of the joints so the cuts don't
+  line up`), or for one cut `shelves: its housing for shelf goes right
+  across side and cuts it in two`. A cut of another joint is named `the
+  <housing> of <joint>`. A part made of boards is tested as one board
+  with its own cuts; round and turned parts are not tested yet.
 
 One mistake, one error. A kind's own rule says it first: when one fails
 the design isn't checked further, so std's `tenon_thin` speaks for a tenon
@@ -3135,7 +3149,8 @@ too deep gets no wall error, and its part is left out of the overlap
 check, which would only report the same mistake as parts that no longer
 fit. Two closed cuts that run into each other are one error, for the
 first. Nothing here is reported for a part or member that already
-overlaps something.
+overlaps something, and a part whose cuts already failed a `wall()` rule
+or a size gets no error for being in pieces.
 
 ### Held
 
@@ -3210,7 +3225,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), or `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, or `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut); see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |

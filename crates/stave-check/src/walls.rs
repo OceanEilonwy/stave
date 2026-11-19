@@ -18,6 +18,9 @@
 //!    every closed cut of another joint pair or piece of hardware. A hole that runs
 //!    into another joint's empty hole is caught here; one that runs into a
 //!    pin or tenon is an overlap, already reported.
+//! 5. **A part stays one piece** (`error[wall]`, in [`crate::whole`]):
+//!    cuts that meet across a part, or one that goes right across it,
+//!    leave it in pieces.
 //!
 //! One mistake, one error: a pair or piece of hardware whose kind's rule
 //! failed, or whose cuts are too big or too deep, gets no backstop error
@@ -34,7 +37,7 @@ use crate::names::{and_list, length_text};
 use crate::{Checker, Contact, Item};
 
 /// What messages call a cut: its name, or its operation's word.
-fn cut_noun(cut: &Cut) -> String {
+pub(crate) fn cut_noun(cut: &Cut) -> String {
     cut.name.as_ref().map_or_else(
         || cut.kind.operation().unnamed_noun().to_owned(),
         CutName::words,
@@ -86,7 +89,7 @@ pub(crate) struct SizeProblem {
 
 impl Checker<'_> {
     /// The joint, hardware or part's boards a cut is for.
-    fn source_name(&self, source: CutSource) -> String {
+    pub(crate) fn source_name(&self, source: CutSource) -> String {
         match source {
             CutSource::Joint { joint, .. } => self.joint_name(joint),
             CutSource::Hardware { hardware } => self.hardware_name(hardware),
@@ -95,7 +98,7 @@ impl Checker<'_> {
     }
 
     /// Where a cut's joint or hardware is written.
-    fn source_place(
+    pub(crate) fn source_place(
         &self,
         source: CutSource,
     ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
@@ -126,7 +129,7 @@ impl Checker<'_> {
 
     /// `true` when a part, or a member of a cut's joint pair or piece of
     /// hardware, already has an error at rest.
-    fn already_failed(&self, part: PartId, source: CutSource) -> bool {
+    pub(crate) fn already_failed(&self, part: PartId, source: CutSource) -> bool {
         self.failed.contains(&Item::Part(part)) || self.owner_overlaps(source)
     }
 
@@ -305,6 +308,7 @@ impl Checker<'_> {
             self.closed_cuts(&walls);
         }
         self.solids = solids;
+        self.whole_parts();
     }
 
     /// One kind's rule that reads `wall(cut)`, for one pair or piece of
