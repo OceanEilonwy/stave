@@ -6,7 +6,7 @@
 use stave_lang::ast::Span;
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef, RExpr};
+use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef};
 use stave_model::ids::HardwareId;
 use stave_model::solved::{CutSource, Rules};
 use stave_model::value::{AnchorValue, Value};
@@ -163,11 +163,10 @@ impl Solver<'_> {
         kind: &KindDef,
         adjusts: &[AdjustDef],
     ) -> Solved<Vec<ExactLength>> {
-        let expressions: Vec<RExpr> = adjusts.iter().map(|a| a.within.clone()).collect();
         self.in_kind(binding, kind, |solver, kind_env| {
-            expressions
+            adjusts
                 .iter()
-                .map(|within| solver.kind_length(within, kind_env))
+                .map(|adjust| solver.kind_length(&adjust.within, kind_env))
                 .collect()
         })
     }
@@ -235,12 +234,7 @@ impl Solver<'_> {
         if self.noted_with_earlier(Code::Adjust, call) {
             return Ok(());
         }
-        let given = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        let given = KindEnv::of_binding(binding);
         let search = self.search_lists(&given, call.span, &mut |solver, trial| {
             solver.adjustments_fit(call.hardware, binding, kind, adjusts, &trial.settings)
         });
@@ -266,9 +260,17 @@ impl Solver<'_> {
         adjusts: &[AdjustDef],
         settings: &[(String, Value)],
     ) -> bool {
+        // Its param values follow from the new settings, so its cache
+        // starts empty.
         let trial = Binding {
+            kind: binding.kind,
+            name: binding.name.clone(),
+            roles: binding.roles.clone(),
             settings: settings.to_vec(),
-            ..binding.clone()
+            glue: binding.glue,
+            methods: binding.methods.clone(),
+            face: binding.face,
+            params: crate::eval::ParamCache::default(),
         };
         let Ok(rest) = self.rest(hardware, &trial) else {
             return false;
@@ -293,12 +295,8 @@ impl Solver<'_> {
         if kind.requires.is_empty() {
             return Ok(true);
         }
-        let mut kind_env = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
+        // Its own param values: `mount` is bound here and nowhere else.
+        let mut kind_env = KindEnv::new(binding.kind, &binding.roles, &binding.settings);
         kind_env.mount = Some(mount);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
@@ -398,7 +396,7 @@ mod tests {
             body: body(member),
             on: body(on),
             axis,
-            within: RExpr::error(Span::default()),
+            within: stave_model::defs::RExpr::error(Span::default()),
             span: Span::default(),
         }
     }

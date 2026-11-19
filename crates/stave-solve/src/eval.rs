@@ -1,5 +1,6 @@
 //! Evaluating resolved expressions to exact values, on demand.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 
 use stave_lang::ast::Span;
@@ -21,36 +22,111 @@ use stave_schema::words::StockForm;
 use crate::fixes::Written;
 use crate::{Fault, Frame, Memo, Reported, Solved, Solver};
 
-/// The roles and settings of one application of a kind.
-pub(crate) struct KindEnv {
+/// The param values of one application of a kind, worked out on demand
+/// and remembered. A [`crate::joints::Binding`] carries one so that every
+/// environment built from it shares what was worked out. A copy starts
+/// empty, because a copy is made to change the settings (the help search
+/// tries other values), and the values remembered would be wrong for it.
+#[derive(Default)]
+pub(crate) struct ParamCache(RefCell<Vec<Option<Value>>>);
+
+impl ParamCache {
+    /// The remembered value of the kind's param `index`.
+    fn get(&self, index: usize) -> Option<Value> {
+        self.0.borrow().get(index).cloned().flatten()
+    }
+
+    /// Remembers the value of the kind's param `index`.
+    fn set(&self, index: usize, value: Value) {
+        let mut values = self.0.borrow_mut();
+        if values.len() <= index {
+            values.resize(index.saturating_add(1), None);
+        }
+        if let Some(slot) = values.get_mut(index) {
+            *slot = Some(value);
+        }
+    }
+}
+
+impl Clone for ParamCache {
+    fn clone(&self) -> Self {
+        ParamCache::default()
+    }
+}
+
+impl PartialEq for ParamCache {
+    /// What is remembered follows from the settings: it never makes two
+    /// bindings differ.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for ParamCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ParamCache")
+    }
+}
+
+/// A kind environment's param values: its own, or a binding's, shared.
+enum Params<'e> {
+    Own(ParamCache),
+    Shared(&'e ParamCache),
+}
+
+/// The roles and settings of one application of a kind. It borrows them
+/// where it can: from the binding of a joint or a piece of hardware, or
+/// from a kind value.
+pub(crate) struct KindEnv<'e> {
     pub kind: KindId,
     /// Per role: a part or a region; empty for a kind value.
-    pub roles: Vec<Value>,
+    pub roles: Cow<'e, [Value]>,
     /// Settings from the kind value and the call.
-    pub settings: Vec<(String, Value)>,
+    pub settings: Cow<'e, [(String, Value)]>,
     /// Param values, worked out on demand.
-    pub params: RefCell<Vec<Option<Value>>>,
+    params: Params<'e>,
     /// Parts the kind made for this pair.
-    pub made: Vec<PartId>,
+    pub made: Cow<'e, [PartId]>,
     /// For a piece of hardware once it is placed: its mount face, as an
     /// anchor (`mount` in its kind's rules).
     pub mount: Option<AnchorValue>,
 }
 
-impl KindEnv {
+impl<'e> KindEnv<'e> {
+    /// An environment with its own (empty) param values.
     pub fn new(
         kind: KindId,
-        roles: Vec<Value>,
-        settings: Vec<(String, Value)>,
-        param_count: usize,
+        roles: impl Into<Cow<'e, [Value]>>,
+        settings: impl Into<Cow<'e, [(String, Value)]>>,
     ) -> Self {
         KindEnv {
             kind,
-            roles,
-            settings,
-            params: RefCell::new(vec![None; param_count]),
-            made: Vec::new(),
+            roles: roles.into(),
+            settings: settings.into(),
+            params: Params::Own(ParamCache::default()),
+            made: Cow::Borrowed(&[]),
             mount: None,
+        }
+    }
+
+    /// The environment of a binding: its roles and settings, borrowed, and
+    /// the param values it remembers, shared with every other environment
+    /// of the same binding.
+    pub fn of_binding(binding: &'e crate::joints::Binding) -> Self {
+        KindEnv {
+            kind: binding.kind,
+            roles: Cow::Borrowed(&binding.roles),
+            settings: Cow::Borrowed(&binding.settings),
+            params: Params::Shared(&binding.params),
+            made: Cow::Borrowed(&[]),
+            mount: None,
+        }
+    }
+
+    fn params(&self) -> &ParamCache {
+        match &self.params {
+            Params::Own(params) => params,
+            Params::Shared(params) => params,
         }
     }
 }
@@ -60,7 +136,7 @@ impl KindEnv {
 pub(crate) struct Env<'e> {
     pub ctx: Ctx,
     pub file: FileId,
-    pub kind: Option<&'e KindEnv>,
+    pub kind: Option<&'e KindEnv<'e>>,
     /// The array being declared and its element count, for `[same]` and
     /// `split(region, axis)`.
     pub array: Option<(DefId, usize)>,
@@ -96,13 +172,13 @@ impl ArrayItems {
         })
     }
 
-    fn all(&self) -> Value {
+    fn all(self) -> Value {
         match self {
-            ArrayItems::Parts(v) => Value::Parts(v.clone()),
-            ArrayItems::Regions(v) => Value::List(v.iter().map(|r| Value::Region(*r)).collect()),
-            ArrayItems::Assemblies(v) => Value::Assemblies(v.clone()),
-            ArrayItems::Joints(v) => Value::List(v.iter().map(|j| Value::Joint(*j)).collect()),
-            ArrayItems::Hardware(v) => Value::List(v.iter().map(|h| Value::Hardware(*h)).collect()),
+            ArrayItems::Parts(v) => Value::Parts(v),
+            ArrayItems::Regions(v) => Value::List(v.into_iter().map(Value::Region).collect()),
+            ArrayItems::Assemblies(v) => Value::Assemblies(v),
+            ArrayItems::Joints(v) => Value::List(v.into_iter().map(Value::Joint).collect()),
+            ArrayItems::Hardware(v) => Value::List(v.into_iter().map(Value::Hardware).collect()),
         }
     }
 }
@@ -181,9 +257,9 @@ impl Solver<'_> {
             RExprKind::Word(word) => Ok(Value::Word(*word)),
             RExprKind::Symbol(symbol) => self.symbol(*symbol, env, span),
             RExprKind::SelfElement(def) => {
-                let slot = self.model.item(*def, env.ctx).cloned();
+                let slot = self.model.item(*def, env.ctx);
                 Ok(slot
-                    .and_then(|slot| slot_value(&slot, env.ctx.element))
+                    .and_then(|slot| slot_value(slot, env.ctx.element))
                     .ok_or(Fault::Earlier)?)
             }
             RExprKind::Member { base, member } => {
@@ -442,7 +518,7 @@ impl Solver<'_> {
             }
             _ => {}
         }
-        let Some(slot) = self.model.item(def, env.ctx).cloned() else {
+        let Some(slot) = self.model.item(def, env.ctx) else {
             return Err(self
                 .eval_error(
                     env,
@@ -453,10 +529,10 @@ impl Solver<'_> {
                 .into());
         };
         match slot {
-            ItemSlot::Param(param) => self.param_value(param),
-            ItemSlot::Let(binding) => self.let_value(binding),
+            ItemSlot::Param(param) => self.param_value(*param),
+            ItemSlot::Let(binding) => self.let_value(*binding),
             ItemSlot::Require(require) => {
-                let Some(inst) = self.model.requires.get(require.index()).cloned() else {
+                let Some(inst) = self.model.requires.get(require.index()) else {
                     return Err(Fault::Internal("a require").into());
                 };
                 let Some(def) = self.model.defs.require(inst.def) else {
@@ -470,7 +546,7 @@ impl Solver<'_> {
                 };
                 Ok(Value::Bool(self.eval_bool(&def.condition, &env)?))
             }
-            other => slot_value(&other, None).ok_or_else(|| {
+            other => slot_value(other, None).ok_or_else(|| {
                 self.eval_error(
                     env,
                     span,
@@ -490,7 +566,7 @@ impl Solver<'_> {
             Some(Memo::Todo) => {}
             None => return Err(Fault::Internal("a param").into()),
         }
-        let Some(inst) = self.model.params.get(param.index()).cloned() else {
+        let Some(inst) = self.model.params.get(param.index()) else {
             return Err(Fault::Internal("a param").into());
         };
         let Some(def) = self.model.defs.param(inst.def) else {
@@ -558,7 +634,7 @@ impl Solver<'_> {
                     .assembly(assembly)
                     .and_then(|a| match &a.kind {
                         stave_model::defs::AssemblyKind::Instance { args, .. } => {
-                            args.get(index).map(|(_, e)| e.clone())
+                            args.get(index).map(|(_, e)| e)
                         }
                         _ => None,
                     });
@@ -580,7 +656,7 @@ impl Solver<'_> {
                             kind: None,
                             array,
                         };
-                        let value = self.eval(&arg, &env);
+                        let value = self.eval(arg, &env);
                         // As for a default: no `?`, so the memo is settled.
                         value.and_then(|value| {
                             let domain_ctx = Ctx {
@@ -696,7 +772,7 @@ impl Solver<'_> {
             Some(Memo::Todo) => {}
             None => return Err(Fault::Internal("a let").into()),
         }
-        let Some(inst) = self.model.lets.get(binding.index()).cloned() else {
+        let Some(inst) = self.model.lets.get(binding.index()) else {
             return Err(Fault::Internal("a let").into());
         };
         let Some(def) = self.model.defs.let_def(inst.def) else {
@@ -731,7 +807,7 @@ impl Solver<'_> {
     /// this pair.
     pub(crate) fn kind_param(
         &mut self,
-        kind_env: &KindEnv,
+        kind_env: &KindEnv<'_>,
         index: usize,
         file: FileId,
         span: Span,
@@ -739,8 +815,8 @@ impl Solver<'_> {
         if self.poisoned(DefId::Kind(kind_env.kind)) {
             return Err(self.skip().into());
         }
-        if let Some(Some(value)) = kind_env.params.borrow().get(index) {
-            return Ok(value.clone());
+        if let Some(value) = kind_env.params().get(index) {
+            return Ok(value);
         }
         let Some(kind) = self.model.defs.kind(kind_env.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
@@ -784,9 +860,7 @@ impl Solver<'_> {
                 }
             },
         };
-        if let Some(slot) = kind_env.params.borrow_mut().get_mut(index) {
-            *slot = Some(value.clone());
-        }
+        kind_env.params().set(index, value.clone());
         Ok(value)
     }
 
@@ -807,17 +881,12 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(kind_value.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        let kind_env = KindEnv::new(
-            kind_value.kind,
-            Vec::new(),
-            kind_value.settings.clone(),
-            kind.params.len(),
-        );
+        let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
         if let Some(index) = kind.param(name) {
             return self.kind_param(&kind_env, index, file, span);
         }
         if let Some(field) = kind.field(name) {
-            let value_expr = field.value.clone();
+            let value_expr = &field.value;
             let Some(ctx) = self.module_ctx(DefId::Kind(kind_value.kind)) else {
                 return Err(Fault::Internal("the file an item is declared in").into());
             };
@@ -827,7 +896,7 @@ impl Solver<'_> {
                 kind: Some(&kind_env),
                 array: None,
             };
-            return self.eval(&value_expr, &env);
+            return self.eval(value_expr, &env);
         }
         let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self
@@ -1026,7 +1095,7 @@ impl Solver<'_> {
                     .into());
             }
         };
-        let Some(slot) = self.model.item(def, ctx).cloned() else {
+        let Some(slot) = self.model.item(def, ctx) else {
             return Err(Fault::Internal("an item").into());
         };
         let items = match slot {
@@ -1056,9 +1125,9 @@ impl Solver<'_> {
         }
     }
 
-    fn labels(&self, def: DefId) -> Option<Vec<String>> {
+    fn labels(&self, def: DefId) -> Option<&[(String, Span)]> {
         match self.model.defs.array(def)? {
-            ArrayDef::Labels(labels) => Some(labels.iter().map(|(l, _)| l.clone()).collect()),
+            ArrayDef::Labels(labels) => Some(labels),
             ArrayDef::Count(_) => None,
         }
     }
@@ -1096,7 +1165,7 @@ impl Solver<'_> {
                         .into());
                 };
                 let same_shape = match (self.labels(declared), self.labels(def)) {
-                    (Some(a), Some(b)) => a == b,
+                    (Some(a), Some(b)) => a.iter().map(|(l, _)| l).eq(b.iter().map(|(l, _)| l)),
                     (None, None) => count == items.len(),
                     _ => false,
                 };
@@ -1151,15 +1220,15 @@ impl Solver<'_> {
             StockField::Species => return Ok(Value::Word(Word::Species(def.species))),
             StockField::Form => return Ok(Value::Word(Word::StockForm(def.form))),
             StockField::Thickness => match (&def.thickness, def.form) {
-                (Some(t), _) => (t.clone(), "thickness"),
+                (Some(t), _) => (t, "thickness"),
                 (None, StockForm::Dowel) => match &def.diameter {
-                    Some(d) => (d.clone(), "diameter"),
+                    Some(d) => (d, "diameter"),
                     None => return Err(Fault::Earlier.into()),
                 },
                 (None, _) => return Err(Fault::Earlier.into()),
             },
             StockField::Diameter => (
-                def.diameter.clone().ok_or_else(|| {
+                def.diameter.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'diameter'", def.decl.name),
@@ -1171,9 +1240,9 @@ impl Solver<'_> {
                 "diameter",
             ),
             StockField::Width => match (&def.width, def.form) {
-                (Some(w), _) => (w.clone(), "width"),
+                (Some(w), _) => (w, "width"),
                 (None, StockForm::Dowel) => {
-                    (def.diameter.clone().ok_or(Fault::Earlier)?, "diameter")
+                    (def.diameter.as_ref().ok_or(Fault::Earlier)?, "diameter")
                 }
                 (None, _) => {
                     return Err(self
@@ -1188,7 +1257,7 @@ impl Solver<'_> {
                 }
             },
             StockField::MaxWidth => (
-                def.max_width.clone().ok_or_else(|| {
+                def.max_width.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'max_width'", def.decl.name),
@@ -1200,7 +1269,7 @@ impl Solver<'_> {
                 "max_width",
             ),
             StockField::MaxLength => (
-                def.max_length.clone().ok_or_else(|| {
+                def.max_length.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'max_length'", def.decl.name),
@@ -1222,7 +1291,7 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        let value = self.eval(&expr, &env)?;
+        let value = self.eval(expr, &env)?;
         if let Value::Length(size) = &value
             && *size <= ExactLength::ZERO
         {
@@ -1306,7 +1375,7 @@ impl Solver<'_> {
         if self.poisoned(DefId::Profile(profile)) {
             return Err(self.skip().into());
         }
-        let Some(def) = self.model.defs.profile(profile).cloned() else {
+        let Some(def) = self.model.defs.profile(profile) else {
             return Err(Fault::Internal("a profile's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Profile(profile)) else {

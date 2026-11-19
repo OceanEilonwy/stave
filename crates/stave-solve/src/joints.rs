@@ -1,6 +1,8 @@
 //! Joints: binding kind calls, finding pairs, what joints add to their
 //! parts, the parts they make and the cuts they describe.
 
+use std::rc::Rc;
+
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactLength, Length, Rational};
@@ -21,7 +23,7 @@ use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
 use stave_schema::words::{Grain, StockForm};
 
-use crate::eval::{Env, KindEnv, midpoint};
+use crate::eval::{Env, KindEnv, ParamCache, midpoint};
 use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
 
 /// A kind call with its kind, roles and settings worked out.
@@ -35,6 +37,9 @@ pub(crate) struct Binding {
     pub glue: bool,
     pub methods: Vec<RecipeId>,
     pub face: Option<Face>,
+    /// The kind's param values for these settings, worked out once and
+    /// shared by every environment built from this binding.
+    pub params: ParamCache,
 }
 
 /// Who a cut belongs to and where to report a mistake in its sizes: a
@@ -170,7 +175,7 @@ impl PartGeom {
 
 /// A joint's pairs while it is worked out.
 pub(crate) struct JointWork {
-    pub binding: Binding,
+    pub binding: Rc<Binding>,
     pub pairs: Vec<PairWork>,
     pub unmatched: Vec<PartId>,
     pub requires: Vec<Vec<stave_model::solved::RequireResult>>,
@@ -189,7 +194,7 @@ pub(crate) struct PairWork {
     /// of `parts`.
     pub across: bool,
     pub contact: Contact,
-    pub env: KindEnv,
+    pub env: KindEnv<'static>,
     pub extensions: Vec<stave_model::solved::Extension>,
     /// Whether the joint makes its cuts, parts and members for this pair.
     pub making: Making,
@@ -246,7 +251,7 @@ impl Solver<'_> {
         if self.model.defs.is_poisoned(DefId::Kind(kind)) {
             return Err(self.skip().into());
         }
-        let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
+        let Some(kind_def) = self.model.defs.kind(kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         // A kind chosen through a param that doesn't take what this call
@@ -410,21 +415,22 @@ impl Solver<'_> {
             glue,
             methods,
             face,
+            params: ParamCache::default(),
         })
     }
 
-    /// The binding of a joint, worked out once.
-    pub(crate) fn joint_binding(&mut self, joint: JointId) -> Solved<Binding> {
+    /// The binding of a joint, worked out once and shared.
+    pub(crate) fn joint_binding(&mut self, joint: JointId) -> Solved<Rc<Binding>> {
         match self.joints.get(joint.index()) {
-            Some(Memo::Done(binding)) => return Ok(binding.clone()),
+            Some(Memo::Done(binding)) => return Ok(Rc::clone(binding)),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             Some(Memo::Busy) => return Err(self.cycle(Frame::Joint(joint)).into()),
             _ => {}
         }
-        let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
+        let Some(inst) = self.model.joints.get(joint.index()) else {
             return Err(Fault::Internal("a joint").into());
         };
-        let Some(def) = self.model.defs.joint(inst.def).cloned() else {
+        let Some(def) = self.model.defs.joint(inst.def) else {
             return Err(Fault::Internal("a joint's declaration").into());
         };
         if self.poisoned(DefId::Joint(inst.def)) {
@@ -466,7 +472,7 @@ impl Solver<'_> {
                 }
             });
         self.leave();
-        let (memo, result) = self.remember(result, def.decl.file, def.call.span);
+        let (memo, result) = self.remember(result.map(Rc::new), def.decl.file, def.call.span);
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = memo;
         }
@@ -515,7 +521,7 @@ impl Solver<'_> {
     /// Pass A of a joint: pairs, requires and what it adds to its parts.
     pub(crate) fn work_joint(&mut self, joint: JointId) -> Solved<JointWork> {
         let binding = self.joint_binding(joint)?;
-        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let (file, span) = self.joint_place(joint);
@@ -610,12 +616,7 @@ impl Solver<'_> {
             } else {
                 parts.iter().map(|p| Value::Part(*p)).collect()
             };
-            let env = KindEnv::new(
-                binding.kind,
-                roles,
-                binding.settings.clone(),
-                kind.params.len(),
-            );
+            let env = KindEnv::new(binding.kind, roles, binding.settings.clone());
             let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
                 return Err(Fault::Internal("the file an item is declared in").into());
             };
@@ -688,10 +689,10 @@ impl Solver<'_> {
             if let (Some(joint_def), Making::Made) = (&kind.joint, making) {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
-                    let members: Vec<PartId> = if across {
-                        parts.clone()
+                    let members: &[PartId] = if across {
+                        &parts
                     } else {
-                        parts.get(extend.role).copied().into_iter().collect()
+                        parts.get(extend.role).map_or(&[], std::slice::from_ref)
                     };
                     for (part, other) in members.iter().flat_map(|part| {
                         parts
@@ -1128,7 +1129,7 @@ impl Solver<'_> {
             Axis::Across => stave_lang::placement::Direction::Right,
             Axis::Deep => stave_lang::placement::Direction::Front,
         };
-        let body = self.part_body(part).cloned();
+        let body = self.part_body(part);
         let file = self
             .part_env(part)
             .map(|e| e.file)
@@ -1277,9 +1278,9 @@ impl Solver<'_> {
         selector_on(selector, p, gp, q, gq)
     }
 
-    fn depth(&mut self, value: Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
+    fn depth(&mut self, value: &Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
         match value {
-            Value::Length(length) => Ok(Depth::Length(round_length(length)?)),
+            Value::Length(length) => Ok(Depth::Length(round_length(*length)?)),
             Value::Word(Word::Through) => Ok(Depth::Through),
             other => Err(self
                 .error(
@@ -1299,10 +1300,10 @@ impl Solver<'_> {
     /// Evaluates a cut operation's arguments.
     pub(crate) fn cut_kind(&mut self, operation: &OperationDef, env: &Env<'_>) -> Solved<CutKind> {
         let spec = stave_schema::operations::cut_operation(operation.operation);
-        let mut values: Vec<(String, Value, Span)> = Vec::new();
+        let mut values: Vec<(&str, Value, Span)> = Vec::new();
         for arg in &operation.args {
             values.push((
-                arg.name.clone(),
+                arg.name.as_str(),
                 self.eval(&arg.value, env)?,
                 arg.value.span,
             ));
@@ -1310,12 +1311,12 @@ impl Solver<'_> {
         let get = |name: &str| {
             values
                 .iter()
-                .find(|(n, _, _)| n == name)
-                .map(|(_, v, s)| (v.clone(), *s))
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, v, s)| (v, *s))
         };
         let length = |this: &mut Self, name: &str| -> Solved<stave_lang::units::Length> {
             match get(name) {
-                Some((Value::Length(l), _)) => round_length(l),
+                Some((Value::Length(l), _)) => round_length(*l),
                 Some((other, span)) => Err(this
                     .error(
                         Code::UnitMismatch,
@@ -1424,14 +1425,14 @@ impl Solver<'_> {
     fn dovetail_slope(
         &mut self,
         operation: &OperationDef,
-        values: &[(String, Value, Span)],
+        values: &[(&str, Value, Span)],
         env: &Env<'_>,
     ) -> Solved<Slope> {
         let get = |name: &str| {
             values
                 .iter()
-                .find(|(n, _, _)| n == name)
-                .map(|(_, v, s)| (v.clone(), *s))
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, v, s)| (v, *s))
         };
         match (get("angle"), get("slope")) {
             (Some((Value::Angle(angle), _)), None) => Ok(Slope::Angle(
@@ -1680,7 +1681,7 @@ impl Solver<'_> {
         pair: &PairWork,
         env: &Env<'_>,
     ) -> Solved<Vec<AssemblyStep>> {
-        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.clone()) else {
+        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.as_ref()) else {
             return Ok(Vec::new());
         };
         let mut steps = Vec::new();
@@ -1748,7 +1749,7 @@ impl Solver<'_> {
             }
         };
         let size_of = |this: &mut Self,
-                       size: &Option<Size>,
+                       size: Option<&Size>,
                        field: StockField,
                        word: &str|
          -> Solved<ExactLength> {
@@ -1775,13 +1776,8 @@ impl Solver<'_> {
                 }),
             }
         };
-        let length = size_of(
-            self,
-            &Some(body.length.clone()),
-            StockField::Thickness,
-            "length",
-        )?;
-        let width = size_of(self, &body.width, StockField::Width, "width")?;
+        let length = size_of(self, Some(&body.length), StockField::Thickness, "length")?;
+        let width = size_of(self, body.width.as_ref(), StockField::Width, "width")?;
         let thickness = match &body.thickness {
             Some(expr) => self.eval_length(expr, env)?,
             None => self

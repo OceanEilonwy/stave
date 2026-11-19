@@ -178,7 +178,7 @@ impl Solver<'_> {
             .ok_or(Fault::Internal("a stock's declaration"))?;
         let source = self.body_source(part)?;
         let image = source != part;
-        let body = self.part_body(source).cloned();
+        let body = self.part_body(source);
         let grain = body.as_ref().map_or(Grain::Length, |b| b.grain);
         let axis = match grain {
             Grain::Length => PartAxis::Width,
@@ -451,11 +451,11 @@ impl Solver<'_> {
     ) -> Solved<Vec<Method>> {
         let own = self
             .part_body(source)
-            .and_then(|b| b.boards.clone())
+            .and_then(|b| b.boards.as_ref())
             .zip(self.part_env(source));
         let value = match own {
-            Some((expr, env)) => Some(self.eval(&expr, &env)?),
-            None => match self.model.defs.project(self.model.root).cloned() {
+            Some((expr, env)) => Some(self.eval(expr, &env)?),
+            None => match self.model.defs.project(self.model.root) {
                 Some(project) if project.boards.is_some() => match &project.boards {
                     Some(expr) => Some(self.eval_in_module(self.model.root, project.file, expr)?),
                     None => None,
@@ -471,11 +471,11 @@ impl Solver<'_> {
                             .get(module.index())?
                             .library
                             .as_ref()?;
-                        Some((*module, library.file, library.boards.clone()?))
+                        Some((*module, library.file, library.boards.as_ref()?))
                     });
                     match found {
                         Some((module, file, expr)) => {
-                            Some(self.eval_in_module(module, file, &expr)?)
+                            Some(self.eval_in_module(module, file, expr)?)
                         }
                         None => None,
                     }
@@ -516,7 +516,7 @@ impl Solver<'_> {
             if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
                 return Err(self.skip().into());
             }
-            let Some(kind) = self.model.defs.kind(value.kind).cloned() else {
+            let Some(kind) = self.model.defs.kind(value.kind) else {
                 return Err(Fault::Internal("a kind's declaration").into());
             };
             if kind.base != BaseKind::Joint {
@@ -706,7 +706,7 @@ impl Solver<'_> {
         extra: &mut BTreeMap<PartId, [ExactLength; 2]>,
         requires: &mut Vec<RequireResult>,
     ) -> Solved<PairWork> {
-        let Some(kind) = self.model.defs.kind(method.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(method.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let roles: Vec<Value> = if method.across {
@@ -714,12 +714,7 @@ impl Solver<'_> {
         } else {
             parts.iter().map(|p| Value::Part(*p)).collect()
         };
-        let env = KindEnv::new(
-            method.kind,
-            roles,
-            method.settings.clone(),
-            kind.params.len(),
-        );
+        let env = KindEnv::new(method.kind, roles, method.settings.clone());
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -773,12 +768,12 @@ impl Solver<'_> {
         if let Some(joint_def) = &kind.joint {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
-                let members: Vec<PartId> = if method.across {
-                    parts.clone()
+                let members: &[PartId] = if method.across {
+                    &parts
                 } else {
-                    parts.get(extend.role).copied().into_iter().collect()
+                    parts.get(extend.role).map_or(&[], std::slice::from_ref)
                 };
-                for board in members {
+                for board in members.iter().copied() {
                     for other in parts.iter().copied().filter(|o| *o != board) {
                         let (a, b) = (self.drawn_box(board)?, self.drawn_box(other)?);
                         let Some(world) = a.touching_axis(&b) else {
@@ -879,13 +874,14 @@ impl Solver<'_> {
         made: &mut Vec<MadeInfo>,
         board_cuts: &mut BTreeMap<PartId, Vec<Cut>>,
     ) -> Solved<()> {
-        let Some(kind) = self.model.defs.kind(method.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(method.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let joint_def = kind.joint.clone().unwrap_or_default();
+        let no_joint = stave_model::defs::JointKindDef::default();
+        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
         let part_name = self.part_name(part);
         let assembly = self.model.parts.get(part.index()).and_then(|p| p.assembly);
         let origin = PartOrigin::Boards {
@@ -927,7 +923,7 @@ impl Solver<'_> {
             });
             made_ids.push(id);
         }
-        pair.env.made = made_ids;
+        pair.env.made = made_ids.into();
         let env = Env {
             ctx,
             file: kind.decl.file,

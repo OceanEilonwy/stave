@@ -747,7 +747,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 let offset = match terms.axis(axis).map(|t| &t.kind) {
                     Some(AxisTermKind::Against { gap: offset, .. })
                     | Some(AxisTermKind::Flush { inset: offset, .. })
-                    | Some(AxisTermKind::Corner { inset: offset, .. }) => offset.clone(),
+                    | Some(AxisTermKind::Corner { inset: offset, .. }) => *offset,
                     Some(
                         AxisTermKind::CenterOn { .. }
                         | AxisTermKind::CenterBetween { .. }
@@ -757,8 +757,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 };
                 match offset {
                     Some(expr) => {
-                        let value = self.value(&expr, &env).map_err(halt)?;
-                        Ok((amount(&value)?, self.affine(&expr, &env).map_err(halt)?))
+                        let value = self.value(expr, &env).map_err(halt)?;
+                        Ok((amount(&value)?, self.affine(expr, &env).map_err(halt)?))
                     }
                     None => Ok((Amount::Length(ExactLength::ZERO), Affine::zero())),
                 }
@@ -1388,7 +1388,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         if let Some((source, _, _)) = self.solver.mirror_source(part).map_err(|_| Halt)? {
             return self.part_size(source, axis);
         }
-        let body = self.solver.part_body(part).cloned().ok_or(Halt)?;
+        let body = self.solver.part_body(part).ok_or(Halt)?;
         let env = self.solver.part_env(part).ok_or(Halt)?;
         if self.solver.part_profile(part).map_err(|_| Halt)?.is_some() {
             return Ok(Affine::other("a turned part's profile"));
@@ -1463,7 +1463,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             return Ok(Affine::zero());
         }
         let env = self.solver.part_env(part).ok_or(Halt)?;
-        let term = terms.axis(axis).cloned().ok_or(Halt)?;
+        let term = terms.axis(axis).copied().ok_or(Halt)?;
         let size = self.size_along(part, axis)?;
         self.term_low(&term, axis, &size, &env, part)
     }
@@ -1512,7 +1512,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         Ok((self.anchor(face, env)?, side))
     }
 
-    fn optional(&mut self, expr: &Option<RExpr>, env: &Env<'static>) -> Step<Affine> {
+    fn optional(&mut self, expr: Option<&RExpr>, env: &Env<'static>) -> Step<Affine> {
         match expr {
             Some(expr) => self.affine(expr, env),
             None => Ok(Affine::zero()),
@@ -1525,7 +1525,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         match &term.kind {
             AxisTermKind::Against { face, gap } => {
                 let (position, side) = self.face_term(face, env)?;
-                let gap = self.optional(gap, env)?;
+                let gap = self.optional(*gap, env)?;
                 if side.is_positive() {
                     Ok((position.plus(&gap)?, true))
                 } else {
@@ -1534,7 +1534,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             }
             AxisTermKind::Flush { face, inset } => {
                 let (position, side) = self.face_term(face, env)?;
-                let inset = self.optional(inset, env)?;
+                let inset = self.optional(*inset, env)?;
                 if side.is_positive() {
                     Ok((position.minus(&inset)?, false))
                 } else {
@@ -1544,7 +1544,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             AxisTermKind::Corner { part, inset, face } => {
                 let other = self.solver.eval_part(part, env).map_err(|_| Halt)?;
                 let position = self.part_face(other, *face)?;
-                let inset = self.optional(inset, env)?;
+                let inset = self.optional(*inset, env)?;
                 if face.is_positive() {
                     Ok((position.minus(&inset)?, false))
                 } else {
@@ -1749,7 +1749,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let orientation = self.solver.part_orientation(part).map_err(|_| Halt)?;
         let world = orientation.direction(axis).axis();
         let terms = self.solver.part_terms(part).map_err(|_| Halt)?;
-        let term = terms.axis(world).cloned().ok_or(Halt)?;
+        let term = terms.axis(world).copied().ok_or(Halt)?;
         // Each partner's ends: the solver's values, to hold its choices,
         // and the forms.
         let mut partners = Vec::new();
@@ -1851,7 +1851,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     /// The solver's value of the end [`Self::known_end`] gives.
     fn known_end_value(&mut self, term: &AxisTerm, env: &Env<'static>) -> Step<ExactLength> {
-        let length = |this: &mut Self, expr: &Option<RExpr>| -> Step<ExactLength> {
+        let length = |this: &mut Self, expr: Option<&RExpr>| -> Step<ExactLength> {
             match expr {
                 Some(expr) => this.solver.eval_length(expr, env).map_err(|_| Halt),
                 None => Ok(ExactLength::ZERO),
@@ -1861,7 +1861,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             AxisTermKind::Against { face, gap } => {
                 let anchor = self.solver.eval_anchor(face, env).map_err(|_| Halt)?;
                 let positive = anchor.face.ok_or(Halt)?.is_positive();
-                let gap = length(self, gap)?;
+                let gap = length(self, *gap)?;
                 // A gap moves away from the face: up from a top face.
                 let offset = if positive {
                     gap
@@ -1873,7 +1873,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
             AxisTermKind::Flush { face, inset } => {
                 let anchor = self.solver.eval_anchor(face, env).map_err(|_| Halt)?;
                 let positive = anchor.face.ok_or(Halt)?.is_positive();
-                (anchor.position, length(self, inset)?, positive)
+                (anchor.position, length(self, *inset)?, positive)
             }
             AxisTermKind::Corner { part, inset, face } => {
                 let other = self.solver.eval_part(part, env).map_err(|_| Halt)?;
@@ -1882,7 +1882,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     .part_anchor(other, *face)
                     .map_err(|_| Halt)?
                     .position;
-                (position, length(self, inset)?, face.is_positive())
+                (position, length(self, *inset)?, face.is_positive())
             }
             AxisTermKind::CenterOn { .. }
             | AxisTermKind::CenterBetween { .. }
