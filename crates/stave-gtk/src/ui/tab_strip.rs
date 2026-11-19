@@ -840,7 +840,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, settle, unnamed_buttons};
 
     /// The strip's tab boxes, in order.
     fn tab_boxes(strip: &TabStrip) -> Vec<gtk::Widget> {
@@ -1127,52 +1127,5 @@ mod tests {
         assert!(!show_step(&frame, Step::Next));
         assert!(!show_step(&frame, Step::Previous));
         assert_eq!(frame.visible_child().as_ref(), Some(&only));
-    }
-
-    /// The buttons under `root` (itself included) that show no words and
-    /// have no accessible name, by their tooltip: a screen reader would
-    /// call each just "button". A menu button counts as one button, not
-    /// its inner one. (main's `gtk_test::unnamed_buttons`, here until that
-    /// helper reaches this branch.)
-    fn unnamed_buttons(root: &impl IsA<gtk::Widget>) -> Vec<String> {
-        fn shows_words(widget: &gtk::Widget) -> bool {
-            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-                return !label.label().is_empty();
-            }
-            let mut child = widget.first_child();
-            while let Some(next) = child {
-                if shows_words(&next) {
-                    return true;
-                }
-                child = next.next_sibling();
-            }
-            false
-        }
-
-        fn walk(widget: &gtk::Widget, unnamed: &mut Vec<String>) {
-            let menu = widget.is::<gtk::MenuButton>();
-            if (menu || widget.is::<gtk::Button>())
-                && !shows_words(widget)
-                && !gtk::test_accessible_has_property(widget, gtk::AccessibleProperty::Label)
-            {
-                unnamed.push(
-                    widget
-                        .tooltip_text()
-                        .map_or_else(|| widget.type_().name().to_owned(), String::from),
-                );
-            }
-            if menu {
-                return;
-            }
-            let mut child = widget.first_child();
-            while let Some(next) = child {
-                walk(&next, unnamed);
-                child = next.next_sibling();
-            }
-        }
-
-        let mut unnamed = Vec::new();
-        walk(root.as_ref(), &mut unnamed);
-        unnamed
     }
 }
