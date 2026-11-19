@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-19 21:31+0800\n"
+"POT-Creation-Date: 2026-11-19 22:14+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -394,7 +394,7 @@ msgstr ""
 msgid "The project places no parts. Add a part to its text and it appears here as soon as the file is saved."
 msgstr ""
 
-#: crates/stave-app/src/empty.rs:309
+#: crates/stave-app/src/empty.rs:309 crates/stave-gtk/src/ui/tree.rs:925
 msgid "Nothing to show yet"
 msgstr ""
 
@@ -422,11 +422,12 @@ msgstr ""
 msgid "can't make the glTF file: {value}"
 msgstr ""
 
-#: crates/stave-app/src/finder.rs:49
+#: crates/stave-app/src/finder.rs:49 crates/stave-gtk/src/ui/tree.rs:436
+#: crates/stave-gtk/src/ui/workbench.rs:114
 msgid "Parts"
 msgstr ""
 
-#: crates/stave-app/src/finder.rs:50
+#: crates/stave-app/src/finder.rs:50 crates/stave-gtk/src/ui/workbench.rs:115
 msgid "Files"
 msgstr ""
 
@@ -438,7 +439,9 @@ msgstr ""
 msgid "Lines"
 msgstr ""
 
-#: crates/stave-app/src/finder.rs:53
+#: crates/stave-app/src/finder.rs:53 crates/stave-gtk/src/ui/workbench.rs:118
+#: crates/stave-gtk/src/ui/workbench.rs:1083
+#: crates/stave-gtk/src/ui/workbench.rs:1085
 msgid "Problems"
 msgstr ""
 
@@ -954,6 +957,7 @@ msgstr ""
 
 #: crates/stave-app/src/inspect.rs:1263
 #: crates/stave-gtk/src/ui/edit_view/grip_text.rs:406
+#: crates/stave-gtk/src/ui/files.rs:1844
 msgid "Note"
 msgstr ""
 
@@ -1038,6 +1042,7 @@ msgid "How it goes together"
 msgstr ""
 
 #: crates/stave-app/src/inspect.rs:1603 crates/stave-app/src/inspect.rs:1654
+#: crates/stave-gtk/src/ui/inspector.rs:482
 msgid "See how it goes together"
 msgstr ""
 
@@ -1218,6 +1223,7 @@ msgid "Syntax"
 msgstr ""
 
 #: crates/stave-app/src/problems.rs:123
+#: crates/stave-gtk/src/ui/new_project.rs:234
 msgid "Name"
 msgstr ""
 
@@ -1317,7 +1323,7 @@ msgstr ""
 msgid "warning"
 msgstr ""
 
-#: crates/stave-app/src/problems.rs:998
+#: crates/stave-app/src/problems.rs:998 crates/stave-gtk/src/ui/panels.rs:332
 msgid "note"
 msgstr ""
 
@@ -1605,7 +1611,7 @@ msgstr ""
 msgid "Can't open"
 msgstr ""
 
-#: crates/stave-app/src/session.rs:348
+#: crates/stave-app/src/session.rs:348 crates/stave-gtk/src/ui/panels.rs:142
 msgid "No problems"
 msgstr ""
 
@@ -1761,6 +1767,221 @@ msgid "{count} shape"
 msgid_plural "{count} shapes"
 msgstr[0] ""
 msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/app.rs:60
+msgid "General"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:61
+msgid "3D View"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:62
+msgid "Editor"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:104
+msgid "New project"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:111 crates/stave-gtk/src/ui/start_page.rs:328
+#: crates/stave-gtk/src/ui/update/project.rs:841
+msgid "Open a project folder"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:118
+msgid "Check the project again"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:125
+msgid "Find a part, a problem or a name"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:132
+msgid "Next problem"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:139
+msgid "Previous problem"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:146
+msgid "Go back"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:153
+msgid "Go forward"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:160
+msgid "Show the parts"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:167
+msgid "Keyboard shortcuts"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:174
+msgid "Close the window"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:181
+msgid "Quit"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:188
+msgid "Show the design"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:195
+msgid "Frame the selection"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:202
+msgid "Leave focus, or clear the selection"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:209
+msgid "Turn the view left"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:216
+msgid "Turn the view right"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:223
+msgid "Look from higher up"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:230
+msgid "Look from lower down"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:237
+msgid "Zoom in"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:244
+msgid "Zoom out"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:251
+msgid "Open the editor"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:258
+msgid "Save the file"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:265
+msgid "Tidy the file's layout"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:272
+msgid "Search in the file"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:279
+msgid "Go to where a name is made"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:286
+msgid "Peek at where a name is made"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:293
+msgid "List where a name is used"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:300
+msgid "Show the card for the word at the cursor"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:311
+msgid "Remove the selected piece"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:314
+msgid "Undo"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:315
+msgid "Redo"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:318
+msgid "Close the card, peek or search"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:689
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:29
+msgid "The Stave contributors"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:691
+msgid "Woodworking design for beginners: describe a project in words, see it in 3D, and let Stave check that it can be built."
+msgstr ""
+
+#. TRANSLATORS: your name, and others who translated, one per line.
+#: crates/stave-gtk/src/ui/app.rs:694
+msgid "translator-credits"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:747
+#, rust-format
+msgid "Stave couldn't save its settings for next time: {error}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:865
+#, rust-format
+msgid "can't find the folder '{folder}'"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:880
+#, rust-format
+msgid "'{folder}' is not a project folder: open the folder that holds its .stave files"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:938
+msgid "Follow System Style"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:939
+msgid "Light"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:940
+msgid "Dark"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:947
+msgid "Keyboard Shortcuts"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/app.rs:948
+msgid "About Stave"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/dock.rs:104
+#, rust-format
+msgid "Open or close {name}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/dock.rs:110
+msgid "Has an error"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/dock.rs:111
+msgid "Is part of an error"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/dock.rs:112
+msgid "Has a warning"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/dock.rs:148
+msgid "Move:"
+msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_panel.rs:26
 msgid "Nothing being added"
@@ -1919,6 +2140,198 @@ msgstr ""
 msgid "'{file}' didn't come out as the edit says"
 msgstr ""
 
+#: crates/stave-gtk/src/ui/editor.rs:959
+msgid "Find in this file"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1002
+msgid "Previous match (Shift+Enter)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1005
+msgid "Previous match"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1015
+msgid "Next match (Enter)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1018
+msgid "Next match"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1028
+msgid "Close the search (Escape)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1031
+msgid "Close the search"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1128
+msgid "No matches"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1135
+#, rust-format
+msgid "{position} of {total}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1140
+#, rust-format
+msgid "{count} match"
+msgid_plural "{count} matches"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1530
+msgid "show in 3D"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1593
+#, rust-format
+msgid "List the uses of {name} (Shift+F12)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/editor.rs:1597
+#, rust-format
+msgid "Select {name} in the 3D view"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:271
+msgid "Go to Where It Is Made"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:272
+msgid "Peek at Where It Is Made"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:273
+msgid "List Where It Is Used"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:274
+msgid "Show Card"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:316
+msgid "Close the list of uses (Escape)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:320
+msgid "Close the list of uses"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:353
+msgid "Ctrl+click follows a name · Alt+F12 peeks · Alt+← goes back"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:381
+msgid "No file open"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:382
+msgid "Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:568
+#, rust-format
+msgid "{file} is part of the standard library and can't be changed"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:596
+#: crates/stave-gtk/src/ui/update/project.rs:900
+#: crates/stave-gtk/src/ui/update/rendering.rs:764
+msgid "_Cancel"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:599
+msgid "_Try Again"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:600
+msgid "Save a _Copy…"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:623
+#, rust-format
+msgid "Saved {file}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:643
+msgid "Save a Copy"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:655
+#, rust-format
+msgid "Saved a copy as {file}; the open file still has unsaved changes"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:664
+msgid "_Close"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:697
+msgid "The file is already laid out"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1360
+#, rust-format
+msgid "Line {line}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1471 crates/stave-gtk/src/ui/files.rs:1512
+#, rust-format
+msgid "{file} — not saved (Ctrl+S saves)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1570
+msgid "This word isn't declared anywhere: it is part of the language"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1608
+msgid "no uses"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1611
+#, rust-format
+msgid "{count} use"
+msgid_plural "{count} uses"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/files.rs:1701
+msgctxt "verb"
+msgid "Open"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1703
+msgid "Open the definition (F12)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1842
+msgid "Error"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1843
+msgid "Warning"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1853
+#, rust-format
+msgid "Help: {help}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1881
+#, rust-format
+msgid "Defined in {place}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1938
+#, rust-format
+msgid "{file} changed on disk; your unsaved changes are kept"
+msgstr ""
+
 #: crates/stave-gtk/src/ui/finder.rs:184
 msgid "All"
 msgstr ""
@@ -1926,6 +2339,19 @@ msgstr ""
 #: crates/stave-gtk/src/ui/finder.rs:189
 #, rust-format
 msgid "{group} {count}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/floating.rs:457
+#: crates/stave-gtk/src/ui/floating.rs:458
+msgid "Press and hold to move it"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:160
+msgid "Nothing selected"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:161
+msgid "Click a part in the list or in the 3D view to see its stock, size, joints and where it is written."
 msgstr ""
 
 #: crates/stave-gtk/src/ui/inspector.rs:300
@@ -1940,11 +2366,47 @@ msgstr[1] ""
 msgid "in {assembly}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:984
+#: crates/stave-gtk/src/ui/inspector.rs:376
+msgid "Joined to"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:384
+msgid "Cuts"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:420
+msgid "This file has changes that aren't saved"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:436
+msgid "Show it in the editor"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:484
+msgid "See the hardware that makes it"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:518
+msgid "Checks"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:536
+msgid "Show this problem"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:559
+msgid "Defined in"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:587
+msgid "The text is the source of truth. Positions are worked out from these relationships; none are stored."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/mod.rs:984 crates/stave-gtk/src/ui/start_page.rs:112
 msgid "New Project…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:985
+#: crates/stave-gtk/src/ui/mod.rs:985 crates/stave-gtk/src/ui/start_page.rs:113
 msgid "Open Project…"
 msgstr ""
 
@@ -2005,22 +2467,26 @@ msgid "Frame Everything"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/mod.rs:1043
+#: crates/stave-gtk/src/ui/workbench.rs:1110
 msgid "Reset Layout"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/mod.rs:1044
+#: crates/stave-gtk/src/ui/workbench.rs:1113
 msgid "Panels"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/mod.rs:1045
+#: crates/stave-gtk/src/ui/start_page.rs:115
 msgid "Style"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/mod.rs:1047
+#: crates/stave-gtk/src/ui/new_project.rs:263
 msgid "Project"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1048
+#: crates/stave-gtk/src/ui/mod.rs:1048 crates/stave-gtk/src/ui/workbench.rs:119
 msgid "Edit"
 msgstr ""
 
@@ -2051,6 +2517,185 @@ msgstr ""
 msgid "Nothing selected. {problems}."
 msgstr ""
 
+#: crates/stave-gtk/src/ui/new_project.rs:137
+#, rust-format
+msgid "{value} mm isn't a size Stave can use"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:154
+msgid "Give the project a name"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:158
+#, rust-format
+msgid "'{name}' can't name the wood: use letters, digits and _"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:189
+msgid "solid boards"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:190
+msgid "plywood sheets"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:191
+msgid "MDF sheets"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:235
+msgid "Hall table"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:237
+msgid "Width (across), mm"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:238
+msgid "Height (up), mm"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:239
+msgid "Depth (front to back), mm"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:241
+msgid "Called"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:250
+msgid "Species"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:257
+msgid "Bought as"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:260
+msgid "Thickness, mm"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:261
+msgid "Longest board you can get, mm"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:266
+msgid "Overall size"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:268
+msgid "The box the piece fits in: the first space you click to add to"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:275
+msgid "Wood"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:276
+msgid "The stock you buy; add more later in the text"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:285
+msgid "Libraries"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:286
+msgid "What the menus offer to put in a space"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:304
+msgid "Tools you have"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:305
+msgid "Leave them all unticked if you have every tool"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:418
+msgid "Choose a folder to write the project into"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:427
+msgid "No folder chosen yet"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:441
+msgid "New Project"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:454
+#: crates/stave-gtk/src/ui/sections.rs:290
+#: crates/stave-gtk/src/ui/sections.rs:294
+#: crates/stave-gtk/src/ui/sections.rs:300
+msgid "Cancel"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:460
+msgid "Create"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:481
+msgid "Folder"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:482
+msgid "The project's .stave file is written here"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:484
+msgid "Write it into"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:495
+msgid "Choose Folder…"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:545
+msgid "Choose the folder for the new project"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:616
+#, rust-format
+msgid "can't make the folder '{folder}': {error}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/new_project.rs:638
+msgid "Click inside the box to add the first piece"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:113
+msgid "The 3D view shows the last version without errors until these are fixed."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:143
+msgid "Every part fits, every joint closes and everything that moves moves clear."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:335
+msgid "help"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:361
+msgid "Show this place in the Code panel"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:368
+msgid "also here"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:394
+#, rust-format
+msgid "Line {line}: {text}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:610
+msgid "No files"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/panels.rs:611
+msgid "This folder has no .stave files."
+msgstr ""
+
 #: crates/stave-gtk/src/ui/remember.rs:108
 #, rust-format
 msgid "can't make the folder '{folder}'"
@@ -2061,6 +2706,103 @@ msgstr ""
 msgid "can't write '{file}'"
 msgstr ""
 
+#: crates/stave-gtk/src/ui/sections.rs:94 crates/stave-gtk/src/ui/tree.rs:1546
+#, rust-format
+msgid "Select {name}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/sections.rs:95
+#, rust-format
+msgid "The space {name}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/sections.rs:291
+msgid "Leave the design as it is (Esc)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/sections.rs:294
+msgid "Esc"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/sections.rs:298
+msgid "Enter"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/sections.rs:325
+msgid "Apply"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/start_page.rs:90
+msgid "Recent Projects"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/start_page.rs:164
+#: crates/stave-gtk/src/ui/start_page.rs:165
+msgid "Main Menu"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/start_page.rs:180
+msgid "Open a project folder to see its design, or start a new project. You can also drop a folder here."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/start_page.rs:199
+msgid "_Open Folder…"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/start_page.rs:208
+msgid "_New Project…"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tab_strip.rs:584
+msgid "Move or close this panel"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tab_strip.rs:586
+msgid "Panel menu"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tab_strip.rs:760
+#, rust-format
+msgid "Close {title}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tab_strip.rs:800
+msgid "Not saved (Ctrl+S saves)"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tab_strip.rs:802
+msgid "not saved"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1117
+msgid "has an error"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1118
+msgid "has a warning"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1119
+msgid "involved in a problem"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1246
+msgid "Open its text"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1327
+msgid "Fold it"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1506
+#, rust-format
+msgid "{name}. Activate to focus on it"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/tree.rs:1599
+msgid "Open it"
+msgstr ""
+
 #: crates/stave-gtk/src/ui/update/project.rs:364
 #, rust-format
 msgid "{name} isn't in the 3D view, which shows the last version without errors"
@@ -2068,10 +2810,6 @@ msgstr ""
 
 #: crates/stave-gtk/src/ui/update/project.rs:368
 msgid "That isn't in the 3D view, which shows the last version without errors"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/update/project.rs:841
-msgid "Open a project folder"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/update/project.rs:887
@@ -2084,11 +2822,6 @@ msgid "One file has changes that aren't saved. If you don't save them, they are 
 msgid_plural "{count} files have changes that aren't saved. If you don't save them, they are lost."
 msgstr[0] ""
 msgstr[1] ""
-
-#: crates/stave-gtk/src/ui/update/project.rs:900
-#: crates/stave-gtk/src/ui/update/rendering.rs:764
-msgid "_Cancel"
-msgstr ""
 
 #: crates/stave-gtk/src/ui/update/project.rs:901
 msgid "_Don't Save"
@@ -2200,6 +2933,64 @@ msgstr ""
 msgid "Posed at contact"
 msgstr ""
 
+#: crates/stave-gtk/src/ui/workbench.rs:113
+msgid "Model"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:116
+msgid "Details"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:117
+msgid "Code"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:120
+#: crates/stave-gtk/src/ui/workbench.rs:1087
+msgid "Output"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:185
+msgid "Move to the Left"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:186
+msgid "Move to the Right"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:187
+msgid "Move to the Top"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:188
+msgid "Move to the Bottom"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:189
+msgid "Move to the Middle"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:480
+#, rust-format
+msgid "Stave couldn't save the panel layout for next time: {error}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:1085
+msgid "Show the problems"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:1087
+msgid "Show what the checks said"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:1108
+msgid "Show a panel"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/workbench.rs:1116
+msgid "Show a closed panel, or put them all back"
+msgstr ""
+
 #: data/io.github.OceanEilonwy.Stave.desktop:3
 #: data/io.github.OceanEilonwy.Stave.metainfo.xml:6
 msgid "Stave"
@@ -2243,10 +3034,6 @@ msgstr ""
 
 #: data/io.github.OceanEilonwy.Stave.metainfo.xml:21
 msgid "Edit by clicking in the 3D view or in the text, side by side"
-msgstr ""
-
-#: data/io.github.OceanEilonwy.Stave.metainfo.xml:29
-msgid "The Stave contributors"
 msgstr ""
 
 #: data/io.github.OceanEilonwy.Stave.metainfo.xml:33

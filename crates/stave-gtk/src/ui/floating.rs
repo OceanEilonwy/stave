@@ -17,6 +17,8 @@
 //! [`Floats`] keeps the older API in front of it until the window moves
 //! to relm4 too.
 
+use stave_app::i18n::tr;
+
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
@@ -452,8 +454,8 @@ fn make_draggable(
     widget.set_tooltip_text(Some(
         &widget
             .tooltip_text()
-            .map(|tip| format!("{tip}\nPress and hold to move it"))
-            .unwrap_or_else(|| "Press and hold to move it".to_owned()),
+            .map(|tip| format!("{tip}\n{}", tr("Press and hold to move it")))
+            .unwrap_or_else(|| tr("Press and hold to move it")),
     ));
     [
         (widget.clone(), hold.upcast()),
@@ -584,7 +586,7 @@ mod tests {
     fn workbench() -> Workbench {
         let contents = PanelId::ALL
             .into_iter()
-            .map(|id| (id, gtk::Label::new(Some(id.title())).upcast()))
+            .map(|id| (id, gtk::Label::new(Some(&id.title())).upcast()))
             .collect();
         let Ok(workbench) = Workbench::new(contents, Remember::Nothing) else {
             panic!("the dock is built");

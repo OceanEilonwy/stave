@@ -1036,7 +1036,7 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
     let panels = gio::Menu::new();
     for id in workbench::PanelId::ALL {
         panels.append(
-            Some(id.title()),
+            Some(&id.title()),
             Some(&format!("win.show-panel::{}", id.word())),
         );
     }
@@ -1259,7 +1259,7 @@ pub(in crate::ui) fn build_widgets(
     // The side edges narrow too, so the Model keeps room.
     for (width, level) in [(1000.0, 0), (860.0, 1), (760.0, 2), (600.0, 3)] {
         let narrow = breakpoint(width);
-        workbench.narrow_edges(&narrow);
+        workbench.narrow_edges(&narrow, width);
         if level >= 1 {
             narrow.add_setter(&header.title, "visible", Some(&false.to_value()));
         }
