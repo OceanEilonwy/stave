@@ -215,6 +215,19 @@ struct Trouble {
     error: Option<String>,
 }
 
+/// What the light sees: the shadow map drawn for one key stays right for
+/// every frame with the same key, however the camera moves.
+#[derive(Debug, PartialEq)]
+struct ShadowKey {
+    /// Which upload of meshes was drawn.
+    meshes: u64,
+    /// The light's view and projection.
+    light: [[f32; 4]; 4],
+    /// Each node casting a shadow, by index, and where it is; in order of
+    /// index.
+    casters: Vec<(u32, [[f32; 4]; 4])>,
+}
+
 /// The wgpu device, pipelines and the uploaded scene.
 pub struct Renderer {
     device: wgpu::Device,
@@ -276,6 +289,10 @@ pub struct Renderer {
     /// The selection outline: a full-screen pass over the mask.
     outline_pipeline: wgpu::RenderPipeline,
     meshes: Vec<GpuMesh>,
+    /// Counts uploads, so a shadow map of older meshes is never kept.
+    meshes_generation: u64,
+    /// What the shadow map holds; `None` before the first frame.
+    shadow_key: Option<ShadowKey>,
     target: Option<Target>,
 }
 
@@ -881,6 +898,8 @@ impl Renderer {
             lit_pipeline,
             lit_edge_pipeline,
             meshes: Vec::new(),
+            meshes_generation: 0,
+            shadow_key: None,
             target: None,
         })
     }
@@ -898,6 +917,7 @@ impl Renderer {
     }
 
     fn upload_meshes(&mut self, scene: &SceneGraph) {
+        self.meshes_generation = self.meshes_generation.wrapping_add(1);
         self.meshes = scene
             .nodes
             .iter()
@@ -1096,7 +1116,7 @@ impl Renderer {
             bail!("the scene changed without being uploaded");
         }
         let started = profile::start();
-        self.write_uniforms(frame, width, height);
+        let light = self.write_uniforms(frame, width, height);
         self.ensure_target(width, height);
         let target = self.target.as_ref().context("no render target")?;
         let mut encoder = self
@@ -1190,7 +1210,34 @@ impl Renderer {
                     u32::try_from(vertices.len()).unwrap_or(u32::MAX),
                 )
             });
-        {
+        // Ghosts cast no shadow; see-through parts do.
+        let casting = visible.iter().copied().chain(
+            translucent
+                .iter()
+                .filter(|(_, look, _, _)| *look == Look::XRay)
+                .map(|(_, _, index, mesh)| (*index, *mesh)),
+        );
+        let mut casters: Vec<(u32, [[f32; 4]; 4])> = casting
+            .clone()
+            .map(|(index, _)| {
+                let model = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| frame.posed.transforms.get(index))
+                    .copied()
+                    .unwrap_or(Mat4::IDENTITY);
+                (index, model.to_cols_array_2d())
+            })
+            .collect();
+        casters.sort_by_key(|(index, _)| *index);
+        let shadow_key = ShadowKey {
+            meshes: self.meshes_generation,
+            light: light.to_cols_array_2d(),
+            casters,
+        };
+        // Only the camera moved (an orbit, a pan, a zoom): the shadow map
+        // drawn before is still right.
+        let shadow_drawn = self.shadow_key.as_ref() != Some(&shadow_key);
+        if shadow_drawn {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
                 color_attachments: &[],
@@ -1208,13 +1255,6 @@ impl Renderer {
             });
             pass.set_pipeline(&self.shadow_pipeline);
             pass.set_bind_group(0, &self.scene_group, &[]);
-            // Ghosts cast no shadow; see-through parts do.
-            let casting = visible.iter().copied().chain(
-                translucent
-                    .iter()
-                    .filter(|(_, look, _, _)| *look == Look::XRay)
-                    .map(|(_, _, index, mesh)| (*index, *mesh)),
-            );
             for (index, mesh) in casting {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1405,6 +1445,7 @@ impl Renderer {
         );
         let encoded = started.map(|_| Instant::now());
         self.queue.submit([encoder.finish()]);
+        self.shadow_key = Some(shadow_key);
         let submitted = started.map(|_| Instant::now());
         let (image, gpu_wait, readback) = self.read_back(width, height)?;
         if let (Some(started), Some(encoded), Some(submitted)) = (started, encoded, submitted) {
@@ -1415,7 +1456,7 @@ impl Renderer {
                 submit: submitted.duration_since(encoded),
                 gpu_wait,
                 readback,
-                shadow_drawn: true,
+                shadow_drawn,
             }
             .print();
         }
@@ -1525,7 +1566,9 @@ impl Renderer {
         )
     }
 
-    fn write_uniforms(&self, frame: &Frame<'_>, width: u32, height: u32) {
+    /// Writes the globals and every node's data; returns the light's view
+    /// and projection, which decides the shadow map.
+    fn write_uniforms(&self, frame: &Frame<'_>, width: u32, height: u32) -> Mat4 {
         let aspect = crate::convert::f32_of_u32(width) / crate::convert::f32_of_u32(height);
         let scene = frame.scene;
         let rest = scene.rest();
@@ -1542,9 +1585,10 @@ impl Renderer {
         let light_view = Mat4::look_at_rh(centre + key * reach * 2.0, centre, Vec3::Y);
         let light_projection =
             Mat4::orthographic_rh(-reach, reach, -reach, reach, 0.0, reach * 4.0);
+        let light_view_projection = light_projection * light_view;
         let globals = Globals {
             view_projection: frame.orbit.view_projection(aspect).to_cols_array_2d(),
-            light_view_projection: (light_projection * light_view).to_cols_array_2d(),
+            light_view_projection: light_view_projection.to_cols_array_2d(),
             eye: frame.orbit.eye().extend(1.0).to_array(),
             key_direction: key.extend(0.0).to_array(),
             fill_direction: fill.extend(0.0).to_array(),
@@ -1629,6 +1673,7 @@ impl Renderer {
             .collect();
         self.queue
             .write_buffer(&self.nodes, 0, bytemuck::cast_slice(&nodes));
+        light_view_projection
     }
 }
 
@@ -2069,5 +2114,46 @@ mod tests {
         let after = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
         assert_eq!(before.rgba.len(), after.rgba.len());
         assert!(!renderer.is_lost());
+    }
+
+    #[test]
+    fn the_shadow_map_is_kept_while_only_the_camera_moves() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        let first = renderer.shadow_key.as_ref().map(|key| key.casters.len());
+        assert!(first.is_some_and(|casters| casters > 0));
+        // Turned: the same map, kept, and the picture as with a map drawn
+        // afresh.
+        let turned = frame(&scene, &posed, 0.7);
+        let generation = renderer.meshes_generation;
+        let kept = renderer.render(&turned).unwrap();
+        assert_eq!(renderer.meshes_generation, generation);
+        renderer.shadow_key = None;
+        let fresh = renderer.render(&turned).unwrap();
+        assert_eq!(kept, fresh);
+        // A part moved: the key differs, so the map is drawn again.
+        let caster = renderer
+            .shadow_key
+            .as_ref()
+            .and_then(|key| key.casters.first())
+            .map(|(index, _)| usize::try_from(*index).unwrap())
+            .unwrap();
+        let mut moved = posed.clone();
+        if let Some(transform) = moved.transforms.get_mut(caster) {
+            *transform = Mat4::from_translation(Vec3::new(0.0, 50.0, 0.0)) * *transform;
+        }
+        let before = renderer.shadow_key.take();
+        renderer.render(&frame(&scene, &moved, 0.7)).unwrap();
+        assert_ne!(renderer.shadow_key, before);
+        // A new upload draws it again too, even with nothing moved.
+        renderer.upload(&scene);
+        assert_ne!(
+            renderer.shadow_key.as_ref().map(|key| key.meshes),
+            Some(renderer.meshes_generation)
+        );
     }
 }
