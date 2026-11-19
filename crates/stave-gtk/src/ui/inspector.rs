@@ -23,11 +23,21 @@
 //!   euro_hinge ×2  (hinges[lower]) (hinges[upper])  back face
 //! ▸ Checks                                0 problems
 //! ```
+//!
+//! It is a relm4 component, [`InspectorComponent`]: its model (the page
+//! showing, the note for when there is nothing to select, the files with
+//! unsaved changes) is the only state, only its update changes it, and
+//! the buttons it draws only send [`InspectorInput`] messages.
+//! [`Inspector`] keeps the older callback API in front of it until the
+//! window moves to relm4 too.
 
-use std::cell::RefCell;
+use std::cell::Cell;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::empty::Note;
 use stave_app::focus::Target;
 use stave_app::inspect::{
@@ -39,33 +49,229 @@ use stave_lang::Severity;
 
 use super::focus_panel::FocusPanel;
 use super::icons;
+use super::relm4_shim::Bridge;
 use super::sections::{self, LinkHandlers};
 use super::style::CODE;
 
-type TargetCallback = Rc<dyn Fn(Target)>;
-type SourceCallback = Rc<dyn Fn(SourceLocation)>;
 type UnsavedCallback = Rc<dyn Fn(&str) -> bool>;
+/// Where one of the inspector's callbacks is kept.
+type Slot<T> = Cell<Option<Rc<dyn Fn(T)>>>;
 
-/// The inspector panel.
-pub struct Inspector {
-    /// The panel, ready to put in the split view.
-    pub root: gtk::Stack,
-    details: gtk::Box,
+/// Which of the inspector's pages shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    /// "Nothing selected".
+    Empty,
+    /// Why there is nothing to select.
+    Note,
+    /// The selection's details.
+    Details,
     /// Focus mode's panel.
-    pub focus: FocusPanel,
-    /// Why there is nothing to select, shown instead of "Nothing selected".
-    note: gtk::Box,
-    idle: RefCell<Option<Note>>,
-    /// Where the links it draws report clicks and hovers.
-    pub links: LinkHandlers,
-    callbacks: Rc<RefCell<Callbacks>>,
+    Focus,
 }
 
-#[derive(Default)]
-struct Callbacks {
-    on_focus: Option<TargetCallback>,
-    on_source: Option<SourceCallback>,
-    unsaved: Option<UnsavedCallback>,
+impl Page {
+    /// The page's name in the stack.
+    fn name(self) -> &'static str {
+        match self {
+            Page::Empty => "empty",
+            Page::Note => "note",
+            Page::Details => "details",
+            Page::Focus => "focus",
+        }
+    }
+
+    /// The page for nothing selected: the note when there is one.
+    fn idle(note: Option<&Note>) -> Page {
+        match note {
+            Some(_) => Page::Note,
+            None => Page::Empty,
+        }
+    }
+}
+
+/// The inspector's state.
+pub struct InspectorComponent {
+    /// Where the name links it draws report clicks and hovers. The links
+    /// are built by `sections`, which isn't a component yet.
+    links: LinkHandlers,
+    /// The page showing.
+    page: Page,
+    /// What to say when there is nothing to select.
+    idle: Option<Note>,
+    /// The files with changes that aren't saved, for the ● after the
+    /// file:line link. It is drawn when an inspection is shown.
+    unsaved: BTreeSet<PathBuf>,
+}
+
+/// What an inspector is made with.
+pub struct InspectorInit {
+    /// Focus mode's panel, shown on the focus page.
+    pub focus: gtk::Box,
+    /// Where the name links it draws report clicks and hovers.
+    pub links: LinkHandlers,
+}
+
+/// What the inspector is told.
+#[derive(Debug)]
+pub enum InspectorInput {
+    /// Show focus mode's panel (it fills itself).
+    ShowFocus,
+    /// Say this when nothing is selected because there is nothing to
+    /// select (`None`: the usual "Nothing selected" hint).
+    ShowIdle(Option<Note>),
+    /// Show an inspection, or the hint when nothing is selected.
+    Show(Option<Inspection>),
+    /// The files with changes that aren't saved.
+    Unsaved(BTreeSet<PathBuf>),
+    /// People asked to see a joint or hardware in focus mode.
+    FocusAsked(Target),
+    /// People clicked the file:line link.
+    SourceClicked(SourceLocation),
+    /// People clicked something that selects or lights a target.
+    Click(LinkTarget),
+}
+
+/// What the inspector tells its owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InspectorOutput {
+    /// Show this joint or hardware in focus mode.
+    Focus(Target),
+    /// Show this place in the editor.
+    Source(SourceLocation),
+    /// Select or light this target, as a link does.
+    Link(LinkTarget),
+}
+
+#[relm4::component(pub)]
+impl Component for InspectorComponent {
+    type Init = InspectorInit;
+    type Input = InspectorInput;
+    type Output = InspectorOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Stack {
+            add_css_class: "stave-inspector-panel",
+            set_width_request: 240,
+            set_vhomogeneous: false,
+            set_interpolate_size: true,
+
+            add_named[Some(Page::Empty.name())] = &adw::StatusPage {
+                set_title: "Nothing selected",
+                set_description: Some("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written."),
+                add_css_class: "compact",
+            },
+            add_named[Some(Page::Details.name())] = &gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_propagate_natural_height: true,
+                set_max_content_height: 640,
+
+                #[name = "details"]
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 0,
+                    add_css_class: "stave-inspector-compact",
+                },
+            },
+            add_named[Some(Page::Focus.name())] = &gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_propagate_natural_height: true,
+                set_max_content_height: 640,
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    add_css_class: "stave-inspector",
+                    append: &focus,
+                },
+            },
+            add_named[Some(Page::Note.name())] = &gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_propagate_natural_height: true,
+                set_max_content_height: 640,
+
+                #[name = "note"]
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                    add_css_class: "stave-inspector",
+                },
+            },
+
+            #[watch]
+            set_visible_child_name: model.page.name(),
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        sections::install_style();
+        let InspectorInit { focus, links } = init;
+        let model = InspectorComponent {
+            links,
+            page: Page::Empty,
+            idle: None,
+            unsaved: BTreeSet::new(),
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: InspectorInput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        let output = match message {
+            InspectorInput::ShowFocus => {
+                self.page = Page::Focus;
+                None
+            }
+            InspectorInput::ShowIdle(note) => {
+                if let Some(note) = &note {
+                    fill_note(&widgets.note, note);
+                }
+                // Only a page saying nothing is selected changes.
+                if matches!(self.page, Page::Empty | Page::Note) {
+                    self.page = Page::idle(note.as_ref());
+                }
+                self.idle = note;
+                None
+            }
+            InspectorInput::Show(None) => {
+                self.page = Page::idle(self.idle.as_ref());
+                None
+            }
+            InspectorInput::Show(Some(inspection)) => {
+                let drawer = Drawer {
+                    links: &self.links,
+                    sender: &sender,
+                    unsaved: &self.unsaved,
+                };
+                drawer.fill_details(&widgets.details, &inspection);
+                self.page = Page::Details;
+                None
+            }
+            InspectorInput::Unsaved(unsaved) => {
+                self.unsaved = unsaved;
+                None
+            }
+            InspectorInput::FocusAsked(target) => Some(InspectorOutput::Focus(target)),
+            InspectorInput::SourceClicked(location) => Some(InspectorOutput::Source(location)),
+            InspectorInput::Click(target) => Some(InspectorOutput::Link(target)),
+        };
+        if let Some(output) = output {
+            // Nobody listening is not a mistake: the owner may not want
+            // to hear.
+            let _ = sender.output(output);
+        }
+        self.update_view(widgets, sender);
+    }
 }
 
 fn label(text: &str, classes: &[&str]) -> gtk::Label {
@@ -75,17 +281,6 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .css_classes(classes.to_vec())
-        .build()
-}
-
-/// A page of the card: as tall as it needs, scrolling past the room the
-/// view leaves it.
-fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
-    gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(640)
-        .child(child)
         .build()
 }
 
@@ -127,125 +322,57 @@ fn problems_note(count: usize) -> String {
     }
 }
 
-impl Inspector {
-    /// An empty inspector.
-    pub fn new() -> Inspector {
-        sections::install_style();
-        let empty = adw::StatusPage::builder()
-            .title("Nothing selected")
-            .description("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written.")
-            .css_classes(["compact"])
-            .build();
-        let details = gtk::Box::builder()
+/// Fills the note page: why there is nothing to select.
+fn fill_note(container: &gtk::Box, note: &Note) {
+    clear(container);
+    let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    head.append(&label(&note.title, &["stave-inspector-title"]));
+    if !note.description.is_empty() {
+        head.append(&label(&note.description, &["stave-description"]));
+    }
+    container.append(&head);
+    if let Some(code) = &note.code {
+        let block = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .css_classes(["stave-inspector-compact"])
+            .css_classes(["stave-code"])
             .build();
-        let focus = FocusPanel::new();
-        let focus_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-inspector"])
-            .build();
-        focus_box.append(&focus.root);
-        let root = gtk::Stack::builder()
-            .css_classes(["stave-inspector-panel"])
-            .width_request(240)
-            .vhomogeneous(false)
-            .interpolate_size(true)
-            .build();
-        root.add_named(&empty, Some("empty"));
-        root.add_named(&scrolled(&details), Some("details"));
-        root.add_named(&scrolled(&focus_box), Some("focus"));
-        let note = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .css_classes(["stave-inspector"])
-            .build();
-        root.add_named(&scrolled(&note), Some("note"));
-        root.set_visible_child_name("empty");
-        Inspector {
-            note,
-            idle: RefCell::new(None),
-            root,
-            details,
-            focus,
-            links: LinkHandlers::default(),
-            callbacks: Rc::new(RefCell::new(Callbacks::default())),
-        }
+        block.append(
+            &gtk::Label::builder()
+                .use_markup(true)
+                .label(line_markup(&stave_app::inspect::highlight(code)))
+                .xalign(0.0)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::Char)
+                .build(),
+        );
+        container.append(&block);
+    }
+    if let Some(after) = &note.after {
+        container.append(&label(after, &["stave-description"]));
+    }
+}
+
+/// Draws an inspection's details. Its buttons only send the inspector
+/// messages; its name links report to the link handlers.
+struct Drawer<'a> {
+    links: &'a LinkHandlers,
+    sender: &'a ComponentSender<InspectorComponent>,
+    unsaved: &'a BTreeSet<PathBuf>,
+}
+
+impl Drawer<'_> {
+    /// Sends `message` to the inspector when `button` is clicked.
+    fn on_click(&self, button: &gtk::Button, message: impl Fn() -> InspectorInput + 'static) {
+        let sender = self.sender.input_sender().clone();
+        button.connect_clicked(move |_| sender.emit(message()));
     }
 
-    /// Calls `callback` when a joint or hardware row asks for focus mode.
-    pub fn connect_focus(&self, callback: impl Fn(Target) + 'static) {
-        self.callbacks.borrow_mut().on_focus = Some(Rc::new(callback));
-    }
-
-    /// Calls `callback` when the file:line link is clicked.
-    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.callbacks.borrow_mut().on_source = Some(Rc::new(callback));
-    }
-
-    /// Asks `callback` whether a file (by its path) has unsaved changes,
-    /// for the ● after the file:line link.
-    pub fn connect_unsaved(&self, callback: impl Fn(&str) -> bool + 'static) {
-        self.callbacks.borrow_mut().unsaved = Some(Rc::new(callback));
-    }
-
-    /// Shows focus mode's panel (it fills itself).
-    pub fn show_focus(&self) {
-        self.root.set_visible_child_name("focus");
-    }
-
-    /// Sets what to say when nothing is selected because there is nothing
-    /// to select (`None`: the usual "Nothing selected" hint), and shows it
-    /// if nothing is shown.
-    pub fn show_idle(&self, note: Option<Note>) {
-        if let Some(note) = &note {
-            clear(&self.note);
-            let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
-            head.append(&label(&note.title, &["stave-inspector-title"]));
-            if !note.description.is_empty() {
-                head.append(&label(&note.description, &["stave-description"]));
-            }
-            self.note.append(&head);
-            if let Some(code) = &note.code {
-                let block = gtk::Box::builder()
-                    .orientation(gtk::Orientation::Vertical)
-                    .css_classes(["stave-code"])
-                    .build();
-                block.append(
-                    &gtk::Label::builder()
-                        .use_markup(true)
-                        .label(line_markup(&stave_app::inspect::highlight(code)))
-                        .xalign(0.0)
-                        .wrap(true)
-                        .wrap_mode(gtk::pango::WrapMode::Char)
-                        .build(),
-                );
-                self.note.append(&block);
-            }
-            if let Some(after) = &note.after {
-                self.note.append(&label(after, &["stave-description"]));
-            }
-        }
-        let idle = note.is_some();
-        self.idle.replace(note);
-        let showing = self.root.visible_child_name();
-        if matches!(showing.as_deref(), Some("empty" | "note")) {
-            self.root
-                .set_visible_child_name(if idle { "note" } else { "empty" });
-        }
-    }
-
-    /// Shows an inspection, or the hint when nothing is selected.
-    pub fn show(&self, inspection: Option<&Inspection>) {
-        let Some(inspection) = inspection else {
-            let idle = self.idle.borrow().is_some();
-            self.root
-                .set_visible_child_name(if idle { "note" } else { "empty" });
-            return;
-        };
-        clear(&self.details);
-        self.details.append(&self.header(inspection));
+    /// Fills `details` with the inspection: header, what it is, what it
+    /// is joined to, its cuts, how it works, its checks and where it is
+    /// written.
+    fn fill_details(&self, details: &gtk::Box, inspection: &Inspection) {
+        clear(details);
+        details.append(&self.header(inspection));
 
         // What it is: its kind (and where it sits) and its rows.
         let (kind, place) = kind_and_place(&inspection.eyebrow);
@@ -256,50 +383,37 @@ impl Inspector {
         for field in &inspection.rows {
             body.append(&self.field_row(field));
         }
-        self.details.append(&section_box);
+        details.append(&section_box);
 
-        let joined: Vec<&Connection> = inspection
-            .connections
-            .iter()
-            .filter(|c| c.section == ConnectionSection::Joined)
-            .collect();
+        let joined = connections_in(inspection, ConnectionSection::Joined);
         if !joined.is_empty() {
             let (section_box, body) =
                 sections::section("Joined to", &joined.len().to_string(), true);
             for connection in joined {
                 body.append(&self.connection_row(connection));
             }
-            self.details.append(&section_box);
+            details.append(&section_box);
         }
-        let cuts: Vec<&Connection> = inspection
-            .connections
-            .iter()
-            .filter(|c| c.section == ConnectionSection::Cuts)
-            .collect();
+        let cuts = connections_in(inspection, ConnectionSection::Cuts);
         if !cuts.is_empty() {
             let (section_box, body) = sections::section("Cuts", &cuts.len().to_string(), true);
             for connection in cuts {
                 body.append(&self.connection_row(connection));
             }
-            self.details.append(&section_box);
+            details.append(&section_box);
         }
-        let how: Vec<&Connection> = inspection
-            .connections
-            .iter()
-            .filter(|c| c.section == ConnectionSection::HowItWorks)
-            .collect();
+        let how = connections_in(inspection, ConnectionSection::HowItWorks);
         if !how.is_empty() {
             let (section_box, body) = sections::section(inspection.connections_title, "", true);
             for connection in how {
                 body.append(&self.connection_row(connection));
             }
-            self.details.append(&section_box);
+            details.append(&section_box);
         }
-        self.details.append(&self.checks_section(inspection));
+        details.append(&self.checks_section(inspection));
         if let Some(source) = &inspection.source {
-            self.details.append(&self.source_section(source));
+            details.append(&source_section(source));
         }
-        self.root.set_visible_child_name("details");
     }
 
     /// The header row: swatch, name, and the file:line link (with ● when
@@ -313,8 +427,7 @@ impl Inspector {
         let trailing = inspection.source.as_ref().map(|source| {
             let holder = gtk::Box::builder().spacing(2).build();
             holder.append(&self.source_link(source));
-            let unsaved = self.callbacks.borrow().unsaved.clone();
-            if unsaved.is_some_and(|unsaved| unsaved(&source.location.path)) {
+            if self.unsaved.contains(Path::new(&source.location.path)) {
                 holder.append(
                     &gtk::Label::builder()
                         .label("●")
@@ -338,12 +451,8 @@ impl Inspector {
                 .build(),
         );
         let location = source.location.clone();
-        let callbacks = self.callbacks.clone();
-        link.connect_clicked(move |_| {
-            let callback = callbacks.borrow().on_source.clone();
-            if let Some(callback) = callback {
-                callback(location.clone());
-            }
+        self.on_click(&link, move || {
+            InspectorInput::SourceClicked(location.clone())
         });
         link
     }
@@ -389,13 +498,7 @@ impl Inspector {
                         ConnectionSection::Cuts => "See the hardware that makes it",
                     })
                     .build();
-                let callbacks = self.callbacks.clone();
-                button.connect_clicked(move |_| {
-                    let callback = callbacks.borrow().on_focus.clone();
-                    if let Some(callback) = callback {
-                        callback(target);
-                    }
-                });
+                self.on_click(&button, move || InspectorInput::FocusAsked(target));
                 button.upcast()
             }
             None => lead.upcast(),
@@ -445,50 +548,59 @@ impl Inspector {
                 .css_classes(["flat", "stave-check-row", class])
                 .tooltip_text("Show this problem")
                 .build();
-            let links = self.links.clone();
             let problem = check.problem;
-            button.connect_clicked(move |_| {
-                links.click_target(LinkTarget::Select(Selection::Problem(problem)));
+            self.on_click(&button, move || {
+                InspectorInput::Click(LinkTarget::Select(Selection::Problem(problem)))
             });
             body.append(&button);
         }
         section_box
     }
+}
 
-    fn source_section(&self, source: &Snippet) -> gtk::Box {
-        let (section_box, section) = sections::section("Defined in", &source.label, true);
-        // One label per line, each ending in "…" where it doesn't fit, so
-        // no letter is ever cut in half.
-        let code = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .css_classes(["stave-code"])
-            .build();
-        let mut lines: Vec<String> = source.lines.iter().map(|line| line_markup(line)).collect();
-        if source.cut_short {
-            lines.push("…".to_owned());
-        }
-        for markup in lines {
-            code.append(
-                &gtk::Label::builder()
-                    .use_markup(true)
-                    .label(if markup.is_empty() {
-                        " "
-                    } else {
-                        markup.as_str()
-                    })
-                    .xalign(0.0)
-                    .ellipsize(gtk::pango::EllipsizeMode::End)
-                    .build(),
-            );
-        }
-        section.append(&code);
-        section.append(&sections::words(
-            "The text is the source of truth. Positions are worked out from these relationships; none are stored.",
-            &["stave-footnote"],
-        ));
-        section_box
+/// The inspection's connections in one section, in order.
+fn connections_in(inspection: &Inspection, section: ConnectionSection) -> Vec<&Connection> {
+    inspection
+        .connections
+        .iter()
+        .filter(|connection| connection.section == section)
+        .collect()
+}
+
+/// "Defined in": the declaration, highlighted.
+fn source_section(source: &Snippet) -> gtk::Box {
+    let (section_box, section) = sections::section("Defined in", &source.label, true);
+    // One label per line, each ending in "…" where it doesn't fit, so
+    // no letter is ever cut in half.
+    let code = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["stave-code"])
+        .build();
+    let mut lines: Vec<String> = source.lines.iter().map(|line| line_markup(line)).collect();
+    if source.cut_short {
+        lines.push("…".to_owned());
     }
+    for markup in lines {
+        code.append(
+            &gtk::Label::builder()
+                .use_markup(true)
+                .label(if markup.is_empty() {
+                    " "
+                } else {
+                    markup.as_str()
+                })
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build(),
+        );
+    }
+    section.append(&code);
+    section.append(&sections::words(
+        "The text is the source of truth. Positions are worked out from these relationships; none are stored.",
+        &["stave-footnote"],
+    ));
+    section_box
 }
 
 /// One line of a snippet as Pango markup, coloured by token.
@@ -520,9 +632,128 @@ fn clear(container: &gtk::Box) {
     }
 }
 
+/// Calls the callback in `slot`, if one is connected. It is cloned out
+/// first, so the callback is free to connect another.
+fn call<T>(slot: &Slot<T>, value: T) {
+    let callback = slot.take();
+    slot.set(callback.clone());
+    if let Some(callback) = callback {
+        callback(value);
+    }
+}
+
+/// Where the inspector's outputs go while the window connects them one by
+/// one: each slot is taken and put back around a call, never borrowed.
+#[derive(Default)]
+struct Callbacks {
+    focus: Slot<Target>,
+    source: Slot<SourceLocation>,
+}
+
+/// The inspector panel, behind the callback API the window still uses:
+/// it owns the component (dropping it shuts the component down), passes
+/// its setters on as [`InspectorInput`] messages and its
+/// [`InspectorOutput`]s to the callbacks.
+///
+/// Setters are queued: they take effect when the main loop next runs,
+/// after whatever called them has returned.
+pub struct Inspector {
+    /// The panel, ready to put in the split view.
+    pub root: gtk::Stack,
+    /// Focus mode's panel.
+    pub focus: FocusPanel,
+    /// Where the links it draws report clicks and hovers.
+    pub links: LinkHandlers,
+    callbacks: Rc<Callbacks>,
+    /// Asked, as an inspection is shown, whether its file has unsaved
+    /// changes.
+    unsaved: Cell<Option<UnsavedCallback>>,
+    bridge: Bridge<InspectorComponent>,
+}
+
+impl Inspector {
+    /// An empty inspector.
+    pub fn new() -> Inspector {
+        let focus = FocusPanel::new();
+        let links = LinkHandlers::default();
+        let bridge = Bridge::<InspectorComponent>::launch(InspectorInit {
+            focus: focus.root.clone(),
+            links: links.clone(),
+        });
+        let callbacks = Rc::new(Callbacks::default());
+        let outputs = Rc::clone(&callbacks);
+        let link_handlers = links.clone();
+        bridge.connect(move |output| match output {
+            InspectorOutput::Focus(target) => call(&outputs.focus, target),
+            InspectorOutput::Source(location) => call(&outputs.source, location),
+            InspectorOutput::Link(target) => link_handlers.click_target(target),
+        });
+        Inspector {
+            root: bridge.widget().clone(),
+            focus,
+            links,
+            callbacks,
+            unsaved: Cell::new(None),
+            bridge,
+        }
+    }
+
+    /// Calls `callback` when a joint or hardware row asks for focus mode.
+    pub fn connect_focus(&self, callback: impl Fn(Target) + 'static) {
+        self.callbacks.focus.set(Some(Rc::new(callback)));
+    }
+
+    /// Calls `callback` when the file:line link is clicked.
+    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
+        self.callbacks.source.set(Some(Rc::new(callback)));
+    }
+
+    /// Asks `callback` whether a file (by its path) has unsaved changes,
+    /// for the ● after the file:line link.
+    pub fn connect_unsaved(&self, callback: impl Fn(&str) -> bool + 'static) {
+        self.unsaved.set(Some(Rc::new(callback)));
+    }
+
+    /// Shows focus mode's panel (it fills itself).
+    pub fn show_focus(&self) {
+        self.bridge.send(InspectorInput::ShowFocus);
+    }
+
+    /// Sets what to say when nothing is selected because there is nothing
+    /// to select (`None`: the usual "Nothing selected" hint), and shows it
+    /// if nothing is shown.
+    pub fn show_idle(&self, note: Option<Note>) {
+        self.bridge.send(InspectorInput::ShowIdle(note));
+    }
+
+    /// Shows an inspection, or the hint when nothing is selected.
+    pub fn show(&self, inspection: Option<&Inspection>) {
+        if let Some(source) = inspection.and_then(|inspection| inspection.source.as_ref()) {
+            // Asked now, as the old inspector did while drawing; the
+            // answer goes to the component as the files it knows to be
+            // unsaved.
+            let callback = self.unsaved.take();
+            self.unsaved.set(callback.clone());
+            let path = &source.location.path;
+            let unsaved = callback
+                .filter(|unsaved| unsaved(path))
+                .map(|_| PathBuf::from(path))
+                .into_iter()
+                .collect();
+            self.bridge.send(InspectorInput::Unsaved(unsaved));
+        }
+        self.bridge.send(InspectorInput::Show(inspection.cloned()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
+    use stave_app::session::LineNumber;
+
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
 
     #[test]
     fn the_eyebrow_becomes_a_section_title_and_note() {
@@ -536,5 +767,175 @@ mod tests {
         );
         assert_eq!(problems_note(0), "0 problems");
         assert_eq!(problems_note(1), "1 problem");
+    }
+
+    /// Every button under `widget`, depth first.
+    fn buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
+        let mut found = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Ok(button) = current.clone().downcast::<gtk::Button>() {
+                found.push(button);
+            }
+            found.extend(buttons(&current));
+            child = current.next_sibling();
+        }
+        found
+    }
+
+    /// An inspection written at `doors.stave:9`, with nothing else in it.
+    fn inspection() -> Option<Inspection> {
+        let line = LineNumber::new(9)?;
+        Some(Inspection {
+            eyebrow: "PART · IN door_l".to_owned(),
+            title: "stile".to_owned(),
+            description: None,
+            swatch: None,
+            rows: Vec::new(),
+            connections_title: "Joints and cuts",
+            connections: Vec::new(),
+            moves_with: None,
+            checks: Vec::new(),
+            source: Some(Snippet {
+                label: "doors.stave:9".to_owned(),
+                location: SourceLocation {
+                    path: "doors.stave".to_owned(),
+                    line,
+                },
+                lines: Vec::new(),
+                cut_short: false,
+            }),
+        })
+    }
+
+    #[test]
+    fn a_dropped_inspector_is_freed() {
+        on_gtk_thread(inspector_is_freed);
+    }
+
+    /// Dropping the inspector shuts its component down when the main
+    /// loop next runs: the panel, the model (and its runtime) and the
+    /// callbacks are all freed.
+    fn inspector_is_freed() {
+        let inspector = Inspector::new();
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        inspector.connect_source(move |_| {
+            let _ = &held;
+        });
+        let held = Rc::clone(&token);
+        inspector.connect_unsaved(move |_| {
+            let _ = &held;
+            true
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        inspector.show(inspection().as_ref());
+        let root = inspector.root.downgrade();
+        let input = inspector.bridge.sender().clone();
+        settle();
+        assert!(root.upgrade().is_some(), "the panel lives while held");
+        drop(inspector);
+        settle();
+        assert!(root.upgrade().is_none(), "the panel is freed");
+        assert!(
+            input.send(InspectorInput::ShowFocus).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callbacks are freed");
+    }
+
+    #[test]
+    fn setters_choose_the_page_without_calling_back() {
+        on_gtk_thread(setters_do_not_call_back);
+    }
+
+    fn setters_do_not_call_back() {
+        let inspector = Inspector::new();
+        let calls = Rc::new(RefCell::new(0));
+        let counted = Rc::clone(&calls);
+        inspector.connect_focus(move |_| *counted.borrow_mut() += 1);
+        let counted = Rc::clone(&calls);
+        inspector.connect_source(move |_| *counted.borrow_mut() += 1);
+        let page = |inspector: &Inspector| inspector.root.visible_child_name();
+
+        inspector.show(inspection().as_ref());
+        assert_eq!(page(&inspector).as_deref(), Some("empty"), "only queued");
+        settle();
+        assert_eq!(page(&inspector).as_deref(), Some("details"));
+        inspector.show_focus();
+        settle();
+        assert_eq!(page(&inspector).as_deref(), Some("focus"));
+        inspector.show(None);
+        settle();
+        assert_eq!(page(&inspector).as_deref(), Some("empty"));
+        inspector.show_idle(Some(Note {
+            title: "Nothing to select".to_owned(),
+            description: String::new(),
+            code: None,
+            after: None,
+        }));
+        settle();
+        assert_eq!(page(&inspector).as_deref(), Some("note"));
+        assert_eq!(*calls.borrow(), 0, "setters never call back");
+    }
+
+    #[test]
+    fn a_click_while_handling_an_output_is_queued_not_re_entered() {
+        on_gtk_thread(clicks_are_queued);
+    }
+
+    /// The old inspector called its callback from inside the click, with
+    /// GTK's signal still on the stack. Now a click only queues a
+    /// message; its output reaches the callback after the update has
+    /// returned, and a click fired from inside the callback is queued
+    /// too. The ● asks the unsaved callback as the inspection is shown.
+    fn clicks_are_queued() {
+        let inspector = Rc::new(Inspector::new());
+        inspector.connect_unsaved(|path| path == "doors.stave");
+        inspector.show(inspection().as_ref());
+        settle();
+        let details = inspector.root.upcast_ref::<gtk::Widget>().clone();
+        let Some(link) = buttons(&details)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("doors.stave:9"))
+        else {
+            panic!("the inspection has a file:line link");
+        };
+        assert!(
+            inspector
+                .bridge
+                .model()
+                .unsaved
+                .contains(Path::new("doors.stave")),
+            "the file was asked about as the inspection was shown"
+        );
+
+        let heard: Rc<RefCell<Vec<(u32, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&inspector);
+        let inner = link.clone();
+        inspector.connect_source(move |location| {
+            let Some(inspector) = weak.upgrade() else {
+                return;
+            };
+            let first = log.borrow().is_empty();
+            if first {
+                // A click from in here is only queued, as is a setter.
+                inner.emit_clicked();
+                inspector.show_focus();
+            }
+            let focus = inspector.root.visible_child_name().as_deref() == Some("focus");
+            log.borrow_mut().push((location.line.get(), focus));
+        });
+
+        link.emit_clicked();
+        assert!(heard.borrow().is_empty(), "the click is only queued");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(9, false), (9, true)],
+            "each output after its update, the inner click after the first"
+        );
     }
 }
