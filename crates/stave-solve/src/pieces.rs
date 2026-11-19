@@ -43,7 +43,7 @@ use crate::boards::{BOARD_ID_BASE, BoardPart, Division};
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
 use crate::joints::{GeomTable, PairWork, PartGeom, local_slot, round_length};
-use crate::{Reported, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// A part cut into pieces: what the solved design needs to point the
 /// part's other connections at the right piece.
@@ -192,7 +192,7 @@ fn minus(a: Length, b: Length) -> Length {
 /// along the part's length and is `piece` long (`whole` is the part's cut
 /// length).
 fn shifted(mut cut: Cut, offset: Length, piece: Length, whole: Length) -> Solved<Cut> {
-    let shift = |value: Length| value.checked_sub(offset).ok_or(Reported);
+    let shift = |value: Length| value.checked_sub(offset).ok_or(Fault::Overflow);
     match &mut cut.place {
         CutPlace::Crossing { footprint, .. } => {
             footprint.min.length = shift(footprint.min.length)?;
@@ -215,11 +215,11 @@ fn shifted(mut cut: Cut, offset: Length, piece: Length, whole: Length) -> Solved
                 End::End => whole
                     .checked_sub(offset)
                     .and_then(|x| x.checked_sub(piece))
-                    .ok_or(Reported)?,
+                    .ok_or(Fault::Overflow)?,
             };
             if let CutKind::Outline { marks, .. } = &mut cut.kind {
                 for mark in marks {
-                    mark.along = mark.along.checked_sub(by).ok_or(Reported)?;
+                    mark.along = mark.along.checked_sub(by).ok_or(Fault::Overflow)?;
                 }
             }
         }
@@ -248,10 +248,13 @@ impl Solver<'_> {
         let mut stocks = std::collections::BTreeSet::new();
         for index in 0..self.model.parts.len() {
             let part = PartId::from_usize(index);
-            if matches!(self.mirror_source(part), Ok(Some(_)) | Err(_)) {
+            let (file, span) = self.part_place(part);
+            let source = self.mirror_source(part);
+            if !matches!(self.settled(source, file, span), Some(None)) {
                 continue;
             }
-            if let Ok(stock) = self.part_stock(part) {
+            let stock = self.part_stock(part);
+            if let Some(stock) = self.settled(stock, file, span) {
                 stocks.insert(stock);
             }
         }
@@ -343,7 +346,9 @@ impl Solver<'_> {
             match self.part_pieces(part, tables) {
                 Ok(Some(split)) => splits.push(split),
                 Ok(None) => {}
-                Err(Reported) => {
+                Err(failure) => {
+                    let (file, span) = self.part_place(part);
+                    let _ = self.settle(failure, file, span);
                     // Nothing half-made is kept.
                     tables.made.truncate(made_before);
                     tables.joints.truncate(joints_before);
@@ -377,16 +382,18 @@ impl Solver<'_> {
         };
         match self.eval(&expr, &env)? {
             Value::Splices(splicing) => Ok(Some(splicing)),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!(
-                    "'lengths' needs spliced(by: ..., at: ..., from: ...), found {}",
-                    other.description()
-                ),
-                env.file,
-                expr.span,
-                "write lengths: spliced(by: kind_name, at: 1200mm, from: left)",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!(
+                        "'lengths' needs spliced(by: ..., at: ..., from: ...), found {}",
+                        other.description()
+                    ),
+                    env.file,
+                    expr.span,
+                    "write lengths: spliced(by: kind_name, at: 1200mm, from: left)",
+                )
+                .into()),
         }
     }
 
@@ -397,7 +404,7 @@ impl Solver<'_> {
             return Ok(None);
         };
         let Some((file, span)) = self.lengths_place(source) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part's lengths are written").into());
         };
         let place = Place {
             file,
@@ -405,7 +412,7 @@ impl Solver<'_> {
             report: source == part,
         };
         let Some(geom) = tables.geoms.get(part).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let name = self.part_name(part);
         self.check_spliceable(part, &name, place)?;
@@ -438,8 +445,16 @@ impl Solver<'_> {
         }
         let from_start = splicing.from.is_positive() != direction.is_positive();
         let slot = local_slot(PartAxis::Length);
-        let drawn = geom.drawn.get(slot).copied().ok_or(Reported)?;
-        let start = geom.start.get(slot).copied().ok_or(Reported)?;
+        let drawn = geom
+            .drawn
+            .get(slot)
+            .copied()
+            .ok_or(Fault::Internal("a part's length"))?;
+        let start = geom
+            .start
+            .get(slot)
+            .copied()
+            .ok_or(Fault::Internal("a part's length"))?;
         let total = geom.cut_size(PartAxis::Length)?;
         let mut positions: Vec<ExactLength> = splicing.at.iter().copied().collect();
         positions.sort();
@@ -480,7 +495,7 @@ impl Solver<'_> {
             } else {
                 start.checked_add(drawn).and_then(|x| x.checked_sub(*at))
             }
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
             boundaries.push(local);
         }
         boundaries.push(if from_start { total } else { ExactLength::ZERO });
@@ -493,7 +508,7 @@ impl Solver<'_> {
         for splice in 0..positions.len() {
             let joint = JointId::from_usize(first_joint + splice);
             let (Some(a), Some(b)) = (pieces.get(splice), pieces.get(splice + 1)) else {
-                return Err(Reported);
+                return Err(Fault::Internal("the pieces either side of a splice").into());
             };
             let parts = vec![a.stand_in, b.stand_in];
             let work =
@@ -505,16 +520,16 @@ impl Solver<'_> {
                 continue;
             };
             let Some(mut piece_geom) = tables.geoms.get(piece.stand_in).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Internal("a piece of a spliced part").into());
             };
             if let (Some(s), Some(e)) =
                 (piece_geom.start.get_mut(slot), piece_geom.end.get_mut(slot))
             {
-                *s = s.checked_add(low_add).ok_or(Reported)?;
-                *e = e.checked_add(high_add).ok_or(Reported)?;
+                *s = s.checked_add(low_add).ok_or(Fault::Overflow)?;
+                *e = e.checked_add(high_add).ok_or(Fault::Overflow)?;
             }
-            piece.low = piece.low.checked_sub(low_add).ok_or(Reported)?;
-            piece.high = piece.high.checked_add(high_add).ok_or(Reported)?;
+            piece.low = piece.low.checked_sub(low_add).ok_or(Fault::Overflow)?;
+            piece.high = piece.high.checked_add(high_add).ok_or(Fault::Overflow)?;
             let (world_low, world_high) = to_world(&geom, piece.low, piece.high)?;
             let world = geom.orientation.direction(PartAxis::Length).axis();
             piece_geom.cut_box = piece_geom.cut_box.with(world, world_low, world_high);
@@ -525,7 +540,7 @@ impl Solver<'_> {
         let stock = self.part_stock(part)?;
         if let Some(max_length) = self.stock_length(stock, StockField::MaxLength)? {
             for piece in &pieces {
-                let length = piece.high.checked_sub(piece.low).ok_or(Reported)?;
+                let length = piece.high.checked_sub(piece.low).ok_or(Fault::Overflow)?;
                 if length > max_length {
                     let piece_name = self.part_name(piece.stand_in);
                     let stock_name = self.stock_name(stock);
@@ -590,7 +605,7 @@ impl Solver<'_> {
             let index = u32::try_from(number + 1)
                 .ok()
                 .and_then(PieceIndex::new)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let id = if number == 0 {
                 part
             } else {
@@ -610,7 +625,11 @@ impl Solver<'_> {
         let real = |id: PartId| -> PartId { ids.get(&id).copied().unwrap_or(id) };
         for piece in &pieces {
             let id = real(piece.stand_in);
-            let geom = tables.geoms.get(piece.stand_in).cloned().ok_or(Reported)?;
+            let geom = tables
+                .geoms
+                .get(piece.stand_in)
+                .cloned()
+                .ok_or(Fault::Internal("a piece of a spliced part"))?;
             tables.geoms.set(id, geom);
             if tables.cuts.len() <= id.index() {
                 tables.cuts.resize(id.index() + 1, Vec::new());
@@ -674,11 +693,12 @@ impl Solver<'_> {
         code: Code,
         message: String,
         help: impl Into<String>,
-    ) -> Reported {
+    ) -> Failure {
         if place.report {
             self.error(code, message, place.file, place.span, help)
+                .into()
         } else {
-            Reported
+            Fault::Earlier.into()
         }
     }
 
@@ -706,7 +726,7 @@ impl Solver<'_> {
             .defs
             .stock(stock)
             .map(|s| s.form)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Internal("a stock's declaration"))?;
         let stock_name = self.stock_name(stock);
         match form {
             StockForm::Solid => Ok(()),
@@ -730,10 +750,10 @@ impl Solver<'_> {
     /// The splice kind: a joint kind with two roles that are parts.
     fn splice_method(&mut self, value: &KindValue, place: Place) -> Solved<Method> {
         if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         let Some(kind) = self.model.defs.kind(value.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         if kind.base != BaseKind::Joint {
             return Err(self.fail(
@@ -798,10 +818,14 @@ impl Solver<'_> {
         geoms: &mut GeomTable,
     ) -> Solved<Vec<Piece>> {
         let slot = local_slot(PartAxis::Length);
-        let drawn_start = geom.start.get(slot).copied().ok_or(Reported)?;
+        let drawn_start = geom
+            .start
+            .get(slot)
+            .copied()
+            .ok_or(Fault::Internal("a part's length"))?;
         let drawn_end = drawn_start
-            .checked_add(geom.drawn.get(slot).copied().ok_or(Reported)?)
-            .ok_or(Reported)?;
+            .checked_add(geom.drawn.get(slot).copied().ok_or(Fault::Overflow)?)
+            .ok_or(Fault::Overflow)?;
         let world = geom.orientation.direction(PartAxis::Length).axis();
         let first = self
             .boards
@@ -811,7 +835,7 @@ impl Solver<'_> {
         let mut pieces = Vec::new();
         for (k, pair) in boundaries.windows(2).enumerate() {
             let [a, b] = pair else {
-                return Err(Reported);
+                return Err(Fault::Internal("the pieces of a spliced part").into());
             };
             let (low, high) = if a <= b { (*a, *b) } else { (*b, *a) };
             // The drawn stretch: what isn't added at the part's own ends.
@@ -823,18 +847,22 @@ impl Solver<'_> {
                 piece_geom.start.get_mut(slot),
                 piece_geom.end.get_mut(slot),
             ) {
-                *d = drawn_high.checked_sub(drawn_low).ok_or(Reported)?;
-                *s = drawn_low.checked_sub(low).ok_or(Reported)?;
-                *e = high.checked_sub(drawn_high).ok_or(Reported)?;
+                *d = drawn_high.checked_sub(drawn_low).ok_or(Fault::Overflow)?;
+                *s = drawn_low.checked_sub(low).ok_or(Fault::Overflow)?;
+                *e = high.checked_sub(drawn_high).ok_or(Fault::Overflow)?;
             }
             let (cut_low, cut_high) = to_world(geom, low, high)?;
             let (seen_low, seen_high) = to_world(geom, drawn_low, drawn_high)?;
             piece_geom.cut_box = geom.cut_box.with(world, cut_low, cut_high);
             piece_geom.drawn_box = geom.drawn_box.with(world, seen_low, seen_high);
-            let k = u32::try_from(k).map_err(|_| Reported)?;
-            let id =
-                PartId::from_usize(usize::try_from(first.saturating_add(k)).map_err(|_| Reported)?);
-            let index = k.checked_add(1).and_then(BoardIndex::new).ok_or(Reported)?;
+            let k = u32::try_from(k).map_err(|_| Fault::Overflow)?;
+            let id = PartId::from_usize(
+                usize::try_from(first.saturating_add(k)).map_err(|_| Fault::Overflow)?,
+            );
+            let index = k
+                .checked_add(1)
+                .and_then(BoardIndex::new)
+                .ok_or(Fault::Overflow)?;
             let mut min = [ExactLength::ZERO; 3];
             for each in Axis::ALL {
                 if let Some(slot) = min.get_mut(axis_slot(each)) {
@@ -876,12 +904,12 @@ impl Solver<'_> {
     ) -> Solved<SpliceWork> {
         let kind_id = method.value.kind;
         let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
         let env = KindEnv::new(kind_id, roles, method.settings.clone(), kind.params.len());
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let kind_env = Env {
             ctx,
@@ -892,6 +920,7 @@ impl Solver<'_> {
         let joint_name = format!("{name}.splice[{}]", splice + 1);
         let source = CutSource::Joint { joint, pair: 0 };
         let mut requires = Vec::new();
+        let mut failure: Option<Failure> = None;
         for (index, require) in kind.requires.iter().enumerate() {
             if self.defer_wall_rule(source, kind_id, index, require, &kind_env)? {
                 continue;
@@ -918,7 +947,11 @@ impl Solver<'_> {
                     diagnostic = diagnostic.with_note(note);
                 }
                 let help = self.require_help(&require.condition, &kind_env, "joint");
-                self.report(diagnostic.with_help(help));
+                let reported = self.report(diagnostic.with_help(help));
+                failure.get_or_insert(reported.into());
+            } else if !holds {
+                // A mirror image: its source reports.
+                failure.get_or_insert(Fault::Earlier.into());
             }
             requires.push(solved::RequireResult {
                 name: format!("{joint_name}.{}", require.decl.name),
@@ -926,7 +959,6 @@ impl Solver<'_> {
                 message,
             });
         }
-        let failed = requires.iter().any(|r| !r.holds);
         let mut extensions = Vec::new();
         if let Some(joint_def) = &kind.joint {
             for extend in &joint_def.adds {
@@ -955,7 +987,7 @@ impl Solver<'_> {
                         End::Start => &mut entry[0],
                         End::End => &mut entry[1],
                     };
-                    *slot = slot.checked_add(by).ok_or(Reported)?;
+                    *slot = slot.checked_add(by).ok_or(Fault::Overflow)?;
                     extensions.push(solved::Extension {
                         part: piece,
                         axis: PartAxis::Length,
@@ -987,8 +1019,8 @@ impl Solver<'_> {
                 }
             }
         }
-        if failed {
-            return Err(Reported);
+        if let Some(failure) = failure {
+            return Err(failure);
         }
         let contact = match parts.as_slice() {
             [p, q] => match self.drawn_box(*p)?.touching_axis(&self.drawn_box(*q)?) {
@@ -1067,9 +1099,9 @@ impl Solver<'_> {
                 .position(|(a, b)| *a <= middle && middle <= *b)
                 .unwrap_or(0);
             let (Some(piece), Some((offset, end))) = (pieces.get(found), ranges.get(found)) else {
-                return Err(Reported);
+                return Err(Fault::Internal("the piece a cut falls in").into());
             };
-            let length = end.checked_sub(*offset).ok_or(Reported)?;
+            let length = end.checked_sub(*offset).ok_or(Fault::Overflow)?;
             piece_cuts
                 .entry(piece.stand_in)
                 .or_default()
@@ -1092,9 +1124,10 @@ impl Solver<'_> {
         splice: usize,
         zone: (Length, Length),
         place: Place,
-    ) -> Reported {
+    ) -> Failure {
         if !place.report {
-            return Reported;
+            // A mirror image: its source reports.
+            return Fault::Earlier.into();
         }
         // Distances along the part from the `from` end, on its drawn
         // length.
@@ -1163,8 +1196,7 @@ impl Solver<'_> {
                 format!("the {what} is cut here"),
             ));
         }
-        self.report(diagnostic);
-        Reported
+        self.report(diagnostic).into()
     }
 
     /// Pass B of one splice: the parts it makes, its cuts and steps, as a
@@ -1183,10 +1215,10 @@ impl Solver<'_> {
     ) -> Solved<Joint> {
         let kind_id = method.value.kind;
         let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let joint_def = kind.joint.clone().unwrap_or_default();
         let joint_name = format!("{name}.splice[{}]", splice + 1);
@@ -1278,7 +1310,7 @@ impl Solver<'_> {
         let index = u32::try_from(splice + 1)
             .ok()
             .and_then(PieceIndex::new)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         Ok(Joint {
             id: joint,
             name: joint_name,
@@ -1306,24 +1338,35 @@ impl Solver<'_> {
     /// A part both spliced and wider than its stock: its pieces stay single
     /// boards for now.
     pub(crate) fn spliced_boards(&mut self, split: &Split, geoms: &GeomTable) {
-        let Ok(source) = self.body_source(split.whole) else {
+        let (file, span) = self.part_place(split.whole);
+        let source = self.body_source(split.whole);
+        let Some(source) = self.settled(source, file, span) else {
             return;
         };
         if source != split.whole {
             return;
         }
-        let Ok(stock) = self.part_stock(split.whole) else {
+        let stock = self.part_stock(split.whole);
+        let Some(stock) = self.settled(stock, file, span) else {
             return;
         };
-        let Ok(Some(max_width)) = self.stock_length(stock, StockField::MaxWidth) else {
+        let max_width = self.stock_length(stock, StockField::MaxWidth);
+        let Some(Some(max_width)) = self.settled(max_width, file, span) else {
             return;
         };
-        let wide = split.pieces.iter().any(|piece| {
-            geoms
-                .get(*piece)
-                .and_then(|geom| geom.cut_size(PartAxis::Width).ok())
+        let mut wide = false;
+        for piece in &split.pieces {
+            let Some(geom) = geoms.get(*piece) else {
+                continue;
+            };
+            let width = geom.cut_size(PartAxis::Width);
+            if self
+                .settled(width, file, span)
                 .is_some_and(|width| width > max_width)
-        });
+            {
+                wide = true;
+            }
+        }
         if !wide {
             return;
         }
@@ -1360,14 +1403,14 @@ fn to_world(
     if direction.is_positive() {
         let base = geom.cut_box.min(world);
         Ok((
-            base.checked_add(low).ok_or(Reported)?,
-            base.checked_add(high).ok_or(Reported)?,
+            base.checked_add(low).ok_or(Fault::Overflow)?,
+            base.checked_add(high).ok_or(Fault::Overflow)?,
         ))
     } else {
         let base = geom.cut_box.max(world);
         Ok((
-            base.checked_sub(high).ok_or(Reported)?,
-            base.checked_sub(low).ok_or(Reported)?,
+            base.checked_sub(high).ok_or(Fault::Overflow)?,
+            base.checked_sub(low).ok_or(Fault::Overflow)?,
         ))
     }
 }

@@ -20,7 +20,7 @@ use stave_model::value::{KindValue, Patch, Spacing, Value};
 use crate::eval::{Env, midpoint};
 use crate::hardware::{Frame, FrameBox, Outline, PlacedShape, positive_direction};
 use crate::place::{add, divide, scale, sub};
-use crate::{Reported, Solved, Solver};
+use crate::{Fault, Solved, Solver};
 
 /// One copy of a joint's member: its frame on the patch, and its shapes.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,11 +117,11 @@ impl Solver<'_> {
             let Carrier::Contact(layout) = &body.with else {
                 continue;
             };
-            let id = BodyId::new(index).ok_or(Reported)?;
+            let id = BodyId::new(index).ok_or(Fault::Internal("a member's number"))?;
             let patch = self.member_patch(layout, env)?;
             let count = match &layout.count {
                 Some(count) => {
-                    usize::try_from(self.eval_count(count, env)?).map_err(|_| Reported)?
+                    usize::try_from(self.eval_count(count, env)?).map_err(|_| Fault::Overflow)?
                 }
                 None => 1,
             };
@@ -136,7 +136,7 @@ impl Solver<'_> {
                 .iter()
                 .map(|(frame_box, _, _)| frame_box.along)
                 .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
-                .ok_or(Reported)?;
+                .ok_or(Fault::Internal("a member's shapes"))?;
             let size = sub(high, low)?;
             let length_axis = patch.axis(stave_lang::placement::PartAxis::Length);
             let width_axis = patch.axis(stave_lang::placement::PartAxis::Width);
@@ -147,20 +147,23 @@ impl Solver<'_> {
             if let Some(past) = past {
                 let (file, span) = place;
                 let what = self.describe(&Value::Length(past));
-                return Err(self.error(
-                    Code::Overlap,
-                    format!(
-                        "{owner}: its {}s run {what} past the end of where its parts touch",
-                        body.name
-                    ),
-                    file,
-                    span,
-                    "use fewer of them, or space them closer together",
-                ));
+                return Err(self
+                    .error(
+                        Code::Overlap,
+                        format!(
+                            "{owner}: its {}s run {what} past the end of where its parts touch",
+                            body.name
+                        ),
+                        file,
+                        span,
+                        "use fewer of them, or space them closer together",
+                    )
+                    .into());
             }
-            let across = midpoint(area.min(width_axis), area.max(width_axis)).ok_or(Reported)?;
-            let plane =
-                midpoint(area.min(patch.normal()), area.max(patch.normal())).ok_or(Reported)?;
+            let across =
+                midpoint(area.min(width_axis), area.max(width_axis)).ok_or(Fault::Overflow)?;
+            let plane = midpoint(area.min(patch.normal()), area.max(patch.normal()))
+                .ok_or(Fault::Overflow)?;
             let mut copies = Vec::with_capacity(count);
             for low_end in lows {
                 // The shapes' low end along sits where the spacing puts it.
@@ -196,7 +199,7 @@ impl Solver<'_> {
             let item = match &body.item {
                 Some(item) => match self.eval(item, env)? {
                     Value::Kind(kind_value) => Some(kind_value),
-                    _ => return Err(Reported),
+                    _ => return Err(Fault::Earlier.into()),
                 },
                 None => None,
             };
@@ -214,13 +217,15 @@ impl Solver<'_> {
     fn member_patch(&mut self, layout: &LayoutDef, env: &Env<'_>) -> Solved<Patch> {
         match self.eval(&layout.on, env)? {
             Value::Patch(patch) => Ok(patch),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!("'on' needs a contact patch, found {}", other.description()),
-                env.file,
-                layout.on.span,
-                "write on: contact(piece, into), the patch where the parts touch",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("'on' needs a contact patch, found {}", other.description()),
+                    env.file,
+                    layout.on.span,
+                    "write on: contact(piece, into), the patch where the parts touch",
+                )
+                .into()),
         }
     }
 
@@ -233,13 +238,15 @@ impl Solver<'_> {
             Value::Spacing(spacing) => Ok(spacing),
             Value::Word(Word::Evenly) => Ok(Spacing::Evenly),
             Value::Word(Word::Ends) => Ok(Spacing::Ends(ExactLength::ZERO)),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!("'spaced' needs a spacing, found {}", other.description()),
-                env.file,
-                spaced.span,
-                "write evenly, ends, ends(inset: d), pitch(d) or gap(d)",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("'spaced' needs a spacing, found {}", other.description()),
+                    env.file,
+                    spaced.span,
+                    "write evenly, ends, ends(inset: d), pitch(d) or gap(d)",
+                )
+                .into()),
         }
     }
 }

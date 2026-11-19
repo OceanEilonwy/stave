@@ -31,7 +31,7 @@ use stave_model::value::Value;
 
 use crate::hardware::{Frame, Placed, RoleBound, world_index};
 use crate::joints::Binding;
-use crate::{Reported, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// A point in the kind's frame, exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -612,20 +612,27 @@ impl Solver<'_> {
         Some((def.decl.file, def.call.span))
     }
 
-    /// Reports a mechanism error at its kind, once per kind.
-    fn mechanism_error(&mut self, kind: KindId, message: String, note: Option<String>, help: &str) {
+    /// Reports a mechanism error at its kind, once per kind: after the
+    /// first, the failure is the one reported earlier.
+    fn mechanism_error(
+        &mut self,
+        kind: KindId,
+        message: String,
+        note: Option<String>,
+        help: &str,
+    ) -> Failure {
         if !self.reported_mechanisms.insert(kind) {
-            return;
+            return Fault::Earlier.into();
         }
         let Some((file, span)) = self.mechanism_place(kind) else {
-            return;
+            return Fault::Internal("where a hardware kind's mechanism is written").into();
         };
         let mut diagnostic =
             Diagnostic::error(Code::Mechanism, message, Label::new(file, span)).with_help(help);
         if let Some(note) = note {
             diagnostic = diagnostic.with_note(note);
         }
-        self.report(diagnostic);
+        self.report(diagnostic).into()
     }
 
     /// Counts one piece of hardware's mechanism on its own, as soon as it
@@ -650,12 +657,11 @@ impl Solver<'_> {
         let declared = match declare(hardware, mechanism, &is_moving, &mechanism.plane, None, 0) {
             Ok(declared) => declared,
             Err(error) => {
-                self.declare_error(mechanism.kind, kind_name, error);
-                return Err(Reported);
+                return Err(self.declare_error(mechanism.kind, kind_name, error));
             }
         };
         let Some(found) = freedoms(&declared.members, &declared.entries) else {
-            return Err(Reported);
+            return Err(Fault::Internal("a mechanism's freedoms").into());
         };
         let wanted = if declared.drive.is_some() { 1 } else { 0 };
         if found != wanted {
@@ -672,25 +678,26 @@ impl Solver<'_> {
                     "count three for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until none is left",
                 )
             };
-            self.mechanism_error(mechanism.kind, message, None, help);
-            return Err(Reported);
+            return Err(self.mechanism_error(mechanism.kind, message, None, help));
         }
         let left = unreachable(&declared.members, &declared.entries);
         if !left.is_empty() {
-            self.mechanism_error(
+            return Err(self.mechanism_error(
                 mechanism.kind,
                 format!(
                     "{kind_name}'s mechanism can't be solved one step at a time from its drive"
                 ),
                 Some(format!("nothing places {}", left.join(" and "))),
                 "pin each of them to a member that is held or driven, or to one pinned to those",
-            );
-            return Err(Reported);
+            ));
         }
         let Some(drive) = declared.drive else {
             return Ok(None);
         };
-        let frame = mechanism.plane.frame().ok_or(Reported)?;
+        let frame = mechanism
+            .plane
+            .frame()
+            .ok_or(Fault::Internal("a mechanism's plane"))?;
         match Mechanism::new(
             frame,
             declared.members,
@@ -700,16 +707,13 @@ impl Solver<'_> {
             vec![hardware],
         ) {
             Ok(counted) => Ok(Some(counted)),
-            Err(error) => {
-                self.counted_error(mechanism.kind, kind_name, &error);
-                Err(Reported)
-            }
+            Err(error) => Err(self.counted_error(mechanism.kind, kind_name, &error)),
         }
     }
 
-    fn declare_error(&mut self, kind: KindId, kind_name: &str, error: DeclareError) {
+    fn declare_error(&mut self, kind: KindId, kind_name: &str, error: DeclareError) -> Failure {
         match error {
-            DeclareError::Internal => {}
+            DeclareError::Internal => Fault::Internal("a mechanism's members").into(),
             DeclareError::DriveNotCarried(member) => self.mechanism_error(
                 kind,
                 format!(
@@ -727,7 +731,7 @@ impl Solver<'_> {
         }
     }
 
-    fn counted_error(&mut self, kind: KindId, kind_name: &str, error: &MechanismError) {
+    fn counted_error(&mut self, kind: KindId, kind_name: &str, error: &MechanismError) -> Failure {
         let help = match error {
             MechanismError::OnePiece { .. } | MechanismError::BothHeld { .. } => {
                 "join a member that moves to one that holds it, or to another that moves"
@@ -740,16 +744,18 @@ impl Solver<'_> {
                 "drive the member that is with: the piece (the door, the lid, the drawer side)"
             }
             MechanismError::EmptyRange => "give the drive a from: and a to: that differ",
-            MechanismError::UnknownMember { .. }
-            | MechanismError::NoMembers
-            | MechanismError::Overflow => return,
+            // Checked when the kind is resolved.
+            MechanismError::UnknownMember { .. } | MechanismError::NoMembers => {
+                return Fault::Earlier.into();
+            }
+            MechanismError::Overflow => return Fault::Overflow.into(),
         };
         self.mechanism_error(
             kind,
             format!("{kind_name}'s mechanism can't move: {error}"),
             None,
             help,
-        );
+        )
     }
 
     /// Every assembly's mechanism, from its hardware (grammar, "Mechanisms",
@@ -763,7 +769,14 @@ impl Solver<'_> {
         let assemblies: Vec<AssemblyId> = self.model.assemblies.iter().map(|a| a.id).collect();
         assemblies
             .into_iter()
-            .map(|assembly| self.assembly_mechanism(assembly, placed).ok().flatten())
+            .map(|assembly| {
+                let result = self.assembly_mechanism(assembly, placed);
+                let (file, span) = match self.model.assemblies.get(assembly.index()) {
+                    Some(inst) => self.place_of(stave_model::defs::DefId::Assembly(inst.def)),
+                    None => (self.project_file, self.project_span),
+                };
+                self.settled(result, file, span).flatten()
+            })
             .collect()
     }
 
@@ -805,7 +818,9 @@ impl Solver<'_> {
         // Every pin parallel to one axis.
         for (id, _, mechanism) in drivers.iter().chain(&followers) {
             if mechanism.plane.axis != base.plane.axis {
-                let (file, span) = self.hardware_call(*id).ok_or(Reported)?;
+                let (file, span) = self
+                    .hardware_call(*id)
+                    .ok_or(Fault::Internal("where a piece of hardware is written"))?;
                 return Err(self.error(
                     Code::Motion,
                     format!(
@@ -818,16 +833,17 @@ impl Solver<'_> {
                     file,
                     span,
                     "mount the hardware of one assembly so that it all turns or runs the same way",
-                ));
+                ).into());
             }
         }
         let moving = self.moving_roles(&first_placed.roles, Some(assembly));
         let is_moving = |role: RoleIndex| moving.get(role.index()).copied().unwrap_or(false);
+        // Each piece of hardware's own mechanism was checked when placed.
         let Ok(mut declared) = declare(first, base, &is_moving, &base.plane, None, 0) else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let Some(mut drive) = declared.drive else {
-            return Err(Reported);
+            return Err(Fault::Internal("the drive of a mechanism").into());
         };
         let mut stop = declared.stop.clone();
         let mut bodies: BTreeMap<(HardwareId, BodyId), MemberIndex> = declared
@@ -842,7 +858,7 @@ impl Solver<'_> {
             let moving = self.moving_roles(&item_placed.roles, Some(assembly));
             let is_moving = |role: RoleIndex| moving.get(role.index()).copied().unwrap_or(false);
             let Ok(other) = declare(id, mechanism, &is_moving, &base.plane, None, 0) else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             let shape = |d: &Declared| -> Vec<(String, Holding)> {
                 d.members
@@ -855,10 +871,12 @@ impl Solver<'_> {
                 && other.entries == declared.entries
                 && start(other.drive) == start(Some(drive));
             if !alike {
-                let (file, span) = self.hardware_call(id).ok_or(Reported)?;
+                let (file, span) = self
+                    .hardware_call(id)
+                    .ok_or(Fault::Internal("where a piece of hardware is written"))?;
                 let first_name = hardware_name(self, first);
                 let other_name = hardware_name(self, id);
-                self.report(
+                let reported = self.report(
                     Diagnostic::error(
                         Code::Motion,
                         format!("{assembly_name}'s hardware doesn't move alike"),
@@ -871,7 +889,7 @@ impl Solver<'_> {
                         "use one kind of hinge or slide, set the same way, for everything that moves {assembly_name}"
                     )),
                 );
-                return Err(Reported);
+                return Err(reported.into());
             }
             if let Some(other_drive) = other.drive
                 && let Some(narrower) = narrower(&drive, other_drive.to())
@@ -907,7 +925,7 @@ impl Solver<'_> {
                 Some(drive.member()),
                 offset,
             ) else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             if let Some(follower_stop) = follower.stop {
                 let at = match (follower_stop.at, drive) {
@@ -915,7 +933,9 @@ impl Solver<'_> {
                     | (DriveValue::Travel(_), MechanismDrive::Travel { .. }) => follower_stop.at,
                     (DriveValue::Turn(_), MechanismDrive::Travel { .. })
                     | (DriveValue::Travel(_), MechanismDrive::Turn { .. }) => {
-                        let (file, span) = self.hardware_call(id).ok_or(Reported)?;
+                        let (file, span) = self
+                            .hardware_call(id)
+                            .ok_or(Fault::Internal("where a piece of hardware is written"))?;
                         return Err(self.error(
                             Code::TypeMismatch,
                             format!(
@@ -927,7 +947,7 @@ impl Solver<'_> {
                             file,
                             span,
                             "give the stop an angle for something that turns, a length for something that slides",
-                        ));
+                        ).into());
                     }
                 };
                 if let Some(narrower) = narrower(&drive, at) {
@@ -948,7 +968,10 @@ impl Solver<'_> {
             }
             hardware.push(id);
         }
-        let frame = base.plane.frame().ok_or(Reported)?;
+        let frame = base
+            .plane
+            .frame()
+            .ok_or(Fault::Internal("a mechanism's plane"))?;
         match Mechanism::new(
             frame,
             declared.members,
@@ -965,8 +988,7 @@ impl Solver<'_> {
                     .kind(base.kind)
                     .map(|k| k.decl.name.clone())
                     .unwrap_or_default();
-                self.counted_error(base.kind, &kind_name, &error);
-                Err(Reported)
+                Err(self.counted_error(base.kind, &kind_name, &error))
             }
         }
     }
@@ -1026,13 +1048,15 @@ impl Solver<'_> {
             Some(stop) if stop.at == mechanism.drive().to() => stop.message.clone(),
             Some(_) | None => format!("its hardware goes {reach} at most"),
         };
-        Err(self.error(
-            Code::Motion,
-            format!("{name} can't {verb} {asked}: {why}"),
-            file,
-            span,
-            format!("pose {name} at most {reach}, or write open"),
-        ))
+        Err(self
+            .error(
+                Code::Motion,
+                format!("{name} can't {verb} {asked}: {why}"),
+                file,
+                span,
+                format!("pose {name} at most {reach}, or write open"),
+            )
+            .into())
     }
 
     /// A kind's mechanism for one piece of hardware, every value worked
@@ -1073,7 +1097,7 @@ impl Solver<'_> {
                 file,
                 def.span,
                 "a mechanism moves in one plane: run its rails along depth and one of along or across",
-            ));
+            ).into());
         }
         let plane_point = |point: ExactPoint| -> PlanePoint { [point.on(first), point.on(second)] };
         let direction = |axis: FrameAxis| -> PlanePoint {
@@ -1108,7 +1132,7 @@ impl Solver<'_> {
             for coupling in &def.couplings {
                 let ratio = match solver.eval(&coupling.ratio, env)? {
                     Value::Ratio(ratio) | Value::Count(ratio) => ratio,
-                    _ => return Err(Reported),
+                    _ => return Err(Fault::Earlier.into()),
                 };
                 entries.push(Entry::Couple {
                     bodies: [coupling.body, coupling.to],
@@ -1148,7 +1172,7 @@ impl Solver<'_> {
                             file,
                             stop.span,
                             "write stop: 100deg \"...\" for something that turns, stop: 300mm \"...\" for something that slides",
-                        ));
+                        ).into());
                     }
                 };
                 // The drive goes no further than what stops it.
@@ -1163,16 +1187,18 @@ impl Solver<'_> {
                         _ => false,
                     };
                 if beyond {
-                    return Err(self.error(
-                        Code::Motion,
-                        format!(
-                            "kind '{kind_name}' is driven past its stop: {}",
-                            stop.message.literal()
-                        ),
-                        file,
-                        stop.span,
-                        "make the drive's to: no more than the stop",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::Motion,
+                            format!(
+                                "kind '{kind_name}' is driven past its stop: {}",
+                                stop.message.literal()
+                            ),
+                            file,
+                            stop.span,
+                            "make the drive's to: no more than the stop",
+                        )
+                        .into());
                 }
                 Some((at, stop.message.literal().to_owned()))
             }

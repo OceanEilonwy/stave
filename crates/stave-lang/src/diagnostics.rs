@@ -293,6 +293,8 @@ codes! {
     Mirror = "mirror", layer 3;
     /// `<kind>'s mechanism has <n> freedoms; it needs exactly one`
     Mechanism = "mechanism", layer 3;
+    /// `Stave could not work out <what>; this is a bug in Stave`
+    Internal = "internal", layer 3;
     /// `<joint>: <part> meets none of the parts it should join`
     NoContact = "no-contact", layer 4;
     /// `<a> and <b> overlap`

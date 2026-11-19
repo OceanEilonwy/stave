@@ -840,8 +840,8 @@ of equal value stays straight, so a cylinder stays a cylinder. Readable:
 | Entry | Type | Meaning |
 |---|---|---|
 | `pose <target> = <value>` | `open` \| `closed` \| `Angle` \| `Length` | sets a motion; see [Scenes](#scenes) |
-| `show` | an item or a list | show only these |
-| `hide` | an item or a list | hide these |
+| `show` | a part, assembly or piece of hardware, or a list of them | show only these; anything else (a region, a joint, a length) is `error[type-mismatch]` |
+| `hide` | a part, assembly or piece of hardware, or a list of them | hide these; anything else is `error[type-mismatch]` |
 | `explode` | `Bool` | pull the parts apart along their joints' insert directions |
 | `section` | `Anchor` | cut the view at a plane: what lies above it (`up`), to its right (`across`) or in front of it (`deep`) isn't drawn, and the wood it cuts is drawn flat |
 
@@ -3227,7 +3227,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
-| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`) |
+| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly` |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
@@ -3240,6 +3240,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
+| 3 | `internal` | `Stave could not work out <what>; this is a bug in Stave`: a failure inside Stave that no check explains; it is reported rather than leaving the design unbuilt without a word |
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
