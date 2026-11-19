@@ -1,0 +1,2023 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the stave package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: stave\n"
+"Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
+"POT-Creation-Date: 2026-11-19 21:13+0800\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
+
+#: crates/stave-app/src/candidates.rs:69
+msgid "the project has no resolved model; fix its name and type errors first"
+msgstr ""
+
+#: crates/stave-app/src/candidates/new_project.rs:133
+#, rust-format
+msgid "the overall {value} must be more than 0mm"
+msgstr ""
+
+#: crates/stave-app/src/candidates/new_project.rs:137
+#, rust-format
+msgid "{stock}'s {field} must be more than 0mm"
+msgstr ""
+
+#: crates/stave-app/src/candidates/new_project.rs:141
+#, rust-format
+msgid "the name '{value}' is used twice"
+msgstr ""
+
+#: crates/stave-app/src/candidates/new_project.rs:144
+msgid "the new project's text doesn't parse; please report this as a bug"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:119
+#, rust-format
+msgid "still to fill in: {value}"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:123
+msgid "the candidate's declaration is not in this project"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:126
+#, rust-format
+msgid "'{value}' is bound to something that is not in this design"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:131
+#, rust-format
+msgid "{value0} is a {value1} kind, which is used by a joint or a tool list, not placed by itself"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:135
+msgid "only a component that fills a space can be repeated"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:138
+#, rust-format
+msgid "'{file}' already uses the name '{alias}' differently; import the module there by hand first"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:144
+#, rust-format
+msgid "'{value}' is already used in this project or is a word of the language; choose another name"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:148
+msgid "the project has no file to add to"
+msgstr ""
+
+#: crates/stave-app/src/candidates/write.rs:151
+#: crates/stave-app/src/repeat.rs:63
+msgid "the written patch doesn't parse; please report this as a bug"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:273
+#, rust-format
+msgid "{value}"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:334 crates/stave-app/src/change.rs:404
+#, rust-format
+msgid "Drag {grip}"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:339
+msgid "move the grip, or type a value for it"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:401
+#, rust-format
+msgid "Drag {grip} to {value}"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:711 crates/stave-app/src/remove.rs:81
+#, rust-format
+msgid "there is no item named '{name}' in this project"
+msgstr ""
+
+#: crates/stave-app/src/change.rs:811 crates/stave-app/src/editing.rs:1127
+msgid "the check was stopped"
+msgstr ""
+
+#: crates/stave-app/src/choices.rs:209
+msgid "Values"
+msgstr ""
+
+#: crates/stave-app/src/choices.rs:218
+msgid "In this project"
+msgstr ""
+
+#: crates/stave-app/src/choices.rs:221
+#, rust-format
+msgid "Standard · {module}"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:65
+msgid "a part can't face itself"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:66
+msgid "a refusal lists errors only"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:67
+msgid "a candidate that fits has no errors"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:68
+msgid "a refusal needs at least one error"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:69
+msgid "a fix needs at least one operation"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:70
+msgid "a grip's value and stops must lie within its range"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:71
+msgid "a grip's step must be more than zero"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:163
+msgid "In this space"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:164
+msgid "On this face"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:165
+msgid "Between these parts"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:166
+msgid "With these parts"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:467
+#, rust-format
+msgid "{first} (and {more} more)"
+msgid_plural "{first} (and {more} more)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/edit.rs:510
+#, rust-format
+msgid "It doesn't fit now that {setting} is {value}."
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:518
+#, rust-format
+msgid "It stopped fitting when {setting} became {value}."
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:535
+#, rust-format
+msgid "Clear {setting} again"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:537
+#, rust-format
+msgid "Put {setting} back to {value}, the default"
+msgstr ""
+
+#: crates/stave-app/src/edit.rs:541
+#, rust-format
+msgid "Put {setting} back to {value}"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:377
+msgid "nothing is being edited"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:378 crates/stave-app/src/editing.rs:619
+msgid "choose something from the menu first"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:380
+#, rust-format
+msgid "the menu has no entry {number}"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:383
+msgid "that isn't what the card is asking you to point at"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:385
+#, rust-format
+msgid "there is no setting called '{name}'"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:390
+#, rust-format
+msgid "'{name}' can't be used: it is already used in this project, is a word of the language, or is not a name"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:394
+msgid "there is no such fix"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:396
+msgid "nothing to put back: no setting change made it stop fitting"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:399
+#, rust-format
+msgid "'{name}' has no default: choose a value"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:402 crates/stave-app/src/editing.rs:620
+msgid "the edit doesn't fit, so nothing was written"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:404
+msgid "there is no removal waiting on what depends on it"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:405
+msgid "list the grips of something first"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:407
+#, rust-format
+msgid "there is no grip {number}"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:410
+msgid "no grip is being dragged"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:411
+msgid "that is not one of the sizes this grip could change"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:442
+msgid "the design can't be edited by pointing until it places: fix the errors `stave check` shows first"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:622 crates/stave-app/src/export_view.rs:35
+#, rust-format
+msgid "can't write '{path}': {source}"
+msgstr ""
+
+#: crates/stave-app/src/editing.rs:1447
+#: crates/stave-gtk/src/ui/edit_writer.rs:89
+#, rust-format
+msgid "'{file}' changed since the edit began; start the edit again"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:37
+msgid "Nothing to build yet: the design is still being checked"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:38
+msgid "Nothing to build: the folder couldn't be opened"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:39
+msgid "Nothing to build yet: fix the problems first"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:40
+msgid "Nothing to build: a library has no parts"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:41
+msgid "Nothing to build: the project has no parts yet"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:114
+msgid "JOINT KINDS"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:115
+msgid "HARDWARE KINDS"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:116
+msgid "FASTENERS"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:117
+msgid "TOOLS"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:118
+msgid "RECIPES"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:119
+msgid "COMPONENTS"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:120
+msgid "STOCK"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:121
+msgid "PROFILES"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:151 crates/stave-app/src/empty.rs:203
+#: crates/stave-app/src/empty.rs:340 crates/stave-app/src/session.rs:334
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:490
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:496
+msgid "Checking…"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:153
+msgid "Nothing to inspect"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:154
+msgid "Open a project folder to see its parts here."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:157
+msgid "Nothing to inspect yet"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:159
+msgid "Once the errors are fixed, click a part in the list or in the 3D view to see its stock, size, joints and where it is written."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:164 crates/stave-app/src/empty.rs:207
+#: crates/stave-app/src/empty.rs:296
+msgid "No parts yet"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:166
+msgid "Add a part to the project's text; then click it in the list or in the 3D view to see it here."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:185
+msgid "A library folder"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:187
+msgid "A library holds kinds of joints and hardware, recipes and components for projects to use. It has no parts of its own, so there is nothing to select or build here. To use it, import it at the top of a project file:"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:192
+#, rust-format
+msgid "Then name what you need through it, such as {name}.{example}. Click a name in the list to read how it is written."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:204
+msgid "No folder open"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:205
+msgid "The parts appear once the errors are fixed"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:206
+msgid "A library has no parts. It defines:"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:298
+msgid "The project places no parts. Add a part to its text and it appears here as soon as the file is saved."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:309
+msgid "Nothing to show yet"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:312
+#, rust-format
+msgid "The design has {count} error, so it can't be put together yet. The problems chip at the top steps through them (F8)."
+msgid_plural "The design has {count} errors, so it can't be put together yet. The problems chip at the top steps through them (F8)."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/empty.rs:323
+msgid "Nothing to show"
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:325
+msgid "This folder is a library of kinds and components, with no parts to place. Open a project that uses it to see it in 3D."
+msgstr ""
+
+#: crates/stave-app/src/empty.rs:333
+msgid "Can't open the folder"
+msgstr ""
+
+#: crates/stave-app/src/export_view.rs:32
+#, rust-format
+msgid "can't make the glTF file: {value}"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:49
+msgid "Parts"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:50
+msgid "Files"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:51
+msgid "Names"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:52
+msgid "Lines"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:53
+msgid "Problems"
+msgstr ""
+
+#: crates/stave-app/src/finder.rs:218
+msgid "read only"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:90
+#, rust-format
+msgid "no joint or hardware is called '{name}'; try one of: {names}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:94
+#, rust-format
+msgid "joint '{name}' has {count} pairs, numbered from 0; there is no pair {pair}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:187
+#, rust-format
+msgid "{piece} into {into} ({kind})"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:411
+#, rust-format
+msgid "{length} deep"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:412
+msgid "all the way through"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:416
+msgid "Hole"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:418
+#, rust-format
+msgid "{diameter} across, {depth}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:427
+msgid "Mortise"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:429
+#, rust-format
+msgid "{thickness} × {width} mm, {depth}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:442
+msgid "Tenon"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:444
+#, rust-format
+msgid "{length} long, {thickness} × {width} mm"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:453
+msgid "Round tenon"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:455
+#, rust-format
+msgid "{diameter} across, {length} long"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:461
+msgid "Dado"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:462
+msgid "Rabbet"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:463
+msgid "Groove"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:464
+msgid "Notch"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:469
+msgid "Slot"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:471
+#, rust-format
+msgid "{width} wide, {depth}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:476
+msgid "Round section"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:477 crates/stave-app/src/inspect.rs:1211
+#, rust-format
+msgid "{length} across"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:479
+msgid "Dovetail socket"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:479 crates/stave-app/src/focus.rs:480
+msgid "angled sides"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:480
+msgid "Dovetail tail"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:481
+msgid "Outline"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:481
+msgid "cut to a drawn shape"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:593
+msgid "Goes in"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:597
+msgid "Receives it"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:604 crates/stave-app/src/inspect.rs:788
+msgid "Part"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:606
+#, rust-format
+msgid "{part} (the {role})"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:615
+msgid "Made by the joint"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:632
+msgid "Places"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:634
+#, rust-format
+msgid "{count} × {name}{what}, {each}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:659
+#, rust-format
+msgid "{cut}, in {part}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:681
+msgid "Fit"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:718
+#, rust-format
+msgid "{project} · Joint focus · {title}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:732
+msgid "apart"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:736
+msgid "half way"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:740
+msgid "together"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:783
+#, rust-format
+msgid "wood overlaps by {depth} mm"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:787
+msgid "a part doesn't touch the others"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:794
+msgid "touches, nothing overlaps"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:800
+msgid "clear all the way"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:949
+msgid "Opens to"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:951
+msgid "Pulls out"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:987
+msgid "Closest to the side"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:997
+msgid "Closest to anything"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1014
+msgid "Swing check"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1016
+msgid "Slide check"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1036
+msgid "Dotted line"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1038
+msgid "the path of the door's front edge: solid where it has been"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1040
+msgid "the path of the drawer's front: solid where it has been"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1068
+msgid "How this hinge works"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1069
+msgid "How this drawer slide works"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1070
+msgid "How this pull is fixed"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1076
+#, rust-format
+msgid "{project} · Hardware · {title}"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1204
+msgid "Looking down on the slide, cut through its middle"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1206
+msgid "Looking down on the hinge, through the cabinet top"
+msgstr ""
+
+#: crates/stave-app/src/focus.rs:1207
+msgid "Looking down on the joint, cut through its middle"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:565
+msgid "pick which size changes"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:619
+msgid "the size is already that"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:636
+msgid "the solver ran out of time"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:645
+msgid "that value"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:651
+#, rust-format
+msgid "the rule '{name}' stops it ({message})"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:657
+#, rust-format
+msgid "'{path}' would leave its range"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:665
+#, rust-format
+msgid "can't reach {value}"
+msgstr ""
+
+#: crates/stave-app/src/gripping.rs:668
+#, rust-format
+msgid "can't reach {value}: {reasons}"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:244
+msgid "plain"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:245
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:411
+msgid "solved"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:246
+msgid "locked"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:247
+msgid "a size of the stock"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:248
+msgid "a size of the hardware or joint"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:318
+msgid "the design doesn't place yet, so it has no grips; fix its errors first"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:320
+msgid "the selection is not in this design"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:322
+msgid "this project has no envelope: its root is a part, not a box"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:325
+msgid "this space is not one piece of a split, so it has no boundaries to move"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1189
+#, rust-format
+msgid "'{value}' can't be changed by a patch: it is set inside another component"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1193
+msgid "the value is not the same kind as the size (a length for a length)"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1198
+msgid "that value is not one this size follows"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1199 crates/stave-app/src/solve_edit.rs:157
+#: crates/stave-app/src/stops.rs:190
+msgid "the numbers are too large"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1206
+#, rust-format
+msgid "'{path}' would have to be {numerator}/{denominator}, which has no exact decimal, so a drag can't write it"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1220
+msgid "this size is worked out from numbers only, so a drag has nothing to change"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1226
+#, rust-format
+msgid "{name} (the size is not worked out from it in a straight line)"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1233
+#, rust-format
+msgid "nothing this size follows can change: {reasons}"
+msgstr ""
+
+#: crates/stave-app/src/grips.rs:1339
+#, rust-format
+msgid "Set {path} to {value}"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:137
+msgid "say why this must hold: it is the message shown when a change breaks it"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:140
+#, rust-format
+msgid "'{value}' was picked twice; a distance needs two different things"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:144 crates/stave-app/src/repeat.rs:185
+#, rust-format
+msgid "there is no item named '{value}' in this project"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:149
+#, rust-format
+msgid "'{value}' is not a part or a region; pick a part, a region or one of their faces"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:155
+#, rust-format
+msgid "'{value0}' and '{value1}' are not parallel; pick two faces across the same axis"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:161
+#, rust-format
+msgid "'{value0}' and '{value1}' are apart along more than one axis; pick two faces instead"
+msgstr ""
+
+#: crates/stave-app/src/hold.rs:222
+#, rust-format
+msgid "Hold {condition}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:250
+#, rust-format
+msgid "turns {angle}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:252
+#, rust-format
+msgid "slides out {length}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:433
+msgid "turned"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:548 crates/stave-app/src/part_joints.rs:418
+#, rust-format
+msgid "mirror of {name}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:774 crates/stave-app/src/inspect.rs:1454
+msgid "Moves"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:776
+#, rust-format
+msgid "with {assembly}, {motion}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:789
+msgid "Piece of a spliced part"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:790
+msgid "Mirror image"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:791
+msgid "Made part"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:792 crates/stave-app/src/problems.rs:126
+msgid "Hardware"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:793
+msgid "Assembly"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:794
+msgid "Joint member"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:795
+msgid "Joint"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1090
+#, rust-format
+msgid "with {names}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1107
+#, rust-format
+msgid "{face} face"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1142
+#, rust-format
+msgid "on its {face}: {names}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1155
+msgid "hinged on"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1219
+msgid "Stock"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1227
+msgid "Finished size"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1236
+msgid "Grain"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1238
+#, rust-format
+msgid "along the {direction}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1245
+msgid "Shape"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1246
+#, rust-format
+msgid "turned to {profile}"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1254 crates/stave-app/src/inspect.rs:1464
+msgid "Mirror of"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1263
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:406
+msgid "Note"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1371 crates/stave-app/src/inspect.rs:1504
+msgid "Joints and cuts"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1390
+msgid "hinge"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1391
+msgid "drawer slide"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1392
+msgid "pull"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1396 crates/stave-app/src/inspect.rs:1629
+msgid "Kind"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1400
+msgid "Mounted on"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1402
+#, rust-format
+msgid "{piece}, {face} face"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1412
+msgid "See how it works"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1429
+msgid "How it works"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1449
+msgid "Component"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1473
+msgid "Inside"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1476
+#, rust-format
+msgid "{parts} part, {hardware} of hardware"
+msgid_plural "{parts} parts, {hardware} of hardware"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/inspect.rs:1554
+msgid "Placed by"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1558 crates/stave-app/src/inspect.rs:1633
+msgid "Pair"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1563
+msgid "Fastener"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1567
+msgid "Copies"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1571
+msgid "Each"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1578
+msgid "Goes in with"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1600 crates/stave-app/src/inspect.rs:1651
+msgid "How it goes together"
+msgstr ""
+
+#: crates/stave-app/src/inspect.rs:1603 crates/stave-app/src/inspect.rs:1654
+msgid "See how it goes together"
+msgstr ""
+
+#: crates/stave-app/src/link.rs:199
+#, rust-format
+msgid "Linked to the text · {name}, line {line}"
+msgstr ""
+
+#: crates/stave-app/src/naming.rs:51
+#, rust-format
+msgid "'{value}' gives no name: a name needs a letter"
+msgstr ""
+
+#: crates/stave-app/src/naming.rs:55
+#, rust-format
+msgid "every name from '{value}' is taken"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:72
+#, rust-format
+msgid "there is no param named '{value}' in this project"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:77
+#, rust-format
+msgid "'{value}' is a locked param, which no edit changes; take 'locked' off it in the text first"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:82
+#, rust-format
+msgid "'{value}' has no default value, so it can't be solved for"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:86
+#, rust-format
+msgid "'{name}' is already a {kind} param"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:90
+#, rust-format
+msgid "the text of '{value}' couldn't be read"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:154
+#, rust-format
+msgid "Let the solver change {name}"
+msgstr ""
+
+#: crates/stave-app/src/param_kind.rs:158
+#, rust-format
+msgid "Make {name} a plain param"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:125
+#, rust-format
+msgid "{kind}: {count} joint"
+msgid_plural "{kind}: {count} joints"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/part_joints.rs:129
+#, rust-format
+msgid "{kind}: {count} {name}"
+msgid_plural "{kind}: {count} {name}s"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/part_joints.rs:137
+#, rust-format
+msgid "{kind} × {count}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:271
+#, rust-format
+msgid "{kind}, no glue"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:718
+#, rust-format
+msgid "{kind}{times}, {face} face"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:735
+msgid "turns on"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:736
+msgid "slides in"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:818
+msgid "CARCASS"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:827
+#, rust-format
+msgid "{count} part"
+msgid_plural "{count} parts"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/part_joints.rs:831
+#, rust-format
+msgid "{count} joint"
+msgid_plural "{count} joints"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/part_joints.rs:835
+#, rust-format
+msgid "{parts} · {joints}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:872
+#, rust-format
+msgid "turns {amount}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:874
+#, rust-format
+msgid "slides {amount}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:884
+#, rust-format
+msgid "turns {amount} on {names}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:884
+#, rust-format
+msgid "{amount} on {names}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:886
+#, rust-format
+msgid "slides {amount} in {names}"
+msgstr ""
+
+#: crates/stave-app/src/part_joints.rs:886
+#, rust-format
+msgid "{amount} in {names}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:114
+msgid "Motion"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:115
+msgid "Overlap"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:116
+msgid "No contact"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:117
+msgid "Adjustment"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:118
+msgid "Mechanism"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:119
+msgid "Order"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:120
+msgid "Requirement"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:121
+msgid "Placement"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:122
+msgid "Syntax"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:123
+msgid "Name"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:124
+msgid "Value"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:125
+msgid "Cut"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:127
+msgid "Not supported yet"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:135
+msgid "A door or drawer hits something as it moves"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:136
+msgid "Wood passes through wood"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:137
+msgid "The joint's parts don't meet"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:138
+msgid "The hardware can't be adjusted to fit"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:139
+msgid "The hardware's moving parts can't work as written"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:140
+msgid "The joint can't be put together in this order"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:141
+msgid "A requirement doesn't hold"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:142
+msgid "Where a part goes isn't settled"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:143
+msgid "Stave can't read the text here"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:144
+msgid "A name isn't right"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:145
+msgid "A value is the wrong kind or size"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:146
+msgid "A cut can't be made with your tools"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:147
+msgid "The hardware doesn't match its size"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:148
+msgid "Stave can't do this yet"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:223
+#, rust-format
+msgid "{category} ({count})"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:744
+#, rust-format
+msgid "Swing {name}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:746
+#, rust-format
+msgid "Slide {name}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:828
+#, rust-format
+msgid "{severity} · {category}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:996 crates/stave-app/src/problems.rs:1173
+msgid "error"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:997 crates/stave-app/src/problems.rs:1172
+msgid "warning"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:998
+msgid "note"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1069
+#, rust-format
+msgid "{name} hits {things} as it opens"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1071
+#, rust-format
+msgid "{name} hits {things} as it slides out"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1075
+msgid " and "
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1111
+#, rust-format
+msgid "closed {amount}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1115
+#, rust-format
+msgid "blocked from {amount}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1119
+#, rust-format
+msgid "opens to {amount}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1121
+#, rust-format
+msgid "slides out {amount}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1177
+#, rust-format
+msgid "Off screen: {words} · {message}"
+msgstr ""
+
+#: crates/stave-app/src/problems.rs:1183
+#, rust-format
+msgid "Off screen: {words} · {message} · {more} more"
+msgid_plural "Off screen: {words} · {message} · {more} more"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/remove.rs:85
+#, rust-format
+msgid "'{name}' can't be removed by a patch"
+msgstr ""
+
+#: crates/stave-app/src/remove.rs:89
+#, rust-format
+msgid "'{name}' is still used by {users}; remove those too, or change them first"
+msgstr ""
+
+#: crates/stave-app/src/remove.rs:183
+#, rust-format
+msgid "Remove {item}"
+msgstr ""
+
+#: crates/stave-app/src/remove.rs:187
+#, rust-format
+msgid "Remove {item} and the item that uses it"
+msgid_plural "Remove {item} and the {count} items that use it"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/repeat.rs:189
+#, rust-format
+msgid "'{name}' can't be repeated this way: {reason}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:193
+#, rust-format
+msgid "'{name}' already has {count} pieces"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:197
+#, rust-format
+msgid "say which way to split the space for '{value}': across, up or deep"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:201
+#, rust-format
+msgid "{pieces} pieces need {pieces} shares, found {found}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:206
+#, rust-format
+msgid "the shares of '{value}' are not plain numbers, so they can't be moved by a grip"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:215
+#, rust-format
+msgid "'{region}' has no pieces {lower} and {upper}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:220
+#, rust-format
+msgid "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:226
+#, rust-format
+msgid "the design has no solved space named '{value}'; it must solve before a grip can move it"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:232
+#, rust-format
+msgid "'{value}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:238
+msgid "the sizes are too large to work with exactly"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:441
+msgid "only an assembly of a component fills a space"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:445
+msgid "it is a mirror image; repeat the assembly it mirrors"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:457 crates/stave-app/src/repeat.rs:952
+msgid "its component has no space (Region) param to fill"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:460 crates/stave-app/src/repeat.rs:955
+msgid "its space param is not written"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:490 crates/stave-app/src/repeat.rs:540
+#: crates/stave-app/src/repeat.rs:611
+#, rust-format
+msgid "Make {count} of {name}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:503
+msgid "its space is not an element of a split, bound with [same]"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:507 crates/stave-app/src/repeat.rs:510
+msgid "its space is not a split of this project"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:512
+msgid "its space is not a region"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:516
+msgid "its space is not an even split or a split with shares"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:518 crates/stave-app/src/repeat.rs:672
+msgid "its count is not a fixed number"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:585
+msgid "only a part can be spaced along a span"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:588
+msgid "it is a mirror image; repeat the part it mirrors"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:663
+msgid "only a region split into pieces has shares"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:668
+msgid "it is one space, not split into pieces"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:671
+msgid "it is not an even split or a split with shares"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:755
+#, rust-format
+msgid "Move the boundary between {lower} and {upper}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:835 crates/stave-app/src/repeat.rs:937
+msgid "only an assembly is mirrored this way"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:838 crates/stave-app/src/repeat.rs:940
+msgid "it is an array; mirror a single assembly"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:841 crates/stave-app/src/repeat.rs:943
+msgid "it is already a mirror image"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:845 crates/stave-app/src/repeat.rs:947
+#, rust-format
+msgid "it already has a mirror image, {image}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:888
+#, rust-format
+msgid "Add the mirror image of {assembly}"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:958
+msgid "it already fills one of two matching spaces; mirror it without saying which way"
+msgstr ""
+
+#: crates/stave-app/src/repeat.rs:1008
+#, rust-format
+msgid "Make {assembly} a mirrored pair"
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:23
+msgid "The folder can't be written to. Save a copy somewhere else, or check that the folder isn't read-only."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:26
+msgid "The disk is full. Make some room and try again, or save a copy on another disk."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:29
+msgid "The folder the file was in isn't there any more (it may have been moved, renamed or unplugged). Save a copy somewhere else."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:32
+msgid "Something stopped the file being written. Try again, or save a copy somewhere else."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:44
+#, rust-format
+msgid ""
+"{advice} Your changes are still in the editor.\n"
+"\n"
+"File: {file}"
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:54
+msgid "This file is part of Stave's standard library and can't be changed. Save a copy in your project folder to change it there."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:60
+msgid "The file isn't open in the editor any more, so there is nothing to save. Open it again to make changes."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:73
+msgid "The 3D view couldn't be turned into a glTF file. Check the design for problems, then try again."
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:94
+#, rust-format
+msgid "Couldn't Save {file}"
+msgstr ""
+
+#: crates/stave-app/src/save_failure.rs:100
+#, rust-format
+msgid ""
+"{advice}\n"
+"\n"
+"File: {file}"
+msgstr ""
+
+#: crates/stave-app/src/scratch.rs:645
+msgid "the edit was refused, so nothing was written"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:58
+msgid "Design"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:59
+msgid "Cut list"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:335 crates/stave-app/src/session.rs:373
+msgid "Not checked yet"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:336
+msgid "Can't open"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:348
+msgid "No problems"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:352
+#, rust-format
+msgid "{errors}, {warnings}"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:374
+msgid "Checking the project…"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:387
+msgid "the folder couldn't be opened"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:390
+#, rust-format
+msgid "Checking again… last result: {result}"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:395
+#, rust-format
+msgid "Checked {files} · {errors} · {warnings} · {time}"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:404
+#, rust-format
+msgid "Can't open: {message}"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:413
+#, rust-format
+msgid "{count} file"
+msgid_plural "{count} files"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/session.rs:421
+#, rust-format
+msgid "{count} error"
+msgid_plural "{count} errors"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/session.rs:429
+#, rust-format
+msgid "{count} warning"
+msgid_plural "{count} warnings"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-app/src/session.rs:438
+#, rust-format
+msgid "{millis} ms"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:442
+#, rust-format
+msgid "{seconds}.{tenths} s"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:505
+msgid "The build plan (PDF) isn't built yet"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:507
+msgid "Fix the problems first: the build plan needs a design without errors"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:1018
+msgid "Building the plan…"
+msgstr ""
+
+#: crates/stave-app/src/session.rs:1019
+msgid "Build plan (Ctrl+B)"
+msgstr ""
+
+#: crates/stave-app/src/solve_edit.rs:153
+msgid "the design has errors that stop it being placed; fix them first"
+msgstr ""
+
+#: crates/stave-app/src/solve_edit.rs:156
+msgid "the target is not the same kind of value as the size"
+msgstr ""
+
+#: crates/stave-app/src/solve_edit.rs:301
+#: crates/stave-app/src/solve_edit.rs:336
+#, rust-format
+msgid "{path} to {value}"
+msgstr ""
+
+#: crates/stave-app/src/solve_edit.rs:306
+#: crates/stave-app/src/solve_edit.rs:341
+#, rust-format
+msgid "Set {changes}"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:167
+msgid "the design doesn't place yet, so no value can be checked; fix its errors first"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:170
+#, rust-format
+msgid "'{value}' is not a param of this project or of one of its assemblies"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:174
+#, rust-format
+msgid "'{value}' is not written as a plain number, so there is nothing to move"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:178
+#, rust-format
+msgid "the value of '{path}' can't be worked out: {reason}"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:183
+#, rust-format
+msgid "the limit must be the same kind of value as '{value}' and run from low to high"
+msgstr ""
+
+#: crates/stave-app/src/stops.rs:189
+msgid "the search was cancelled"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:248
+msgid "steel"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:265
+#, rust-format
+msgid "cylinder {diameter} mm across, {length} mm long"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:275
+#, rust-format
+msgid "bar {thickness} mm thick"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:278
+msgid "outline"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:284
+#, rust-format
+msgid "box {size}"
+msgstr ""
+
+#: crates/stave-app/src/view.rs:289
+#, rust-format
+msgid "{count} shape"
+msgid_plural "{count} shapes"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/edit_panel.rs:26
+msgid "Nothing being added"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_panel.rs:28
+msgid "Click inside a space, or in the gap between two parts, to add something there; or select a part and choose “Add something onto its face” in Details. Select a part or an assembly to change it in Details."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:237
+#, rust-format
+msgid "was {value}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:83
+#, rust-format
+msgid "{value} · stuck: {why}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:86
+#, rust-format
+msgid "{value} · solved"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:88
+#, rust-format
+msgid "{value} · follows {list}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:92
+#, rust-format
+msgid "{value} · locked: follows {list}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:117
+msgid "it can't move"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:140
+msgid "numbers only"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:169
+#, rust-format
+msgid "stops at {at}, because at {next} {problem}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:176
+#, rust-format
+msgid "stops at {at}: the end of its range"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:177
+#, rust-format
+msgid "as far as {at} was tried"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:245
+#, rust-format
+msgid "'{text}' isn't a value Stave can read: {reason}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:251
+#, rust-format
+msgid "'{text}' isn't the same kind of value as {value}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:281
+#, rust-format
+msgid "this grip moves it between {low} and {high}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:285
+#, rust-format
+msgid "it {why}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:288
+#, rust-format
+msgid "it goes in steps of {step}; the nearest is {nearest}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:297
+#, rust-format
+msgid "it can only be one of {values}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:301
+msgid "it can't be worked out"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:304
+#, rust-format
+msgid "Can't be {value}: {why}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:382
+#, rust-format
+msgid "{path} {from} to {to}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:410
+#, rust-format
+msgid "stuck: {why}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:413
+msgid "Follows"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:417
+#, rust-format
+msgid "locked: follows {list}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:500
+msgid "✓ It fits"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:509
+#, rust-format
+msgid "✕ It doesn't fit: {problem}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:513
+#, rust-format
+msgid "✕ It doesn't fit: {problem} (and {count} more)"
+msgid_plural "✕ It doesn't fit: {problem} (and {count} more)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:524
+msgid "Pick which size changes"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:574
+#, rust-format
+msgid "The solver changes {change}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:576
+#, rust-format
+msgid "Changes {change}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grip_text.rs:609
+msgid "Drag the handle, or type a value"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_writer.rs:116
+msgid "an edit falls inside a character"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_writer.rs:131
+#, rust-format
+msgid "'{file}' didn't come out as the edit says"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/finder.rs:184
+msgid "All"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/finder.rs:189
+#, rust-format
+msgid "{group} {count}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:300
+#, rust-format
+msgid "{count} problem"
+msgid_plural "{count} problems"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/stave-gtk/src/ui/inspector.rs:362
+#, rust-format
+msgid "in {assembly}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/remember.rs:108
+#, rust-format
+msgid "can't make the folder '{folder}'"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/remember.rs:114
+#, rust-format
+msgid "can't write '{file}'"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.desktop:3
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:6
+msgid "Stave"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.desktop:4
+msgid "Woodworking Design"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.desktop:5
+msgid "Design furniture in words, see it in 3D and check it can be built"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.desktop:10
+msgid "woodworking;furniture;cabinet;joinery;joint;cut list;carpentry;CAD;"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:7
+msgid "Design furniture in words and check it can be built"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:9
+msgid "Stave is woodworking design for beginners. A project is a short text file that says what the parts are, what wood they are cut from and how they are joined. Stave shows the design in 3D and checks it the way a compiler checks a program: parts that run into each other, a door that hits a side when it swings, a joint that a tool you have can't cut."
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:16
+msgid "Features:"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:18
+msgid "See the design in 3D, open its doors and drawers, and pull it apart along its joints"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:19
+msgid "Focus on one joint or piece of hardware to see how it goes together"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:20
+msgid "Problems pinned where they happen, each with a plain explanation and a way to fix it"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:21
+msgid "Edit by clicking in the 3D view or in the text, side by side"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:29
+msgid "The Stave contributors"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:33
+msgid "A clothing cabinet, with one door's hinge stile selected"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:50
+msgid "woodworking"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:51
+msgid "furniture"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:52
+msgid "joinery"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:53
+msgid "cut list"
+msgstr ""
+
+#: data/io.github.OceanEilonwy.Stave.metainfo.xml:58
+msgid "The first release."
+msgstr ""

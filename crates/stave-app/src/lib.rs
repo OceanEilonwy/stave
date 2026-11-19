@@ -39,6 +39,7 @@ pub mod grip_values;
 pub mod gripping;
 pub mod grips;
 pub mod hold;
+pub mod i18n;
 pub mod inspect;
 pub mod item_offer;
 pub mod link;

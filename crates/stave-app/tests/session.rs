@@ -201,7 +201,7 @@ fn while_checking_again_the_pill_keeps_its_last_colour_and_words() {
     let mut session = checked_session(folder);
     let before = session.check_status().pill();
     assert_eq!(before.tone, Tone::Errors);
-    assert_eq!(before.label, "1 problem");
+    assert_eq!(before.label, "1 error");
 
     session.apply(Command::Check);
     let during = session.check_status().pill();
@@ -495,6 +495,8 @@ fn the_inspector_describes_a_door_part() {
     let shown = session.shown().unwrap().clone();
     let inspection = inspect::inspect(&shown, &stile).unwrap();
     assert_eq!(inspection.eyebrow, "PART · IN door_l");
+    assert_eq!(inspection.kind, "Part");
+    assert_eq!(inspection.within.as_deref(), Some("door_l"));
     assert_eq!(inspection.title, "stile[hinge]");
     let rows: Vec<String> = inspection
         .rows

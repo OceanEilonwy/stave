@@ -33,6 +33,7 @@ mod finder;
 mod floating;
 mod focus_panel;
 mod focus_stage;
+mod frame_lists;
 #[cfg(test)]
 mod gtk_test;
 mod header;
@@ -574,6 +575,9 @@ pub(in crate::ui) struct Window {
     watcher: Option<Watcher>,
     /// Editing in the 3D view: the menu, the card and the ghost.
     editing: edit_view::EditView,
+    /// What each frame draws selected and how each node looks, kept
+    /// between frames.
+    frame_lists: frame_lists::FrameLists,
     /// Where the window's handlers, timers and background work send its
     /// messages.
     sender: ComponentSender<Window>,
@@ -653,7 +657,24 @@ impl Component for Window {
             folder,
             options,
         } = init;
-        let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
+        let renderer = Renderer::new()
+            .map(|mut renderer| {
+                // The live view's frames go to GTK as dmabufs where both
+                // sides can, and by readback otherwise.
+                let display = gtk::prelude::WidgetExt::display(&widgets.window);
+                let accepted = crate::render::display_modifiers(&display);
+                let used = renderer.use_dmabufs(accepted);
+                if crate::render::profile::enabled() {
+                    match used {
+                        Ok(()) => eprintln!("stave-profile: frames go to GTK as dmabufs"),
+                        Err(error) => {
+                            eprintln!("stave-profile: frames go by readback: {error:#}");
+                        }
+                    }
+                }
+                renderer
+            })
+            .map_err(|error| format!("{error:#}"));
         let mut window = Window {
             widgets,
             session: Session::new(folder),
@@ -705,6 +726,7 @@ impl Component for Window {
             pins: Pins::default(),
             watcher: None,
             editing: edit_view::EditView::new(),
+            frame_lists: frame_lists::FrameLists::default(),
             sender,
             style_handler: None,
         };
@@ -971,10 +993,7 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
             ("Build Plan", "win.build"),
         ]),
     );
-    project.append_section(
-        None,
-        &section(&[("Export View as glTF…", "win.export-view")]),
-    );
+    project.append_section(None, &section(&[("Export 3D Model…", "win.export-view")]));
     let edit = gio::Menu::new();
     edit.append_section(
         None,
@@ -1079,7 +1098,6 @@ pub(in crate::ui) fn build_widgets(
     let edge_pin = gtk::Button::builder()
         .child(&edge_content)
         .css_classes(["stave-edge-pin"])
-        .action_name("win.show-problem")
         .tooltip_text("Show the problem off screen")
         .visible(false)
         .build();

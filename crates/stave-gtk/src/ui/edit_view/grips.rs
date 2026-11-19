@@ -2191,7 +2191,8 @@ mod tests {
         send(&mut session, EditCommand::DragTo(mm_amount(6.0).unwrap()));
         let moved = panel(&session);
         assert_eq!(moved.title, "apron_front.setback");
-        assert_eq!(moved.value.as_deref(), Some("6mm (was 5mm)"));
+        assert_eq!(moved.value.as_deref(), Some("6mm"));
+        assert_eq!(moved.was.as_deref(), Some("5mm"));
         assert_eq!(moved.verdict.words, "✓ It fits");
         assert!(moved.can_apply);
         // The readout at the top of the view says it in one line.
@@ -2214,9 +2215,10 @@ mod tests {
         // Each choice is a radio row: the name, and the value on the right.
         assert_eq!(choosing.choices[0].name, "overall_width");
         assert_eq!(choosing.choices[0].value, "500 → 520 mm");
+        let about = choosing.about.as_ref().unwrap();
         assert_eq!(
-            choosing.about.as_deref(),
-            Some("follows overall_width, legs.inset")
+            (about.label.as_str(), about.words.as_str()),
+            ("Follows", "overall_width, legs.inset")
         );
         assert!(!choosing.can_apply);
         let width = choosing.choices[0].param;
@@ -2298,8 +2300,12 @@ mod tests {
             };
             let model = PanelModel {
                 title: "case.base.length".to_owned(),
-                value: Some("1000mm (was 900mm)".to_owned()),
-                about: Some("follows overall_width".to_owned()),
+                value: Some("1000mm".to_owned()),
+                was: Some("900mm".to_owned()),
+                about: Some(super::super::grip_text::PanelAbout {
+                    label: "Follows".to_owned(),
+                    words: "overall_width".to_owned(),
+                }),
                 changes: Vec::new(),
                 choices: vec![
                     choice("overall_width", "940 → 1040 mm", true),

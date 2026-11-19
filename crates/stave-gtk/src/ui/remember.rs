@@ -14,6 +14,7 @@
 //! and installed before the first run, and Stave also runs straight from
 //! `cargo run`. Screenshots neither read nor write it.
 
+use stave_app::i18n::{fill_in, tr};
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
@@ -102,11 +103,15 @@ impl Remembered {
     pub(super) fn save(self) -> Result<()> {
         let path = path();
         if let Some(folder) = path.parent() {
-            std::fs::create_dir_all(folder)
-                .with_context(|| format!("can't make the folder '{}'", folder.display()))?;
+            std::fs::create_dir_all(folder).with_context(|| {
+                fill_in(
+                    &tr("can't make the folder '{folder}'"),
+                    &[("folder", &folder.display())],
+                )
+            })?;
         }
         std::fs::write(&path, self.to_text())
-            .with_context(|| format!("can't write '{}'", path.display()))
+            .with_context(|| fill_in(&tr("can't write '{file}'"), &[("file", &path.display())]))
     }
 }
 

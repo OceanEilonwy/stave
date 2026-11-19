@@ -25,6 +25,7 @@
 //! navigation layer knows), so a mirror comes as the rename's text edits
 //! ([`stave_ide::Analysis::rename`]) and a patch that applies after them.
 
+use crate::i18n::{fill_in, tr, tr_noop};
 use std::num::NonZeroU32;
 
 use stave_ide::{Analysis, RenameEdit, RenameError};
@@ -58,9 +59,12 @@ pub struct GeneratedPatch {
     pub parse: Parse<ast::PatchFile>,
 }
 
+/// What a [`PatchBuildError`] says.
+const PATCH_BUG: &str = tr_noop("the written patch doesn't parse; please report this as a bug");
+
 /// A generated patch didn't parse: a bug in the writer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("the written patch doesn't parse; please report this as a bug")]
+#[error("{}", tr(PATCH_BUG))]
 pub struct PatchBuildError(pub Vec<Diagnostic>);
 
 impl GeneratedPatch {
@@ -104,10 +108,10 @@ impl GeneratedPatch {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RepeatError {
     /// The project has no top-level item by that name.
-    #[error("there is no item named '{0}' in this project")]
+    #[error("{}", self.text())]
     UnknownItem(String),
     /// The item isn't of the sort the request needs.
-    #[error("'{name}' can't be repeated this way: {reason}")]
+    #[error("{}", self.text())]
     NotRepeatable {
         /// The item.
         name: String,
@@ -115,7 +119,7 @@ pub enum RepeatError {
         reason: String,
     },
     /// The repeat already has that many pieces.
-    #[error("'{name}' already has {count} pieces")]
+    #[error("{}", self.text())]
     SameCount {
         /// The item.
         name: String,
@@ -123,10 +127,10 @@ pub enum RepeatError {
         count: usize,
     },
     /// A first repeat needs the axis to split along.
-    #[error("say which way to split the space for '{0}': across, up or deep")]
+    #[error("{}", self.text())]
     NoAxis(String),
     /// `shares:` with the wrong number of entries.
-    #[error("{pieces} pieces need {pieces} shares, found {found}")]
+    #[error("{}", self.text())]
     SharesCount {
         /// How many pieces.
         pieces: usize,
@@ -134,10 +138,10 @@ pub enum RepeatError {
         found: usize,
     },
     /// The split's shares are not plain numbers, so a grip can't move them.
-    #[error("the shares of '{0}' are not plain numbers, so they can't be moved by a grip")]
+    #[error("{}", self.text())]
     SharesNotNumbers(String),
     /// The grip names pieces the split doesn't have.
-    #[error("'{region}' has no pieces {lower} and {upper}")]
+    #[error("{}", self.text())]
     NoSuchPieces {
         /// The region.
         region: String,
@@ -147,20 +151,16 @@ pub enum RepeatError {
         upper: usize,
     },
     /// The boundary is dragged onto or past the far side of a piece.
-    #[error(
-        "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}"
-    )]
+    #[error("{}", self.text())]
     BoundaryOutside {
         /// The two pieces' sizes together.
         pair: Length,
     },
     /// The design has no solved region by that name (it didn't solve).
-    #[error("the design has no solved space named '{0}'; it must solve before a grip can move it")]
+    #[error("{}", self.text())]
     NotSolved(String),
     /// No mirror image was found for the assembly.
-    #[error(
-        "'{0}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add"
-    )]
+    #[error("{}", self.text())]
     NoMirror(String),
     /// The rename a mirror makes was refused.
     #[error(transparent)]
@@ -170,11 +170,75 @@ pub enum RepeatError {
     Naming(#[from] NamingError),
     /// Arithmetic that doesn't fit the exact numbers (a bug, or sizes of
     /// kilometres).
-    #[error("the sizes are too large to work with exactly")]
+    #[error("{}", self.text())]
     Overflow,
     /// The written patch didn't parse: a bug.
     #[error(transparent)]
     Build(#[from] PatchBuildError),
+}
+
+impl RepeatError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            RepeatError::UnknownItem(v0) => fill_in(
+                &tr("there is no item named '{value}' in this project"),
+                &[("value", v0)],
+            ),
+            RepeatError::NotRepeatable { name, reason } => fill_in(
+                &tr("'{name}' can't be repeated this way: {reason}"),
+                &[("name", name), ("reason", reason)],
+            ),
+            RepeatError::SameCount { name, count } => fill_in(
+                &tr("'{name}' already has {count} pieces"),
+                &[("name", name), ("count", count)],
+            ),
+            RepeatError::NoAxis(v0) => fill_in(
+                &tr("say which way to split the space for '{value}': across, up or deep"),
+                &[("value", v0)],
+            ),
+            RepeatError::SharesCount { pieces, found } => fill_in(
+                &tr("{pieces} pieces need {pieces} shares, found {found}"),
+                &[("pieces", pieces), ("found", found)],
+            ),
+            RepeatError::SharesNotNumbers(v0) => fill_in(
+                &tr(
+                    "the shares of '{value}' are not plain numbers, so they can't be moved by a grip",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::NoSuchPieces {
+                region,
+                lower,
+                upper,
+            } => fill_in(
+                &tr("'{region}' has no pieces {lower} and {upper}"),
+                &[("region", region), ("lower", lower), ("upper", upper)],
+            ),
+            RepeatError::BoundaryOutside { pair } => fill_in(
+                &tr(
+                    "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}",
+                ),
+                &[("pair", pair)],
+            ),
+            RepeatError::NotSolved(v0) => fill_in(
+                &tr(
+                    "the design has no solved space named '{value}'; it must solve before a grip can move it",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::NoMirror(v0) => fill_in(
+                &tr(
+                    "'{value}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::Rename(error) => error.to_string(),
+            RepeatError::Naming(error) => error.to_string(),
+            RepeatError::Overflow => tr("the sizes are too large to work with exactly"),
+            RepeatError::Build(error) => error.to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -374,10 +438,12 @@ pub fn repeat_assembly(
     };
     let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
     let ItemKind::Design(DesignItem::Assembly(assembly)) = &found.item.kind else {
-        return Err(not("only an assembly of a component fills a space"));
+        return Err(not(&tr("only an assembly of a component fills a space")));
     };
     let AssemblyDef::Instance { component, body } = &assembly.def else {
-        return Err(not("it is a mirror image; repeat the assembly it mirrors"));
+        return Err(not(&tr(
+            "it is a mirror image; repeat the assembly it mirrors",
+        )));
     };
     if let Some(shares) = request.shares
         && shares.len() != request.count.get()
@@ -388,10 +454,10 @@ pub fn repeat_assembly(
         });
     }
     let param = region_param(scope, name)
-        .ok_or_else(|| not("its component has no space (Region) param to fill"))?;
+        .ok_or_else(|| not(&tr("its component has no space (Region) param to fill")))?;
     let field = body
         .field(&param)
-        .ok_or_else(|| not("its space param is not written"))?;
+        .ok_or_else(|| not(&tr("its space param is not written")))?;
     let component_text = found.slice(component.span).ok_or(RepeatError::Overflow)?;
     let body_text = found.slice(body.span).ok_or(RepeatError::Overflow)?;
 
@@ -420,7 +486,10 @@ pub fn repeat_assembly(
                 format!("replace assembly {name}{declaration} : {component_text} {body_text}"),
                 format!("set {name}.{param} = {}[same]", bay.as_str()),
             ];
-            let summary = format!("Make {} of {name}", request.count.get());
+            let summary = fill_in(
+                &tr("Make {count} of {name}"),
+                &[("count", &request.count.get()), ("name", &name)],
+            );
             Ok(GeneratedPatch::new(&summary, &ops)?)
         }
         Some(spec) => {
@@ -430,23 +499,23 @@ pub fn repeat_assembly(
                 index: ast::Index::Same(_),
             } = &field.value.kind
             else {
-                return Err(not(
+                return Err(not(&tr(
                     "its space is not an element of a split, bound with [same]",
-                ));
+                )));
             };
             let ExprKind::Name(bay) = &base.kind else {
-                return Err(not("its space is not a split of this project"));
+                return Err(not(&tr("its space is not a split of this project")));
             };
             let region = find(scope, bay.as_str())
-                .ok_or_else(|| not("its space is not a split of this project"))?;
+                .ok_or_else(|| not(&tr("its space is not a split of this project")))?;
             let ItemKind::Design(DesignItem::Region(region_item)) = &region.item.kind else {
-                return Err(not("its space is not a region"));
+                return Err(not(&tr("its space is not a region")));
             };
             let split = split_of(&region_item.value)
                 .filter(|split| !split.at)
-                .ok_or_else(|| not("its space is not an even split or a split with shares"))?;
+                .ok_or_else(|| not(&tr("its space is not an even split or a split with shares")))?;
             let current =
-                array_count(spec).ok_or_else(|| not("its count is not a fixed number"))?;
+                array_count(spec).ok_or_else(|| not(&tr("its count is not a fixed number")))?;
             if current == request.count.get() && request.shares.is_none() {
                 return Err(RepeatError::SameCount {
                     name: name.to_owned(),
@@ -467,7 +536,10 @@ pub fn repeat_assembly(
                 ),
                 format!("replace assembly {name}{declaration} : {component_text} {body_text}"),
             ];
-            let summary = format!("Make {} of {name}", request.count.get());
+            let summary = fill_in(
+                &tr("Make {count} of {name}"),
+                &[("count", &request.count.get()), ("name", &name)],
+            );
             Ok(GeneratedPatch::new(&summary, &ops)?)
         }
     }
@@ -510,10 +582,10 @@ pub fn repeat_part(
     };
     let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
     let ItemKind::Design(DesignItem::Part(part)) = &found.item.kind else {
-        return Err(not("only a part can be spaced along a span"));
+        return Err(not(&tr("only a part can be spaced along a span")));
     };
     let PartDef::FromStock { stock, body } = &part.def else {
-        return Err(not("it is a mirror image; repeat the part it mirrors"));
+        return Err(not(&tr("it is a mirror image; repeat the part it mirrors")));
     };
     if let Some(spec) = &part.array
         && array_count(spec) == Some(request.count.get())
@@ -535,7 +607,10 @@ pub fn repeat_part(
             request.to
         ),
     ];
-    let summary = format!("Make {} of {name}", request.count.get());
+    let summary = fill_in(
+        &tr("Make {count} of {name}"),
+        &[("count", &request.count.get()), ("name", &name)],
+    );
     Ok(GeneratedPatch::new(&summary, &ops)?)
 }
 
@@ -585,16 +660,16 @@ pub fn move_shares(
     };
     let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
     let ItemKind::Design(DesignItem::Region(region)) = &found.item.kind else {
-        return Err(not("only a region split into pieces has shares"));
+        return Err(not(&tr("only a region split into pieces has shares")));
     };
     let spec = region
         .array
         .as_ref()
-        .ok_or_else(|| not("it is one space, not split into pieces"))?;
+        .ok_or_else(|| not(&tr("it is one space, not split into pieces")))?;
     let split = split_of(&region.value)
         .filter(|split| !split.at)
-        .ok_or_else(|| not("it is not an even split or a split with shares"))?;
-    let indexes = array_indexes(spec).ok_or_else(|| not("its count is not a fixed number"))?;
+        .ok_or_else(|| not(&tr("it is not an even split or a split with shares")))?;
+    let indexes = array_indexes(spec).ok_or_else(|| not(&tr("its count is not a fixed number")))?;
     // The shares must be plain numbers for a grip to read them back.
     if let Some(expr) = split.shares
         && share_values(expr).is_none()
@@ -676,8 +751,13 @@ pub fn move_shares(
         split.axis.word(),
         list.join(", ")
     )];
-    let summary =
-        format!("Move the boundary between {name}[{lower_label}] and {name}[{upper_label}]");
+    let summary = fill_in(
+        &tr("Move the boundary between {lower} and {upper}"),
+        &[
+            ("lower", &format!("{name}[{lower_label}]")),
+            ("upper", &format!("{name}[{upper_label}]")),
+        ],
+    );
     Ok(GeneratedPatch::new(&summary, &ops)?)
 }
 
@@ -752,16 +832,19 @@ pub fn mirror_assembly(
     let found =
         find(scope, assembly).ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
     let ItemKind::Design(DesignItem::Assembly(item)) = &found.item.kind else {
-        return Err(not("only an assembly is mirrored this way"));
+        return Err(not(&tr("only an assembly is mirrored this way")));
     };
     if item.array.is_some() {
-        return Err(not("it is an array; mirror a single assembly"));
+        return Err(not(&tr("it is an array; mirror a single assembly")));
     }
     let AssemblyDef::Instance { body, .. } = &item.def else {
-        return Err(not("it is already a mirror image"));
+        return Err(not(&tr("it is already a mirror image")));
     };
     if let Some(image) = mirror_image_of(scope, assembly) {
-        return Err(not(&format!("it already has a mirror image, {image}")));
+        return Err(not(&fill_in(
+            &tr("it already has a mirror image, {image}"),
+            &[("image", &image)],
+        )));
     }
     let (axis, about, first_side) = body
         .fields
@@ -801,7 +884,10 @@ pub fn mirror_assembly(
         renamed.as_str(),
         quoted(&found.file.name)
     )];
-    let summary = format!("Add the mirror image of {assembly}");
+    let summary = fill_in(
+        &tr("Add the mirror image of {assembly}"),
+        &[("assembly", &assembly)],
+    );
     let patch = GeneratedPatch::new(&summary, &ops)?;
     Ok(MirrorPlan {
         source: assembly.to_owned(),
@@ -848,26 +934,29 @@ pub fn mirror_split_assembly(
     let found =
         find(scope, assembly).ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
     let ItemKind::Design(DesignItem::Assembly(item)) = &found.item.kind else {
-        return Err(not("only an assembly is mirrored this way"));
+        return Err(not(&tr("only an assembly is mirrored this way")));
     };
     if item.array.is_some() {
-        return Err(not("it is an array; mirror a single assembly"));
+        return Err(not(&tr("it is an array; mirror a single assembly")));
     }
     let AssemblyDef::Instance { component, body } = &item.def else {
-        return Err(not("it is already a mirror image"));
+        return Err(not(&tr("it is already a mirror image")));
     };
     if let Some(image) = mirror_image_of(scope, assembly) {
-        return Err(not(&format!("it already has a mirror image, {image}")));
+        return Err(not(&fill_in(
+            &tr("it already has a mirror image, {image}"),
+            &[("image", &image)],
+        )));
     }
     let param = region_param(scope, assembly)
-        .ok_or_else(|| not("its component has no space (Region) param to fill"))?;
+        .ok_or_else(|| not(&tr("its component has no space (Region) param to fill")))?;
     let field = body
         .field(&param)
-        .ok_or_else(|| not("its space param is not written"))?;
+        .ok_or_else(|| not(&tr("its space param is not written")))?;
     if split_mirror(scope, &field.value).is_some() {
-        return Err(not(
+        return Err(not(&tr(
             "it already fills one of two matching spaces; mirror it without saying which way",
-        ));
+        )));
     }
     let source = found.slice(field.value.span).ok_or(RepeatError::Overflow)?;
 
@@ -915,7 +1004,10 @@ pub fn mirror_split_assembly(
             quoted(&found.file.name)
         ),
     ];
-    let summary = format!("Make {assembly} a mirrored pair");
+    let summary = fill_in(
+        &tr("Make {assembly} a mirrored pair"),
+        &[("assembly", &assembly)],
+    );
     let patch = GeneratedPatch::new(&summary, &ops)?;
     Ok(MirrorPlan {
         source: assembly.to_owned(),

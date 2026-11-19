@@ -130,6 +130,7 @@ const fn stroke(paths: &'static [&'static str]) -> Shape {
         paint: Paint::Stroke(1.5),
         paths,
         tilted: false,
+        directional: false,
     }
 }
 
@@ -846,7 +847,7 @@ fn empty_rows(empty: &EmptyState, rows: &mut Vec<(gtk::ListBoxRow, RowKind)>) {
         if shown.is_empty() {
             continue;
         }
-        rows.push(plain_heading(group.heading()));
+        rows.push(plain_heading(&group.heading()));
         for item in shown {
             rows.push(library_row(item));
         }

@@ -6,6 +6,7 @@ use super::add_action;
 use crate::render::Ticket;
 use crate::ui::floating::FloatsOutput;
 use crate::ui::view_tools::{CameraOutput, ViewToolbarOutput};
+use crate::ui::viewport::Shown;
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 
@@ -14,7 +15,7 @@ use crate::ui::*;
 pub(in crate::ui) enum RenderingInput {
     /// Frames the selection, or everything.
     Frame,
-    /// The Export View action: ask where to save.
+    /// The Export 3D Model action: ask where to save.
     ExportView,
     /// Saves the view into this file.
     ExportTo(PathBuf),
@@ -449,20 +450,6 @@ impl Window {
             .collect()
     }
 
-    /// The nodes of what the pointer is over in the Parts panel.
-    pub(in crate::ui) fn hovered_nodes(&self) -> Vec<NodeId> {
-        let session = &self.session;
-        let state = &self.state;
-        let Some((_, graph)) = session.drawable() else {
-            return Vec::new();
-        };
-        state
-            .hovered
-            .iter()
-            .flat_map(|item| graph.nodes_of(*item).into_iter().take(1))
-            .collect()
-    }
-
     /// F: frames the selection (every part of a selected assembly), or
     /// everything.
     pub(in crate::ui) fn frame(&mut self) {
@@ -651,7 +638,7 @@ impl Window {
             self.session.drawable().map(|(design, _)| design),
         );
         let dialog = gtk::FileDialog::builder()
-            .title("Export View as glTF")
+            .title("Export 3D Model (.glb, for other 3D programs)")
             .initial_name(name)
             .modal(true)
             .build();
@@ -861,53 +848,19 @@ impl Window {
         self.on_next_frame(|_| RenderingInput::RenderNow.into());
     }
 
-    /// How each node looks outside focus mode. Choosing something only
-    /// outlines it: the rest stays solid, so clicking around never switches
-    /// the view between solid and see-through. With X-ray on everything
-    /// but the selection is see-through; a posed problem fades what it
-    /// doesn't involve. `None` draws every node as usual.
-    pub(in crate::ui) fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
-        let session = &self.session;
-        let state = &self.state;
-        let (_, graph) = session.drawable()?;
-        let count = graph.node_ids().count();
-        let kept: &[NodeId] = match state.problem.as_ref() {
-            Some(problem) => &problem.highlight.nodes,
-            None if state.xray => selection,
-            None => return None,
-        };
-        let rest = if state.xray { Look::XRay } else { Look::Dim };
-        let mut looks = vec![rest; count];
-        for node in kept {
-            if let Some(look) = looks.get_mut(node.index()) {
-                *look = Look::Normal;
-            }
-        }
-        Some(looks)
-    }
-
     pub(in crate::ui) fn render_now(&mut self) {
-        let mut selection = self.selected_nodes();
-        // What a partner link in the Parts panel points at is outlined
-        // too, while the pointer is over it.
-        selection.extend(self.hovered_nodes());
-        // And what a name link in the Inspector or the Edit panel points at.
-        selection.extend(self.link_hover_nodes());
         let backdrop = self.backdrop();
-        let looks = if self.state.focus.is_some() {
-            None
-        } else {
-            self.looks(&selection)
-        };
         let ghost = self.render_ghost(backdrop);
         let rendered = if let Some(rendered) = ghost {
             rendered
         } else {
+            self.refresh_frame_lists();
             self.state.render_queued = false;
             let session = &self.session;
             let (width, height) = self.state.size;
-            // Borrowed field by field, so the renderer can be borrowed
-            // mutably beside them once the marks are worked out.
+            // Borrowed field by field, so the renderer and the kept lists
+            // can be borrowed mutably beside them once the marks are worked
+            // out.
             let (Some((_, graph)), Some(orbit), Some(posed)) = (
                 session.drawable(),
                 self.state.orbit,
@@ -917,13 +870,6 @@ impl Window {
             };
             let problem = &self.state.problem;
             let focus = self.state.focus.as_ref();
-            // Outside focus mode, a selected joint member shows through
-            // the parts it sits in.
-            let outside = if focus.is_none() {
-                session.looks()
-            } else {
-                None
-            };
             let plan = focus
                 .filter(|f| f.plan)
                 .and_then(|f| f.focus.plan().copied());
@@ -949,18 +895,10 @@ impl Window {
             } else {
                 edit_view::EditMarks::default()
             };
-            let looks = if marks.covering.is_empty() {
-                looks
-            } else {
-                let mut looks =
-                    looks.unwrap_or_else(|| vec![Look::Normal; graph.node_ids().count()]);
-                for node in &marks.covering {
-                    if let Some(look) = looks.get_mut(node.index()) {
-                        *look = Look::XRay;
-                    }
-                }
-                Some(looks)
-            };
+            let count = graph.node_ids().count();
+            // Outside focus mode, a selected joint member shows through
+            // the parts it sits in.
+            let (selection, outside, looks) = self.frame_lists.for_frame(&marks.covering, count);
             let Ok(renderer) = &mut self.state.renderer else {
                 return;
             };
@@ -968,15 +906,12 @@ impl Window {
                 scene: graph,
                 posed,
                 orbit,
-                selection: if focus.is_some() { &[] } else { &selection },
+                selection: if focus.is_some() { &[] } else { selection },
                 highlight,
                 section: plan
                     .map(|p| p.section)
                     .or_else(|| session.scene_entry().and_then(|entry| entry.section)),
-                looks: focus
-                    .map(|f| f.looks.as_slice())
-                    .or(outside.as_deref())
-                    .or(looks.as_deref()),
+                looks: focus.map(|f| f.looks.as_slice()).or(outside).or(looks),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
                 lit: Some(&marks.lit),
@@ -1013,8 +948,10 @@ impl Window {
                 let shown = crate::render::profile::time("gtk texture", || {
                     self.widgets.viewport.show_live(frame)
                 });
-                if shown {
-                    crate::render::profile::frame_shown();
+                match shown {
+                    Shown::Yes => crate::render::profile::frame_shown(),
+                    Shown::No => {}
+                    Shown::Refused => self.request_render(),
                 }
                 self.show_pins();
                 self.place_ghost_verdict();
@@ -1083,7 +1020,27 @@ impl Window {
         }
         self.pins.made_for = None;
         self.pins.edge = None;
+        self.hide_edge_pin();
+    }
+
+    /// Hides the chip at the view's edge and takes its action away: the
+    /// action takes a problem's number, and a chip that names none must
+    /// not carry the action without one (GTK warns of the mismatch).
+    fn hide_edge_pin(&self) {
         self.widgets.edge_pin.set_visible(false);
+        self.widgets.edge_pin.set_action_name(None);
+    }
+
+    /// Shows the chip at the view's edge for a problem: its number is set
+    /// as the target before the action is named, so the button never holds
+    /// the action without the number it takes.
+    fn show_edge_pin(&self, index: ProblemIndex) {
+        let target = u64::try_from(index.0).unwrap_or(0).to_variant();
+        self.widgets.edge_pin.set_action_target_value(Some(&target));
+        self.widgets
+            .edge_pin
+            .set_action_name(Some("win.show-problem"));
+        self.widgets.edge_pin.set_visible(true);
     }
 
     /// Pins each problem where it happens (its shared wood, or the parts
@@ -1230,15 +1187,12 @@ impl Window {
         }
         self.pins.edge = edge;
         let Some(pin) = first_off.and_then(|place| self.pins.pins.get(place)) else {
-            self.widgets.edge_pin.set_visible(false);
+            self.hide_edge_pin();
             return;
         };
         let text = problems::off_screen_text(pin.mark, &pin.message, off_count.saturating_sub(1));
         self.widgets.edge_label.set_label(&text);
-        self.widgets.edge_pin.set_visible(true);
-        self.widgets
-            .edge_pin
-            .set_action_target_value(Some(&u64::try_from(pin.index.0).unwrap_or(0).to_variant()));
+        self.show_edge_pin(pin.index);
     }
 
     /// One pin: its mark's "!" and the problem's words, choosing it

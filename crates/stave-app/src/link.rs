@@ -5,6 +5,7 @@
 //! which the view's chip names ([`chip`]: "Linked to the text · door_l,
 //! line 9").
 
+use crate::i18n::{fill_in, tr};
 use stave_ide::{Analysis, SymbolId, SymbolKind};
 use stave_model::solved::{AssemblyId, SolvedDesign};
 
@@ -194,8 +195,8 @@ pub fn chip(
             .map(|j| j.name.as_str()),
         Selection::Location(_) | Selection::Problem(_) => None,
     }?;
-    Some(format!(
-        "Linked to the text · {name}, line {}",
-        location.line
+    Some(fill_in(
+        &tr("Linked to the text · {name}, line {line}"),
+        &[("name", &name), ("line", &location.line)],
     ))
 }

@@ -13,6 +13,7 @@
 //!
 //! `docs/gui.md` describes how the window's views use this contract.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -52,10 +53,10 @@ impl View {
     pub const ALL: [View; 2] = [View::Design, View::CutList];
 
     /// Its name in the switcher: "Design", "Cut list".
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> String {
         match self {
-            View::Design => "Design",
-            View::CutList => "Cut list",
+            View::Design => tr("Design"),
+            View::CutList => tr("Cut list"),
         }
     }
 
@@ -330,9 +331,9 @@ impl CheckStatus {
             Activity::Idle
         };
         let (tone, label) = match self.verdict() {
-            None if self.is_checking() => (Tone::Unknown, "Checking…".to_owned()),
-            None => (Tone::Unknown, "Not checked yet".to_owned()),
-            Some(Verdict::CantOpen(_)) => (Tone::Errors, "Can't open".to_owned()),
+            None if self.is_checking() => (Tone::Unknown, tr("Checking…")),
+            None => (Tone::Unknown, tr("Not checked yet")),
+            Some(Verdict::CantOpen(_)) => (Tone::Errors, tr("Can't open")),
             Some(Verdict::Checked(summary)) => {
                 let tone = if summary.errors > 0 {
                     Tone::Errors
@@ -341,10 +342,19 @@ impl CheckStatus {
                 } else {
                     Tone::Clean
                 };
-                let label = match summary.problems() {
-                    0 => "No problems".to_owned(),
-                    1 => "1 problem".to_owned(),
-                    count => format!("{count} problems"),
+                // Errors and warnings counted apart, so the words say
+                // which there are without the pill's colour.
+                let label = match (summary.errors, summary.warnings) {
+                    (0, 0) => tr("No problems"),
+                    (errors, 0) => errors_text(errors),
+                    (0, warnings) => warnings_text(warnings),
+                    (errors, warnings) => fill_in(
+                        &tr("{errors}, {warnings}"),
+                        &[
+                            ("errors", &errors_text(errors)),
+                            ("warnings", &warnings_text(warnings)),
+                        ],
+                    ),
                 };
                 (tone, label)
             }
@@ -360,49 +370,78 @@ impl CheckStatus {
     /// 26 ms", or "Checking again… last result: 1 error".
     pub fn line(&self) -> String {
         match self {
-            CheckStatus::Idle => "Not checked yet".to_owned(),
-            CheckStatus::Checking { last: None } => "Checking the project…".to_owned(),
+            CheckStatus::Idle => tr("Not checked yet"),
+            CheckStatus::Checking { last: None } => tr("Checking the project…"),
             CheckStatus::Checking { last: Some(last) } => {
                 let result = match last {
                     Verdict::Checked(summary) => {
                         let mut counts = Vec::new();
                         if summary.errors > 0 || summary.warnings == 0 {
-                            counts.push(plural(summary.errors, "error", "errors"));
+                            counts.push(errors_text(summary.errors));
                         }
                         if summary.warnings > 0 {
-                            counts.push(plural(summary.warnings, "warning", "warnings"));
+                            counts.push(warnings_text(summary.warnings));
                         }
                         counts.join(", ")
                     }
-                    Verdict::CantOpen(_) => "the folder couldn't be opened".to_owned(),
+                    Verdict::CantOpen(_) => tr("the folder couldn't be opened"),
                 };
-                format!("Checking again… last result: {result}")
+                fill_in(
+                    &tr("Checking again… last result: {result}"),
+                    &[("result", &result)],
+                )
             }
-            CheckStatus::Done(Verdict::Checked(summary)) => format!(
-                "Checked {} · {} · {} · {}",
-                plural(summary.files, "file", "files"),
-                plural(summary.errors, "error", "errors"),
-                plural(summary.warnings, "warning", "warnings"),
-                duration_text(summary.elapsed)
+            CheckStatus::Done(Verdict::Checked(summary)) => fill_in(
+                &tr("Checked {files} · {errors} · {warnings} · {time}"),
+                &[
+                    ("files", &files_text(summary.files)),
+                    ("errors", &errors_text(summary.errors)),
+                    ("warnings", &warnings_text(summary.warnings)),
+                    ("time", &duration_text(summary.elapsed)),
+                ],
             ),
-            CheckStatus::Done(Verdict::CantOpen(message)) => format!("Can't open: {message}"),
+            CheckStatus::Done(Verdict::CantOpen(message)) => {
+                fill_in(&tr("Can't open: {message}"), &[("message", &message)])
+            }
         }
     }
 }
 
 /// `1 file`, `10 files`.
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
+fn files_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} file", "{count} files", count),
+        &[("count", &count)],
+    )
+}
+
+/// `1 error`, `2 errors`.
+fn errors_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} error", "{count} errors", count),
+        &[("count", &count)],
+    )
+}
+
+/// `1 warning`, `2 warnings`.
+fn warnings_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} warning", "{count} warnings", count),
+        &[("count", &count)],
+    )
 }
 
 /// `26 ms`, `1.4 s`.
 fn duration_text(elapsed: Duration) -> String {
     let millis = elapsed.as_millis();
     if millis < 1000 {
-        format!("{millis} ms")
+        fill_in(&tr("{millis} ms"), &[("millis", &millis)])
     } else {
         let tenths = millis / 100;
-        format!("{}.{} s", tenths / 10, tenths % 10)
+        fill_in(
+            &tr("{seconds}.{tenths} s"),
+            &[("seconds", &(tenths / 10)), ("tenths", &(tenths % 10))],
+        )
     }
 }
 
@@ -434,7 +473,7 @@ pub enum Activity {
 pub struct Pill {
     /// Its colour.
     pub tone: Tone,
-    /// "No problems", "3 problems".
+    /// "No problems", "1 error", "2 warnings", "1 error, 2 warnings".
     pub label: String,
     /// Whether a check is running.
     pub activity: Activity,
@@ -461,11 +500,11 @@ pub enum Notice {
 
 impl Notice {
     /// Its words.
-    pub fn text(self) -> &'static str {
+    pub fn text(self) -> String {
         match self {
-            Notice::BuildPlanNotBuilt => "The build plan (PDF) isn't built yet",
+            Notice::BuildPlanNotBuilt => tr("The build plan (PDF) isn't built yet"),
             Notice::BuildPlanHasErrors => {
-                "Fix the problems first: the build plan needs a design without errors"
+                tr("Fix the problems first: the build plan needs a design without errors")
             }
         }
     }
@@ -974,10 +1013,10 @@ impl Session {
 
     /// The build button's tooltip: its name and shortcut, what it is
     /// doing, or why there is nothing to build.
-    pub fn build_tooltip(&self) -> &'static str {
+    pub fn build_tooltip(&self) -> String {
         match (self.build, self.buildable()) {
-            (Build::Building, _) => "Building the plan…",
-            (Build::Idle, Ok(())) => "Build plan (Ctrl+B)",
+            (Build::Building, _) => tr("Building the plan…"),
+            (Build::Idle, Ok(())) => tr("Build plan (Ctrl+B)"),
             (Build::Idle, Err(reason)) => reason.nothing_to_build(),
         }
     }
@@ -1739,6 +1778,27 @@ impl Carry<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pill_counts_errors_and_warnings_apart() {
+        let words = |errors, warnings| {
+            let pill = CheckStatus::Done(Verdict::Checked(Summary {
+                errors,
+                warnings,
+                files: 1,
+                elapsed: Duration::ZERO,
+            }))
+            .pill();
+            (pill.tone, pill.label)
+        };
+        assert_eq!(words(0, 0), (Tone::Clean, "No problems".to_owned()));
+        assert_eq!(words(1, 0), (Tone::Errors, "1 error".to_owned()));
+        assert_eq!(words(0, 2), (Tone::Warnings, "2 warnings".to_owned()));
+        assert_eq!(
+            words(3, 1),
+            (Tone::Errors, "3 errors, 1 warning".to_owned())
+        );
+    }
 
     #[test]
     fn a_file_and_line_from_the_command_line_names_a_place() {

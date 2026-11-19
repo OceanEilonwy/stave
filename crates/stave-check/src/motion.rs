@@ -22,7 +22,7 @@ use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
 use stave_model::mechanism::DriveValue;
-use stave_model::solved::{AssemblyId, PoseValue, SolvedDesign, WorldBox};
+use stave_model::solved::{AssemblyId, BodyOwner, PartId, PoseValue, SolvedDesign, WorldBox};
 
 use crate::fixes::OverlayChange;
 use crate::names::length_text;
@@ -137,6 +137,114 @@ impl Checker<'_> {
         let kind_id = self.design.hardware.get(hardware.index())?.kind_id;
         let kind = self.model.defs.kind(kind_id)?;
         Some((kind.decl.file, kind.mechanism.as_ref()?.span))
+    }
+
+    /// The assemblies with a motion that move a part, outermost first:
+    /// two parts move alike when these are the same.
+    fn motions_of(&self, part: PartId) -> Vec<AssemblyId> {
+        self.bodies
+            .iter()
+            .find(|body| body.item == Item::Part(part))
+            .map(|body| {
+                body.chain
+                    .iter()
+                    .copied()
+                    .filter(|assembly| {
+                        self.design
+                            .assemblies
+                            .get(assembly.index())
+                            .is_some_and(|found| found.mechanism.is_some())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A joint's parts must move alike (grammar, "Scenes"): a joint
+    /// between a part that moves with an assembly's motion and a part
+    /// that moves differently would hold the assembly shut, which is
+    /// `error[motion]` at the joint, once for each joint with the other
+    /// pairs as notes. Its parts and members are then left out of the
+    /// scene and sweep checks: one mistake, one error.
+    pub(crate) fn joint_motions(&mut self) {
+        let mut found = Vec::new();
+        for joint in &self.design.joints {
+            let mut crossing: Vec<(PartId, PartId)> = Vec::new();
+            for pair in &joint.pairs {
+                let parts: Vec<PartId> = pair.roles.iter().map(|role| role.part).collect();
+                for (index, a) in parts.iter().enumerate() {
+                    for b in parts.iter().skip(index + 1) {
+                        if a != b
+                            && self.motions_of(*a) != self.motions_of(*b)
+                            && !crossing.contains(&(*a, *b))
+                        {
+                            crossing.push((*a, *b));
+                        }
+                    }
+                }
+            }
+            if !crossing.is_empty() {
+                found.push((joint.id, crossing));
+            }
+        }
+        for (joint, crossing) in found {
+            let joint_name = self.joint_name(joint);
+            let sentence = |(a, b): (PartId, PartId)| {
+                let (a_name, b_name) = (self.part_name(a), self.part_name(b));
+                let (a_moves, b_moves) = (self.motions_of(a), self.motions_of(b));
+                match (a_moves.last(), b_moves.last()) {
+                    (Some(x), Some(y)) if x != y => format!(
+                        "{a_name} moves with {} but {b_name} moves with {}, so the joint would hold them both still",
+                        self.assembly_name(*x),
+                        self.assembly_name(*y)
+                    ),
+                    (Some(x), _) => format!(
+                        "{a_name} moves with {} but {b_name} doesn't, so the joint would hold {} shut",
+                        self.assembly_name(*x),
+                        self.assembly_name(*x)
+                    ),
+                    (None, Some(y)) => format!(
+                        "{b_name} moves with {} but {a_name} doesn't, so the joint would hold {} shut",
+                        self.assembly_name(*y),
+                        self.assembly_name(*y)
+                    ),
+                    (None, None) => format!("{a_name} and {b_name} move differently"),
+                }
+            };
+            let Some((&first, rest)) = crossing.split_first() else {
+                continue;
+            };
+            let notes: Vec<String> = rest
+                .iter()
+                .map(|pair| format!("and {}", sentence(*pair)))
+                .collect();
+            let message = format!("{joint_name}: {}", sentence(first));
+            let parts: Vec<PartId> = crossing.iter().flat_map(|(a, b)| [*a, *b]).collect();
+            let items: Vec<Item> = parts.iter().map(|part| Item::Part(*part)).collect();
+            self.failed.extend(items.iter().copied());
+            let members: Vec<Item> = self
+                .bodies
+                .iter()
+                .filter(|body| {
+                    matches!(body.item.owner(),
+                        Some(BodyOwner::Joint { joint: owner, .. }) if owner == joint)
+                })
+                .map(|body| body.item)
+                .collect();
+            self.failed.extend(members);
+            self.next_contact = Some(Contact::of(self.design, &items, &[]));
+            let place = self.joint_place(joint);
+            self.report(
+                Severity::Error,
+                Code::Motion,
+                message,
+                place,
+                notes,
+                Some(format!(
+                    "take '{joint_name}' out, or join these parts only to parts that move with them"
+                )),
+            );
+        }
     }
 
     /// Stops early, leaving the result partial, once `stopped` says so; it

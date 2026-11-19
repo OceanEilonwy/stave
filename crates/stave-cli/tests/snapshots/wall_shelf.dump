@@ -46,10 +46,12 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (9)
+REQUIRES (11)
 arm_supports                                 holds
 corner[left].same_thickness                  holds
+corner[left].crosses_fully                   holds
 corner[right].same_thickness                 holds
+corner[right].crosses_fully                  holds
 shelf_screws.bites                           holds
 shelf_screws.seat_wide                       holds
 shelf_screws.seat_long                       holds

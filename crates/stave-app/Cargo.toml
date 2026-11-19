@@ -18,6 +18,7 @@ stave-schema = { path = "../stave-schema" }
 stave-smt = { path = "../stave-smt" }
 thiserror = "2"
 notify = "8"
+gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
 
 [dev-dependencies]
 glam = "0.30"

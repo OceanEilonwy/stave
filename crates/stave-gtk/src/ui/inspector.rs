@@ -40,6 +40,7 @@ use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::empty::Note;
 use stave_app::focus::Target;
+use stave_app::i18n::{fill_in, ntr, tr};
 use stave_app::inspect::{
     Connection, ConnectionSection, Field, Inspection, LinkTarget, Snippet, Swatch, SwatchShape,
     TokenClass,
@@ -119,7 +120,7 @@ pub enum InspectorInput {
     /// select (`None`: the usual "Nothing selected" hint).
     ShowIdle(Option<Note>),
     /// Show an inspection, or the hint when nothing is selected.
-    Show(Option<Inspection>),
+    Show(Option<Box<Inspection>>),
     /// The files with changes that aren't saved.
     Unsaved(BTreeSet<PathBuf>),
     /// People asked to see a joint or hardware in focus mode.
@@ -293,31 +294,12 @@ pub(super) fn swatch_mark(swatch: &Swatch, size: i32) -> gtk::DrawingArea {
     icons::swatch(colour, swatch.shape == SwatchShape::Round, size)
 }
 
-/// The section's title and note from the eyebrow: "Part" and "in door_l"
-/// for "PART · IN door_l".
-fn kind_and_place(eyebrow: &str) -> (String, String) {
-    let (kind, place) = eyebrow.split_once(" · ").unwrap_or((eyebrow, ""));
-    let mut chars = kind.chars();
-    let kind = match chars.next() {
-        Some(first) => first
-            .to_uppercase()
-            .chain(chars.as_str().to_lowercase().chars())
-            .collect(),
-        None => String::new(),
-    };
-    let place = match place.strip_prefix("IN ") {
-        Some(rest) => format!("in {rest}"),
-        None => place.to_owned(),
-    };
-    (kind, place)
-}
-
 /// "0 problems", "1 problem", "2 problems".
 fn problems_note(count: usize) -> String {
-    match count {
-        1 => "1 problem".to_owned(),
-        count => format!("{count} problems"),
-    }
+    fill_in(
+        &ntr("{count} problem", "{count} problems", count),
+        &[("count", &count)],
+    )
 }
 
 /// Fills the note page: why there is nothing to select.
@@ -373,8 +355,13 @@ impl Drawer<'_> {
         details.append(&self.header(inspection));
 
         // What it is: its kind (and where it sits) and its rows.
-        let (kind, place) = kind_and_place(&inspection.eyebrow);
-        let (section_box, body) = sections::section(&kind, &place, true);
+        let place = inspection
+            .within
+            .as_ref()
+            .map_or_else(String::new, |assembly| {
+                fill_in(&tr("in {assembly}"), &[("assembly", assembly)])
+            });
+        let (section_box, body) = sections::section(&inspection.kind, &place, true);
         if let Some(description) = &inspection.description {
             body.append(&sections::words(description, &["stave-row-note"]));
         }
@@ -709,7 +696,8 @@ impl Inspector {
                 .collect();
             self.bridge.send(InspectorInput::Unsaved(unsaved));
         }
-        self.bridge.send(InspectorInput::Show(inspection.cloned()));
+        self.bridge
+            .send(InspectorInput::Show(inspection.cloned().map(Box::new)));
     }
 }
 
@@ -723,15 +711,7 @@ mod tests {
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 
     #[test]
-    fn the_eyebrow_becomes_a_section_title_and_note() {
-        assert_eq!(
-            kind_and_place("PART · IN door_l"),
-            ("Part".to_owned(), "in door_l".to_owned())
-        );
-        assert_eq!(
-            kind_and_place("JOINT MEMBER"),
-            ("Joint member".to_owned(), String::new())
-        );
+    fn problems_are_counted_in_words() {
         assert_eq!(problems_note(0), "0 problems");
         assert_eq!(problems_note(1), "1 problem");
     }
@@ -755,6 +735,8 @@ mod tests {
         let line = LineNumber::new(9)?;
         Some(Inspection {
             eyebrow: "PART · IN door_l".to_owned(),
+            kind: "Part".to_owned(),
+            within: Some("door_l".to_owned()),
             title: "stile".to_owned(),
             description: None,
             swatch: None,

@@ -19,6 +19,7 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::finder::{Hit, Kind};
+use stave_app::i18n::{fill_in, tr};
 use stave_lang::Severity;
 
 use super::relm4_shim::Bridge;
@@ -180,11 +181,14 @@ impl FinderComponent {
                 .iter()
                 .filter(|hit| kind.is_none_or(|kind| hit.kind == kind))
                 .count();
-            let title = kind.map_or("All", Kind::title);
+            let title = kind.map_or_else(|| tr("All"), Kind::title);
             button.set_label(&if self.hits.is_empty() {
-                title.to_owned()
+                title
             } else {
-                format!("{title} {count}")
+                fill_in(
+                    &tr("{group} {count}"),
+                    &[("group", &title), ("count", &count)],
+                )
             });
             button.set_sensitive(kind.is_none() || count > 0);
         }

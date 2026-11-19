@@ -32,6 +32,7 @@ use std::cell::RefCell;
 use adw::prelude::*;
 use gtk::gdk;
 use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::{fill_in, tr};
 use stave_model::ids::ParamId;
 
 use super::super::relm4_shim::Bridge;
@@ -229,16 +230,12 @@ impl GripPanelComponent {
         sender: &ComponentSender<Self>,
     ) {
         widgets.note.set_label(&model.title);
-        // "1000mm (was 900mm)": the value in the field (so it can be typed
-        // over), what it was after it.
-        let shown = model.value.clone().unwrap_or_default();
-        let (value, was) = match shown.split_once(" (was ") {
-            Some((value, was)) => (
-                value.to_owned(),
-                format!("was {}", was.trim_end_matches(')')),
-            ),
-            None => (shown, String::new()),
-        };
+        // The value in the field (so it can be typed over), "was 900mm"
+        // after it.
+        let value = model.value.clone().unwrap_or_default();
+        let was = model.was.as_ref().map_or_else(String::new, |was| {
+            fill_in(&tr("was {value}"), &[("value", was)])
+        });
         // The field keeps what is being typed in it.
         if self.shown_value != value && !widgets.value.has_focus() {
             widgets.value.set_text(&value);
@@ -246,16 +243,12 @@ impl GripPanelComponent {
         self.shown_value = value;
         widgets.was.set_label(&was);
         widgets.was.set_visible(!was.is_empty());
-        // "follows overall_width" under "Follows"; anything else ("solved",
+        // "overall_width" under "Follows"; anything else ("solved",
         // "stuck: …") under "Note".
-        match model.about.as_deref() {
+        match &model.about {
             Some(about) => {
-                let (label, words) = match about.strip_prefix("follows ") {
-                    Some(rest) => ("Follows", rest),
-                    None => ("Note", about),
-                };
-                widgets.about_label.set_label(label);
-                widgets.about.set_label(words);
+                widgets.about_label.set_label(&about.label);
+                widgets.about.set_label(&about.words);
                 widgets.about_row.set_visible(true);
             }
             None => widgets.about_row.set_visible(false),
@@ -599,7 +592,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::edit_view::grip_text::{PanelChoice, PanelVerdict};
+    use crate::ui::edit_view::grip_text::{PanelAbout, PanelChoice, PanelVerdict};
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 
     /// A panel to pick between two sizes, the first picked.
@@ -614,8 +607,12 @@ mod tests {
         };
         PanelModel {
             title: "case.base.length".to_owned(),
-            value: Some("1000mm (was 900mm)".to_owned()),
-            about: Some("follows overall_width".to_owned()),
+            value: Some("1000mm".to_owned()),
+            was: Some("900mm".to_owned()),
+            about: Some(PanelAbout {
+                label: "Follows".to_owned(),
+                words: "overall_width".to_owned(),
+            }),
             changes: vec!["Changes overall_width 940mm to 1040mm".to_owned()],
             choices: vec![
                 choice(0, "overall_width", true),

@@ -53,6 +53,10 @@ invalid states unrepresentable.
 - **No panics in library code:** no `unwrap`, `expect`, `panic!`, indexing that
   can fail, or lossy `as` casts outside tests. Use `TryFrom`, checked
   arithmetic and `?`. Library crates use `thiserror`; binaries use `anyhow`.
+- **No `unsafe`:** every crate forbids `unsafe_code`, with one exception:
+  `stave-gtk`'s `render/dmabuf.rs` (handing frames to GTK as dmabufs) is
+  allowed it, `stave-gtk` denies it everywhere else, and each `unsafe`
+  block there carries a `// SAFETY:` comment.
 - **Floats** (`f32`/`f64`) only at the geometry and rendering boundary
   (`stave-geom`, `stave-scene`, `stave-gtk`, drawings in `stave-output`).
   Convert from exact values in one place.
@@ -106,3 +110,10 @@ open buffers) sits beside that chain after `stave-modules` and before
   `.git/index.lock` exists, wait and retry. Never rewrite history.
 - User-facing text (diagnostics, PDF, UI) is plain, specific English and uses
   woodworking words a beginner can look up.
+- Words the window shows (`stave-gtk`, and what `stave-app` words for it)
+  are marked for translation with `stave_app::i18n`: `tr("…")`, `ntr` for
+  a count (never an `if` on the count), `fill_in` for values (whole
+  sentences with named holes, never pieces glued together), `tr_noop` for
+  a table translated where it is shown. Text that is matched on stays
+  untranslated. Run `po/update-pot` after adding a file that marks words.
+  The core crates' diagnostics stay English and unmarked.

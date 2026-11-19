@@ -158,12 +158,12 @@ forwards what people do.
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
 | `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
-| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
+| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). Its code is split beside it: `widgets.rs` builds the widgets, `events.rs` wires their signals, `actions.rs` holds the `win.*` actions and main menu, `selection.rs`, `camera.rs`, `drawing.rs`, `motion.rs`, `pins.rs` and `focus_mode.rs` one part of the 3D view each, `capture.rs` export and screenshots, `options.rs` how a window is asked to open. |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel (joint chips); the Details panel's pages (the Inspector for a selection, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/sections.rs` | The Inspector's and the Edit panel's building blocks, after Unity's inspector: the header row, collapsible sections, label \| value rows (22 px, a 104 px grey label column), name links (`LinkHandlers`: a click selects, the pointer lights it in 3D; wired by `edit_view/links.rs`), the Cancel (Esc) / Apply (Enter) footer, and their stylesheet. |
 | `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Edit, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The scene menu's floating box and the moving assemblies' chips on the 3D view; the finder dialog (Ctrl+K). |
-| `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range). |
+| `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range; at least 24 px tall; mirrored right to left in drawing, pointer and arrow keys; moved a twentieth a notch by the scroll wheel; its value in words for screen readers, "2.6°, blocked" past the blocked point, and the blocked range, "blocked from 0.6°", as its description; a stronger track and a dark edge on the handle in high contrast). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
 | `stave-gtk` | `ui/files.rs`, `editor.rs` | The Code panel: the open files as tabs (each with its dot), a placeholder while none is open, breadcrumbs, the uses panel and the footer; the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
 | `stave-gtk` | `ui/edit_panel.rs`, `option_search.rs` | The Edit panel's content (the card in progress, or how to start one) and the search over a setting's options (below). |
@@ -205,7 +205,7 @@ and is tested headless (`crates/stave-app/tests/session.rs`).
   `Verdict` is `Checked(Summary)` (errors, warnings, files, elapsed) or
   `CantOpen(message)`. `pill()` gives the title bar's pill (`Tone`:
   `Unknown`, `Clean`, `Warnings`, `Errors`; `label`: "No problems",
-  "3 problems"; `Activity`: `Idle` or `Checking`, keeping the last tone and
+  "1 error", "2 warnings", "1 error, 2 warnings"; `Activity`: `Idle` or `Checking`, keeping the last tone and
   label while checking); `line()` the problems chip's tooltip.
 - `build() -> Build`: `Idle` or `Building`. `buildable() ->
   Result<(), empty::Reason>`: `Ok` only when the latest check has parts
@@ -282,9 +282,25 @@ project there, after asking about unsaved changes, as Open Project… does.
 Ctrl+W closes the window (`window.close`, asking about unsaved changes)
 and Ctrl+Q closes every window (`app.quit`), each asking. The shortcuts
 dialog (`adw::ShortcutsDialog`) lists every key: the actions' keys come
-from the one table `app::ACCELERATORS` that also binds them, and the keys
-widgets handle themselves (F, Esc, Delete in the 3D view; F12, Alt+F12,
-Shift+F12 in the editor) from `app::OTHER_KEYS`.
+from the one table `app::ACCELERATORS` that also binds them, and the few
+keys widgets handle themselves (Delete in the 3D view, Undo, Redo and
+Escape in the editor) from `app::OTHER_KEYS`. Each action's `KeyScope`
+says what binds its keys: the application (`set_accels_for_action`), the
+window after the focused widget and never while typing in a text field
+(F frames, Escape leaves focus or clears the selection), or the text
+editor (`editor.follow` F12, `editor.peek` Alt+F12, `editor.uses`
+Shift+F12, `editor.show-info` Ctrl+I, also in the text's right-click
+menu), or the 3D view while it has the keyboard (`view.turn-left` and
+`view.turn-right` on Left and Right, `view.look-higher` and
+`view.look-lower` on Up and Down, about 15° a press; `view.zoom-in` on
+plus, equals or keypad plus and `view.zoom-out` on minus or keypad
+minus, a scroll step each).
+
+To a screen reader the 3D view is a picture named "3D view of <project
+title>", its description what is selected and what the last check found
+("door_l selected. 1 error."), kept up to date as either changes. It is
+outlined in the accent colour while it has the keyboard
+(`staveviewport:focus-visible`).
 
 Stave remembers the window's size, whether it was maximised and the
 style chosen in the menu, in `~/.config/stave/window` (a GLib key file,
@@ -325,17 +341,22 @@ values, the repeat handles) sits over the model. Each panel is a
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
 the 3D view) or into another frame, or pick "Move to the Right" (left,
-bottom, top, middle) from its tab's menu; close it with its ×; show an edge
-again from the status bar's toggles. The default layout is the compact
-board (H2, `Layout::default`): Parts in a frame above Files on the left;
-the Model in the centre with Code as the next tab of the same frame (so
-the open files sit beside the Model); Details with Edit as tabs on the
-right, which shows; Problems and Output at the bottom, whose edge starts
-hidden (the status bar opens it). The edges start 272 px (left), 340 px
+bottom, top, middle) from its tab's menu; close it with its × (every
+panel but the 3D view, whose tab has no ×); show an edge again from the
+status bar's toggles. A first launch shows only the 3D view, Parts on the
+left and Problems along the bottom (`Layout::default`), so a beginner
+meets their project rather than a dock. Every other panel opens from the
+status bar's Panels menu (Code also from "Edit the Text" and Ctrl+E; Edit
+when an edit starts), into its home on the compact board (H2,
+`Layout::board`): Parts in a frame above Files on the left; the Model in
+the centre with Code as the next tab of the same frame (so the open files
+sit beside the Model); Details with Edit as tabs on the right; Problems
+and Output at the bottom. Choosing a part reveals its line in the Code
+panel only while that panel is open. The edges start 272 px (left), 340 px
 (right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
 the sides to 220 and 260. A layout file older than the Edit panel puts it
 beside Details wherever that file put Details, and a panel a file doesn't
-mention (Output, in a board B file) goes where the default puts it, so a
+mention (Output, in a board B file) goes where the compact board puts it, so a
 saved board B still opens as board B. The layout is remembered per user
 in `~/.config/stave/layout` (saved on every drop and when the window
 closes; a broken file means the default) and never in a `.stave` file:
@@ -349,7 +370,7 @@ tool camera right        # where a tool group on the 3D view is docked
 ```
 
 "Reset Layout" (View menu, and the status bar's Panels menu) puts the
-compact board back, the tool groups in their usual spots.
+first launch's three panels back, the tool groups in their usual spots.
 
 - **3D View** is the view with its controls floating on it (part of the
   panel, so they go wherever the view is docked): the scene menu at the
@@ -380,10 +401,18 @@ compact board back, the tool groups in their usual spots.
   The 3D view's tab reads "Model" with a cube. A panel can show its own
   tabs in place of its one (`tab_strip::set_page_tabs`): the Code panel
   shows one tab per open file (its problem dot, its name in monospace and
-  a yellow ● while it has unsaved changes), so in the default layout the
+  a yellow ● while it has unsaved changes), so on the compact board the
   strip reads "Model · doors.stave ● · carcass.stave". Clicking a file's
   tab shows the Code panel on that file; clicking Model shows the 3D view.
   With no file open the Code panel keeps its own "Code" tab.
+  For the keyboard and screen readers the strip is a tab list of tabs
+  (the shown one selected); showing another panel restyles the tabs in
+  place, so the focused tab keeps the keyboard (a panel's own tabs
+  changing remakes them, and the tab at the same place takes the keyboard
+  back); each tab is one Tab stop (the × is for the pointer, labelled
+  "Close <panel>"; the ▾ menu closes a panel); Ctrl+Page Up / Ctrl+Page
+  Down show the previous or next panel while the keyboard is in the frame
+  (after the focused widget, so the editor keeps its own).
 - **Panels** (the status bar's button, and the main menu) shows any closed
   panel again, back where it was, and resets the layout.
 
@@ -412,7 +441,10 @@ compact board back, the tool groups in their usual spots.
   block, coloured like the editor, without its indent, the part it is
   about tinted and underlined (wavy for where it is, straight for a place
   that explains it), then each `note:` and the `help:` line (green).
-  Choosing a row selects the problem (posed in the 3D view). While the 3D
+  Choosing a row selects the problem (posed in the 3D view). A new
+  check keeps the rows of problems that are unchanged at the start and
+  end of the list and replaces only the run between, so the list does
+  not jump while someone types. While the 3D
   view shows an older design (`showing_older()`), a line over the list
   says so: "The 3D view shows the last version without errors until
   these are fixed." There is no banner over the window.
@@ -445,13 +477,13 @@ compact board back, the tool groups in their usual spots.
 
 - **Title bar** (`Header`, 34 px): a menu bar (`gtk::PopoverMenuBar`)
   with Project (New Project…, Open Project…, Save, Check Again, Build
-  Plan, Export View as glTF…), Edit (Find…, Find in the Text, Format the
+  Plan, Export 3D Model…), Edit (Find…, Find in the Text, Format the
   Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
   Frame Everything, the panels, Reset Layout, the style) and Help (About
   Stave), all from `main_menu`; then the project's name in small grey
   words (`Session::title()`, its folder in the tooltip). The Design | Cut
   list switcher sits in the middle. On the right: a find button (a
-  magnifier; "Find a part, file, line or problem (Ctrl K)", `win.find`),
+  magnifier; "Find a part, file, line or problem (Ctrl+K)", `win.find`),
   the problems chip and the hammer. Back and forward are not in the bar:
   they are `win.back`/`win.forward` (Alt+←/→, the View menu, the mouse's
   side buttons), each offered only when it can go. The switcher is an
@@ -464,7 +496,10 @@ compact board back, the tool groups in their usual spots.
   error · 0 warnings · 26 ms"). The pill is red while the latest check
   has an error, amber for warnings only, green for none (`Pill::tone`;
   the class goes on the chip round the pill, `.stave-problems-chip.errors
-  button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
+  button.stave-pill`, a test keeps the CSS keyed so). Colour is never
+  the only sign: the pill's words count errors and warnings apart and
+  its icon is a circle for errors, a triangle for warnings only. Icon-only
+  buttons have accessible names, not only tooltips. The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
   (`buildable()`), its tooltip saying why (`build_tooltip()`). Until the
   build plan is made, the hammer is hidden and `win.build` isn't
@@ -473,7 +508,7 @@ compact board back, the tool groups in their usual spots.
   Project…", `win.new-project`, see [A new project](#a-new-project)),
   opens a project folder (Ctrl+O) or a recent one ("Open Recent",
   `win.open-recent`), saves (Ctrl+S), checks again (Ctrl+R) and exports
-  the view as glTF ("Export View as glTF…", `win.export-view`, with
+  the view as glTF ("Export 3D Model…", `win.export-view`, with
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes); the View menu frames everything, brings back closed panels and
   sets the style (follow system, light, dark: `app.style`, remembered);
@@ -523,8 +558,23 @@ compact board back, the tool groups in their usual spots.
   and names ellipsize. Every row carries its `Mark`
   (`problems::marks`): a red dot for an error, an amber one for a
   warning, a red ring for a part a problem only involves; a folded row
-  carries the worst inside it. Arrow keys move through the rows and
-  follow parts like a click. F9 shows the Parts panel. The panel alone at
+  carries the worst inside it. F9 shows the Parts panel.
+  For the keyboard and screen readers the list is a tree (its role
+  `Tree`, each row a `TreeItem` with its level: headings and folded rows
+  1, part rows 2, joined-to rows 3; a heading expanded, a folded row not;
+  a row's dim text and its mark in words as its description). The arrow
+  keys only move through the rows: a click or Enter chooses one (selects
+  and frames it, opens focus mode, opens a library's text), so walking
+  the list moves neither the camera nor the editor. Right (Left, right to
+  left) or + opens a folded row and, on an open heading, goes to its
+  first row; Left or − folds a heading and, on a part row, goes to its
+  heading (on a joined-to row, to its part); the keyboard stays on the
+  assembly's row. Choosing a part inside an assembly the user folded,
+  elsewhere (the 3D view, the finder), opens it again. A new check, new
+  marks or a new selection update the rows in place: rows that read the
+  same are kept and only the run that differs is replaced, so the scroll
+  position and the row with the keyboard survive a check, and a check
+  that changed nothing touches no row. The panel alone at
   300, 200 and 150 px:
   `STAVE_PARTS_SHOTS=dir cargo test -p stave-gtk parts_panel_pictures --
   --ignored` on a display.
@@ -693,8 +743,9 @@ free of its warning.
   error · …"), which selects it. A posed problem shows only its own pin;
   focus mode and an older design show none.
 - **The dots**: the tree's rows and the rail's tabs carry their marks
-  (`problems::marks`); the Move chips are ringed for a moving assembly
-  with a problem.
+  (`problems::marks`), round for an error, square for a warning; the
+  Move chips are ringed for a moving assembly with a problem and carry
+  the same dot, and say the problem to a screen reader.
 - **Stepping**: the chip's pill and arrows, F8 and Shift+F8 select the
   next or previous problem (`Command::NextProblem`), wrapping round.
 - **Reading a problem**: in the Problems panel (see "Problems panel"
@@ -1206,7 +1257,7 @@ it was. Once written, the window selects the item by its new name.
 
 ### The finder's verbs
 
-The finder (Ctrl+K) lists, before what it finds, under "DO · Enter does
+The finder (Ctrl+K) lists, before what it finds, under "Do · Enter does
 it", what a verb typed in it would do (`edit_view/verbs.rs`, through
 `Finder::connect_actions` and `connect_action`); Enter runs the first.
 "add shelf" (or "add hanging rail", "add casework.drawer") with a space's
@@ -1579,10 +1630,11 @@ step and changes nothing in the interface.
   it out; a test checks the two agree on every example), Tab inserting
   spaces, smart Home/End, undo that groups typing, the
   name under the cursor and its uses marked (its declaration stronger),
-  wavy underlines from the fast tier and the last check (drawn by the
-  text view itself, 1.6 px thick, in libadwaita's error and warning
-  colours for the style, with a bar of the same colour in the gutter
-  beside each line that has one; every place a check's problem points
+  underlines from the fast tier and the last check (drawn by the
+  text view itself in libadwaita's error and warning colours for the
+  style, wavy and 1.6 px thick for an error, dotted for a warning, with
+  a bar of the same colour in the gutter beside each line that has one,
+  whole for an error and dashed for a warning; every place a check's problem points
   at is underlined, so a standard file open in a tab shows the kind's
   rule a requirement comes from; the check's underlines need only the
   text the check read, not the names worked out), a lens above each part, assembly, piece of hardware,
@@ -1596,7 +1648,9 @@ step and changes nothing in the interface.
   Enter / Shift+Enter or the arrows step, Escape closes; Ctrl+F anywhere
   else opens the finder); Ctrl+S saves; Ctrl+Shift+I lays the
   file out with `stave fmt` (never done unasked; Undo takes it back).
-  Resting the pointer on a word shows its card: the problem there with
+  Resting the pointer on a word, or Ctrl+I at the cursor, shows its
+  card (and gives the text its words as an accessible description while
+  it shows): the problem there with
   its help line, or what the name is, its doc comment and where it is
   declared.
 - **History**: following a name or a use first records where the cursor

@@ -8,6 +8,7 @@
 //! progress it stays where it is and says how to start.
 
 use adw::prelude::*;
+use stave_app::i18n::tr;
 
 /// The panel's content.
 pub struct EditPanel {
@@ -22,10 +23,10 @@ impl EditPanel {
     pub fn new(cards: &[&gtk::Widget]) -> EditPanel {
         let empty = adw::StatusPage::builder()
             .icon_name("document-edit-symbolic")
-            .title("Nothing being added")
-            .description(
+            .title(tr("Nothing being added"))
+            .description(tr(
                 "Click inside a space, or in the gap between two parts, to add something there; or select a part and choose “Add something onto its face” in Details. Select a part or an assembly to change it in Details.",
-            )
+            ))
             .css_classes(["compact", "stave-edit-empty"])
             .build();
         let holder = gtk::Box::builder()

@@ -246,8 +246,9 @@ fn fill_menu(
     entries: &[MenuEntry],
     chosen: &(impl Fn(Declaration) + Clone + 'static),
 ) -> MenuRows {
-    heading_label.set_label(heading.text());
-    root.update_property(&[gtk::accessible::Property::Label(heading.text())]);
+    let heading = heading.text();
+    heading_label.set_label(&heading);
+    root.update_property(&[gtk::accessible::Property::Label(&heading)]);
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }

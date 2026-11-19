@@ -23,6 +23,7 @@
 //! (`rail[bottom, top]`) adds them up. A folded assembly counts each pair
 //! once.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::collections::{BTreeMap, BTreeSet};
 
 use stave_model::mechanism::DriveValue;
@@ -120,20 +121,22 @@ impl Chip {
     pub fn tooltip(&self) -> String {
         let count = self.count;
         match &self.counted {
-            Counted::Joints => format!(
-                "{}: {count} {}",
-                self.kind,
-                if count == 1 { "joint" } else { "joints" }
+            Counted::Joints => fill_in(
+                &ntr("{kind}: {count} joint", "{kind}: {count} joints", count),
+                &[("kind", &self.kind), ("count", &count)],
             ),
-            Counted::Pieces(name) => {
-                let name = name.replace('_', " ");
-                if count == 1 {
-                    format!("{}: 1 {name}", self.kind)
-                } else {
-                    format!("{}: {count} {name}s", self.kind)
-                }
-            }
-            Counted::Fitted if count > 1 => format!("{} × {count}", self.kind),
+            Counted::Pieces(name) => fill_in(
+                &ntr("{kind}: {count} {name}", "{kind}: {count} {name}s", count),
+                &[
+                    ("kind", &self.kind),
+                    ("count", &count),
+                    ("name", &name.replace('_', " ")),
+                ],
+            ),
+            Counted::Fitted if count > 1 => fill_in(
+                &tr("{kind} × {count}"),
+                &[("kind", &self.kind), ("count", &count)],
+            ),
             Counted::Fitted | Counted::Nothing => self.kind.clone(),
         }
     }
@@ -265,7 +268,7 @@ fn joint_words(joint: &Joint) -> String {
     if joint.glue {
         words
     } else {
-        format!("{words}, no glue")
+        fill_in(&tr("{kind}, no glue"), &[("kind", &words)])
     }
 }
 
@@ -412,7 +415,7 @@ impl PartJoints {
             let mirror_of = assembly
                 .mirror_of
                 .and_then(|source| design.assemblies.get(source.index()))
-                .map(|source| format!("mirror of {}", source.name));
+                .map(|source| fill_in(&tr("mirror of {name}"), &[("name", &source.name)]));
             let (base, index) = split_index(&assembly.name);
             found.folds.insert(
                 assembly.id,
@@ -711,7 +714,10 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
             many => format!(" ×{many}"),
         };
         rows.push(hardware_row(
-            format!("{kind}{times}, {face} face"),
+            fill_in(
+                &tr("{kind}{times}, {face} face"),
+                &[("kind", kind), ("times", &times), ("face", face)],
+            ),
             *glyph,
             pieces,
         ));
@@ -726,8 +732,8 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
     // What its assembly moves on, when hardware fitted to it moves it.
     if let Some((motion, outside)) = moves_on(design, part.assembly, Some(id)) {
         let words = match motion {
-            Motion::Turn => "turns on",
-            Motion::Travel => "slides in",
+            Motion::Turn => tr("turns on"),
+            Motion::Travel => tr("slides in"),
         };
         rows.push(JoinedTo {
             glyph: match motion {
@@ -809,7 +815,7 @@ fn carcass_heading(design: &SolvedDesign) -> Heading {
         .filter(|j| j.assembly.is_none())
         .count();
     Heading {
-        title: "CARCASS".to_owned(),
+        title: tr("CARCASS"),
         note: counts_note(parts, joints),
         motion: None,
         motion_words: None,
@@ -817,17 +823,18 @@ fn carcass_heading(design: &SolvedDesign) -> Heading {
 }
 
 fn counts_note(parts: usize, joints: usize) -> String {
-    let parts = if parts == 1 {
-        "1 part".to_owned()
-    } else {
-        format!("{parts} parts")
-    };
-    let joints = if joints == 1 {
-        "1 joint".to_owned()
-    } else {
-        format!("{joints} joints")
-    };
-    format!("{parts} · {joints}")
+    let parts = fill_in(
+        &ntr("{count} part", "{count} parts", parts),
+        &[("count", &parts)],
+    );
+    let joints = fill_in(
+        &ntr("{count} joint", "{count} joints", joints),
+        &[("count", &joints)],
+    );
+    fill_in(
+        &tr("{parts} · {joints}"),
+        &[("parts", &parts), ("joints", &joints)],
+    )
 }
 
 fn assembly_heading(design: &SolvedDesign, id: AssemblyId) -> Heading {
@@ -854,22 +861,31 @@ fn assembly_heading(design: &SolvedDesign, id: AssemblyId) -> Heading {
     let (note, motion_words) = match (extent, moves) {
         (Some(extent), Some((_, outside))) => {
             let names: Vec<&str> = outside.iter().map(|(n, _)| n.as_str()).collect();
-            let (amount, verb) = match extent {
-                DriveValue::Turn(angle) => (inspect::degrees(angle), "turns"),
-                DriveValue::Travel(travel) => (inspect::mm(travel), "slides"),
-            };
-            let on = match extent {
-                DriveValue::Turn(_) => "on",
-                DriveValue::Travel(_) => "in",
+            let turns = matches!(extent, DriveValue::Turn(_));
+            let amount = match extent {
+                DriveValue::Turn(angle) => inspect::degrees(angle),
+                DriveValue::Travel(travel) => inspect::mm(travel),
             };
             if names.is_empty() {
-                (format!("{verb} {amount}"), Some(format!("{verb} {amount}")))
+                let words = fill_in(
+                    &if turns {
+                        tr("turns {amount}")
+                    } else {
+                        tr("slides {amount}")
+                    },
+                    &[("amount", &amount)],
+                );
+                (words.clone(), Some(words))
             } else {
                 let names = names.join(", ");
-                (
-                    format!("{amount} {on} {names}"),
-                    Some(format!("{verb} {amount} {on} {names}")),
-                )
+                let values: [(&str, &dyn std::fmt::Display); 2] =
+                    [("amount", &amount), ("names", &names)];
+                let (note, words) = if turns {
+                    (tr("{amount} on {names}"), tr("turns {amount} on {names}"))
+                } else {
+                    (tr("{amount} in {names}"), tr("slides {amount} in {names}"))
+                };
+                (fill_in(&note, &values), Some(fill_in(&words, &values)))
             }
         }
         _ => (counts_note(parts, joints), None),

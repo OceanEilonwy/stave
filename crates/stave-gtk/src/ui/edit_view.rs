@@ -1456,6 +1456,7 @@ mod grips;
 pub(in crate::ui) mod hold;
 pub(in crate::ui) mod item_tools;
 mod links;
+pub(super) use links::Hovered;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;

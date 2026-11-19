@@ -355,7 +355,16 @@ impl Window {
                 });
                 match selection {
                     Some(selection) => self.select_and_frame(Some(selection)),
-                    None => self.toast("It isn't in the design the 3D view shows"),
+                    None => {
+                        // Name the thing, and say why: the view shows the
+                        // last version of the design that had no errors.
+                        let name = analysis
+                            .symbol(symbol)
+                            .map_or_else(|| "That".to_owned(), |found| found.name.clone());
+                        self.toast(&format!(
+                            "{name} isn't in the 3D view, which shows the last version without errors"
+                        ));
+                    }
                 }
             }
             ProjectInput::Notice { text, seconds } => {
@@ -812,7 +821,7 @@ impl Window {
         let session = &self.session;
         self.widgets
             .header
-            .show_build(session.build(), session.build_tooltip());
+            .show_build(session.build(), &session.build_tooltip());
         if let Some(action) = self.widgets.window.lookup_action("build")
             && let Ok(action) = action.downcast::<gio::SimpleAction>()
         {
@@ -869,7 +878,7 @@ impl Window {
             return;
         }
         let dialog = adw::AlertDialog::builder()
-            .heading("Save your changes?")
+            .heading("Save Changes?")
             .body(if count == 1 {
                 "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
             } else {

@@ -150,9 +150,9 @@ impl HeaderParts {
         menu_bar.add_css_class("stave-menu-bar");
         menu_bar.set_valign(gtk::Align::Center);
         let menu_button = gtk::MenuButton::builder()
-            .child(&PathIcon::new(icons::MENU, 16))
+            .icon_name("open-menu-symbolic")
             .menu_model(menus)
-            .tooltip_text("Main menu")
+            .tooltip_text("Main Menu")
             .css_classes(["flat", "stave-icon-button"])
             .valign(gtk::Align::Center)
             .primary(true)
@@ -170,7 +170,7 @@ impl HeaderParts {
 
         let find = gtk::Button::builder()
             .icon_name("system-search-symbolic")
-            .tooltip_text("Find a part, file, line or problem (Ctrl K)")
+            .tooltip_text("Find a part, file, line or problem (Ctrl+K)")
             .action_name("win.find")
             .css_classes(["flat", "stave-icon-button", "stave-find"])
             .valign(gtk::Align::Center)
@@ -195,7 +195,7 @@ impl HeaderParts {
                 .valign(gtk::Align::Center)
                 .build();
             content.append(&PathIcon::new(shape, 15));
-            let label = gtk::Label::new(Some(view.title()));
+            let label = gtk::Label::new(Some(&view.title()));
             content.append(&label);
             switcher_labels.push(label);
             let toggle = adw::Toggle::builder()
@@ -390,7 +390,7 @@ fn show_pill(parts: &HeaderParts, shown: &PillShown) {
     } = shown;
     let (class, shape) = match pill.tone {
         Tone::Clean => ("clean", icons::CHECK),
-        Tone::Warnings => ("warnings", icons::ALERT),
+        Tone::Warnings => ("warnings", icons::WARNING),
         Tone::Errors => ("errors", icons::ALERT),
         Tone::Unknown => ("unknown", icons::PENDING),
     };
