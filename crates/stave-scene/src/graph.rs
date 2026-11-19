@@ -735,7 +735,7 @@ impl SceneGraph {
                 section: scene.section.as_ref().map(Section::of_plane),
             })
             .collect();
-        let exploded = Exploded::of(design);
+        let exploded = Exploded::of(design, &paths);
         let (explode_assembly, explode_part) = nodes
             .iter()
             .map(|node| exploded.of_node(design, node))
@@ -1299,7 +1299,10 @@ struct Exploded {
 }
 
 impl Exploded {
-    fn of(design: &SolvedDesign) -> Exploded {
+    /// `paths` is every assembly's mechanism, run once by the graph's
+    /// build (by [`AssemblyId`]): running one is the costliest step of a
+    /// build, so it isn't run again here.
+    fn of(design: &SolvedDesign, paths: &[Option<Arc<MechanismPath>>]) -> Exploded {
         // Distances grow with the design, so the joinery shows at a glance
         // whatever its size.
         let size = bounds_of(design.parts().iter()).map_or(0.0, |b| b.size().length());
@@ -1308,7 +1311,10 @@ impl Exploded {
         let own: Vec<Vec3> = design
             .assemblies()
             .iter()
-            .map(|assembly| Exploded::assembly_move(design, assembly, base))
+            .map(|assembly| {
+                let path = paths.get(assembly.id.index()).and_then(Option::as_deref);
+                Exploded::assembly_move(design, assembly, base, path)
+            })
             .collect();
         let assemblies = design
             .assemblies()
@@ -1339,20 +1345,17 @@ impl Exploded {
         design: &SolvedDesign,
         assembly: &stave_model::solved::Assembly,
         base: f32,
+        path: Option<&MechanismPath>,
     ) -> Vec3 {
         let members = || assembly.parts.iter().filter_map(|p| design.part(*p));
         let Some(bounds) = bounds_of(members()) else {
             return Vec3::ZERO;
         };
-        let path = assembly
-            .mechanism
-            .as_ref()
-            .and_then(|mechanism| MechanismPath::new(mechanism).ok());
-        let travel = path.as_ref().and_then(|path| match path.shape() {
+        let travel = path.and_then(|path| match path.shape() {
             MotionShape::Travel { toward, .. } => Some(toward),
             MotionShape::Turn { .. } | MotionShape::General => None,
         });
-        let swing = path.as_ref().and_then(MechanismPath::swing);
+        let swing = path.and_then(MechanismPath::swing);
         match (travel, swing) {
             (Some(toward), _) => {
                 let direction = render::direction(toward);
