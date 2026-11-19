@@ -370,6 +370,7 @@ impl State<'_, '_> {
                             .iter()
                             .copied()
                             .chain(world.rods().iter().map(WorldRod::bounds))
+                            .chain(world.slant_bounds())
                             .map(|b| placed_bounds(&b, placement))
                             .collect(),
                     ),
@@ -742,6 +743,9 @@ fn pieces(solid: &WorldSolid, boxes: &[WorldBox], axis: Axis) -> Vec<(Section, (
             out.push((rect(&b), range(&b)));
         }
     }
+    for b in solid.slant_bounds() {
+        out.push((rect(&b), range(&b)));
+    }
     out
 }
 
@@ -882,6 +886,7 @@ fn push_contact(mover: &WorldSolid, other: &WorldSolid, direction: Direction) ->
             .iter()
             .copied()
             .chain(solid.rods().iter().map(WorldRod::bounds))
+            .chain(solid.slant_bounds())
             .map(|region| Piece::of_box(&region, axis))
             .collect()
     };

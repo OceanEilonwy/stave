@@ -118,6 +118,21 @@ fn reflect_members(
                 axis: *along,
                 bounds: reflect_box(bounds, axis, plane)?,
             },
+            WorldShape::Slanted {
+                axis: along,
+                toward,
+                angle,
+                diameter,
+                length,
+                bounds,
+            } => WorldShape::Slanted {
+                axis: *along,
+                toward: crate::hardware::slant_reflected(*along, *toward, axis),
+                angle: *angle,
+                diameter: *diameter,
+                length: *length,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
             WorldShape::Prism {
                 axis: along,
                 points,
@@ -198,6 +213,30 @@ fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
                 diameter: round_length(diameter)?,
                 start,
                 end,
+            }
+        }
+        WorldShape::Slanted {
+            axis,
+            toward,
+            angle,
+            diameter,
+            length,
+            bounds,
+        } => {
+            let centre = |on: Axis| -> Solved<Length> {
+                round_length(midpoint(bounds.min(on), bounds.max(on)).ok_or(Fault::Overflow)?)
+            };
+            let mut middle = solved::Point::default();
+            for on in Axis::ALL {
+                middle = middle.with(on, centre(on)?);
+            }
+            solved::MemberShape::Slanted {
+                centre: middle,
+                axis: *axis,
+                toward: *toward,
+                angle: *angle,
+                diameter: round_length(*diameter)?,
+                length: round_length(*length)?,
             }
         }
         WorldShape::Prism {
@@ -327,6 +366,21 @@ fn reflect_member_shape(
                 end,
             }
         }
+        solved::MemberShape::Slanted {
+            centre,
+            axis: along,
+            toward,
+            angle,
+            diameter,
+            length,
+        } => solved::MemberShape::Slanted {
+            centre: centre.with(axis, flip_one(centre.get(axis))?),
+            axis: *along,
+            toward: crate::hardware::slant_reflected(*along, *toward, axis),
+            angle: *angle,
+            diameter: *diameter,
+            length: *length,
+        },
         solved::MemberShape::Prism {
             axis: along,
             points,
@@ -731,6 +785,7 @@ fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Sol
             name: cut.name.clone(),
             face: cut.face,
             shape: &cut.shape,
+            slant: cut.slant,
             kind: cut.kind.clone(),
         },
     )
@@ -746,6 +801,8 @@ struct MemberCut<'a> {
     face: stave_lang::placement::Face,
     /// The shape's world box.
     shape: &'a ExactBox,
+    /// The shape's slant, when it is a slanted cylinder.
+    slant: Option<crate::hardware::WorldSlant>,
     kind: solved::CutKind,
 }
 
@@ -773,6 +830,37 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
             max: corner(|p| p.1)?,
         })
     };
+    // A drill follows the slant of its member: going deeper into the
+    // part, it leans toward the slant's direction, or away from it when
+    // the hole goes in toward the negative end of the axis.
+    let kind = match (cut.kind, cut.slant) {
+        (
+            solved::CutKind::Drill {
+                diameter,
+                depth,
+                from_depth,
+                tilt: _,
+            },
+            Some(slant),
+        ) => {
+            let inward_positive = !cut.face.is_positive();
+            let lean = if inward_positive {
+                slant.toward
+            } else {
+                slant.toward.opposite()
+            };
+            solved::CutKind::Drill {
+                diameter,
+                depth,
+                from_depth,
+                tilt: Some(solved::Tilt {
+                    angle: slant.angle,
+                    toward: geom.face_toward(lean.axis(), lean.is_positive()),
+                }),
+            }
+        }
+        (kind, _) => kind,
+    };
     Ok(Cut {
         source: cut.source,
         name: cut.name,
@@ -783,7 +871,7 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
             footprint: local_box(&region)?,
             shape: local_box(cut.shape)?,
         },
-        kind: cut.kind,
+        kind,
     })
 }
 
@@ -997,6 +1085,20 @@ impl Solver<'_> {
                                 ),
                             ).into());
                         };
+                        let slant = crate::hardware::WorldSlant::of(&crate::hardware::world_shape(
+                            shape,
+                            &copy.frame,
+                        )?);
+                        self.check_slanted_cut(&crate::hardware::SlantedCut {
+                            owner: &inst.name,
+                            member: &member.name,
+                            part,
+                            face,
+                            slant,
+                            kinds: &kinds,
+                            file: place.0,
+                            span: place.1,
+                        })?;
                         for cut_kind in &kinds {
                             work.member_cuts.push(WorldMemberCut {
                                 pair: pair_index,
@@ -1005,6 +1107,7 @@ impl Solver<'_> {
                                 name: cut.name.clone(),
                                 face,
                                 shape: shape.world,
+                                slant,
                                 kind: cut_kind.clone(),
                             });
                             let made = member_cut(
@@ -1019,6 +1122,7 @@ impl Solver<'_> {
                                     name: cut.name.clone(),
                                     face,
                                     shape: &shape.world,
+                                    slant,
                                     kind: cut_kind.clone(),
                                 },
                             )?;
@@ -1460,6 +1564,7 @@ impl Solver<'_> {
                         name: cut.name.clone(),
                         face,
                         shape: &shape,
+                        slant: cut.slant.map(|slant| slant.reflected(axis)),
                         kind: cut.kind.clone(),
                     },
                 );
@@ -1603,6 +1708,7 @@ impl Solver<'_> {
                         cut.face
                     },
                     shape,
+                    slant: cut.slant.map(|slant| slant.reflected(axis)),
                     ..cut.clone()
                 };
                 if outside {

@@ -122,6 +122,66 @@ impl WorldRod {
     }
 }
 
+/// A slanted cylinder in the world (grammar, "Slanted members"): a slanted
+/// member, or a slanted hole drilled for one. The ends of its axis are
+/// rounded to the nanometre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorldSlant {
+    /// One end of its axis.
+    pub from: Point,
+    /// The other end.
+    pub to: Point,
+    /// Its diameter.
+    pub diameter: Length,
+}
+
+impl WorldSlant {
+    /// The ends of its axis, world nanometres.
+    fn ends(&self) -> (DVec3, DVec3) {
+        (point_vector(self.from), point_vector(self.to))
+    }
+
+    fn radius(&self) -> f64 {
+        render::nm(self.diameter) / 2.0
+    }
+
+    /// The box around it: its axis's box grown, on each axis, by how far
+    /// an end disc reaches past the axis there, rounded outward.
+    pub fn bounds(&self) -> WorldBox {
+        let (a, b) = self.ends();
+        let direction = (b - a).normalize_or_zero();
+        let mut low = Point::default();
+        let mut high = Point::default();
+        for axis in Axis::ALL {
+            let k = axis_index(axis);
+            let reach = self.radius() * (1.0 - direction[k] * direction[k]).max(0.0).sqrt();
+            let reach = render::integer_from_f64(reach.ceil()).unwrap_or(0);
+            let (x, y) = (self.from.get(axis).nm(), self.to.get(axis).nm());
+            low = low.with(axis, Length::from_nm(x.min(y).saturating_sub(reach)));
+            high = high.with(axis, Length::from_nm(x.max(y).saturating_add(reach)));
+        }
+        WorldBox::new(low, high)
+    }
+
+    fn translated(&self, by: Point) -> WorldSlant {
+        let shift = |p: Point| {
+            let mut out = p;
+            for axis in Axis::ALL {
+                out = out.with(
+                    axis,
+                    Length::from_nm(p.get(axis).nm().saturating_add(by.get(axis).nm())),
+                );
+            }
+            out
+        };
+        WorldSlant {
+            from: shift(self.from),
+            to: shift(self.to),
+            ..*self
+        }
+    }
+}
+
 /// A convex outline on the plane across a world axis, extruded along it:
 /// a hardware member's prism or bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,7 +305,11 @@ pub struct WorldSolid {
     boxes: Vec<WorldBox>,
     rods: Vec<WorldRod>,
     prisms: Vec<WorldPrism>,
+    /// Slanted cylinders of wood or steel: a member's slanted shapes.
+    slants: Vec<WorldSlant>,
     holes: Vec<WorldRod>,
+    /// Slanted holes.
+    slant_holes: Vec<WorldSlant>,
     cuts: Vec<WorldCut>,
 }
 
@@ -314,6 +378,15 @@ impl WorldSolid {
                 } => solid
                     .prisms
                     .push(WorldPrism::bar(*axis, *from, *to, *thickness, *start, *end)),
+                MemberShape::Slanted { diameter, .. } => {
+                    if let Some((from, to)) = shape.slanted_ends() {
+                        solid.slants.push(WorldSlant {
+                            from,
+                            to,
+                            diameter: *diameter,
+                        });
+                    }
+                }
             }
         }
         solid
@@ -365,13 +438,43 @@ impl WorldSolid {
                 })
             })
             .collect();
+        let slant_holes = solid
+            .slants()
+            .iter()
+            .map(|slant| {
+                let (from, to) = slant.exact_ends();
+                WorldSlant {
+                    from: world_point(pose, from),
+                    to: world_point(pose, to),
+                    diameter: slant.diameter,
+                }
+            })
+            .collect();
         WorldSolid {
             boxes,
             rods,
             prisms: Vec::new(),
+            slants: Vec::new(),
             holes,
+            slant_holes,
             cuts,
         }
+    }
+
+    /// The boxes around its slanted cylinders of wood or steel: what they
+    /// count as wherever they aren't tested along their slant.
+    pub fn slant_bounds(&self) -> impl Iterator<Item = WorldBox> + '_ {
+        self.slants.iter().map(WorldSlant::bounds)
+    }
+
+    /// Its slanted cylinders of wood or steel.
+    pub fn slants(&self) -> &[WorldSlant] {
+        &self.slants
+    }
+
+    /// Its slanted holes.
+    pub fn slant_holes(&self) -> &[WorldSlant] {
+        &self.slant_holes
     }
 
     /// The box around all of it; `None` when it has no wood.
@@ -381,6 +484,7 @@ impl WorldSolid {
             .copied()
             .chain(self.rods.iter().map(WorldRod::bounds))
             .chain(self.prisms.iter().filter_map(WorldPrism::bounds))
+            .chain(self.slant_bounds())
             .reduce(|a, b| union(&a, &b))
     }
 
@@ -391,6 +495,7 @@ impl WorldSolid {
         self.boxes.extend(other.boxes.iter().copied());
         self.rods.extend(other.rods.iter().copied());
         self.prisms.extend(other.prisms.iter().cloned());
+        self.slants.extend(other.slants.iter().copied());
         self
     }
 
@@ -400,7 +505,9 @@ impl WorldSolid {
             boxes: self.boxes.iter().map(|b| translate_box(b, by)).collect(),
             rods: self.rods.iter().map(|r| r.translated(by)).collect(),
             prisms: self.prisms.iter().map(|p| p.translated(by)).collect(),
+            slants: self.slants.iter().map(|p| p.translated(by)).collect(),
             holes: self.holes.iter().map(|r| r.translated(by)).collect(),
+            slant_holes: self.slant_holes.iter().map(|r| r.translated(by)).collect(),
             cuts: self.cuts.iter().map(|c| c.translated(by)).collect(),
         }
     }
@@ -467,6 +574,16 @@ fn world_coordinate(pose: &Pose, axis: PartAxis, local: Length) -> (Axis, Length
         origin.saturating_sub(local.nm())
     };
     (world, Length::from_nm(value))
+}
+
+/// The world point of a point in a part's own frame.
+fn world_point(pose: &Pose, local: stave_model::solved::Size3) -> Point {
+    let mut point = Point::default();
+    for axis in PartAxis::ALL {
+        let (world, value) = world_coordinate(pose, axis, local.get(axis));
+        point = point.with(world, value);
+    }
+    point
 }
 
 fn world_rod(pose: &Pose, rod: &Rod) -> WorldRod {
@@ -843,7 +960,203 @@ pub fn overlaps(a: &WorldSolid, b: &WorldSolid) -> Vec<Overlap> {
             found.extend(prism_prism(x, y));
         }
     }
+    // Slanted cylinders: along their slant against boxes, less the
+    // slanted holes that hold them; as the boxes around them against
+    // everything else.
+    for (slants, other, own) in [(&a.slants, b, a), (&b.slants, a, b)] {
+        for slant in slants {
+            let pieces = clip_slant(slant, &other.slant_holes);
+            for region in &other.boxes {
+                for piece in &pieces {
+                    found.extend(slant_box(piece, region));
+                }
+            }
+            let bounds = slant.bounds();
+            for rod in &other.rods {
+                for piece in clip(rod, &own.holes) {
+                    found.extend(rod_box(&piece, &bounds));
+                }
+            }
+            for prism in &other.prisms {
+                found.extend(prism_box(prism, &bounds, &[]));
+            }
+        }
+    }
+    for x in &a.slants {
+        for y in &b.slants {
+            if let Some(region) = intersection(&x.bounds(), &y.bounds()) {
+                let (depth, axis) = thinnest(&region);
+                found.extend(finish(render::nm(depth), axis, region));
+            }
+        }
+    }
     found
+}
+
+/// A stretch of a slanted cylinder's axis left to test, as fractions of
+/// the way from one end to the other, with how deep it can at most go
+/// when a hole only partly holds it.
+#[derive(Debug, Clone, Copy)]
+struct SlantPiece {
+    slant: WorldSlant,
+    from: f64,
+    to: f64,
+    cap: Option<f64>,
+}
+
+/// A slanted cylinder cut back to where the slanted holes on its own axis
+/// hold it, as [`clip`] does for a straight one: a hole parallel to it
+/// whose disc holds its disc clears it over the hole's length, and one
+/// that only partly holds it caps how deep it can go there.
+fn clip_slant(slant: &WorldSlant, holes: &[WorldSlant]) -> Vec<SlantPiece> {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let (a, b) = slant.ends();
+    let length = (b - a).length();
+    let mut pieces = vec![SlantPiece {
+        slant: *slant,
+        from: 0.0,
+        to: 1.0,
+        cap: None,
+    }];
+    if length <= 0.0 {
+        return pieces;
+    }
+    let direction = (b - a) / length;
+    for hole in holes {
+        let (c, d) = hole.ends();
+        let hole_length = (d - c).length();
+        if hole_length <= 0.0 {
+            continue;
+        }
+        let hole_direction = (d - c) / hole_length;
+        // Parallel, to within a hundredth of a degree.
+        if direction.cross(hole_direction).length() > 1.75e-4 {
+            continue;
+        }
+        let offset = (c - a).reject_from_normalized(direction).length();
+        let held = offset + slant.radius() <= hole.radius() + tolerance;
+        let protrudes = offset + slant.radius() - hole.radius();
+        if !held && offset >= slant.radius() + hole.radius() {
+            continue;
+        }
+        let (p, q) = ((c - a).dot(direction), (d - a).dot(direction));
+        let (hs, he) = (p.min(q) / length, p.max(q) / length);
+        let mut next = Vec::new();
+        for piece in pieces {
+            let (low, high) = (hs.max(piece.from), he.min(piece.to));
+            if low >= high {
+                next.push(piece);
+                continue;
+            }
+            if piece.from < low {
+                next.push(SlantPiece { to: low, ..piece });
+            }
+            if !held {
+                let cap = Some(piece.cap.map_or(protrudes, |c| c.min(protrudes)));
+                next.push(SlantPiece {
+                    from: low,
+                    to: high,
+                    cap,
+                    ..piece
+                });
+            }
+            if high < piece.to {
+                next.push(SlantPiece {
+                    from: high,
+                    ..piece
+                });
+            }
+        }
+        pieces = next;
+    }
+    // What is left of it no longer than the contact tolerance only
+    // touches what it is left against.
+    pieces.retain(|piece| (piece.to - piece.from) * length > tolerance);
+    pieces
+}
+
+/// How far a stretch of a slanted cylinder goes into a box: the deepest
+/// any of it lies inside the box, from the box's nearest face, sampled on
+/// its axis and round the rims of its cross-sections (its ends are flat
+/// discs square to its axis) every millimetre or so along it, but no more
+/// than the length of its axis inside the box.
+fn slant_box(piece: &SlantPiece, region: &WorldBox) -> Option<Overlap> {
+    let shared = intersection(&piece.slant.bounds(), region)?;
+    let (a, b) = piece.slant.ends();
+    let (start, end) = (a + (b - a) * piece.from, a + (b - a) * piece.to);
+    let radius = piece.slant.radius();
+    let low = point_vector(region.min());
+    let high = point_vector(region.max());
+    let line = end - start;
+    let length = line.length();
+    let direction = line.normalize_or_zero();
+    let u = direction.any_orthonormal_vector();
+    let v = direction.cross(u);
+    // How deep a point lies inside the box: negative outside it.
+    let inside = |p: DVec3| (p - low).min(high - p).min_element();
+    let steps = crate::clearance::integer((length / 1.0e6).ceil()).clamp(1, 400);
+    let around = 32_u32;
+    let mut deepest = (f64::NEG_INFINITY, start);
+    for step in 0..=steps {
+        let t = f64::from(step) / f64::from(steps);
+        let centre = start + line * t;
+        let mut consider = |p: DVec3| {
+            let depth = inside(p);
+            if depth > deepest.0 {
+                deepest = (depth, p);
+            }
+        };
+        consider(centre);
+        for k in 0..around {
+            let angle = std::f64::consts::TAU * f64::from(k) / f64::from(around);
+            let rim = centre + (u * angle.cos() + v * angle.sin()) * radius;
+            consider(rim);
+            if step == 0 || step == steps {
+                consider(centre + (rim - centre) * 0.5);
+            }
+        }
+    }
+    // How long a stretch of its axis lies in the box, by the slab
+    // method: it need move no farther than that along itself to clear it.
+    let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
+    for k in 0..3 {
+        if line[k].abs() < 1e-9 {
+            if start[k] < low[k] || start[k] > high[k] {
+                (enter, leave) = (1.0, 0.0);
+            }
+            continue;
+        }
+        let (t0, t1) = (
+            (low[k] - start[k]) / line[k],
+            (high[k] - start[k]) / line[k],
+        );
+        enter = enter.max(t0.min(t1));
+        leave = leave.min(t0.max(t1));
+    }
+    let along = (leave - enter) * length;
+    let mut depth = if along > 0.0 {
+        deepest.0.min(along)
+    } else {
+        deepest.0
+    };
+    if let Some(cap) = piece.cap {
+        depth = depth.min(cap);
+    }
+    let axis = nearest_axis_of(deepest.1, low, high);
+    finish(depth, axis, shared)
+}
+
+/// The world axis of the box's face nearest a point.
+fn nearest_axis_of(point: DVec3, low: DVec3, high: DVec3) -> Axis {
+    Axis::ALL
+        .into_iter()
+        .map(|axis| {
+            let k = axis_index(axis);
+            let gap = (point[k] - low[k]).abs().min((high[k] - point[k]).abs());
+            (gap, axis)
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map_or(Axis::Up, |(_, axis)| axis)
 }
 
 /// How far a prism goes into a box, less what `holes` clear of the box
@@ -925,6 +1238,7 @@ pub fn touches(a: &WorldSolid, b: &WorldSolid) -> bool {
                     .filter_map(WorldPrism::bounds)
                     .map(Shape::Box),
             )
+            .chain(solid.slant_bounds().map(Shape::Box))
             .collect()
     };
     let (a_shapes, b_shapes) = (shapes(a), shapes(b));
@@ -959,6 +1273,7 @@ pub fn touches_over_area(a: &WorldSolid, b: &WorldSolid) -> bool {
                     .filter_map(WorldPrism::bounds)
                     .map(Shape::Box),
             )
+            .chain(solid.slant_bounds().map(Shape::Box))
             .collect()
     };
     let (a_shapes, b_shapes) = (shapes(a), shapes(b));
@@ -1455,6 +1770,7 @@ pub fn overlaps_placed(
             .copied()
             .chain(solid.rods.iter().map(WorldRod::bounds))
             .chain(solid.prisms.iter().filter_map(WorldPrism::bounds))
+            .chain(solid.slant_bounds())
             .map(|region| Oriented::of(&region, matrix))
             .collect()
     };
@@ -1594,6 +1910,8 @@ mod tests {
             holes: vec![rod(Axis::Up, [50, 50], 22, 0, 20)],
             cuts: Vec::new(),
             prisms: Vec::new(),
+            slants: Vec::new(),
+            slant_holes: Vec::new(),
         };
         let tenon = WorldSolid {
             rods: vec![rod(Axis::Up, [50, 50], 22, -50, 20)],

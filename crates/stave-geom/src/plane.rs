@@ -149,6 +149,7 @@ fn elements(solid: &WorldSolid) -> Vec<Element> {
         .iter()
         .copied()
         .chain(solid.rods().iter().map(WorldRod::bounds))
+        .chain(solid.slant_bounds())
         .map(Element::Box)
         .chain(
             solid

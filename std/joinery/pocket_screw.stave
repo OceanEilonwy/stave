@@ -1,0 +1,50 @@
+stave 1
+
+/// Pocket screws: screws driven at a shallow slant from the face of one
+/// part, out through its end or edge and into the other part. The pocket
+/// is drilled with a pocket-hole jig: a wide counterbore for the screw head
+/// that stops short of the end, and a narrow hole on through it. The usual
+/// way to join a face frame, a carcass or a table's aprons without clamps
+/// across the whole job.
+kind pocket_screw : joint {
+  /// Shank diameter of the screws.
+  param diameter = 4mm
+  /// Length of the screws.
+  param length = 32mm
+  /// How far each screw reaches into the other part, along its slant.
+  param bite = 12mm
+  /// Screws per connection.
+  param count = 2
+  /// How steeply the screws slant from square to the end of the part:
+  /// 15deg is what pocket-hole jigs drill.
+  param tilt = 15deg
+  /// Diameter of the pocket: the counterbore the screw head sits in.
+  param pocket = 9.5mm
+  /// Wood left between neighbouring pockets, and from the end pockets to
+  /// the ends of the patch where the parts touch.
+  param gap = 10mm
+  /// The pilot hole in the other part: about three quarters of the shank,
+  /// so the thread cuts its own way into the wood round it.
+  param pilot = diameter * 3 / 4
+
+  // The screws slant toward the part's thickness: the pocket opens on one
+  // face of the part, the screw comes out of the middle of its end, and
+  // the pilot hole keeps 3mm of wood to every face of the other part.
+  require thick_enough : piece.thickness >= 12mm "the part is too thin for pocket screws"
+  require pilot_wall   : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
+  require seat_long    : contact(piece, into).length >= count * (pocket + gap) + gap "too many pocket screws for this joint"
+
+  /// The screws: driven at a slant through the pocket, out through the end
+  /// of the piece and into the other part. Each is drawn and checked at
+  /// the size of its core, the pilot hole, as std's screw is.
+  member screw : wood_screw(diameter: diameter, length: length) {
+    on:    contact(piece, into)
+    count: count
+    shape: cylinder(diameter: pilot, depth: -(length - bite)..bite, tilt: tilt, toward: across)
+  }
+  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite) }
+
+  note: "Drill the pockets in {piece} with a pocket-hole jig, clamp the parts flush and drive the screws"
+}

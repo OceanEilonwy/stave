@@ -1179,8 +1179,14 @@ pub enum CutKind {
     Drill {
         /// Hole diameter.
         diameter: Length,
-        /// Hole depth.
+        /// Hole depth (along the slant, for a slanted hole).
         depth: Depth,
+        /// How far below the face the hole starts: zero for a hole that
+        /// opens onto it.
+        from_depth: Length,
+        /// The slant of the member it is drilled for, when it has one
+        /// (grammar, "Slanted members").
+        tilt: Option<Tilt>,
     },
     /// A dovetail socket.
     DovetailSocket {
@@ -1227,6 +1233,19 @@ impl CutKind {
             CutKind::Outline { .. } => CutOperation::Outline,
         }
     }
+}
+
+/// Which way a slanted hole leans, in the drilled part's own frame: going
+/// deeper, it turns from square to its face by `angle` toward the face
+/// `toward` (grammar, "Slanted members").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct Tilt {
+    /// How far it turns from square to the face: more than 0deg, less
+    /// than 90deg.
+    pub angle: Angle,
+    /// The face of the part it leans toward; never across the axis of the
+    /// face it is drilled from.
+    pub toward: LocalFace,
 }
 
 /// Where on its face a cut is, in the part's own frame.
@@ -1939,6 +1958,24 @@ pub enum MemberShape {
         /// Its high end along `axis`.
         end: Length,
     },
+    /// A cylinder whose axis is turned from a world axis toward a world
+    /// direction square to it (grammar, "Slanted members").
+    Slanted {
+        /// The middle of its axis.
+        centre: Point,
+        /// The world axis it is turned from.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// Its axis, read toward `axis`'s positive end, leans toward this
+        /// direction, square to `axis`.
+        toward: Direction,
+        /// How far it is turned: more than 0deg, less than 90deg.
+        angle: Angle,
+        /// Its diameter.
+        diameter: Length,
+        /// How long it is along its axis.
+        length: Length,
+    },
     /// A convex outline on the plane across a world axis, extruded along it.
     Prism {
         /// The axis it is extruded along.
@@ -2067,8 +2104,84 @@ impl Body {
 }
 
 impl MemberShape {
+    /// The two ends of a slanted cylinder's axis, each rounded to the
+    /// nanometre; `None` for any other shape or on overflow.
+    pub fn slanted_ends(&self) -> Option<(Point, Point)> {
+        let MemberShape::Slanted {
+            centre,
+            axis,
+            toward,
+            angle,
+            length,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let (sin, cos) = angle.sin_cos();
+        let half = Length::from_nm(length.nm() / 2);
+        let along = half.scaled(cos)?;
+        let lean = half.scaled(sin)?;
+        let lean = if toward.is_positive() {
+            lean
+        } else {
+            lean.checked_neg()?
+        };
+        let shift = |sign: i64| -> Option<Point> {
+            let at = |on: Axis, by: Length| -> Option<Length> {
+                centre.get(on).checked_add(by.checked_mul(sign)?)
+            };
+            Some(
+                centre
+                    .with(*axis, at(*axis, along)?)
+                    .with(toward.axis(), at(toward.axis(), lean)?),
+            )
+        };
+        Some((shift(-1)?, shift(1)?))
+    }
+
+    /// The corners of the box around a slanted cylinder, rounded outward;
+    /// `None` for any other shape or on overflow.
+    fn slanted_corners(&self) -> Option<(Point, Point)> {
+        let MemberShape::Slanted {
+            axis,
+            toward,
+            angle,
+            diameter,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let (a, b) = self.slanted_ends()?;
+        let (sin, cos) = angle.sin_cos();
+        let radius = Length::from_nm(diameter.nm().saturating_add(1) / 2);
+        // How far the end discs reach past the axis on each world axis,
+        // rounded up by a nanometre.
+        let reach = |on: Axis| -> Option<i64> {
+            let value = if on == *axis {
+                radius.scaled(sin)?
+            } else if on == toward.axis() {
+                radius.scaled(cos)?
+            } else {
+                return Some(radius.nm());
+            };
+            value.nm().checked_add(1)
+        };
+        let mut low = a;
+        let mut high = a;
+        for on in Axis::ALL {
+            let (x, y) = (a.get(on).nm(), b.get(on).nm());
+            let r = reach(on)?;
+            low = low.with(on, Length::from_nm(x.min(y).checked_sub(r)?));
+            high = high.with(on, Length::from_nm(x.max(y).checked_add(r)?));
+        }
+        Some((low, high))
+    }
+
     /// The world box around the shape, at rest: exact for a box, a
     /// cylinder and a prism; for a bar, its corners rounded outward to the
+    /// nanometre; for a slanted cylinder, rounded outward to the
     /// nanometre.
     pub fn bounds(&self) -> WorldBox {
         // A box from its extent along `axis` and on the two others.
@@ -2107,6 +2220,10 @@ impl MemberShape {
                         b.nm().saturating_add(rounded),
                     ],
                 )
+            }
+            MemberShape::Slanted { .. } => {
+                let (low, high) = self.slanted_corners().unwrap_or_default();
+                WorldBox::new(low, high)
             }
             MemberShape::Prism {
                 axis,
@@ -2470,6 +2587,30 @@ mod tests {
 
     fn mm(value: i64) -> Length {
         Length::from_mm(value)
+    }
+
+    #[test]
+    fn a_slanted_cylinder_has_its_ends_on_its_slant() {
+        // 32mm long, turned 15deg from across toward up, centred on the
+        // origin: its ends are 15.454813mm along and 4.141105mm up from it.
+        let shape = MemberShape::Slanted {
+            centre: Point::default(),
+            axis: Axis::Across,
+            toward: Direction::Up,
+            angle: Angle::from_deg(15),
+            diameter: mm(3),
+            length: mm(32),
+        };
+        let (a, b) = shape.slanted_ends().unwrap();
+        assert_eq!(b.across, Length::from_nm(15_454_813));
+        assert_eq!(b.up, Length::from_nm(4_141_105));
+        assert_eq!(a.across, Length::from_nm(-15_454_813));
+        assert_eq!(a.up, Length::from_nm(-4_141_105));
+        // The box round it reaches past the ends by the end discs.
+        let bounds = shape.bounds();
+        assert!(bounds.max().across > b.across);
+        assert!(bounds.max().up > b.up);
+        assert_eq!(bounds.max().deep, Length::from_nm(1_500_000));
     }
 
     #[test]

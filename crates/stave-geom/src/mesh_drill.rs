@@ -29,7 +29,7 @@ use glam::{Vec2, Vec3};
 
 use crate::build::{Builder, Frame, GrainAxes, LATHE_SEGMENTS};
 use crate::mesh::merge;
-use crate::solid::{Rod, across};
+use crate::solid::{Rod, Slant, across};
 use crate::{Geometry, Vertex, render};
 
 /// Lengths below this (millimetres) count as zero.
@@ -53,12 +53,15 @@ fn key(point: Vec3) -> Key {
     point.to_array().map(|c| (c + 0.0).to_bits())
 }
 
-/// A hole in the part's local frame.
+/// A hole in the part's local frame (millimetres): along `axis` from
+/// `start` to `end`, its wall following `polygon` on the plane across it,
+/// spanned by `u` and `v`. The three are at right angles; for a hole along
+/// one of the part's axes they are the part's axes.
 struct Hole {
-    /// Local slot of the hole's axis, and of the two across it.
-    axis: usize,
-    u: usize,
-    v: usize,
+    /// Unit vectors along the hole's axis and the two across it.
+    axis: Vec3,
+    u: Vec3,
+    v: Vec3,
     /// Its centre on `u`, `v`.
     centre: Vec2,
     /// Its range along the axis.
@@ -66,39 +69,100 @@ struct Hole {
     end: f32,
     /// The polygon its wall follows, counter-clockwise on (`u`, `v`).
     polygon: Vec<Vec2>,
+    /// `true` for a slanted hole: a surface triangle is cut where the
+    /// hole's axis meets its plane within the hole's range (it may be far
+    /// bigger than the hole, a board's face), not where its middle is.
+    slanted: bool,
+}
+
+/// A local unit vector along a part axis.
+fn unit(axis: stave_lang::placement::PartAxis) -> Vec3 {
+    let mut vector = Vec3::ZERO;
+    vector[slot(axis)] = 1.0;
+    vector
 }
 
 impl Hole {
     fn of(rod: &Rod) -> Hole {
-        let [u, v] = across(rod.axis).map(slot);
+        let [u, v] = across(rod.axis).map(unit);
         let centre = Vec2::new(render::mm(rod.centre[0]), render::mm(rod.centre[1]));
         let radius = render::mm(rod.diameter) * 0.5;
-        let polygon = (0..LATHE_SEGMENTS)
-            .map(|step| centre + Vec2::from_angle(angle(step)) * radius)
-            .collect();
         Hole {
-            axis: slot(rod.axis),
+            axis: unit(rod.axis),
             u,
             v,
             centre,
             start: render::mm(rod.start),
             end: render::mm(rod.end),
-            polygon,
+            polygon: ring(centre, radius),
+            slanted: false,
         }
+    }
+
+    /// A slanted hole (grammar, "Slanted members").
+    fn of_slant(slant: &Slant) -> Hole {
+        let direction = slant.direction().as_vec3().normalize_or_zero();
+        let u = direction.any_orthonormal_vector();
+        let v = direction.cross(u);
+        let entry = Vec3::new(
+            render::mm(slant.entry.length),
+            render::mm(slant.entry.width),
+            render::mm(slant.entry.thickness),
+        );
+        let centre = Vec2::new(entry.dot(u), entry.dot(v));
+        let at = entry.dot(direction);
+        Hole {
+            axis: direction,
+            u,
+            v,
+            centre,
+            start: at + render::mm(slant.start),
+            end: at + render::mm(slant.end),
+            polygon: ring(centre, render::mm(slant.diameter) * 0.5),
+            slanted: true,
+        }
+    }
+
+    /// How far along the axis a local point is.
+    fn along(&self, local: Vec3) -> f32 {
+        local.dot(self.axis)
     }
 
     /// A local point on the plane across the axis.
     fn flat(&self, local: Vec3) -> Vec2 {
-        Vec2::new(local[self.u], local[self.v])
+        Vec2::new(local.dot(self.u), local.dot(self.v))
     }
 
     /// The local point at `along` the axis over a point of the plane.
     fn point(&self, flat: Vec2, along: f32) -> Vec3 {
-        let mut local = Vec3::ZERO;
-        local[self.axis] = along;
-        local[self.u] = flat.x;
-        local[self.v] = flat.y;
-        local
+        self.axis * along + self.u * flat.x + self.v * flat.y
+    }
+
+    /// Does the hole go through the surface triangle with these local
+    /// corners? For a slanted hole: where its axis meets the triangle's
+    /// plane, within its range or near enough that its rim does (the rim
+    /// reaches `radius × cot` of the angle the axis meets the plane at,
+    /// along the axis). For any other hole: where the triangle's middle is.
+    fn meets(&self, corners: [Vec3; 3]) -> bool {
+        let middle = (corners[0] + corners[1] + corners[2]) / 3.0;
+        if !self.slanted {
+            return self.within_range(self.along(middle));
+        }
+        let normal = (corners[1] - corners[0])
+            .cross(corners[2] - corners[0])
+            .normalize_or_zero();
+        let facing = normal.dot(self.axis);
+        if facing.abs() < 1e-4 {
+            return false;
+        }
+        let base = self.point(self.centre, 0.0);
+        let hit = (normal.dot(corners[0]) - normal.dot(base)) / facing;
+        let radius = self
+            .polygon
+            .first()
+            .map_or(0.0, |p| p.distance(self.centre));
+        let reach = radius * (1.0 - facing * facing).max(0.0).sqrt() / facing.abs();
+        hit > self.start - reach - EPSILON && hit < self.end + reach + EPSILON
     }
 
     fn within_range(&self, along: f32) -> bool {
@@ -115,6 +179,13 @@ impl Hole {
     fn count(&self) -> usize {
         self.polygon.len()
     }
+}
+
+/// The corners of a hole's polygon round a centre.
+fn ring(centre: Vec2, radius: f32) -> Vec<Vec2> {
+    (0..LATHE_SEGMENTS)
+        .map(|step| centre + Vec2::from_angle(angle(step)) * radius)
+        .collect()
 }
 
 /// The angle of a corner of the hole's polygon. The corners sit half a
@@ -192,7 +263,19 @@ struct Facet {
 /// Drills a hole through a lathe mesh (in the render frame) of a part
 /// whose frame is `frame`.
 pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, rod: &Rod) {
-    let hole = Hole::of(rod);
+    drill_hole(geometry, frame, grain, &Hole::of(rod));
+}
+
+/// Drills a slanted hole through the mesh (in the render frame) of a
+/// part whose frame is `frame`: a board's or a lathe's alike.
+pub(crate) fn drill_slant(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, slant: &Slant) {
+    drill_hole(geometry, frame, grain, &Hole::of_slant(slant));
+}
+
+fn drill_hole(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, hole: &Hole) {
+    if hole.slanted {
+        split_round(geometry, frame, hole);
+    }
     let vertices = &geometry.mesh.vertices;
     let local: Vec<Vec3> = vertices
         .iter()
@@ -231,7 +314,6 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
         let keep = |indices: &mut Vec<u32>| {
             indices.extend(corners.map(|i| u32::try_from(i).unwrap_or(u32::MAX)));
         };
-        let middle = (positions[0] + positions[1] + positions[2]) / 3.0;
         let flat = positions.map(|p| hole.flat(p));
         let (min, max) = (
             flat[0].min(flat[1]).min(flat[2]),
@@ -239,7 +321,7 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
         );
         let outside_box = max.x < low.x || max.y < low.y || min.x > high.x || min.y > high.y;
         let area = cross(flat[0], flat[1], flat[2]);
-        if !hole.within_range(middle[hole.axis]) || outside_box || area.abs() < EPSILON * EPSILON {
+        if !hole.meets(positions) || outside_box || area.abs() < EPSILON * EPSILON {
             keep(&mut indices);
             continue;
         }
@@ -259,7 +341,7 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
                 flipped,
             }
         };
-        match cut_facet(&hole, &facet, &mut shared) {
+        match cut_facet(hole, &facet, &mut shared) {
             None => keep(&mut indices),
             Some(loops) => {
                 changed = true;
@@ -292,14 +374,14 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
     // Outlines that crossed the opening go.
     geometry.edges.segments.retain(|[from, to]| {
         let middle = frame.local((Vec3::from(*from) + Vec3::from(*to)) * 0.5);
-        !(hole.within_range(middle[hole.axis]) && inside_polygon(&hole.polygon, hole.flat(middle)))
+        !(hole.within_range(hole.along(middle)) && inside_polygon(&hole.polygon, hole.flat(middle)))
     });
 
     let surface: Vec<[Vec3; 3]> = triangles
         .iter()
         .map(|corners| corners.map(|i| local.get(i).copied().unwrap_or(Vec3::ZERO)))
         .collect();
-    let walls = wall(frame, grain, &hole, &surface, &shared);
+    let walls = wall(frame, grain, hole, &surface, &shared);
     let drilled = std::mem::replace(
         geometry,
         Geometry {
@@ -309,6 +391,63 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
         },
     );
     *geometry = merge(vec![drilled, walls]);
+}
+
+/// Splits each surface triangle the hole goes through with its centre
+/// inside (a board's face is far bigger than a hole) into three about the
+/// centre, so the hole's polygon crosses their edges as it crosses a
+/// lathe's small facets. The new edges are inside the old triangle, so no
+/// crack opens beside it.
+fn split_round(geometry: &mut Geometry, frame: &Frame, hole: &Hole) {
+    let vertices = &geometry.mesh.vertices;
+    let at = |index: u32| usize::try_from(index).ok();
+    let (triangles, _) = geometry.mesh.indices.as_chunks::<3>();
+    let mut indices = Vec::with_capacity(geometry.mesh.indices.len());
+    let mut added: Vec<Vertex> = Vec::new();
+    let base = vertices.len();
+    for &[a, b, c] in triangles {
+        let corners = [at(a), at(b), at(c)];
+        let [Some(i), Some(j), Some(k)] = corners else {
+            indices.extend([a, b, c]);
+            continue;
+        };
+        let (Some(va), Some(vb), Some(vc)) = (vertices.get(i), vertices.get(j), vertices.get(k))
+        else {
+            indices.extend([a, b, c]);
+            continue;
+        };
+        let world = [va, vb, vc].map(|v| Vec3::from(v.position));
+        let local = world.map(|w| frame.local(w));
+        let flat = local.map(|p| hole.flat(p));
+        let whole = cross(flat[0], flat[1], flat[2]);
+        if whole.abs() < EPSILON * EPSILON || !hole.meets(local) {
+            indices.extend([a, b, c]);
+            continue;
+        }
+        let centre = hole.centre;
+        let weights = Vec3::new(
+            cross(centre, flat[1], flat[2]) / whole,
+            cross(flat[0], centre, flat[2]) / whole,
+            cross(flat[0], flat[1], centre) / whole,
+        );
+        if weights.min_element() <= 1e-4 {
+            indices.extend([a, b, c]);
+            continue;
+        }
+        let point = Point {
+            flat: centre,
+            world: world[0] * weights.x + world[1] * weights.y + world[2] * weights.z,
+            weights,
+        };
+        let middle = u32::try_from(base + added.len()).unwrap_or(u32::MAX);
+        added.push(blend(vertices, &[i, j, k], &point));
+        indices.extend([a, b, middle, b, c, middle, c, a, middle]);
+    }
+    if added.is_empty() {
+        return;
+    }
+    geometry.mesh.vertices.extend(added);
+    geometry.mesh.indices = indices;
 }
 
 /// Strictly inside a convex counter-clockwise polygon.
@@ -650,9 +789,9 @@ fn span(hole: &Hole, surface: &[[Vec3; 3]], flat: Vec2) -> Option<Span> {
                 cross(a, b, flat) / whole,
             );
             (wa >= 0.0 && wb >= 0.0 && wc >= 0.0).then(|| {
-                triangle[0][hole.axis] * wa
-                    + triangle[1][hole.axis] * wb
-                    + triangle[2][hole.axis] * wc
+                hole.along(triangle[0]) * wa
+                    + hole.along(triangle[1]) * wb
+                    + hole.along(triangle[2]) * wc
             })
         })
         .collect();
@@ -702,12 +841,9 @@ fn wall(
         .collect();
     let inward = |flat: Vec2| {
         let direction = (hole.centre - flat).normalize_or_zero();
-        let mut normal = Vec3::ZERO;
-        normal[hole.u] = direction.x;
-        normal[hole.v] = direction.y;
-        frame.vector(normal)
+        frame.vector(hole.u * direction.x + hole.v * direction.y)
     };
-    let axial = |world: Vec3| frame.local(world)[hole.axis];
+    let axial = |world: Vec3| hole.along(frame.local(world));
     // The surface's points along polygon side `k` near the axial value
     // `near`: its corners and crossings, ordered along the side.
     let surface_chain = |k: usize, near: (f32, f32)| -> Option<Vec<(f32, Vec3)>> {
@@ -808,8 +944,7 @@ fn wall(
         if !stops {
             continue;
         }
-        let mut normal = Vec3::ZERO;
-        normal[hole.axis] = if toward_high { 1.0 } else { -1.0 };
+        let normal = if toward_high { hole.axis } else { -hole.axis };
         let world_normal = frame.vector(normal);
         let centre_local = hole.point(hole.centre, along);
         let middle = builder.vertex(

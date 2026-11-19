@@ -82,6 +82,7 @@ fn boxes(solid: &WorldSolid) -> Vec<WorldBox> {
         .iter()
         .copied()
         .chain(solid.rods().iter().map(WorldRod::bounds))
+        .chain(solid.slant_bounds())
         .collect()
 }
 
@@ -699,7 +700,7 @@ fn swing(
 }
 
 /// A whole, non-negative count of samples as a loop bound.
-fn integer(count: f64) -> u32 {
+pub(crate) fn integer(count: f64) -> u32 {
     let whole = render::integer_from_f64(count.floor()).unwrap_or(0);
     u32::try_from(whole.max(0)).unwrap_or(u32::MAX)
 }

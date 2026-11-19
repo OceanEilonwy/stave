@@ -78,6 +78,15 @@ fn mm_nm(nm: i64) -> f32 {
 /// The mesh of a part with its cuts made, built in `frame` (the part's
 /// frame in the render frame, or its own frame).
 pub fn cut_part(frame: &Frame, part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
+    // Slanted holes are drilled in the part's own frame, where its
+    // coordinates are small, and the result moved into place: drilled in
+    // place, far from the origin, the points where a hole crosses a face
+    // would come out a little different in floats.
+    let own = Frame::own(crate::handedness(part));
+    if !solid.slants().is_empty() && own != *frame {
+        let local = cut_part(&own, part, solid, grain);
+        return moved(local, own.onto(frame));
+    }
     let frame = *frame;
     let size = [part.cut.length, part.cut.width, part.cut.thickness].map(Length::nm);
     let length = render::mm(part.cut.length);
@@ -128,7 +137,31 @@ pub fn cut_part(frame: &Frame, part: &Part, solid: &Solid, grain: GrainAxes) -> 
         }
         pieces.push(turned);
     }
-    merge(pieces)
+    let mut geometry = merge(pieces);
+    for slant in solid.slants() {
+        crate::mesh_drill::drill_slant(&mut geometry, &frame, grain, slant);
+    }
+    geometry
+}
+
+/// A geometry moved by a transform with no reflection in it.
+fn moved(mut geometry: Geometry, transform: glam::Mat4) -> Geometry {
+    for vertex in &mut geometry.mesh.vertices {
+        vertex.position = transform
+            .transform_point3(Vec3::from(vertex.position))
+            .to_array();
+        vertex.normal = transform
+            .transform_vector3(Vec3::from(vertex.normal))
+            .normalize_or_zero()
+            .to_array();
+    }
+    for segment in &mut geometry.edges.segments {
+        for point in segment.iter_mut() {
+            *point = transform.transform_point3(Vec3::from(*point)).to_array();
+        }
+    }
+    geometry.bounds = geometry.bounds.transformed(transform);
+    geometry
 }
 
 /// Joins geometries into one.

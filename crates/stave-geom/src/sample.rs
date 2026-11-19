@@ -26,7 +26,7 @@ use stave_model::solved::Part;
 
 use crate::collide::direction_vector;
 use crate::render;
-use crate::solid::{Point2, Prism, Rod, Solid, across};
+use crate::solid::{Point2, Prism, Rod, Slant, Solid, across};
 
 /// Lengths below this (nanometres) count as on a surface.
 const NUDGE: f64 = 1_000.0;
@@ -131,6 +131,7 @@ impl<'a> Shape<'a> {
             })
         }) || self.rods.iter().any(|rod| in_rod(rod, p, true));
         wood && !self.solid.holes().iter().any(|hole| in_rod(hole, p, false))
+            && !self.solid.slants().iter().any(|slant| in_slant(slant, p))
             && !self.solid.prisms().iter().any(|prism| in_prism(prism, p))
     }
 
@@ -353,6 +354,19 @@ fn in_rod(rod: &Rod, p: DVec3, wood: bool) -> bool {
     } else {
         dx * dx + dy * dy < radius * radius
     }
+}
+
+/// Is a local point inside a slanted hole?
+fn in_slant(slant: &Slant, p: DVec3) -> bool {
+    let (a, b) = slant.ends();
+    let line = b - a;
+    let length = line.length_squared();
+    if length <= 0.0 {
+        return false;
+    }
+    let t = (p - a).dot(line) / length;
+    let radius = render::nm(slant.diameter) / 2.0;
+    (0.0..=1.0).contains(&t) && (p - (a + line * t)).length_squared() < radius * radius
 }
 
 /// The box around an outline's points: (low, high).

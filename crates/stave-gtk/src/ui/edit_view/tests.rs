@@ -702,7 +702,7 @@ fn a_settings_short_list_and_its_search_choose_and_a_blamed_setting_can_be_put_b
 }
 
 /// The Case's joinery: its short list (the default, then "Search all
-/// 18…"), the search dialog finding chigiri by its description (refused:
+/// 19…"), the search dialog finding chigiri by its description (refused:
 /// it can't be chosen) and dowel by its name (chosen with Enter), then
 /// chigiri typed, blamed, and put back from the card.
 fn short_list_search_and_blame_on_the_card() {
@@ -750,7 +750,7 @@ fn short_list_search_and_blame_on_the_card() {
     let texts: Vec<&str> = rows.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(texts, ["dowel(count: 4)", ""], "the default, then Search…");
     assert!(words_in(rows[0].1.upcast_ref()).contains("default"));
-    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 18…"));
+    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 19…"));
     rows[0].1.emit_clicked();
     rows[1].1.emit_clicked();
     let joinery_name = parse_name("joinery").unwrap();
@@ -802,7 +802,7 @@ fn short_list_search_and_blame_on_the_card() {
     search.present("joinery", "");
     assert!(search.root.is_visible());
     let all = search.rows();
-    assert_eq!(all.len(), 18, "every option, with nothing typed");
+    assert_eq!(all.len(), 19, "every option, with nothing typed");
     // The arrow keys move through them.
     let first = search.selected().unwrap();
     search.press_arrow(true);

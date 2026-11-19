@@ -75,6 +75,7 @@ fn wood_boxes(solid: &WorldSolid) -> impl Iterator<Item = WorldBox> + '_ {
         .copied()
         .chain(solid.rods().iter().map(WorldRod::bounds))
         .chain(solid.prisms().iter().filter_map(WorldPrism::bounds))
+        .chain(solid.slant_bounds())
 }
 
 /// A fixed solid's boxes at its placement: exact when it only moved, the

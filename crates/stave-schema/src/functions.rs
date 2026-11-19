@@ -409,7 +409,7 @@ pub const POINT_ARGUMENTS: [&str; 3] = ["along", "across", "depth"];
 pub enum ShapeFunction {
     /// `box(along:, across:, depth:)`
     Box,
-    /// `cylinder(diameter:, depth:, at:, axis:)`
+    /// `cylinder(diameter:, depth:, at:, axis:, tilt:, toward:)`
     Cylinder,
     /// `prism(points: [...], along:)`
     Prism,
@@ -448,7 +448,9 @@ impl ShapeFunction {
     pub fn arguments(self) -> &'static [&'static str] {
         match self {
             ShapeFunction::Box => &["along", "across", "depth"],
-            ShapeFunction::Cylinder => &["diameter", "along", "across", "depth", "at", "axis"],
+            ShapeFunction::Cylinder => &[
+                "diameter", "along", "across", "depth", "at", "axis", "tilt", "toward",
+            ],
             ShapeFunction::Prism => &["points", "along"],
             ShapeFunction::Bar => &["from", "to", "thickness", "along"],
         }

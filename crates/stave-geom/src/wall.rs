@@ -46,8 +46,8 @@ use stave_model::solved::{Cut, CutKind, Depth, End, LocalFace, Part, Shape, Size
 
 use crate::render;
 use crate::solid::{
-    Local, Solid, across, centred_low, depth_range, entering_axes, face_extent, hole_centre,
-    place_centre, slot_run,
+    Local, Solid, across, centred_low, depth_range, drill_range, entering_axes, face_extent,
+    hole_centre, place_centre, slot_run,
 };
 
 /// Where the least wood round a cut is.
@@ -113,6 +113,12 @@ enum Volume {
         start: i128,
         end: i128,
     },
+    /// A slanted hole: the two ends of its axis, and its radius.
+    Slanted {
+        from: [i128; 3],
+        to: [i128; 3],
+        radius: i128,
+    },
 }
 
 /// What a cut removes and how it may open.
@@ -122,6 +128,11 @@ struct CutShape {
     closed: bool,
     entry: LocalFace,
     through: bool,
+    /// `false` for a hole that starts below the face it is cut from.
+    entry_opens: bool,
+    /// `true` for a slanted `through` hole: it opens onto every face it
+    /// runs out of.
+    opens_where_it_runs_out: bool,
 }
 
 impl CutShape {
@@ -140,7 +151,7 @@ impl CutShape {
                     get(outer_min, *axis) <= get(&min, *axis)
                         && get(&max, *axis) <= get(outer_max, *axis)
                 }),
-                Volume::Cylinder { .. } => outer == volume,
+                Volume::Cylinder { .. } | Volume::Slanted { .. } => outer == volume,
             })
         })
     }
@@ -239,6 +250,70 @@ impl Volume {
                 set(&mut max, axis, end);
                 (min, max)
             }
+            Volume::Slanted { from, to, radius } => {
+                // Each end disc reaches r × sqrt(1 - d²) past the axis
+                // along an axis the direction `d` has a share `d` of.
+                let (a, b) = (to_f64(from), to_f64(to));
+                let direction = (b - a).normalize_or_zero();
+                let r = to_f64_one(radius);
+                let mut min = [0; 3];
+                let mut max = [0; 3];
+                for axis in PartAxis::ALL {
+                    let k = slot(axis);
+                    let reach = r * (1.0 - direction[k] * direction[k]).max(0.0).sqrt();
+                    let reach = render::integer_from_f64(reach.ceil()).map_or(0, i128::from);
+                    let (x, y) = (
+                        from.get(k).copied().unwrap_or(0),
+                        to.get(k).copied().unwrap_or(0),
+                    );
+                    set(&mut min, axis, x.min(y) - reach);
+                    set(&mut max, axis, x.max(y) + reach);
+                }
+                (min, max)
+            }
+        }
+    }
+
+    /// The signed distance from a point (half nanometres, `f64`) to the
+    /// shape: negative inside it. Convex in the point, as every shape
+    /// here is convex.
+    fn signed_distance(&self, point: glam::DVec3) -> f64 {
+        match *self {
+            Volume::Box { min, max } => {
+                let (low, high) = (to_f64(min), to_f64(max));
+                let outside = (low - point).max(point - high);
+                let apart = outside.max(glam::DVec3::ZERO).length();
+                let inside = outside.max_element().min(0.0);
+                apart + inside
+            }
+            Volume::Cylinder {
+                axis,
+                centre,
+                radius,
+                start,
+                end,
+            } => {
+                let along = point[slot(axis)];
+                let [u, v] = across(axis).map(slot);
+                let du = point[u] - to_f64_one(centre[0]);
+                let dv = point[v] - to_f64_one(centre[1]);
+                let radial = du.hypot(dv) - to_f64_one(radius);
+                let axial = (to_f64_one(start) - along).max(along - to_f64_one(end));
+                let apart = glam::DVec2::new(radial.max(0.0), axial.max(0.0)).length();
+                apart + radial.max(axial).min(0.0)
+            }
+            Volume::Slanted { from, to, radius } => {
+                // As a capsule round its axis: never farther than the
+                // cylinder itself.
+                let (a, b) = (to_f64(from), to_f64(to));
+                let line = b - a;
+                let t = if line.length_squared() > 0.0 {
+                    ((point - a).dot(line) / line.length_squared()).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (point - (a + line * t)).length() - to_f64_one(radius)
+            }
         }
     }
 
@@ -282,8 +357,54 @@ impl Volume {
                 combine(&[along, apart])
             }
             (Volume::Cylinder { .. }, Volume::Cylinder { .. }) => square_cylinders(self, other),
+            (slanted @ Volume::Slanted { .. }, any)
+            | (
+                any @ (Volume::Box { .. } | Volume::Cylinder { .. }),
+                slanted @ Volume::Slanted { .. },
+            ) => slanted_distance(&slanted, &any),
         }
     }
+}
+
+/// A point in half nanometres as floats.
+fn to_f64(point: [i128; 3]) -> glam::DVec3 {
+    glam::DVec3::new(
+        to_f64_one(point[0]),
+        to_f64_one(point[1]),
+        to_f64_one(point[2]),
+    )
+}
+
+/// A value in half nanometres as a float.
+fn to_f64_one(value: i128) -> f64 {
+    i64::try_from(value)
+        .map(|v| render::nm(Length::from_nm(v)))
+        .unwrap_or(f64::MAX)
+}
+
+/// The signed distance from a slanted hole to another shape: the least,
+/// along the hole's axis, of the other's distance less the hole's radius
+/// (as a capsule: never more than the true distance), found by narrowing
+/// in on it, which works because the distance to a convex shape is convex
+/// along a line. Rounded down to the half nanometre.
+fn slanted_distance(slanted: &Volume, other: &Volume) -> i128 {
+    let Volume::Slanted { from, to, radius } = *slanted else {
+        return 0;
+    };
+    let (a, b) = (to_f64(from), to_f64(to));
+    let along = |t: f64| other.signed_distance(a + (b - a) * t);
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    for _ in 0..200 {
+        let first = low + (high - low) / 3.0;
+        let second = high - (high - low) / 3.0;
+        if along(first) <= along(second) {
+            high = second;
+        } else {
+            low = first;
+        }
+    }
+    let least = along(0.0).min(along(1.0)).min(along((low + high) / 2.0)) - to_f64_one(radius);
+    render::integer_from_f64(least.floor()).map_or(0, i128::from)
 }
 
 fn get(point: &[i128; 3], axis: PartAxis) -> i128 {
@@ -411,6 +532,8 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
         closed: false,
         entry: face,
         through: false,
+        entry_opens: true,
+        opens_where_it_runs_out: false,
     };
     let full = |size: Size3| ([0; 3], PartAxis::ALL.map(|axis| half(size.get(axis))));
     let block = |min: Local, max: Local| Volume::Box {
@@ -419,10 +542,28 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
     };
     let ranged = |depth: Depth| depth_range(size, face, depth);
     match &cut.kind {
-        CutKind::Drill { diameter, depth } => {
+        CutKind::Drill {
+            diameter,
+            depth,
+            from_depth,
+            tilt,
+        } => {
             shape.closed = true;
             shape.through = *depth == Depth::Through;
-            let (start, end) = ranged(*depth);
+            shape.entry_opens = *from_depth <= Length::ZERO;
+            if let Some(tilt) = tilt {
+                let slant =
+                    crate::solid::slant_of(part, cut, *diameter, *depth, *from_depth, *tilt);
+                let (from, to) = slant.exact_ends();
+                shape.opens_where_it_runs_out = shape.through;
+                shape.volumes.push(Volume::Slanted {
+                    from: PartAxis::ALL.map(|axis| half(from.get(axis))),
+                    to: PartAxis::ALL.map(|axis| half(to.get(axis))),
+                    radius: i128::from(diameter.nm()),
+                });
+                return shape;
+            }
+            let (start, end) = drill_range(size, face, *depth, *from_depth);
             shape.volumes.push(Volume::Cylinder {
                 axis: face.axis,
                 centre: hole_centre(part, cut).map(half),
@@ -712,8 +853,11 @@ impl<'a> Walls<'a> {
             return None;
         }
         let size = self.part.cut;
-        let mut opens = vec![shape.entry];
-        if shape.through {
+        let mut opens = Vec::new();
+        if shape.entry_opens {
+            opens.push(shape.entry);
+        }
+        if shape.through && !shape.opens_where_it_runs_out {
             opens.push(opposite(shape.entry));
         }
         let mut best: Option<(i128, Toward)> = None;
@@ -735,7 +879,7 @@ impl<'a> Walls<'a> {
                 let Some(signed) = Self::to_face(shape, face, size) else {
                     continue;
                 };
-                if !shape.closed && signed <= 0 {
+                if (!shape.closed || shape.opens_where_it_runs_out) && signed <= 0 {
                     continue;
                 }
                 consider(signed, Toward::Face(face));
@@ -799,6 +943,11 @@ impl<'a> Walls<'a> {
         let Depth::Length(depth) = depth else {
             return None;
         };
+        // A slanted hole that runs out of the part breaks out of a face,
+        // which its wall reports (grammar, "Cuts stay in their part").
+        if matches!(cut.kind, CutKind::Drill { tilt: Some(_), .. }) {
+            return None;
+        }
         let axis = cut.face.axis;
         let size = self.part.cut.get(axis);
         let round = self.profile.is_some() && axis != PartAxis::Length;
@@ -927,6 +1076,34 @@ mod tests {
         let a = cylinder(PartAxis::Thickness, [20, 10], 8, (0, 15));
         let b = cylinder(PartAxis::Thickness, [32, 10], 8, (0, 15));
         assert_eq!(a.distance(&b), mm(4));
+    }
+
+    #[test]
+    fn a_slanted_hole_is_measured_along_its_slant() {
+        // A 2mm hole at 45deg, its axis from the origin to (10, 0, 10)mm.
+        let hole = Volume::Slanted {
+            from: [0, 0, 0],
+            to: [10, 0, 10].map(mm),
+            radius: mm(1),
+        };
+        // Its end disc reaches r × sin 45deg past the end of its axis.
+        let (_, max) = hole.bounds();
+        let reach = get(&max, PartAxis::Thickness) - mm(10);
+        assert!((reach - 1_414_214).abs() <= 2, "{reach}");
+        // To a box 20mm up: as a capsule, never more than the true wall.
+        let above = Volume::Box {
+            min: [-50, -50, 20].map(mm),
+            max: [50, 50, 30].map(mm),
+        };
+        let wall = hole.distance(&above);
+        assert!((wall - mm(9)).abs() <= 2, "{wall}");
+        assert_eq!(above.distance(&hole), wall);
+        // A box it runs into is a negative wall.
+        let into = Volume::Box {
+            min: [-50, -50, 5].map(mm),
+            max: [50, 50, 30].map(mm),
+        };
+        assert!(hole.distance(&into) < 0);
     }
 
     #[test]

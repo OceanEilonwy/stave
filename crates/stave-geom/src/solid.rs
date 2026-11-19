@@ -45,7 +45,7 @@ use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
     Boards, Cut, CutKind, CutPlace, Depth, End, LocalFace, Mark, Part, Shape, Size3, Slope,
-    SolvedDesign,
+    SolvedDesign, Tilt,
 };
 
 pub use crate::prism::{ConvexPolygon, DepthRange, Point2, Polygon, PolygonError, Prism};
@@ -253,6 +253,87 @@ pub struct Rod {
     /// Flats kept on a round section, drawn but not used by collision
     /// tests.
     pub flats: Option<Flats>,
+}
+
+/// A slanted hole (grammar, "Slanted members"): drilled from `face`, its
+/// axis meeting the face's plane at `entry` and leaning, going deeper,
+/// toward `tilt.toward` by `tilt.angle`. It runs from `start` to `end`
+/// along its axis, measured from `entry` into the part. Exact; only the
+/// tests and meshes that use it work in floats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Slant {
+    /// The face it is drilled from.
+    pub face: LocalFace,
+    /// Where its axis meets the face's plane, in the part's frame.
+    pub entry: Local,
+    /// Which way and how far it leans.
+    pub tilt: Tilt,
+    /// Its diameter.
+    pub diameter: Length,
+    /// Where it starts along its axis, from `entry`: a little before the
+    /// face (negative) for a hole that opens onto it.
+    pub start: Length,
+    /// Where it ends along its axis (after `start`).
+    pub end: Length,
+}
+
+impl Slant {
+    /// The unit vector along its axis, going deeper, in the part's frame
+    /// (`x` length, `y` width, `z` thickness).
+    pub fn direction(&self) -> glam::DVec3 {
+        let angle = self.tilt.angle.to_radians_f64();
+        let mut direction = glam::DVec3::ZERO;
+        let inward = match self.face.end {
+            End::Start => 1.0,
+            End::End => -1.0,
+        };
+        let lean = match self.tilt.toward.end {
+            End::Start => -1.0,
+            End::End => 1.0,
+        };
+        direction[local_slot(self.face.axis)] = inward * angle.cos();
+        direction[local_slot(self.tilt.toward.axis)] = lean * angle.sin();
+        direction
+    }
+
+    /// The two ends of its axis, in the part's frame, nanometres.
+    pub fn ends(&self) -> (glam::DVec3, glam::DVec3) {
+        let entry = glam::DVec3::new(
+            render::nm(self.entry.length),
+            render::nm(self.entry.width),
+            render::nm(self.entry.thickness),
+        );
+        let direction = self.direction();
+        (
+            entry + direction * render::nm(self.start),
+            entry + direction * render::nm(self.end),
+        )
+    }
+
+    /// The two ends of its axis, in the part's frame, each rounded to the
+    /// nanometre.
+    pub fn exact_ends(&self) -> (Local, Local) {
+        let (a, b) = self.ends();
+        let exact = |point: glam::DVec3| {
+            let mut local = Local::default();
+            for axis in PartAxis::ALL {
+                let value =
+                    render::length_from_nm(point[local_slot(axis)].round()).unwrap_or(Length::ZERO);
+                local = local.with(axis, value);
+            }
+            local
+        };
+        (exact(a), exact(b))
+    }
+}
+
+/// The slot of a part axis in a local vector.
+pub(crate) fn local_slot(axis: PartAxis) -> usize {
+    match axis {
+        PartAxis::Length => 0,
+        PartAxis::Width => 1,
+        PartAxis::Thickness => 2,
+    }
 }
 
 /// A station of a lathe profile: a diameter at a distance along the
@@ -504,6 +585,7 @@ pub struct Solid {
     rods: Vec<Rod>,
     profile: Option<Profile>,
     holes: Vec<Rod>,
+    slants: Vec<Slant>,
     prisms: Vec<Prism>,
     skipped: Vec<Skipped>,
     misshapen: Vec<Misshapen>,
@@ -591,6 +673,7 @@ impl Solid {
             rods: Vec::new(),
             profile,
             holes: Vec::new(),
+            slants: Vec::new(),
             prisms: from_boards.prisms,
             skipped: Vec::new(),
             misshapen: from_boards.misshapen,
@@ -627,6 +710,12 @@ impl Solid {
     /// The holes drilled in the part.
     pub fn holes(&self) -> &[Rod] {
         &self.holes
+    }
+
+    /// The slanted holes drilled in the part (grammar, "Slanted
+    /// members").
+    pub fn slants(&self) -> &[Slant] {
+        &self.slants
     }
 
     /// The angled cuts with a slanted piece: the wood is the blocks less
@@ -668,8 +757,18 @@ impl Solid {
         let operation = cut.kind.operation();
         let round_part = self.profile.is_some();
         match &cut.kind {
-            CutKind::Drill { diameter, depth } => {
-                let range = depth_range(size, cut.face, *depth);
+            CutKind::Drill {
+                diameter,
+                depth,
+                from_depth,
+                tilt,
+            } => {
+                if let Some(tilt) = tilt {
+                    self.slants
+                        .push(slant_of(part, cut, *diameter, *depth, *from_depth, *tilt));
+                    return Ok(());
+                }
+                let range = drill_range(size, cut.face, *depth, *from_depth);
                 self.holes.push(Rod {
                     axis: cut.face.axis,
                     centre: hole_centre(part, cut),
@@ -1024,6 +1123,153 @@ pub(crate) fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length
     match face.end {
         End::Start => (Length::ZERO, depth),
         End::End => (Length::from_nm(full.nm().saturating_sub(depth.nm())), full),
+    }
+}
+
+/// A straight hole's range along its axis: `depth` from the face, less
+/// the first `from_depth` of it.
+pub(crate) fn drill_range(
+    size: Size3,
+    face: LocalFace,
+    depth: Depth,
+    from_depth: Length,
+) -> (Length, Length) {
+    let (start, end) = depth_range(size, face, depth);
+    let from_depth = from_depth.max(Length::ZERO);
+    match face.end {
+        End::Start => (start.checked_add(from_depth).unwrap_or(start).min(end), end),
+        End::End => (start, end.checked_sub(from_depth).unwrap_or(end).max(start)),
+    }
+}
+
+/// Where a slanted `through` hole ends along its axis: where its axis
+/// leaves the part, and on until the whole of its last disc is out of the
+/// face it leaves by (`radius × cot` of the angle it meets that face at).
+/// Rounded up to the nanometre.
+fn through_end(size: Size3, face: LocalFace, entry: Local, tilt: Tilt, diameter: Length) -> Length {
+    let probe = Slant {
+        face,
+        entry,
+        tilt,
+        diameter,
+        start: Length::ZERO,
+        end: Length::ZERO,
+    };
+    let direction = probe.direction();
+    let origin = glam::DVec3::new(
+        render::nm(entry.length),
+        render::nm(entry.width),
+        render::nm(entry.thickness),
+    );
+    let mut leave = f64::INFINITY;
+    let mut leaving = 0.0_f64;
+    for axis in PartAxis::ALL {
+        let k = local_slot(axis);
+        let d = direction[k];
+        if d.abs() < 1e-12 {
+            continue;
+        }
+        let limit = if d > 0.0 {
+            render::nm(size.get(axis))
+        } else {
+            0.0
+        };
+        let t = (limit - origin[k]) / d;
+        if t < leave {
+            leave = t;
+            leaving = d.abs();
+        }
+    }
+    let radius = render::nm(diameter) / 2.0;
+    let past = if leaving > 0.0 {
+        radius * (1.0 - leaving * leaving).max(0.0).sqrt() / leaving
+    } else {
+        0.0
+    };
+    render::length_from_nm((leave.max(0.0) + past).ceil() + 1.0).unwrap_or(size.length)
+}
+
+/// The slanted hole a drill makes (grammar, "Slanted members"). On a
+/// member, its axis is the shape's axis, which passes through the middle
+/// of the shape's box; elsewhere, it enters at the middle of its place.
+/// Where the axis meets the face's plane is rounded to the nanometre.
+/// A `through` hole runs until it is surely out of the part.
+pub(crate) fn slant_of(
+    part: &Part,
+    cut: &Cut,
+    diameter: Length,
+    depth: Depth,
+    from_depth: Length,
+    tilt: Tilt,
+) -> Slant {
+    let size = part.cut;
+    let face = cut.face;
+    let plane = match face.end {
+        End::Start => Length::ZERO,
+        End::End => size.get(face.axis),
+    };
+    let entry = match &cut.place {
+        CutPlace::Member { shape, .. } => {
+            let mut centre = Local::default();
+            for axis in PartAxis::ALL {
+                let (low, high) = (local_get(&shape.min, axis), local_get(&shape.max, axis));
+                centre = centre.with(
+                    axis,
+                    Length::from_nm(low.nm().saturating_add(high.nm()).div_euclid(2)),
+                );
+            }
+            // Slide along the axis from the middle to the face's plane:
+            // across the face by the distance to it times tan(angle).
+            let (sin, cos) = tilt.angle.sin_cos();
+            let inward = match face.end {
+                End::Start => 1_i128,
+                End::End => -1,
+            };
+            let lean = match tilt.toward.end {
+                End::Start => -1_i128,
+                End::End => 1,
+            };
+            // Distance to go along the inward normal (negative: back out).
+            let normal = i128::from(plane.nm()) - i128::from(centre.get(face.axis).nm());
+            let along = normal * inward;
+            let shift = if cos == 0 {
+                0
+            } else {
+                along * sin / cos * lean
+            };
+            let across_value = i128::from(centre.get(tilt.toward.axis).nm()) + shift;
+            centre.with(face.axis, plane).with(
+                tilt.toward.axis,
+                Length::from_nm(i64::try_from(across_value).unwrap_or(0)),
+            )
+        }
+        CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Crossing { .. } => {
+            place_centre(part, &cut.place, face.axis).with(face.axis, plane)
+        }
+    };
+    let end = match depth {
+        Depth::Length(depth) => depth,
+        Depth::Through => through_end(size, face, entry, tilt, diameter),
+    };
+    // A hole that opens onto its face starts outside it: its first disc
+    // is square to its slanted axis, and the drill takes away the wedge
+    // between that disc and the face too, `radius × tan(angle)` deep at
+    // most.
+    let start = if from_depth > Length::ZERO {
+        from_depth.min(end)
+    } else {
+        let (sin, cos) = tilt.angle.sin_cos();
+        let radius = i128::from(diameter.nm()) / 2 + 1;
+        let wedge = if cos > 0 { radius * sin / cos + 1 } else { 0 };
+        Length::from_nm(-i64::try_from(wedge).unwrap_or(0))
+    };
+    Slant {
+        face,
+        entry,
+        tilt,
+        diameter,
+        start,
+        end,
     }
 }
 

@@ -1351,6 +1351,8 @@ impl Solver<'_> {
             CutOperation::Drill => CutKind::Drill {
                 diameter: length(self, "diameter")?,
                 depth: depth(self, "depth")?,
+                from_depth: length(self, "from_depth")?,
+                tilt: None,
             },
             CutOperation::DovetailSocket => CutKind::DovetailSocket {
                 neck: length(self, "neck")?,
@@ -1504,7 +1506,9 @@ impl Solver<'_> {
                 ("diameter", "across", Some(*diameter)),
                 ("flats", "across its flats", *flats),
             ],
-            CutKind::Drill { diameter, depth } => vec![
+            CutKind::Drill {
+                diameter, depth, ..
+            } => vec![
                 ("diameter", "across", Some(*diameter)),
                 ("depth", "deep", length(depth)),
             ],
@@ -1519,7 +1523,7 @@ impl Solver<'_> {
             size.filter(|size| *size <= Length::ZERO)
                 .map(|size| (argument, word, size))
         }) else {
-            return Ok(());
+            return self.check_hole_start(at, name, operation, kind, part);
         };
         let cut = name.map_or_else(|| operation.operation.word().to_owned(), |n| n.words());
         let part_name = self.part_name(part);
@@ -1558,6 +1562,63 @@ impl Solver<'_> {
                 at.file,
                 at.span,
                 help,
+            )
+            .into())
+    }
+
+    /// A hole's `from_depth` is not below the face it is cut from, and
+    /// it starts above where it stops (grammar, "Cut operations"):
+    /// `error[cut-size]` at the joint otherwise.
+    fn check_hole_start(
+        &mut self,
+        at: CutAt<'_>,
+        name: Option<&stave_model::defs::CutName>,
+        operation: &OperationDef,
+        kind: &CutKind,
+        part: PartId,
+    ) -> Solved<()> {
+        let CutKind::Drill {
+            depth, from_depth, ..
+        } = kind
+        else {
+            return Ok(());
+        };
+        let start = *from_depth;
+        let stops = match depth {
+            Depth::Length(depth) => Some(*depth),
+            Depth::Through => None,
+        };
+        let fault = if start < Length::ZERO {
+            Some(format!(
+                "starts {} above the face it is cut from",
+                stave_model::value::format_length(
+                    Length::ZERO
+                        .checked_sub(start)
+                        .ok_or(Fault::Overflow)?
+                        .into()
+                )
+            ))
+        } else {
+            stops.filter(|stops| start >= *stops).map(|stops| {
+                format!(
+                    "starts {} below the face but stops {} below it",
+                    stave_model::value::format_length(start.into()),
+                    stave_model::value::format_length(stops.into())
+                )
+            })
+        };
+        let Some(fault) = fault else {
+            return Ok(());
+        };
+        let cut = name.map_or_else(|| operation.operation.word().to_owned(), |n| n.words());
+        let part_name = self.part_name(part);
+        Err(self
+            .error(
+                Code::CutSize,
+                format!("{}: its {cut} in {part_name} {fault}", at.owner),
+                at.file,
+                at.span,
+                "from_depth is how far below the face the hole starts; make it 0mm or more, and less than the hole's depth",
             )
             .into())
     }

@@ -279,6 +279,21 @@ pub fn copy_text(body: &Body) -> String {
                 ),
             ],
         ),
+        [
+            MemberShape::Slanted {
+                diameter,
+                length,
+                angle,
+                ..
+            },
+        ] => fill_in(
+            &tr("cylinder {diameter} mm across, {length} mm long, slanted {angle}"),
+            &[
+                ("diameter", &millimetres(*diameter)),
+                ("length", &millimetres(*length)),
+                ("angle", &angle.to_string()),
+            ],
+        ),
         [MemberShape::Bar { thickness, .. }] => fill_in(
             &tr("bar {thickness} mm thick"),
             &[("thickness", &millimetres(*thickness))],
@@ -368,6 +383,19 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
             "cylinder {} mm across, {} mm {}",
             millimetres(*diameter),
             millimetres(Length::from_nm(end.nm().saturating_sub(start.nm()))),
+            if sunk { "deep" } else { "long" }
+        ),
+        [
+            MemberShape::Slanted {
+                diameter,
+                length,
+                angle,
+                ..
+            },
+        ] => format!(
+            "cylinder {} mm across, {} mm {}, slanted {angle}",
+            millimetres(*diameter),
+            millimetres(*length),
             if sunk { "deep" } else { "long" }
         ),
         [MemberShape::Bar { thickness, .. }] => {

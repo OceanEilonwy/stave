@@ -492,6 +492,13 @@ fn member_shape(shape: &MemberShape) -> Geometry {
                 build::GrainAxes::LENGTH,
             )
         }
+        MemberShape::Slanted { diameter, .. } => {
+            let Some((from, to)) = shape.slanted_ends() else {
+                return build::Builder::default().finish();
+            };
+            let (start, end) = (render::point(from), render::point(to));
+            slanted_cylinder(start, end, render::mm(*diameter) * 0.5)
+        }
         MemberShape::Prism {
             axis,
             points,
@@ -510,6 +517,30 @@ fn member_shape(shape: &MemberShape) -> Geometry {
             extrude(*axis, &bar.corners, *start, *end)
         }
     }
+}
+
+/// A cylinder between two render-frame points: a lathe in a frame whose
+/// first axis runs from one to the other.
+pub(crate) fn slanted_cylinder(start: glam::Vec3, end: glam::Vec3, radius: f32) -> Geometry {
+    let along = end - start;
+    let length = along.length();
+    let first = along.normalize_or_zero();
+    if length <= 0.0 || first == glam::Vec3::ZERO {
+        return build::Builder::default().finish();
+    }
+    let second = first.any_orthonormal_vector();
+    let third = first.cross(second);
+    let frame = build::Frame::new(start, [first, second, third]);
+    build::lathe(
+        &frame,
+        [0.0, 0.0],
+        &[
+            build::ProfilePoint::new(0.0, radius),
+            build::ProfilePoint::new(length, radius),
+        ],
+        build::Corners::Sharp,
+        build::GrainAxes::LENGTH,
+    )
 }
 
 /// A convex outline on the plane across `axis`, extruded from `start` to
