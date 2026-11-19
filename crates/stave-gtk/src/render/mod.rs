@@ -25,7 +25,6 @@ use glam::{Mat4, Vec3};
 use stave_scene::{
     Aabb, Highlight, LineKind, Look, Material, NodeId, Orbit, Overlay, Posed, SceneGraph, Section,
 };
-use wgpu::util::DeviceExt as _;
 
 const COLOUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -223,13 +222,61 @@ struct Target {
     height: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
-    /// The selection mask, multisampled; its resolved copy is bound for
-    /// the outline pass by `mask_group`.
-    mask: wgpu::TextureView,
-    mask_resolved: wgpu::TextureView,
-    mask_group: wgpu::BindGroup,
+    /// Made the first time something is selected.
+    mask: Option<Mask>,
     resolved: wgpu::Texture,
     resolved_view: wgpu::TextureView,
+}
+
+/// The selection mask, multisampled; its resolved copy is bound for the
+/// outline pass by `group`.
+struct Mask {
+    msaa: wgpu::TextureView,
+    resolved: wgpu::TextureView,
+    group: wgpu::BindGroup,
+}
+
+impl Mask {
+    /// A mask for a target `size` large.
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: wgpu::Extent3d) -> Mask {
+        let texture = |label, samples, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: MASK_FORMAT,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let msaa = texture(
+            "selection mask",
+            SAMPLES,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let resolved = texture(
+            "selection mask, resolved",
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("selection mask"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&resolved),
+            }],
+        });
+        Mask {
+            msaa,
+            resolved,
+            group,
+        }
+    }
 }
 
 /// Which target a frame is drawn in.
@@ -343,6 +390,28 @@ pub struct Renderer {
     targets_made: u64,
     /// The readback buffers and the frames in them.
     ring: readback::Ring,
+    /// The box around every node at rest (where the floor is), from the
+    /// last upload.
+    rest_bounds: Option<Aabb>,
+    /// What the node buffer holds, so a frame that would write the same
+    /// again (only the camera moved) doesn't.
+    nodes_written: Vec<NodeData>,
+    /// Lists for working out a frame.
+    scratch: Scratch,
+    /// The vertices drawn on top: a problem's shared volumes, the lit
+    /// spaces, and the overlay.
+    volume_faces: Vertices,
+    volume_lines: Vertices,
+    lit_faces: Vertices,
+    lit_lines: Vertices,
+    overlay_vertices: Vertices,
+    /// How many times the node buffer was written, for tests.
+    node_writes: u64,
+    /// For tests: draw every pass as if all of it were needed (the
+    /// multisampled scene kept, the "on top" pass run, the selection
+    /// outline over the whole frame), to compare with the shortcuts.
+    #[cfg(test)]
+    full_passes: bool,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -963,6 +1032,17 @@ impl Renderer {
             still_target: None,
             targets_made: 0,
             ring: readback::Ring::default(),
+            rest_bounds: None,
+            nodes_written: Vec::new(),
+            scratch: Scratch::default(),
+            volume_faces: Vertices::new("volume faces"),
+            volume_lines: Vertices::new("volume outlines"),
+            lit_faces: Vertices::new("lit space faces"),
+            lit_lines: Vertices::new("lit space outlines"),
+            overlay_vertices: Vertices::new("overlay"),
+            node_writes: 0,
+            #[cfg(test)]
+            full_passes: false,
         })
     }
 
@@ -988,9 +1068,15 @@ impl Renderer {
         if needed > self.node_capacity {
             self.node_capacity = needed.next_power_of_two();
             self.nodes = node_buffer(&self.device, self.node_capacity);
+            self.nodes_written.clear();
             self.scene_group =
                 scene_group(&self.device, &self.scene_layout, &self.globals, &self.nodes);
         }
+        self.rest_bounds = scene
+            .nodes
+            .iter()
+            .map(|node| node.geometry.bounds)
+            .reduce(Aabb::union);
     }
 
     /// Makes sure `slot`'s target has room for a `width` by `height`
@@ -1055,36 +1141,12 @@ impl Renderer {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             );
             let resolved_view = resolved.create_view(&wgpu::TextureViewDescriptor::default());
-            let mask = texture(
-                "selection mask",
-                SAMPLES,
-                MASK_FORMAT,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
-            )
-            .create_view(&wgpu::TextureViewDescriptor::default());
-            let mask_resolved = texture(
-                "selection mask, resolved",
-                1,
-                MASK_FORMAT,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            )
-            .create_view(&wgpu::TextureViewDescriptor::default());
-            let mask_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("selection mask"),
-                layout: &self.mask_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&mask_resolved),
-                }],
-            });
             let target = Some(Target {
                 width,
                 height,
                 msaa,
                 depth,
-                mask,
-                mask_resolved,
-                mask_group,
+                mask: None,
                 resolved,
                 resolved_view,
             });
@@ -1093,6 +1155,24 @@ impl Renderer {
                 Slot::Still => self.still_target = target,
             }
             self.targets_made += 1;
+        }
+    }
+
+    /// Makes sure `slot`'s target has a selection mask.
+    fn ensure_mask(&mut self, slot: Slot) {
+        let target = match slot {
+            Slot::Live => self.live_target.as_mut(),
+            Slot::Still => self.still_target.as_mut(),
+        };
+        if let Some(target) = target
+            && target.mask.is_none()
+        {
+            let size = wgpu::Extent3d {
+                width: target.width,
+                height: target.height,
+                depth_or_array_layers: 1,
+            };
+            target.mask = Some(Mask::new(&self.device, &self.mask_layout, size));
         }
     }
 
@@ -1192,6 +1272,20 @@ impl Renderer {
     }
 
     fn draw(&mut self, frame: &Frame<'_>, slot: Slot) -> Result<readback::Drawn> {
+        // The lists are taken out while the frame is worked out, and put
+        // back for the next, whatever happens.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let drawn = self.draw_with(frame, slot, &mut scratch);
+        self.scratch = scratch;
+        drawn
+    }
+
+    fn draw_with(
+        &mut self,
+        frame: &Frame<'_>,
+        slot: Slot,
+        scratch: &mut Scratch,
+    ) -> Result<readback::Drawn> {
         let (width, height) = (frame.width.max(1), frame.height.max(1));
         let limit = self.device.limits().max_texture_dimension_2d;
         if width > limit || height > limit {
@@ -1204,10 +1298,98 @@ impl Renderer {
             bail!("the scene changed without being uploaded");
         }
         let started = profile::start();
-        let light = self.write_uniforms(frame, width, height);
+        scratch.mark(frame);
+        let (light, view_projection) = self.write_uniforms(frame, width, height, scratch);
         self.ensure_target(slot, width, height);
+        scratch.sort(frame, self.meshes.ranges());
+        // Where the selection's outline can fall: around the selection's
+        // box on screen. `None`: nothing selected is on screen.
+        let outline_rect = scratch
+            .outlined
+            .iter()
+            .filter_map(|(index, _)| {
+                let index = usize::try_from(*index).ok()?;
+                let node = frame.scene.nodes.get(index)?;
+                let transform = frame.posed.transforms.get(index)?;
+                Some(node.geometry.bounds.transformed(*transform))
+            })
+            .reduce(Aabb::union)
+            .and_then(|bounds| screen_rect(view_projection, bounds, width, height));
+        #[cfg(test)]
+        let outline_rect = outline_rect.map(|rect| {
+            if self.full_passes {
+                (0, 0, width, height)
+            } else {
+                rect
+            }
+        });
+        if outline_rect.is_some() {
+            self.ensure_mask(slot);
+        }
         let layout = readback::Layout::new(width, height);
         let buffer = self.ring.buffer(&self.device, layout);
+        let volumes = match frame.highlight.filter(|h| !h.volumes.is_empty()) {
+            Some(highlight) => {
+                box_vertices(highlight.volumes, &mut scratch.faces, &mut scratch.lines);
+                self.volume_faces
+                    .write(&self.device, &self.queue, &scratch.faces)
+                    .zip(
+                        self.volume_lines
+                            .write(&self.device, &self.queue, &scratch.lines),
+                    )
+            }
+            None => None,
+        };
+        let lit = match frame.lit.filter(|boxes| !boxes.is_empty()) {
+            Some(boxes) => {
+                box_vertices(boxes, &mut scratch.faces, &mut scratch.lines);
+                self.lit_faces
+                    .write(&self.device, &self.queue, &scratch.faces)
+                    .zip(
+                        self.lit_lines
+                            .write(&self.device, &self.queue, &scratch.lines),
+                    )
+            }
+            None => None,
+        };
+        let overlay = match frame.overlay {
+            Some(overlay) => {
+                overlay_triangles(overlay, frame, width, height, &mut scratch.overlay);
+                self.overlay_vertices
+                    .write(&self.device, &self.queue, &scratch.overlay)
+            }
+            None => None,
+        };
+        // Ghosts cast no shadow; see-through parts do.
+        let casting = scratch
+            .solid
+            .iter()
+            .map(|(_, index, mesh)| (*index, *mesh))
+            .chain(
+                scratch
+                    .translucent
+                    .iter()
+                    .filter(|(_, look, _, _)| *look == Look::XRay)
+                    .map(|(_, _, index, mesh)| (*index, *mesh)),
+            );
+        scratch.casters.clear();
+        scratch.casters.extend(casting.clone().map(|(index, _)| {
+            let model = usize::try_from(index)
+                .ok()
+                .and_then(|index| frame.posed.transforms.get(index))
+                .copied()
+                .unwrap_or(Mat4::IDENTITY);
+            (index, model.to_cols_array_2d())
+        }));
+        scratch.casters.sort_unstable_by_key(|(index, _)| *index);
+        let light = light.to_cols_array_2d();
+        // Only the camera moved (an orbit, a pan, a zoom): the shadow map
+        // drawn before is still right.
+        let shadow_drawn = !self.shadow_key.as_ref().is_some_and(|key| {
+            key.meshes == self.meshes_generation
+                && key.light == light
+                && key.casters == scratch.casters
+        });
         let target = match slot {
             Slot::Live => &self.live_target,
             Slot::Still => &self.still_target,
@@ -1226,145 +1408,17 @@ impl Renderer {
             );
             pass.set_scissor_rect(0, 0, width, height);
         };
+        let mask = outline_rect.and_then(|rect| Some((rect, target.mask.as_ref()?)));
+        // Anything drawn over the resolved scene. Without it, the view pass
+        // resolves straight into the frame and nothing multisampled is kept.
+        let on_top = mask.is_some() || lit.is_some() || volumes.is_some() || overlay.is_some();
+        #[cfg(test)]
+        let on_top = on_top || self.full_passes;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
-        let volumes = frame
-            .highlight
-            .filter(|h| !h.volumes.is_empty())
-            .map(|h| self.volume_buffers(h.volumes));
-        let lit = frame
-            .lit
-            .filter(|boxes| !boxes.is_empty())
-            .map(|boxes| self.volume_buffers(boxes));
-        let look = |id: NodeId| {
-            frame
-                .looks
-                .and_then(|looks| looks.get(id.index()).copied())
-                .unwrap_or(Look::Normal)
-        };
-        let ranges = self.meshes.ranges();
-        // How far a shown node's centre is from the eye, where it is now.
-        let eye = frame.orbit.eye();
-        let distance = |id: NodeId, transform: Mat4| {
-            frame.scene.node(id).map_or(f32::MAX, |node| {
-                node.geometry
-                    .bounds
-                    .transformed(transform)
-                    .centre()
-                    .distance(eye)
-            })
-        };
-        // Solid parts, nearest first: the wood in front is drawn before
-        // what it hides, so the depth test spares the hidden fragments
-        // their shading.
-        let mut visible: Vec<(f32, u32, MeshRange)> = frame
-            .scene
-            .node_ids()
-            .zip(ranges.iter().copied())
-            .filter_map(|(id, mesh)| {
-                let transform = frame.posed.shown(id)?;
-                if look(id) != Look::Normal {
-                    return None;
-                }
-                Some((
-                    distance(id, transform),
-                    u32::try_from(id.index()).ok()?,
-                    mesh,
-                ))
-            })
-            .collect();
-        visible.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let visible: Vec<(u32, MeshRange)> = visible
-            .into_iter()
-            .map(|(_, index, mesh)| (index, mesh))
-            .collect();
-        // Ghosts and see-through parts, farthest first so they blend in
-        // order.
-        let mut translucent: Vec<(f32, Look, u32, MeshRange)> = frame
-            .scene
-            .node_ids()
-            .zip(ranges.iter().copied())
-            .filter_map(|(id, mesh)| {
-                let transform = frame.posed.shown(id)?;
-                let look = look(id);
-                if look == Look::Normal {
-                    return None;
-                }
-                Some((
-                    distance(id, transform),
-                    look,
-                    u32::try_from(id.index()).ok()?,
-                    mesh,
-                ))
-            })
-            .collect();
-        translucent.sort_by(|a, b| b.0.total_cmp(&a.0));
-        // Every shown node of a selected item is outlined (a hinge is
-        // two), solid or see-through.
-        let selected_items: Vec<stave_scene::Item> = frame
-            .selection
-            .iter()
-            .filter_map(|id| frame.scene.node(*id))
-            .map(|node| node.item)
-            .collect();
-        let outlined: Vec<(u32, MeshRange)> = frame
-            .scene
-            .node_ids()
-            .zip(ranges.iter().copied())
-            .filter(|(id, _)| {
-                frame.posed.shown(*id).is_some()
-                    && frame
-                        .scene
-                        .node(*id)
-                        .is_some_and(|node| selected_items.contains(&node.item))
-            })
-            .filter_map(|(id, mesh)| Some((u32::try_from(id.index()).ok()?, mesh)))
-            .collect();
-        let overlay = frame
-            .overlay
-            .map(|overlay| overlay_triangles(overlay, frame, width, height))
-            .filter(|vertices| !vertices.is_empty())
-            .map(|vertices| {
-                (
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("overlay"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
-                    u32::try_from(vertices.len()).unwrap_or(u32::MAX),
-                )
-            });
-        // Ghosts cast no shadow; see-through parts do.
-        let casting = visible.iter().copied().chain(
-            translucent
-                .iter()
-                .filter(|(_, look, _, _)| *look == Look::XRay)
-                .map(|(_, _, index, mesh)| (*index, *mesh)),
-        );
-        let mut casters: Vec<(u32, [[f32; 4]; 4])> = casting
-            .clone()
-            .map(|(index, _)| {
-                let model = usize::try_from(index)
-                    .ok()
-                    .and_then(|index| frame.posed.transforms.get(index))
-                    .copied()
-                    .unwrap_or(Mat4::IDENTITY);
-                (index, model.to_cols_array_2d())
-            })
-            .collect();
-        casters.sort_by_key(|(index, _)| *index);
-        let shadow_key = ShadowKey {
-            meshes: self.meshes_generation,
-            light: light.to_cols_array_2d(),
-            casters,
-        };
-        // Only the camera moved (an orbit, a pan, a zoom): the shadow map
-        // drawn before is still right.
-        let shadow_drawn = self.shadow_key.as_ref() != Some(&shadow_key);
         if shadow_drawn {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
@@ -1389,22 +1443,30 @@ impl Renderer {
             }
         }
         {
+            let keep = |kept: bool| {
+                if kept {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                }
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("view"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.msaa,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: (!on_top).then_some(&target.resolved_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(frame.backdrop.colour()),
-                        store: wgpu::StoreOp::Store,
+                        store: keep(on_top),
                     },
                 })],
+                // Only the selection mask tests against the scene's depth.
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        store: keep(mask.is_some()),
                     }),
                     stencil_ops: None,
                 }),
@@ -1425,7 +1487,7 @@ impl Renderer {
             self.bind_meshes(&mut pass);
             for pipeline in pipelines {
                 pass.set_pipeline(pipeline);
-                for (index, mesh) in &visible {
+                for (_, index, mesh) in &scratch.solid {
                     draw_mesh(&mut pass, *index, *mesh);
                 }
             }
@@ -1433,34 +1495,34 @@ impl Renderer {
             pass.draw(0..6, 0..1);
             pass.set_pipeline(&self.edge_pipeline);
             pass.set_vertex_buffer(0, self.meshes.edge_buffer().slice(..));
-            for (index, mesh) in &visible {
+            for (_, index, mesh) in &scratch.solid {
                 draw_edges(&mut pass, *index, *mesh);
             }
-            if !translucent.is_empty() {
+            if !scratch.translucent.is_empty() {
                 pass.set_pipeline(if frame.section.is_some() {
                     &self.translucent_section_pipeline
                 } else {
                     &self.translucent_pipeline
                 });
                 self.bind_meshes(&mut pass);
-                for (_, _, index, mesh) in &translucent {
+                for (_, _, index, mesh) in &scratch.translucent {
                     draw_mesh(&mut pass, *index, *mesh);
                 }
                 pass.set_pipeline(&self.edge_pipeline);
                 pass.set_vertex_buffer(0, self.meshes.edge_buffer().slice(..));
-                for (_, _, index, mesh) in &translucent {
+                for (_, _, index, mesh) in &scratch.translucent {
                     draw_edges(&mut pass, *index, *mesh);
                 }
             }
         }
-        if !outlined.is_empty() {
+        if let Some((_, mask)) = mask {
             // The selection mask, tested against the depth just drawn.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("selection mask"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.mask,
+                    view: &mask.msaa,
                     depth_slice: None,
-                    resolve_target: Some(&target.mask_resolved),
+                    resolve_target: Some(&mask.resolved),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Discard,
@@ -1484,12 +1546,12 @@ impl Renderer {
             self.bind_meshes(&mut pass);
             for pipeline in [&self.mask_covered_pipeline, &self.mask_seen_pipeline] {
                 pass.set_pipeline(pipeline);
-                for (index, mesh) in &outlined {
+                for (index, mesh) in &scratch.outlined {
                     draw_mesh(&mut pass, *index, *mesh);
                 }
             }
         }
-        {
+        if on_top {
             // On top: the selection's outline, a problem's shared wood and
             // the overlay.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1517,32 +1579,31 @@ impl Renderer {
             });
             corner(&mut pass);
             pass.set_bind_group(0, &self.scene_group, &[]);
-            if !outlined.is_empty() {
+            if let Some(((x, y, rect_width, rect_height), mask)) = mask {
+                // Only around the selection: everywhere else the band is
+                // empty, and every pixel of it reads the mask 29 times.
+                pass.set_scissor_rect(x, y, rect_width, rect_height);
                 pass.set_pipeline(&self.outline_pipeline);
-                pass.set_bind_group(1, &target.mask_group, &[]);
+                pass.set_bind_group(1, &mask.group, &[]);
                 pass.draw(0..3, 0..1);
+                pass.set_scissor_rect(0, 0, width, height);
             }
             pass.set_bind_group(1, &self.shadow_group, &[]);
-            if let Some((faces, face_count, lines, line_count)) = &lit {
+            if let Some((faces, lines)) = &lit {
                 pass.set_pipeline(&self.lit_pipeline);
-                pass.set_vertex_buffer(0, faces.slice(..));
-                pass.draw(0..*face_count, 0..1);
+                faces.draw(&mut pass);
                 pass.set_pipeline(&self.lit_edge_pipeline);
-                pass.set_vertex_buffer(0, lines.slice(..));
-                pass.draw(0..*line_count, 0..1);
+                lines.draw(&mut pass);
             }
-            if let Some((faces, face_count, lines, line_count)) = &volumes {
+            if let Some((faces, lines)) = &volumes {
                 pass.set_pipeline(&self.volume_pipeline);
-                pass.set_vertex_buffer(0, faces.slice(..));
-                pass.draw(0..*face_count, 0..1);
+                faces.draw(&mut pass);
                 pass.set_pipeline(&self.volume_edge_pipeline);
-                pass.set_vertex_buffer(0, lines.slice(..));
-                pass.draw(0..*line_count, 0..1);
+                lines.draw(&mut pass);
             }
-            if let Some((buffer, count)) = &overlay {
+            if let Some(overlay) = &overlay {
                 pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..*count, 0..1);
+                overlay.draw(&mut pass);
             }
         }
         encoder.copy_texture_to_buffer(
@@ -1568,7 +1629,17 @@ impl Renderer {
         );
         let encoded = started.map(|_| Instant::now());
         let submission = self.queue.submit([encoder.finish()]);
-        self.shadow_key = Some(shadow_key);
+        if shadow_drawn {
+            let key = ShadowKey {
+                meshes: self.meshes_generation,
+                light,
+                casters: std::mem::take(&mut scratch.casters),
+            };
+            // The old key's list is used again for the next frame's.
+            if let Some(old) = self.shadow_key.replace(key) {
+                scratch.casters = old.casters;
+            }
+        }
         let submitted = Instant::now();
         let timings = match (started, encoded) {
             (Some(started), Some(encoded)) => Some(profile::FrameTimings {
@@ -1650,70 +1721,25 @@ impl Renderer {
         );
     }
 
-    /// Vertex buffers of boxes: their faces (triangles) and edges (lines).
-    fn volume_buffers(&self, boxes: &[Aabb]) -> (wgpu::Buffer, u32, wgpu::Buffer, u32) {
-        let mut faces: Vec<[f32; 3]> = Vec::new();
-        let mut lines: Vec<[f32; 3]> = Vec::new();
-        for b in boxes {
-            let c = b.corners().map(|v| v.to_array());
-            // Corner index bits: x = 1, y = 2, z = 4.
-            for quad in [
-                [0, 2, 3, 1],
-                [4, 5, 7, 6],
-                [0, 1, 5, 4],
-                [2, 6, 7, 3],
-                [0, 4, 6, 2],
-                [1, 3, 7, 5],
-            ] {
-                let [a, b2, c2, d] = quad.map(|i| c[i]);
-                faces.extend([a, b2, c2, a, c2, d]);
-            }
-            for (from, to) in [
-                (0, 1),
-                (2, 3),
-                (4, 5),
-                (6, 7),
-                (0, 2),
-                (1, 3),
-                (4, 6),
-                (5, 7),
-                (0, 4),
-                (1, 5),
-                (2, 6),
-                (3, 7),
-            ] {
-                lines.extend([c[from], c[to]]);
-            }
-        }
-        let buffer = |label, data: &[[f32; 3]]| {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(data),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-        };
-        let count = |data: &[[f32; 3]]| u32::try_from(data.len()).unwrap_or(u32::MAX);
-        (
-            buffer("volume faces", &faces),
-            count(&faces),
-            buffer("volume outlines", &lines),
-            count(&lines),
-        )
-    }
-
-    /// Writes the globals and every node's data; returns the light's view
-    /// and projection, which decides the shadow map.
-    fn write_uniforms(&self, frame: &Frame<'_>, width: u32, height: u32) -> Mat4 {
+    /// Writes the globals, and every node's data when it differs from what
+    /// was written last (a frame where only the camera moved writes only
+    /// the globals); returns the light's view and projection, which decides
+    /// the shadow map, and the camera's.
+    fn write_uniforms(
+        &mut self,
+        frame: &Frame<'_>,
+        width: u32,
+        height: u32,
+        scratch: &mut Scratch,
+    ) -> (Mat4, Mat4) {
         let aspect = crate::convert::f32_of_u32(width) / crate::convert::f32_of_u32(height);
         let scene = frame.scene;
-        let rest = scene.rest();
-        let bounds = scene.bounds(frame.posed).or_else(|| scene.bounds(&rest));
+        let bounds = scene.bounds(frame.posed).or(self.rest_bounds);
         let (centre, radius, floor_y) = bounds.map_or((Vec3::ZERO, 1000.0, 0.0), |b| {
             (b.centre(), (b.size().length() * 0.5).max(10.0), b.min.y)
         });
         // The floor is where the lowest part stands at rest.
-        let floor_y = scene.bounds(&rest).map_or(floor_y, |b| b.min.y);
+        let floor_y = self.rest_bounds.map_or(floor_y, |b| b.min.y);
         let key = KEY_TOWARD.normalize();
         let fill = FILL_TOWARD.normalize();
         // The shadow camera covers the design and the floor around it.
@@ -1722,8 +1748,9 @@ impl Renderer {
         let light_projection =
             Mat4::orthographic_rh(-reach, reach, -reach, reach, 0.0, reach * 4.0);
         let light_view_projection = light_projection * light_view;
+        let view_projection = frame.orbit.view_projection(aspect);
         let globals = Globals {
-            view_projection: frame.orbit.view_projection(aspect).to_cols_array_2d(),
+            view_projection: view_projection.to_cols_array_2d(),
             light_view_projection: light_view_projection.to_cols_array_2d(),
             eye: frame.orbit.eye().extend(1.0).to_array(),
             key_direction: key.extend(0.0).to_array(),
@@ -1743,24 +1770,18 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-        // Every node of a selected item is tinted (a hinge is two).
-        let selected: Vec<stave_scene::Item> = frame
-            .selection
-            .iter()
-            .filter_map(|id| scene.node(*id))
-            .map(|node| node.item)
-            .collect();
-        let nodes: Vec<NodeData> = scene
-            .node_ids()
-            .filter_map(|id| {
-                let node = scene.node(id)?;
+        let cut_tint = if frame.tint_cut_faces { 1.0 } else { 0.0 };
+        scratch.nodes.clear();
+        scratch
+            .nodes
+            .extend(scene.nodes.iter().enumerate().map(|(index, node)| {
                 let model = frame
                     .posed
                     .transforms
-                    .get(id.index())
+                    .get(index)
                     .copied()
                     .unwrap_or(Mat4::IDENTITY);
-                let seed = crate::convert::f32_of_index(id.index() % 97) * 1.618;
+                let seed = crate::convert::f32_of_index(index % 97) * 1.618;
                 let (colour, params) = match node.material {
                     Material::Wood(wood) => (
                         [wood.colour[0], wood.colour[1], wood.colour[2], wood.figure],
@@ -1771,10 +1792,9 @@ impl Renderer {
                         ([r, g, b, 0.0], [0.0, 0.0, seed, 1.0])
                     }
                 };
-                let cut_tint = if frame.tint_cut_faces { 1.0 } else { 0.0 };
                 let style = match frame
                     .looks
-                    .and_then(|looks| looks.get(id.index()).copied())
+                    .and_then(|looks| looks.get(index).copied())
                     .unwrap_or(Look::Normal)
                 {
                     Look::Normal => [1.0, 0.0, cut_tint, 1.0],
@@ -1782,8 +1802,8 @@ impl Renderer {
                     Look::Dim => [0.55, 0.5, cut_tint * 0.5, 0.6],
                     Look::XRay => [0.38, 0.1, cut_tint * 1.4, 0.9],
                 };
-                let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));
-                let is_selected = selected.contains(&node.item);
+                let in_problem = scratch.in_problem.get(index).copied().unwrap_or(false);
+                let is_selected = scratch.selected.get(index).copied().unwrap_or(false);
                 // Selected wins over a problem's red: the outline and the
                 // flat wash say which part is meant.
                 let tint = if in_problem && !is_selected {
@@ -1794,7 +1814,7 @@ impl Renderer {
                 // An edit's ghost takes its verdict's colour.
                 let tint = frame
                     .tints
-                    .and_then(|tints| tints.get(id.index()))
+                    .and_then(|tints| tints.get(index))
                     .filter(|tint| tint[3] > 0.0)
                     .copied()
                     .unwrap_or(tint);
@@ -1803,19 +1823,290 @@ impl Renderer {
                 } else {
                     [0.0; 4]
                 };
-                Some(NodeData {
+                NodeData {
                     model: model.to_cols_array_2d(),
                     colour,
                     params,
                     tint,
                     style,
                     selected,
-                })
-            })
-            .collect();
-        self.queue
-            .write_buffer(&self.nodes, 0, bytemuck::cast_slice(&nodes));
-        light_view_projection
+                }
+            }));
+        let written: &[u8] = bytemuck::cast_slice(&self.nodes_written);
+        if written != bytemuck::cast_slice::<NodeData, u8>(&scratch.nodes) {
+            self.queue
+                .write_buffer(&self.nodes, 0, bytemuck::cast_slice(&scratch.nodes));
+            self.node_writes += 1;
+            // What was written is kept; the old list is used again next
+            // frame.
+            std::mem::swap(&mut self.nodes_written, &mut scratch.nodes);
+        }
+        (light_view_projection, view_projection)
+    }
+}
+
+/// Lists a frame is worked out in, kept from frame to frame so that once
+/// they have grown, drawing a frame allocates nothing on the CPU.
+#[derive(Default)]
+struct Scratch {
+    /// Solid parts nearest first: distance from the eye, node index, mesh.
+    solid: Vec<(f32, u32, MeshRange)>,
+    /// Ghosts and see-through parts, farthest first: distance from the
+    /// eye, look, node index, mesh.
+    translucent: Vec<(f32, Look, u32, MeshRange)>,
+    /// Shown nodes of a selected item: node index, mesh.
+    outlined: Vec<(u32, MeshRange)>,
+    /// The selected items, sorted, without repeats.
+    selected_items: Vec<stave_scene::Item>,
+    /// By node index: whether the node's item is selected.
+    selected: Vec<bool>,
+    /// By node index: whether the node is in the problem shown.
+    in_problem: Vec<bool>,
+    /// By node index: what the shaders are given.
+    nodes: Vec<NodeData>,
+    /// The shadow casters: node index and where it is, in index order.
+    casters: Vec<(u32, [[f32; 4]; 4])>,
+    /// The overlay's triangles.
+    overlay: Vec<OverlayVertex>,
+    /// Boxes' faces (triangles) and edges (lines).
+    faces: Vec<[f32; 3]>,
+    lines: Vec<[f32; 3]>,
+}
+
+impl Scratch {
+    /// Marks each node selected (every node of a selected item: a hinge
+    /// is two) and in the problem shown, by index.
+    fn mark(&mut self, frame: &Frame<'_>) {
+        let scene = frame.scene;
+        self.selected_items.clear();
+        self.selected_items.extend(
+            frame
+                .selection
+                .iter()
+                .filter_map(|id| scene.node(*id))
+                .map(|node| node.item),
+        );
+        self.selected_items.sort_unstable();
+        self.selected_items.dedup();
+        self.selected.clear();
+        self.selected.extend(
+            scene
+                .nodes
+                .iter()
+                .map(|node| self.selected_items.binary_search(&node.item).is_ok()),
+        );
+        self.in_problem.clear();
+        self.in_problem.resize(scene.nodes.len(), false);
+        if let Some(highlight) = frame.highlight {
+            for id in highlight.nodes {
+                if let Some(slot) = self.in_problem.get_mut(id.index()) {
+                    *slot = true;
+                }
+            }
+        }
+    }
+
+    /// Sorts the shown nodes into solid, see-through and outlined, in the
+    /// order they are drawn.
+    fn sort(&mut self, frame: &Frame<'_>, ranges: &[MeshRange]) {
+        self.solid.clear();
+        self.translucent.clear();
+        self.outlined.clear();
+        let eye = frame.orbit.eye();
+        for ((id, mesh), node) in frame
+            .scene
+            .node_ids()
+            .zip(ranges.iter().copied())
+            .zip(&frame.scene.nodes)
+        {
+            let (Some(transform), Ok(index)) = (frame.posed.shown(id), u32::try_from(id.index()))
+            else {
+                continue;
+            };
+            // How far the node's centre is from the eye, where it is now.
+            let distance = node
+                .geometry
+                .bounds
+                .transformed(transform)
+                .centre()
+                .distance(eye);
+            let look = frame
+                .looks
+                .and_then(|looks| looks.get(id.index()).copied())
+                .unwrap_or(Look::Normal);
+            match look {
+                Look::Normal => self.solid.push((distance, index, mesh)),
+                Look::Ghost | Look::Dim | Look::XRay => {
+                    self.translucent.push((distance, look, index, mesh));
+                }
+            }
+            // Every shown node of a selected item is outlined, solid or
+            // see-through.
+            if self.selected.get(id.index()).copied().unwrap_or(false) {
+                self.outlined.push((index, mesh));
+            }
+        }
+        // Solid parts, nearest first: the wood in front is drawn before
+        // what it hides, so the depth test spares the hidden fragments
+        // their shading. Ties go by index, so every frame is drawn alike.
+        self.solid
+            .sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        // Ghosts and see-through parts, farthest first so they blend in
+        // order.
+        self.translucent
+            .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.2.cmp(&b.2)));
+    }
+}
+
+/// A vertex buffer written afresh for each frame that needs it, and kept
+/// while it is large enough, so frames don't make buffers.
+struct Vertices {
+    label: &'static str,
+    buffer: Option<wgpu::Buffer>,
+}
+
+/// Vertices written for a frame.
+struct Written {
+    buffer: wgpu::Buffer,
+    bytes: u64,
+    count: u32,
+}
+
+impl Written {
+    /// Draws them with the pipeline set, as vertex buffer 0.
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_vertex_buffer(0, self.buffer.slice(..self.bytes));
+        pass.draw(0..self.count, 0..1);
+    }
+}
+
+impl Vertices {
+    fn new(label: &'static str) -> Vertices {
+        Vertices {
+            label,
+            buffer: None,
+        }
+    }
+
+    /// Writes `vertices`, growing the buffer (by doubling) when they don't
+    /// fit; `None` when there are none.
+    fn write<T: bytemuck::Pod>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[T],
+    ) -> Option<Written> {
+        if vertices.is_empty() {
+            return None;
+        }
+        let data: &[u8] = bytemuck::cast_slice(vertices);
+        let bytes = crate::convert::bytes(data.len());
+        let fits = self.buffer.as_ref().is_some_and(|b| b.size() >= bytes);
+        if !fits {
+            self.buffer = Some(
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(self.label),
+                    size: bytes
+                        .max(4096)
+                        .checked_next_power_of_two()
+                        .unwrap_or(bytes)
+                        .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+        }
+        let buffer = self.buffer.clone()?;
+        queue.write_buffer(&buffer, 0, data);
+        Some(Written {
+            buffer,
+            bytes,
+            count: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The pixels of a `width` by `height` frame that a box covers seen
+/// through `view_projection`, widened by four pixels (the outline's band
+/// and a pixel to spare): left, top, width, height. The whole frame when
+/// some of the box is behind the eye; `None` when none of it is on screen.
+fn screen_rect(
+    view_projection: Mat4,
+    bounds: Aabb,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    const MARGIN: f32 = 4.0;
+    let (w, h) = (
+        crate::convert::f32_of_u32(width),
+        crate::convert::f32_of_u32(height),
+    );
+    let mut low = glam::Vec2::splat(f32::MAX);
+    let mut high = glam::Vec2::splat(f32::MIN);
+    for corner in bounds.corners() {
+        let clip = view_projection * corner.extend(1.0);
+        if clip.w <= 1e-6 {
+            return Some((0, 0, width, height));
+        }
+        // Normalised device coordinates to pixels, from the top left.
+        let pixel = glam::Vec2::new(
+            (clip.x / clip.w + 1.0) * 0.5 * w,
+            (1.0 - clip.y / clip.w) * 0.5 * h,
+        );
+        low = low.min(pixel);
+        high = high.max(pixel);
+    }
+    let whole = |value: f32, limit: u32| {
+        stave_geom::render::integer_from_f64(f64::from(value.clamp(0.0, f32::MAX)))
+            .and_then(|n| u32::try_from(n).ok())
+            .map_or(limit, |n| n.min(limit))
+    };
+    let (left, top) = (
+        whole((low.x - MARGIN).floor(), width),
+        whole((low.y - MARGIN).floor(), height),
+    );
+    let (right, bottom) = (
+        whole((high.x + MARGIN).ceil(), width),
+        whole((high.y + MARGIN).ceil(), height),
+    );
+    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+}
+
+/// Boxes' faces (triangles) and edges (lines), written into `faces` and
+/// `lines` in place of what they held.
+fn box_vertices(boxes: &[Aabb], faces: &mut Vec<[f32; 3]>, lines: &mut Vec<[f32; 3]>) {
+    faces.clear();
+    lines.clear();
+    for b in boxes {
+        let c = b.corners().map(|v| v.to_array());
+        // Corner index bits: x = 1, y = 2, z = 4.
+        for quad in [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ] {
+            let [a, b2, c2, d] = quad.map(|i| c[i]);
+            faces.extend([a, b2, c2, a, c2, d]);
+        }
+        for (from, to) in [
+            (0, 1),
+            (2, 3),
+            (4, 5),
+            (6, 7),
+            (0, 2),
+            (1, 3),
+            (4, 6),
+            (5, 7),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ] {
+            lines.extend([c[from], c[to]]);
+        }
     }
 }
 
@@ -1852,38 +2143,34 @@ const NOTE_FILL: [f32; 4] = [0.98, 0.95, 0.90, 0.92];
 const NOTE_INK: [f32; 4] = [0.45, 0.10, 0.0, 1.0];
 
 /// Polylines on a glyph's grid.
-type Strokes = Vec<Vec<(f32, f32)>>;
+type Strokes = &'static [&'static [(f32, f32)]];
 
 /// A character of a note: its width (a digit is 1 wide, 2 high) and its
 /// strokes. Characters without a glyph are a space.
 fn glyph(character: char) -> (f32, Strokes) {
-    let owned = |strokes: &[&[(f32, f32)]]| strokes.iter().map(|s| s.to_vec()).collect();
     match character {
         '0'..='9' => {
             let digit = u8::try_from(u32::from(character) - u32::from('0')).unwrap_or(0);
-            (1.0, owned(digit_strokes(digit)))
+            (1.0, digit_strokes(digit))
         }
-        '.' => (0.4, owned(&[&[(0.15, 0.0), (0.15, 0.25)]])),
+        '.' => (0.4, (&[&[(0.15, 0.0), (0.15, 0.25)]])),
         'm' => (
             1.3,
-            owned(&[
+            (&[
                 &[(0.0, 0.0), (0.0, 1.3)],
                 &[(0.0, 1.1), (0.3, 1.3), (0.65, 1.1), (0.65, 0.0)],
                 &[(0.65, 1.1), (0.95, 1.3), (1.3, 1.1), (1.3, 0.0)],
             ]),
         ),
-        'c' => (
-            1.0,
-            owned(&[&[(1.0, 1.3), (0.0, 1.3), (0.0, 0.0), (1.0, 0.0)]]),
-        ),
-        'l' => (0.6, owned(&[&[(0.3, 2.0), (0.3, 0.0)]])),
+        'c' => (1.0, (&[&[(1.0, 1.3), (0.0, 1.3), (0.0, 0.0), (1.0, 0.0)]])),
+        'l' => (0.6, (&[&[(0.3, 2.0), (0.3, 0.0)]])),
         'o' => (
             1.0,
-            owned(&[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.3), (0.0, 1.3), (0.0, 0.0)]]),
+            (&[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.3), (0.0, 1.3), (0.0, 0.0)]]),
         ),
         's' => (
             1.0,
-            owned(&[&[
+            (&[&[
                 (1.0, 1.3),
                 (0.0, 1.3),
                 (0.0, 0.65),
@@ -1894,7 +2181,7 @@ fn glyph(character: char) -> (f32, Strokes) {
         ),
         'e' => (
             1.0,
-            owned(&[&[
+            (&[&[
                 (0.0, 0.65),
                 (1.0, 0.65),
                 (1.0, 1.3),
@@ -1905,14 +2192,14 @@ fn glyph(character: char) -> (f32, Strokes) {
         ),
         't' => (
             0.9,
-            owned(&[
+            (&[
                 &[(0.35, 2.0), (0.35, 0.0), (0.9, 0.0)],
                 &[(0.0, 1.3), (0.9, 1.3)],
             ]),
         ),
         'a' => (
             1.0,
-            owned(&[&[
+            (&[&[
                 (0.0, 1.3),
                 (1.0, 1.3),
                 (1.0, 0.0),
@@ -1923,13 +2210,13 @@ fn glyph(character: char) -> (f32, Strokes) {
         ),
         ':' => (
             0.4,
-            owned(&[&[(0.15, 0.1), (0.15, 0.3)], &[(0.15, 1.0), (0.15, 1.2)]]),
+            (&[&[(0.15, 0.1), (0.15, 0.3)], &[(0.15, 1.0), (0.15, 1.2)]]),
         ),
         '°' => (
             0.6,
-            owned(&[&[(0.0, 1.6), (0.3, 2.0), (0.6, 1.6), (0.3, 1.2), (0.0, 1.6)]]),
+            (&[&[(0.0, 1.6), (0.3, 2.0), (0.6, 1.6), (0.3, 1.2), (0.0, 1.6)]]),
         ),
-        _ => (0.6, Vec::new()),
+        _ => (0.6, &[]),
     }
 }
 
@@ -1986,14 +2273,16 @@ fn digit_strokes(digit: u8) -> &'static [&'static [(f32, f32)]] {
     }
 }
 
-/// The overlay as triangles on screen: lines a constant width in pixels,
-/// labels as filled discs with their numbers in white.
+/// The overlay as triangles on screen, written into `out` in place of what
+/// it held: lines a constant width in pixels, labels as filled discs with
+/// their numbers in white.
 fn overlay_triangles(
     overlay: &Overlay,
     frame: &Frame<'_>,
     width: u32,
     height: u32,
-) -> Vec<OverlayVertex> {
+    out: &mut Vec<OverlayVertex>,
+) {
     let aspect = aspect(width, height);
     let view_projection = frame.orbit.view_projection(aspect);
     let (w, h) = (
@@ -2006,7 +2295,7 @@ fn overlay_triangles(
         let clip = view_projection * point.extend(1.0);
         (clip.w > 1e-6).then(|| glam::Vec2::new(clip.x / clip.w, clip.y / clip.w))
     };
-    let mut out = Vec::new();
+    out.clear();
     let segment = |out: &mut Vec<OverlayVertex>,
                    a: glam::Vec2,
                    b: glam::Vec2,
@@ -2034,7 +2323,7 @@ fn overlay_triangles(
             LineKind::Home => (2.0, HOME_COLOUR),
             LineKind::Gap => (2.5, GAP_COLOUR),
         };
-        segment(&mut out, a, b, pixels, colour);
+        segment(out, a, b, pixels, colour);
     }
     let radius = 13.0;
     let mut placed: Vec<glam::Vec2> = Vec::new();
@@ -2056,7 +2345,7 @@ fn overlay_triangles(
             tries += 1;
         }
         if tries > 0 {
-            segment(&mut out, anchor, centre, 1.5, LABEL_FILL);
+            segment(out, anchor, centre, 1.5, LABEL_FILL);
         }
         placed.push(centre);
         let steps = 24_u16;
@@ -2090,7 +2379,7 @@ fn overlay_triangles(
             for stroke in digit_strokes(*digit) {
                 for pair in stroke.windows(2) {
                     if let [a, b] = pair {
-                        segment(&mut out, place(*a), place(*b), 2.2, LABEL_INK);
+                        segment(out, place(*a), place(*b), 2.2, LABEL_INK);
                     }
                 }
             }
@@ -2105,8 +2394,7 @@ fn overlay_triangles(
                 ink: [f32; 4],
                 pill: bool| {
         let gap = 0.45;
-        let glyphs: Vec<(f32, Strokes)> = words.chars().map(glyph).collect();
-        let width: f32 = glyphs.iter().map(|(w, _)| w + gap).sum::<f32>() - gap;
+        let width: f32 = words.chars().map(|c| glyph(c).0 + gap).sum::<f32>() - gap;
         if pill {
             let pad = glam::Vec2::new(5.0, 4.0);
             let low = origin - pad * per_pixel;
@@ -2126,7 +2414,7 @@ fn overlay_triangles(
             }
         }
         let mut left = 0.0;
-        for (advance, strokes) in &glyphs {
+        for (advance, strokes) in words.chars().map(glyph) {
             for stroke in strokes {
                 for pair in stroke.windows(2) {
                     if let [a, b] = pair {
@@ -2149,7 +2437,7 @@ fn overlay_triangles(
         let size = 6.5;
         let width = note.text.chars().map(|c| glyph(c).0 + 0.45).sum::<f32>() * size;
         let origin = at + glam::Vec2::new(-width - 6.0, 10.0) * per_pixel;
-        text(&mut out, origin, &note.text, size, NOTE_INK, true);
+        text(out, origin, &note.text, size, NOTE_INK, true);
     }
     let marker_points: Vec<Option<glam::Vec2>> =
         overlay.markers.iter().map(|m| project(m.at)).collect();
@@ -2185,9 +2473,8 @@ fn overlay_triangles(
         let height = 2.0 * size;
         let centre = at + away * 22.0 * per_pixel;
         let origin = centre - glam::Vec2::new(width, height) * 0.5 * per_pixel;
-        text(&mut out, origin, &marker.text, size, PATH_COLOUR, false);
+        text(out, origin, &marker.text, size, PATH_COLOUR, false);
     }
-    out
 }
 
 /// Writes an image as a PNG.
@@ -2512,6 +2799,91 @@ mod tests {
                 point[1] += millimetres;
             }
         }
+    }
+
+    #[test]
+    fn a_box_on_screen_covers_its_pixels_and_a_margin() {
+        let scene_box = Aabb {
+            min: Vec3::new(-1.0, -1.0, -1.0),
+            max: Vec3::new(1.0, 1.0, 1.0),
+        };
+        // Flat, looking down -z, the box filling the middle half.
+        let flat = Mat4::orthographic_rh(-2.0, 2.0, -2.0, 2.0, -10.0, 10.0);
+        assert_eq!(
+            screen_rect(flat, scene_box, 200, 100),
+            Some((46, 21, 108, 58))
+        );
+        // Off the edge: clamped to the frame.
+        let moved = flat * Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0));
+        assert_eq!(
+            screen_rect(moved, scene_box, 200, 100),
+            Some((121, 21, 79, 58))
+        );
+        // Wholly off screen: nothing.
+        let away = flat * Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0));
+        assert_eq!(screen_rect(away, scene_box, 200, 100), None);
+        // Partly behind the eye: the whole frame.
+        let eye = Mat4::perspective_rh(1.0, 2.0, 0.1, 100.0);
+        assert_eq!(
+            screen_rect(eye, scene_box, 200, 100),
+            Some((0, 0, 200, 100))
+        );
+    }
+
+    #[test]
+    fn the_shortcuts_draw_the_frame_the_full_passes_do() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let selection: Vec<NodeId> = scene.node_ids().take(2).collect();
+        let selected = |yaw| Frame {
+            selection: &selection,
+            ..frame(&scene, &posed, yaw)
+        };
+        // Nothing selected: no mask is made, and nothing multisampled kept.
+        let plain = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        assert!(renderer.still_target.as_ref().unwrap().mask.is_none());
+        let pictures: Vec<Image> = [0.0, 0.7, 2.4]
+            .into_iter()
+            .map(|yaw| renderer.render(&selected(yaw)).unwrap())
+            .collect();
+        assert!(renderer.still_target.as_ref().unwrap().mask.is_some());
+        assert_ne!(plain, pictures[0]);
+        renderer.full_passes = true;
+        assert_eq!(renderer.render(&frame(&scene, &posed, 0.0)).unwrap(), plain);
+        for (yaw, picture) in [0.0, 0.7, 2.4].into_iter().zip(&pictures) {
+            assert_eq!(&renderer.render(&selected(yaw)).unwrap(), picture);
+        }
+    }
+
+    #[test]
+    fn the_nodes_are_written_only_when_they_change() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let selection = [scene.node_ids().next().unwrap()];
+        renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        let writes = renderer.node_writes;
+        // The camera turned: the nodes are as they were.
+        let turned = renderer.render(&frame(&scene, &posed, 0.7)).unwrap();
+        assert_eq!(renderer.node_writes, writes);
+        // Selected, then not: written each time, and the picture is the
+        // one drawn before.
+        renderer
+            .render(&Frame {
+                selection: &selection,
+                ..frame(&scene, &posed, 0.7)
+            })
+            .unwrap();
+        assert_eq!(
+            renderer.render(&frame(&scene, &posed, 0.7)).unwrap(),
+            turned
+        );
+        assert_eq!(renderer.node_writes, writes + 2);
     }
 
     #[test]
