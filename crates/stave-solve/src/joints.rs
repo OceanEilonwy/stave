@@ -229,12 +229,7 @@ impl Solver<'_> {
             glue: given_glue,
             methods: given_methods,
         } = kind_value;
-        if self.model.defs.is_poisoned(DefId::Kind(kind)) {
-            return Err(self.skip().into());
-        }
-        let Some(kind_def) = self.model.defs.kind(kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind_def = self.sound(self.model.defs.sound_kind(kind), "a kind's declaration")?;
         // A kind chosen through a param that doesn't take what this call
         // hands it is one error, in the words of the choice.
         self.check_kind_signature(call, env, kind, &kind_name, owner)?;
@@ -408,12 +403,10 @@ impl Solver<'_> {
         let Some(inst) = self.model.joints.get(joint.index()) else {
             return Err(Fault::Internal("a joint").into());
         };
-        let Some(def) = self.model.defs.joint(inst.def) else {
-            return Err(Fault::Internal("a joint's declaration").into());
-        };
-        if self.poisoned(DefId::Joint(inst.def)) {
-            return Err(self.skip().into());
-        }
+        let def = self.sound(
+            self.model.defs.sound_joint(inst.def),
+            "a joint's declaration",
+        )?;
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = Memo::Busy;
         }
@@ -434,8 +427,13 @@ impl Solver<'_> {
         let result = self
             .bind_call(&def.call, &env, &what, DefId::Joint(inst.def))
             .and_then(|binding| {
-                let base = self.model.defs.kind(binding.kind).map(|k| k.base());
-                if base == Some(BaseKind::Joint) {
+                let base = self
+                    .sound(
+                        self.model.defs.sound_kind(binding.kind),
+                        "a kind's declaration",
+                    )?
+                    .base();
+                if base == BaseKind::Joint {
                     Ok(binding)
                 } else {
                     Err(self
@@ -462,7 +460,7 @@ impl Solver<'_> {
             .model
             .joints
             .get(joint.index())
-            .and_then(|j| self.model.defs.joint(j.def));
+            .and_then(|j| self.model.defs.sound_joint(j.def).ok());
         match def {
             Some(def) => (def.decl.file, def.call.span),
             None => (self.project_file, self.project_span),
@@ -499,9 +497,10 @@ impl Solver<'_> {
     /// Pass A of a joint: pairs, requires and what it adds to its parts.
     pub(crate) fn work_joint(&mut self, joint: JointId) -> Solved<JointWork> {
         let binding = self.joint_binding(joint)?;
-        let Some(kind) = self.model.defs.kind(binding.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(binding.kind),
+            "a kind's declaration",
+        )?;
         let (file, span) = self.joint_place(joint);
         let name = self
             .model
@@ -904,7 +903,7 @@ impl Solver<'_> {
         along: ExactLength,
         across: ExactLength,
     ) -> Solved<bool> {
-        let sheet = match self.model.defs.stock(stock).map(|def| def.form) {
+        let sheet = match self.model.defs.sound_stock(stock).ok().map(|def| def.form) {
             Some(StockForm::Plywood | StockForm::Mdf) => true,
             Some(StockForm::Solid | StockForm::Dowel) | None => false,
         };
@@ -946,12 +945,7 @@ impl Solver<'_> {
             return Ok(());
         }
         let name = self.part_name(part);
-        let stock_name = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|s| s.decl.name.clone())
-            .unwrap_or_default();
+        let stock_name = self.def_name(DefId::Stock(stock));
         let (file, span) = self.part_place(part);
         let reason = format!(
             "its cut thickness works out as {}, which is more than its stock's {}",
@@ -1024,10 +1018,9 @@ impl Solver<'_> {
             ));
         }
         let fixed_width = self
-            .model
-            .defs
-            .stock(stock)
-            .is_some_and(|def| def.fixed_width().is_some());
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .fixed_width()
+            .is_some();
         if fault.is_none()
             && fixed_width
             && let Some(stock_width) = self.stock_length(stock, StockField::Width)?
@@ -1533,7 +1526,8 @@ impl Solver<'_> {
                 RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
                     .model
                     .defs
-                    .kind(*kind)
+                    .sound_kind(*kind)
+                    .ok()
                     .and_then(|k| k.params.get(*index))
                     .map(|param| param.decl.name.clone()),
                 _ => None,
@@ -1639,10 +1633,8 @@ impl Solver<'_> {
         env: &Env<'_>,
     ) -> Solved<Vec<AssemblyStep>> {
         let Some(joint) = self
-            .model
-            .defs
-            .kind(kind)
-            .and_then(stave_model::defs::KindDef::joint)
+            .sound(self.model.defs.sound_kind(kind), "a kind's declaration")?
+            .joint()
         else {
             return Ok(Vec::new());
         };

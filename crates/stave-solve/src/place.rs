@@ -173,6 +173,12 @@ impl<'m> Solver<'m> {
     pub(crate) fn check_ground(&mut self) -> Solved<()> {
         let mut grounded: Vec<(PartId, FileId, Span)> = Vec::new();
         for part in &self.model.parts {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "whether a part is placed on the ground is how it is written, not a value \
+                          worked out: a poisoned part still counts, so its error is not followed \
+                          by a second one about the root"
+            )]
             let Some(def) = self.model.defs.part(part.def) else {
                 continue;
             };
@@ -269,6 +275,11 @@ impl<'m> Solver<'m> {
             .iter()
             .filter(|region| region.assembly.is_none() && region.mirror_of.is_none())
             .filter_map(|region| {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "whether a region is made with box(...) is how it is written, not a \
+                              value worked out: a poisoned box is still the root"
+                )]
                 let def = self.model.defs.region(region.def)?;
                 is_region_box(&def.value).then_some((region.id, def.decl.file, def.value.span))
             })
@@ -290,22 +301,40 @@ impl<'m> Solver<'m> {
     pub(crate) fn part_body(&self, part: PartId) -> Option<&'m PartBodyDef> {
         let model = self.model;
         let inst = model.parts.get(part.index())?;
-        match &model.defs.part(inst.def)?.kind {
+        match &model.defs.sound_part(inst.def).ok()?.kind {
             PartKind::FromStock(body) => Some(body),
             PartKind::Mirror(_) => None,
         }
     }
 
+    /// [`Solver::part_body`] for working the part out: a poisoned part is
+    /// skipped, and a part with no body of its own is a bug in Stave.
+    pub(crate) fn sound_part_body(&mut self, part: PartId) -> Solved<&'m PartBodyDef> {
+        let model = self.model;
+        let Some(inst) = model.parts.get(part.index()) else {
+            return Err(Fault::Internal("a part").into());
+        };
+        match &self
+            .sound(model.defs.sound_part(inst.def), "a part's declaration")?
+            .kind
+        {
+            PartKind::FromStock(body) => Ok(body),
+            PartKind::Mirror(_) => Err(Fault::Internal("a part's description").into()),
+        }
+    }
+
     pub(crate) fn part_env(&self, part: PartId) -> Option<Env<'static>> {
         let inst = self.model.parts.get(part.index())?;
-        let def = self.model.defs.part(inst.def)?;
-        let array = def.array.as_ref().map(|_| {
-            let def_id = DefId::Part(inst.def);
-            (def_id, self.array_len(def_id, inst.ctx))
-        });
+        let def_id = DefId::Part(inst.def);
+        let decl = self.model.defs.decl(def_id)?;
+        let array = self
+            .model
+            .defs
+            .array(def_id)
+            .map(|_| (def_id, self.array_len(def_id, inst.ctx)));
         Some(Env {
             ctx: inst.ctx,
-            file: def.decl.file,
+            file: decl.file,
             kind: None,
             array,
         })
@@ -333,9 +362,7 @@ impl<'m> Solver<'m> {
         let Some(inst) = self.model.parts.get(part.index()) else {
             return Err(Fault::Internal("a part").into());
         };
-        if self.poisoned(DefId::Part(inst.def)) {
-            return Err(self.skip().into());
-        }
+        let def = self.sound(self.model.defs.sound_part(inst.def), "a part's declaration")?;
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
                 return Err(Fault::Internal("the component a mirrored item is in").into());
@@ -343,9 +370,6 @@ impl<'m> Solver<'m> {
             let (axis, plane) = self.assembly_mirror_plane(assembly)?;
             return Ok(Some((source, axis, plane)));
         }
-        let Some(def) = self.model.defs.part(inst.def) else {
-            return Err(Fault::Internal("a part's declaration").into());
-        };
         let PartKind::Mirror(mirror) = &def.kind else {
             return Ok(None);
         };
@@ -393,9 +417,10 @@ impl<'m> Solver<'m> {
         let Some(inst) = self.model.assemblies.get(current.index()) else {
             return Err(Fault::Internal("a component").into());
         };
-        let Some(def) = self.model.defs.assembly(inst.def) else {
-            return Err(Fault::Internal("a component's declaration").into());
-        };
+        let def = self.sound(
+            self.model.defs.sound_assembly(inst.def),
+            "a component's declaration",
+        )?;
         match self.mirror_planes.get(&current) {
             Some(Memo::Done(plane)) => return Ok(*plane),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
@@ -435,7 +460,7 @@ impl<'m> Solver<'m> {
         self.model
             .assemblies
             .get(assembly.index())
-            .and_then(|a| self.model.defs.assembly(a.def))
+            .and_then(|a| self.model.defs.sound_assembly(a.def).ok())
             .is_some_and(|d| matches!(d.kind, stave_model::defs::AssemblyKind::Mirror(_)))
     }
 
@@ -451,9 +476,7 @@ impl<'m> Solver<'m> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.part_stock(source);
         }
-        let Some(body) = self.part_body(part) else {
-            return Err(Fault::Internal("a part's description").into());
-        };
+        let body = self.sound_part_body(part)?;
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
@@ -479,9 +502,7 @@ impl<'m> Solver<'m> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.part_profile(source);
         }
-        let Some(body) = self.part_body(part) else {
-            return Err(Fault::Internal("a part's description").into());
-        };
+        let body = self.sound_part_body(part)?;
         let Some(shape) = &body.shape else {
             return Ok(None);
         };
@@ -508,10 +529,9 @@ impl<'m> Solver<'m> {
         }
         let stock = self.part_stock(part)?;
         Ok(self
-            .model
-            .defs
-            .stock(stock)
-            .is_some_and(|s| s.form == StockForm::Dowel))
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .form
+            == StockForm::Dowel)
     }
 
     pub(crate) fn part_diameter(
@@ -650,14 +670,7 @@ impl<'m> Solver<'m> {
     }
 
     fn compute_part_terms(&mut self, part: PartId) -> Solved<Terms<'m>> {
-        if let Some(inst) = self.model.parts.get(part.index())
-            && self.poisoned(DefId::Part(inst.def))
-        {
-            return Err(self.skip().into());
-        }
-        let Some(body) = self.part_body(part) else {
-            return Err(Fault::Internal("a part's description").into());
-        };
+        let body = self.sound_part_body(part)?;
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
@@ -989,9 +1002,7 @@ impl<'m> Solver<'m> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.drawn_size(source, axis);
         }
-        let Some(body) = self.part_body(part) else {
-            return Err(Fault::Internal("a part's description").into());
-        };
+        let body = self.sound_part_body(part)?;
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
@@ -1014,12 +1025,7 @@ impl<'m> Solver<'m> {
                         let turned = self.profile_length(profile)?;
                         if length != turned {
                             let name = self.part_name(part);
-                            let profile_name = self
-                                .model
-                                .defs
-                                .profile(profile)
-                                .map(|p| p.decl.name.clone())
-                                .unwrap_or_default();
+                            let profile_name = self.def_name(DefId::Profile(profile));
                             return Err(self.error(
                                 Code::TypeMismatch,
                                 format!(
@@ -1094,11 +1100,7 @@ impl<'m> Solver<'m> {
 
     /// The name a stock is declared with.
     pub(crate) fn stock_name(&self, stock: StockId) -> String {
-        self.model
-            .defs
-            .stock(stock)
-            .map(|s| s.decl.name.clone())
-            .unwrap_or_default()
+        self.def_name(DefId::Stock(stock))
     }
 
     /// A part's width against stock sold at a fixed `width:` (grammar,
@@ -1112,10 +1114,9 @@ impl<'m> Solver<'m> {
     ) -> Solved<()> {
         let stock = self.part_stock(part)?;
         let fixed = self
-            .model
-            .defs
-            .stock(stock)
-            .is_some_and(|def| def.fixed_width().is_some());
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .fixed_width()
+            .is_some();
         if !fixed {
             return Ok(());
         }
@@ -1160,11 +1161,8 @@ impl<'m> Solver<'m> {
         let thickness = self.eval_length(expr, env)?;
         let stock = self.part_stock(part)?;
         let form = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|def| def.form)
-            .ok_or(Fault::Internal("a stock's declaration"))?;
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .form;
         let sheet = match form {
             StockForm::Plywood | StockForm::Mdf => true,
             StockForm::Solid | StockForm::Dowel => false,
@@ -1205,12 +1203,7 @@ impl<'m> Solver<'m> {
             && thickness > stock_thickness
         {
             let name = self.part_name(part);
-            let stock_name = self
-                .model
-                .defs
-                .stock(stock)
-                .map(|s| s.decl.name.clone())
-                .unwrap_or_default();
+            let stock_name = self.def_name(DefId::Stock(stock));
             return Err(self.error(
                 Code::TypeMismatch,
                 format!(
@@ -1275,9 +1268,7 @@ impl<'m> Solver<'m> {
         let Some(profile) = self.part_profile(part)? else {
             return Ok(());
         };
-        let Some(body) = self.part_body(part) else {
-            return Err(Fault::Internal("a part's description").into());
-        };
+        let body = self.sound_part_body(part)?;
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
@@ -1315,12 +1306,7 @@ impl<'m> Solver<'m> {
             return Ok(());
         }
         let name = self.part_name(part);
-        let stock_name = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|s| s.decl.name.clone())
-            .unwrap_or_default();
+        let stock_name = self.def_name(DefId::Stock(stock));
         let span = body.shape.as_ref().map_or(body.span, |shape| shape.span);
         let (largest, smaller) = (
             stave_model::value::format_length(largest),
@@ -1989,17 +1975,17 @@ impl<'m> Solver<'m> {
         let Some(inst) = self.model.regions.get(region.index()) else {
             return Err(Fault::Internal("a region").into());
         };
-        let Some(def) = self.model.defs.region(inst.def) else {
+        let Some(decl) = self.model.defs.decl(DefId::Region(inst.def)) else {
             return Err(Fault::Internal("a region's declaration").into());
         };
         // Busy only once nothing below can return before the memo is set.
         if let Some(slot) = self.regions.get_mut(region.index()) {
             *slot = Memo::Busy;
         }
-        self.enter(Frame::Region(region), Some((def.decl.file, def.decl.span)));
-        let result = self.compute_region(region, inst, def);
+        self.enter(Frame::Region(region), Some((decl.file, decl.span)));
+        let result = self.compute_region(region, inst);
         self.leave();
-        let (memo, result) = self.remember(result, def.decl.file, def.decl.span);
+        let (memo, result) = self.remember(result, decl.file, decl.span);
         if let Some(slot) = self.regions.get_mut(region.index()) {
             *slot = memo;
         }
@@ -2010,12 +1996,11 @@ impl<'m> Solver<'m> {
         &mut self,
         region: RegionId,
         inst: &stave_model::instance::RegionInst,
-        def: &stave_model::defs::RegionDef,
     ) -> Solved<RegionValue> {
-        if self.poisoned(DefId::Region(inst.def)) {
-            let _ = region;
-            return Err(self.skip().into());
-        }
+        let def = self.sound(
+            self.model.defs.sound_region(inst.def),
+            "a region's declaration",
+        )?;
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
                 return Err(Fault::Internal("the component a mirrored item is in").into());

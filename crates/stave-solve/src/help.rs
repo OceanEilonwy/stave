@@ -100,7 +100,7 @@ impl Solver<'_> {
         if !compares_for_equality(condition) {
             return HelpSearch::NotSearched;
         }
-        let Some(kind) = self.model.defs.kind(given.kind) else {
+        let Ok(kind) = self.model.defs.sound_kind(given.kind) else {
             return HelpSearch::NotSearched;
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(given.kind)) else {
@@ -132,7 +132,7 @@ impl Solver<'_> {
         span: Span,
         fits: &mut dyn FnMut(&mut Self, &KindEnv) -> bool,
     ) -> HelpSearch {
-        let Some(kind) = self.model.defs.kind(given.kind) else {
+        let Ok(kind) = self.model.defs.sound_kind(given.kind) else {
             return HelpSearch::NotSearched;
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(given.kind)) else {
@@ -162,7 +162,8 @@ impl Solver<'_> {
                 let index = solver
                     .model
                     .defs
-                    .kind(given.kind)
+                    .sound_kind(given.kind)
+                    .ok()
                     .and_then(|kind| kind.param(param));
                 match index {
                     Some(index) => solver.kind_param(given, index, file, span).ok(),

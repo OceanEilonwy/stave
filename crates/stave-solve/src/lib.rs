@@ -56,7 +56,7 @@ use std::collections::HashMap;
 use stave_lang::ast::Span;
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::Model;
-use stave_model::defs::DefId;
+use stave_model::defs::{DefId, Unusable};
 use stave_model::ids::{JointId, LetId, ParamId, PartId, RegionId};
 use stave_model::solved::SolvedDesign;
 use stave_model::value::{RegionValue, Value};
@@ -211,12 +211,25 @@ impl<'m> Solver<'m> {
     /// `true` when an earlier stage reported an error (an item it
     /// poisoned is one).
     pub(crate) fn earlier_errors(&self) -> bool {
-        self.model.defs.earlier_errors || !self.model.defs.poisoned.is_empty()
+        self.model.defs.earlier_errors || self.model.defs.any_poisoned()
     }
 
-    /// `true` if a declaration had a name or type error.
-    pub(crate) fn poisoned(&self, def: DefId) -> bool {
-        self.model.defs.is_poisoned(def)
+    /// A declaration to evaluate, from one of the `Defs::sound_*`
+    /// accessors: a poisoned one is skipped (its error is already
+    /// reported), and a missing one is a bug in Stave, named by `what`.
+    /// The solver reads declarations only this way (the plain accessors
+    /// are disallowed in this crate's `clippy.toml`), so it can't be
+    /// handed a body with an error in it.
+    pub(crate) fn sound<T>(
+        &mut self,
+        found: Result<&'m T, Unusable>,
+        what: &'static str,
+    ) -> Solved<&'m T> {
+        match found {
+            Ok(def) => Ok(def),
+            Err(Unusable::Poisoned) => Err(self.skip().into()),
+            Err(Unusable::Missing) => Err(Fault::Internal(what).into()),
+        }
     }
 
     /// Emits a diagnostic of this stage.
@@ -313,6 +326,16 @@ impl<'m> Solver<'m> {
             Some(decl) => (decl.file, decl.span),
             None => (self.project_file, self.project_span),
         }
+    }
+
+    /// A declaration's name as written, poisoned or not; empty for a
+    /// missing one.
+    pub(crate) fn def_name(&self, def: DefId) -> String {
+        self.model
+            .defs
+            .decl(def)
+            .map(|decl| decl.name.clone())
+            .unwrap_or_default()
     }
 
     /// Where a part is declared, for diagnostics about the part as a whole

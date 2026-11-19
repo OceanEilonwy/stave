@@ -27,7 +27,7 @@ use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis, PerAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{DefId, StockField};
+use stave_model::defs::{DefId, StockField, Unusable};
 use stave_model::ids::{JointId, PairIndex, PartId, StockId};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
@@ -256,8 +256,13 @@ impl Solver<'_> {
             }
         }
         for (stock, parts) in stocks {
-            let Some(def) = self.model.defs.stock(stock) else {
-                continue;
+            let def = match self.model.defs.sound_stock(stock) {
+                Ok(def) => def,
+                Err(Unusable::Missing) => continue,
+                Err(Unusable::Poisoned) => {
+                    let _ = self.skip();
+                    continue;
+                }
             };
             let sheet = match def.form {
                 StockForm::Solid => false,
@@ -788,11 +793,8 @@ impl Solver<'_> {
         }
         let stock = self.part_stock(part)?;
         let form = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|s| s.form)
-            .ok_or(Fault::Internal("a stock's declaration"))?;
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .form;
         let stock_name = self.stock_name(stock);
         match form {
             StockForm::Solid => Ok(()),
@@ -815,12 +817,10 @@ impl Solver<'_> {
 
     /// The splice kind: a joint kind with two roles that are parts.
     fn splice_method(&mut self, value: &KindValue, place: Place) -> Solved<Method> {
-        if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
-            return Err(self.skip().into());
-        }
-        let Some(kind) = self.model.defs.kind(value.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(value.kind),
+            "a kind's declaration",
+        )?;
         if kind.base() != BaseKind::Joint {
             return Err(self.fail(
                 place,
@@ -849,8 +849,8 @@ impl Solver<'_> {
         let methods = value
             .methods
             .iter()
-            .filter_map(|recipe| self.model.defs.recipe(*recipe))
-            .map(|def| def.decl.name.clone())
+            .filter_map(|recipe| self.model.defs.decl(DefId::Recipe(*recipe)))
+            .map(|decl| decl.name.clone())
             .collect();
         Ok(Method {
             value: value.clone(),
@@ -942,9 +942,7 @@ impl Solver<'_> {
         extra: &mut BTreeMap<PartId, [ExactLength; 2]>,
     ) -> Solved<SpliceWork> {
         let kind_id = method.value.kind;
-        let Some(kind) = self.model.defs.kind(kind_id) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(self.model.defs.sound_kind(kind_id), "a kind's declaration")?;
         let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
         let env = KindEnv::new(kind_id, roles, method.settings.clone());
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
@@ -1206,7 +1204,7 @@ impl Solver<'_> {
                 let inst = self.model.hardware.get(hardware.index());
                 (
                     inst.map(|h| h.name.clone()).unwrap_or_default(),
-                    inst.and_then(|h| self.model.defs.hardware_def(h.def))
+                    inst.and_then(|h| self.model.defs.sound_hardware_def(h.def).ok())
                         .map(|def| (def.decl.file, def.call.span)),
                 )
             }
@@ -1256,9 +1254,7 @@ impl Solver<'_> {
         piece_cuts: &mut BTreeMap<PartId, Vec<Cut>>,
     ) -> Solved<Joint> {
         let kind_id = method.value.kind;
-        let Some(kind) = self.model.defs.kind(kind_id) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(self.model.defs.sound_kind(kind_id), "a kind's declaration")?;
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };

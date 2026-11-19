@@ -7,7 +7,7 @@ use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{BodyId, DefId, StockField, StockSectionDef, Word};
+use stave_model::defs::{BodyId, DefId, StockField, StockSectionDef, Unusable, Word};
 use stave_model::ids::{
     AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
 };
@@ -403,10 +403,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // backwards are reported once, at the profile.
     for index in 0..solver.model.defs.profiles.len() {
         let profile = stave_model::ids::ProfileId::from_usize(index);
-        let in_project = solver.model.defs.profile(profile).is_some_and(|def| {
-            solver.module_ctx(DefId::Profile(profile)).is_some()
-                && def.decl.scope == stave_model::defs::Scope::Module(solver.model.root)
-        });
+        let in_project = solver
+            .model
+            .defs
+            .decl(DefId::Profile(profile))
+            .is_some_and(|decl| {
+                solver.module_ctx(DefId::Profile(profile)).is_some()
+                    && decl.scope == stave_model::defs::Scope::Module(solver.model.root)
+            });
         if in_project {
             let result = solver.profile_stations(profile);
             let (file, span) = solver.place_of(DefId::Profile(profile));
@@ -418,10 +422,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 0mm or less is reported once, at the stock.
     for index in 0..solver.model.defs.stocks.len() {
         let stock = StockId::from_usize(index);
-        let in_project = solver.model.defs.stock(stock).is_some_and(|def| {
-            solver.module_ctx(DefId::Stock(stock)).is_some()
-                && def.decl.scope == stave_model::defs::Scope::Module(solver.model.root)
-        });
+        let in_project = solver
+            .model
+            .defs
+            .decl(DefId::Stock(stock))
+            .is_some_and(|decl| {
+                solver.module_ctx(DefId::Stock(stock)).is_some()
+                    && decl.scope == stave_model::defs::Scope::Module(solver.model.root)
+            });
         if !in_project {
             continue;
         }
@@ -588,13 +596,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         if inst.mirror_of.is_some() {
             continue;
         }
-        let Some(def) = solver.model.defs.require(inst.def) else {
-            continue;
+        let def = match solver.model.defs.sound_require(inst.def) {
+            Ok(def) => def,
+            Err(Unusable::Missing) => continue,
+            Err(Unusable::Poisoned) => {
+                let _ = solver.skip();
+                continue;
+            }
         };
-        if solver.poisoned(DefId::Require(inst.def)) {
-            solver.skipped = true;
-            continue;
-        }
         let env = Env {
             ctx: inst.ctx,
             file: def.decl.file,
@@ -822,9 +831,7 @@ impl Solver<'_> {
             return Err(Fault::Internal("a joint").into());
         };
         let kind_id = work.binding.kind;
-        let Some(kind) = self.model.defs.kind(kind_id) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(self.model.defs.sound_kind(kind_id), "a kind's declaration")?;
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -1116,12 +1123,7 @@ impl Solver<'_> {
             });
         }
         for (kind, diameter, length, count) in fastener_totals {
-            let name = self
-                .model
-                .defs
-                .kind(kind)
-                .map(|k| k.decl.name.clone())
-                .unwrap_or_default();
+            let name = self.def_name(DefId::Kind(kind));
             fasteners.push(FastenerUse {
                 joint,
                 kind: name,
@@ -1134,7 +1136,12 @@ impl Solver<'_> {
             .binding
             .methods
             .iter()
-            .filter_map(|r| self.model.defs.recipe(*r).map(|d| d.decl.name.clone()))
+            .filter_map(|r| {
+                self.model
+                    .defs
+                    .decl(DefId::Recipe(*r))
+                    .map(|decl| decl.name.clone())
+            })
             .collect();
         Ok(Joint {
             id: joint,
@@ -1159,9 +1166,10 @@ impl Solver<'_> {
         file: stave_lang::FileId,
         span: stave_lang::ast::Span,
     ) -> Solved<solved::MemberItem> {
-        let Some(def) = self.model.defs.kind(item.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let def = self.sound(
+            self.model.defs.sound_kind(item.kind),
+            "a kind's declaration",
+        )?;
         let kind = def.decl.name.clone();
         let wood = match self.base_field(item, BaseField::Species, file, span)? {
             Some(Value::Word(stave_model::defs::Word::Species(species))) => Some(species),
@@ -1173,10 +1181,10 @@ impl Solver<'_> {
     /// A kind's name, qualified with its module unless it is from the
     /// prelude or the project.
     fn kind_name(&self, kind: stave_model::ids::KindId) -> String {
-        let Some(def) = self.model.defs.kind(kind) else {
+        let Some(decl) = self.model.defs.decl(DefId::Kind(kind)) else {
             return String::new();
         };
-        match def.decl.scope {
+        match decl.scope {
             stave_model::defs::Scope::Module(module)
                 if module != self.model.root && !self.is_prelude(module) =>
             {
@@ -1186,9 +1194,9 @@ impl Solver<'_> {
                     .modules
                     .get(module.index())
                     .map_or("", |m| m.name.as_str());
-                format!("{module_name}.{}", def.decl.name)
+                format!("{module_name}.{}", decl.name)
             }
-            _ => def.decl.name.clone(),
+            _ => decl.name.clone(),
         }
     }
 
@@ -1723,9 +1731,7 @@ impl Solver<'_> {
     // -----------------------------------------------------------------------
 
     fn write_stock(&mut self, stock: StockId) -> Solved<Stock> {
-        let Some(def) = self.model.defs.stock(stock) else {
-            return Err(Fault::Internal("a stock's declaration").into());
-        };
+        let def = self.sound(self.model.defs.sound_stock(stock), "a stock's declaration")?;
         let length = |this: &mut Self, field| -> Solved<Option<Length>> {
             this.stock_length(stock, field)?
                 .map(round_length)
@@ -1796,11 +1802,10 @@ impl Solver<'_> {
                                     })
                                 })
                                 .collect::<Solved<Vec<_>>>()?;
-                            let def = self
-                                .model
-                                .defs
-                                .profile(profile)
-                                .ok_or(Fault::Internal("a profile's declaration"))?;
+                            let def = self.sound(
+                                self.model.defs.sound_profile(profile),
+                                "a profile's declaration",
+                            )?;
                             Shape::Turned {
                                 profile: def.decl.name.clone(),
                                 stations,
@@ -1815,8 +1820,8 @@ impl Solver<'_> {
                                 if self
                                     .model
                                     .defs
-                                    .stock(stock)
-                                    .is_some_and(|s| s.form == StockForm::Dowel) =>
+                                    .sound_stock(stock)
+                                    .is_ok_and(|s| s.form == StockForm::Dowel) =>
                             {
                                 Shape::Round {
                                     diameter: round_length(diameter)?,
@@ -2053,8 +2058,8 @@ impl Solver<'_> {
                 && self
                     .model
                     .defs
-                    .region(inst.def)
-                    .is_some_and(|def| crate::place::is_region_box(&def.value));
+                    .sound_region(inst.def)
+                    .is_ok_and(|def| crate::place::is_region_box(&def.value));
             out.push(Region {
                 id,
                 name: inst.name.clone(),
@@ -2101,12 +2106,7 @@ impl Solver<'_> {
                 .filter(|h| self.within(h.assembly, inst.id))
                 .map(|h| h.id)
                 .collect();
-            let component = self
-                .model
-                .defs
-                .component(inst.component)
-                .map(|c| c.decl.name.clone())
-                .unwrap_or_default();
+            let component = self.def_name(DefId::Component(inst.component));
             out.push(Assembly {
                 id: inst.id,
                 name: inst.name.clone(),
@@ -2205,12 +2205,13 @@ impl Solver<'_> {
         let model = self.model;
         for &scene in &model.scenes {
             // A scene with a name or type error is already reported.
-            if self.poisoned(DefId::Scene(scene)) {
-                self.skipped = true;
-                continue;
-            }
-            let Some(def) = self.model.defs.scene(scene) else {
-                continue;
+            let def = match self.model.defs.sound_scene(scene) {
+                Ok(def) => def,
+                Err(Unusable::Missing) => continue,
+                Err(Unusable::Poisoned) => {
+                    let _ = self.skip();
+                    continue;
+                }
             };
             let env = Env {
                 ctx: Ctx {
@@ -2337,7 +2338,7 @@ impl Solver<'_> {
             Some(list) => {
                 let mut tools = Vec::new();
                 for tool in list {
-                    if self.model.defs.kind(*tool).is_none() {
+                    if self.model.defs.decl(DefId::Kind(*tool)).is_none() {
                         continue;
                     }
                     let kind_value =
@@ -2370,7 +2371,12 @@ impl Solver<'_> {
         let methods = project
             .methods
             .iter()
-            .filter_map(|r| self.model.defs.recipe(*r).map(|d| d.decl.name.clone()))
+            .filter_map(|r| {
+                self.model
+                    .defs
+                    .decl(DefId::Recipe(*r))
+                    .map(|decl| decl.name.clone())
+            })
             .collect();
         Ok(ProjectInfo {
             title: project.title.clone(),

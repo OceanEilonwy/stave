@@ -1,0 +1,22 @@
+# The solver evaluates declarations, so it reads them only through the
+# `Defs::sound_*` accessors (and `Solver::sound`), which refuse a poisoned
+# declaration: one whose name or type error is already reported and whose
+# body may hold unresolved expressions. Where and what a declaration is
+# (its name, file and span) is read with `Defs::decl`, poisoned or not.
+disallowed-methods = [
+    { path = "stave_model::defs::Defs::param", reason = "use Defs::sound_param, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::let_def", reason = "use Defs::sound_let_def, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::region", reason = "use Defs::sound_region, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::part", reason = "use Defs::sound_part, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::joint", reason = "use Defs::sound_joint, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::hardware_def", reason = "use Defs::sound_hardware_def, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::assembly", reason = "use Defs::sound_assembly, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::require", reason = "use Defs::sound_require, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::stock", reason = "use Defs::sound_stock, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::profile", reason = "use Defs::sound_profile, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::kind", reason = "use Defs::sound_kind, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::recipe", reason = "use Defs::sound_recipe, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::component", reason = "use Defs::sound_component, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::scene", reason = "use Defs::sound_scene, or Defs::decl for where it is" },
+    { path = "stave_model::defs::Defs::is_poisoned", reason = "a poisoned declaration is refused by the Defs::sound_* accessors" },
+]

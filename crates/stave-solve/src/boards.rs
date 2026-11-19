@@ -163,11 +163,8 @@ impl Solver<'_> {
             return Ok(None);
         };
         let form = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|s| s.form)
-            .ok_or(Fault::Internal("a stock's declaration"))?;
+            .sound(self.model.defs.sound_stock(stock), "a stock's declaration")?
+            .form;
         let source = self.body_source(part)?;
         let image = source != part;
         let body = self.part_body(source);
@@ -197,12 +194,7 @@ impl Solver<'_> {
                     return Err(Fault::Earlier.into());
                 }
                 let name = self.part_name(part);
-                let stock_name = self
-                    .model
-                    .defs
-                    .stock(stock)
-                    .map(|s| s.decl.name.clone())
-                    .unwrap_or_default();
+                let stock_name = self.def_name(DefId::Stock(stock));
                 return Err(self.error(
                     Code::TypeMismatch,
                     format!(
@@ -500,12 +492,10 @@ impl Solver<'_> {
         };
         let mut methods = Vec::new();
         for value in kinds {
-            if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
-                return Err(self.skip().into());
-            }
-            let Some(kind) = self.model.defs.kind(value.kind) else {
-                return Err(Fault::Internal("a kind's declaration").into());
-            };
+            let kind = self.sound(
+                self.model.defs.sound_kind(value.kind),
+                "a kind's declaration",
+            )?;
             if kind.base() != BaseKind::Joint {
                 return Err(self.error(
                     Code::TypeMismatch,
@@ -675,9 +665,10 @@ impl Solver<'_> {
         extra: &mut BTreeMap<PartId, [ExactLength; 2]>,
         requires: &mut Vec<RequireResult>,
     ) -> Solved<PairWork> {
-        let Some(kind) = self.model.defs.kind(method.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(method.kind),
+            "a kind's declaration",
+        )?;
         let roles: Vec<Value> = if method.across {
             vec![Value::Parts(parts.clone())]
         } else {
@@ -845,9 +836,10 @@ impl Solver<'_> {
         made: &mut Vec<MadeInfo>,
         board_cuts: &mut BTreeMap<PartId, Vec<Cut>>,
     ) -> Solved<()> {
-        let Some(kind) = self.model.defs.kind(method.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(method.kind),
+            "a kind's declaration",
+        )?;
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };

@@ -431,17 +431,13 @@ impl Solver<'_> {
     }
 
     fn compute_hardware(&mut self, hardware: HardwareId) -> Solved<Placed> {
-        if let Some(inst) = self.model.hardware.get(hardware.index())
-            && self.poisoned(DefId::Hardware(inst.def))
-        {
-            return Err(self.skip().into());
-        }
         let Some(inst) = self.model.hardware.get(hardware.index()) else {
             return Err(Fault::Internal("a piece of hardware").into());
         };
-        let Some(def) = self.model.defs.hardware_def(inst.def) else {
-            return Err(Fault::Internal("a piece of hardware's declaration").into());
-        };
+        let def = self.sound(
+            self.model.defs.sound_hardware_def(inst.def),
+            "a piece of hardware's declaration",
+        )?;
         let array = def.array.as_ref().map(|_| {
             (
                 DefId::Hardware(inst.def),
@@ -462,9 +458,10 @@ impl Solver<'_> {
             &format!("hardware '{name}'"),
             DefId::Hardware(inst.def),
         )?;
-        let Some(kind) = self.model.defs.kind(binding.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(binding.kind),
+            "a kind's declaration",
+        )?;
         if !kind.base().is_mounted_hardware() {
             return Err(self
                 .error(
@@ -591,9 +588,10 @@ impl Solver<'_> {
         let Some(inst) = self.model.hardware.get(hardware.index()) else {
             return Err(Fault::Internal("a piece of hardware").into());
         };
-        let Some(def) = self.model.defs.hardware_def(inst.def) else {
-            return Err(Fault::Internal("a piece of hardware's declaration").into());
-        };
+        let def = self.sound(
+            self.model.defs.sound_hardware_def(inst.def),
+            "a piece of hardware's declaration",
+        )?;
         let array = def.array.as_ref().map(|_| {
             (
                 DefId::Hardware(inst.def),
@@ -607,9 +605,10 @@ impl Solver<'_> {
             array,
         };
         let name = &inst.name;
-        let Some(kind) = self.model.defs.kind(binding.kind) else {
-            return Err(Fault::Internal("a kind's declaration").into());
-        };
+        let kind = self.sound(
+            self.model.defs.sound_kind(binding.kind),
+            "a kind's declaration",
+        )?;
         let kind_name = &binding.name;
         let Some(hardware_kind) = kind.hardware() else {
             return Err(Fault::Earlier.into());
@@ -919,12 +918,7 @@ impl Solver<'_> {
                 };
                 let diameter = size(BaseField::Diameter)?;
                 let length = size(BaseField::Length)?;
-                let name = solver
-                    .model
-                    .defs
-                    .kind(fastener.kind)
-                    .map(|k| k.decl.name.clone())
-                    .unwrap_or_default();
+                let name = solver.def_name(DefId::Kind(fastener.kind));
                 out.push(stave_model::solved::HardwareFastener {
                     kind: name,
                     diameter,

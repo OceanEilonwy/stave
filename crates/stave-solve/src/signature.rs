@@ -245,15 +245,8 @@ impl Solver<'_> {
             named,
             kind_span: call.kind.span,
         };
-        let Some(found) = self
-            .model
-            .defs
-            .kind(kind)
-            .and_then(|kind_def| mismatch(kind_def, &handed))
-        else {
-            return Ok(());
-        };
-        let Some(kind_def) = self.model.defs.kind(kind) else {
+        let kind_def = self.sound(self.model.defs.sound_kind(kind), "a kind's declaration")?;
+        let Some(found) = mismatch(kind_def, &handed) else {
             return Ok(());
         };
         let choice = self.kind_choice(*param, env.ctx).unwrap_or(Choice {
@@ -284,7 +277,7 @@ impl Solver<'_> {
                     continue;
                 }
                 ParamSource::Default => {
-                    let def = self.model.defs.param(inst.def)?;
+                    let def = self.model.defs.sound_param(inst.def).ok()?;
                     (
                         def.default.as_ref()?,
                         def.decl.file,
@@ -299,7 +292,7 @@ impl Solver<'_> {
                     index,
                     ctx,
                 } => {
-                    let def = self.model.defs.assembly(assembly)?;
+                    let def = self.model.defs.sound_assembly(assembly).ok()?;
                     let stave_model::defs::AssemblyKind::Instance { args, .. } = &def.kind else {
                         return None;
                     };
@@ -370,12 +363,7 @@ impl Solver<'_> {
         env: &Env<'_>,
         owner: DefId,
     ) -> Diagnostic {
-        let param_name = self
-            .model
-            .defs
-            .param(choice.param)
-            .map(|p| p.decl.name.clone())
-            .unwrap_or_default();
+        let param_name = self.def_name(DefId::Param(choice.param));
         let message = match self.component_of(DefId::Param(choice.param)) {
             Some(component) => format!("'{kind_name}' can't be the {param_name} of {component}"),
             None => format!("'{kind_name}' can't be the project's {param_name}"),
@@ -507,7 +495,8 @@ impl Solver<'_> {
                 let DefId::Kind(id) = *item else {
                     continue;
                 };
-                let Some(kind) = defs.kind(id) else {
+                // A poisoned kind is not offered.
+                let Ok(kind) = defs.sound_kind(id) else {
                     continue;
                 };
                 let own = scope.module == Some(module);
@@ -515,7 +504,6 @@ impl Solver<'_> {
                     || kind.base() != base
                     || kind.decl.scope != Scope::Module(module)
                     || (kind.decl.private && !own)
-                    || defs.is_poisoned(*item)
                     || mismatch(kind, handed).is_some()
                 {
                     continue;

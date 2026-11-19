@@ -2182,7 +2182,7 @@ pub struct Defs {
     pub files: std::collections::BTreeMap<FileId, FileScope>,
     /// Declarations that had a name or type error: anything that depends
     /// on them is skipped without further errors.
-    pub poisoned: std::collections::BTreeSet<DefId>,
+    pub(crate) poisoned: std::collections::BTreeSet<DefId>,
     /// Names of items left out because of a syntax error, per module
     /// (`Component.item` for items inside a component). Uses of them are
     /// skipped without an `unknown-name`.
@@ -2235,13 +2235,39 @@ impl Defs {
     }
 }
 
+/// Why a later stage may not read a declaration's body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unusable {
+    /// It had a name or type error, already reported: what depends on it
+    /// is skipped without further errors, and its body may hold
+    /// [`RExprKind::Error`] expressions.
+    Poisoned,
+    /// No declaration has this id: a bug in Stave.
+    Missing,
+}
+
 macro_rules! getters {
-    ($( $method:ident($id:ty) -> $def:ty, $field:ident; )*) => {
+    ($( $method:ident, $sound:ident($id:ty) -> $def:ty, $field:ident, $variant:ident; )*) => {
         impl Defs {
             $(
-                #[doc = concat!("The definition behind a [`", stringify!($id), "`].")]
+                #[doc = concat!(
+                    "The definition behind a [`", stringify!($id), "`], poisoned or not. ",
+                    "A stage that evaluates it uses [`Defs::", stringify!($sound), "`]."
+                )]
                 pub fn $method(&self, id: $id) -> Option<&$def> {
                     self.$field.get(id.index())
+                }
+
+                #[doc = concat!(
+                    "The definition behind a [`", stringify!($id), "`], only when it ",
+                    "resolved without an error: a later stage that evaluates it can't ",
+                    "be handed a poisoned one."
+                )]
+                pub fn $sound(&self, id: $id) -> Result<&$def, Unusable> {
+                    if self.poisoned.contains(&DefId::$variant(id)) {
+                        return Err(Unusable::Poisoned);
+                    }
+                    self.$field.get(id.index()).ok_or(Unusable::Missing)
                 }
             )*
         }
@@ -2249,20 +2275,20 @@ macro_rules! getters {
 }
 
 getters! {
-    param(ParamDefId) -> ParamDef, params;
-    let_def(LetDefId) -> LetDef, lets;
-    region(RegionDefId) -> RegionDef, regions;
-    part(PartDefId) -> PartDef, parts;
-    joint(JointDefId) -> JointDef, joints;
-    hardware_def(HardwareDefId) -> HardwareDef, hardware;
-    assembly(AssemblyDefId) -> AssemblyDef, assemblies;
-    require(RequireDefId) -> RequireDef, requires;
-    stock(StockId) -> StockDef, stocks;
-    profile(ProfileId) -> ProfileDef, profiles;
-    kind(KindId) -> KindDef, kinds;
-    recipe(RecipeId) -> RecipeDef, recipes;
-    component(ComponentId) -> ComponentDef, components;
-    scene(SceneDefId) -> SceneDef, scenes;
+    param, sound_param(ParamDefId) -> ParamDef, params, Param;
+    let_def, sound_let_def(LetDefId) -> LetDef, lets, Let;
+    region, sound_region(RegionDefId) -> RegionDef, regions, Region;
+    part, sound_part(PartDefId) -> PartDef, parts, Part;
+    joint, sound_joint(JointDefId) -> JointDef, joints, Joint;
+    hardware_def, sound_hardware_def(HardwareDefId) -> HardwareDef, hardware, Hardware;
+    assembly, sound_assembly(AssemblyDefId) -> AssemblyDef, assemblies, Assembly;
+    require, sound_require(RequireDefId) -> RequireDef, requires, Require;
+    stock, sound_stock(StockId) -> StockDef, stocks, Stock;
+    profile, sound_profile(ProfileId) -> ProfileDef, profiles, Profile;
+    kind, sound_kind(KindId) -> KindDef, kinds, Kind;
+    recipe, sound_recipe(RecipeId) -> RecipeDef, recipes, Recipe;
+    component, sound_component(ComponentId) -> ComponentDef, components, Component;
+    scene, sound_scene(SceneDefId) -> SceneDef, scenes, Scene;
 }
 
 impl Defs {
@@ -2357,6 +2383,11 @@ impl Defs {
     /// `true` if the declaration had a name or type error.
     pub fn is_poisoned(&self, def: DefId) -> bool {
         self.poisoned.contains(&def)
+    }
+
+    /// `true` if any declaration had a name or type error.
+    pub fn any_poisoned(&self) -> bool {
+        !self.poisoned.is_empty()
     }
 
     /// The project item of the module, if it is a project module.
