@@ -479,8 +479,21 @@ impl Notice {
 }
 
 /// One check run, numbered so a stale run's outcome can be told apart.
+/// Numbers come from one counter for the whole process, never per
+/// session: a window that opens another folder makes a new session while
+/// the old one's check may still be running, and a fresh count would give
+/// the new check the old one's number, so the old outcome would be taken
+/// for the new folder's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CheckTicket(u64);
+
+impl CheckTicket {
+    /// A ticket no other check in this process has had.
+    fn next() -> CheckTicket {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        CheckTicket(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 /// What a view asks the session to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -608,7 +621,6 @@ pub struct Session {
     explode: Explode,
     status: CheckStatus,
     build: Build,
-    next_ticket: u64,
     running: Option<CheckTicket>,
     queued: Queued,
     /// The last check's result.
@@ -642,7 +654,6 @@ impl Session {
             explode: Explode::TOGETHER,
             status: CheckStatus::Idle,
             build: Build::Idle,
-            next_ticket: 0,
             running: None,
             queued: Queued::Nothing,
             latest: None,
@@ -1503,8 +1514,7 @@ impl Session {
             self.queued = Queued::Again;
             return;
         }
-        let ticket = CheckTicket(self.next_ticket);
-        self.next_ticket = self.next_ticket.saturating_add(1);
+        let ticket = CheckTicket::next();
         self.running = Some(ticket);
         let last = self.status.verdict().cloned();
         self.status = CheckStatus::Checking { last };

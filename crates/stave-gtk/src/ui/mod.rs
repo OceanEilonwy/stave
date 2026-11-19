@@ -3416,12 +3416,14 @@ impl Window {
         });
         // The open files as tabs beside the Model, wherever the Code
         // panel is docked.
-        let page = Rc::downgrade(files);
-        tab_strip::set_page_tabs(workbench::PanelId::Code.word(), move || {
-            page.upgrade()
-                .map(|page| page.page_tabs())
-                .unwrap_or_default()
-        });
+        if let Some(code) = self.widgets.workbench.panel(workbench::PanelId::Code) {
+            let page = Rc::downgrade(files);
+            tab_strip::set_page_tabs(code, move || {
+                page.upgrade()
+                    .map(|page| page.page_tabs())
+                    .unwrap_or_default()
+            });
+        }
         let window = Rc::downgrade(self);
         files.connect_notice(move |text| {
             if let Some(window) = window.upgrade() {

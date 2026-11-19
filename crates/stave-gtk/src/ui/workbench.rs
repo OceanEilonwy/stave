@@ -779,6 +779,11 @@ impl Workbench {
         }
     }
 
+    /// A panel's widget.
+    pub fn panel(&self, id: PanelId) -> Option<&panel::Widget> {
+        self.panels.get(&id)
+    }
+
     /// `true` when two panels are tabs of the same frame.
     pub fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
         let frame = |id| self.panels.get(&id).and_then(frame_of);

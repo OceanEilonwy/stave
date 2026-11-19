@@ -13,12 +13,12 @@
 //! keyboard is anywhere in the frame.
 //!
 //! A panel can show its own tabs in place of its one tab
-//! ([`set_page_tabs`]): the Code panel's open files appear this way, one
+//! ([`set_page_tabs`], given that window's panel widget, so each window's
+//! panel shows its own): the Code panel's open files appear this way, one
 //! tab each (name, and a yellow ● while unsaved), beside the Model's tab
 //! in the frame they share. Clicking one shows the panel on that file.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -51,16 +51,23 @@ pub struct PageTab {
 type PageTabs = Rc<dyn Fn() -> Vec<PageTab>>;
 
 thread_local! {
-    /// Each panel's own tabs, by the panel's id.
-    static PAGE_TABS: RefCell<BTreeMap<String, PageTabs>> = RefCell::new(BTreeMap::new());
+    /// Each panel's own tabs, by the panel widget itself: every window has
+    /// its own Code panel, so an id ("code") would let the last window
+    /// opened answer for all of them. A closed window's entry is pruned.
+    static PAGE_TABS: RefCell<Vec<(glib::WeakRef<panel::Widget>, PageTabs)>> =
+        const { RefCell::new(Vec::new()) };
     /// Every strip, to remake them when a panel's tabs change.
     static STRIPS: RefCell<Vec<glib::WeakRef<TabStrip>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Lets the panel with this id show its own tabs (when `tabs` gives any)
-/// in place of its one tab, in whatever frame holds it.
-pub fn set_page_tabs(id: &str, tabs: impl Fn() -> Vec<PageTab> + 'static) {
-    PAGE_TABS.with(|all| all.borrow_mut().insert(id.to_owned(), Rc::new(tabs)));
+/// Lets this panel show its own tabs (when `tabs` gives any) in place of
+/// its one tab, in whatever frame holds it.
+pub fn set_page_tabs(panel: &panel::Widget, tabs: impl Fn() -> Vec<PageTab> + 'static) {
+    PAGE_TABS.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|(widget, _)| widget.upgrade().is_some_and(|widget| widget != *panel));
+        all.push((panel.downgrade(), Rc::new(tabs)));
+    });
     page_tabs_changed();
 }
 
@@ -77,8 +84,15 @@ pub fn page_tabs_changed() {
 }
 
 /// A panel's own tabs, if it has any.
-fn page_tabs(id: &str) -> Vec<PageTab> {
-    let tabs = PAGE_TABS.with(|all| all.borrow().get(id).cloned());
+fn page_tabs(panel: &panel::Widget) -> Vec<PageTab> {
+    let tabs = PAGE_TABS.with(|all| {
+        all.borrow()
+            .iter()
+            .find(|(widget, _)| widget.upgrade().is_some_and(|widget| widget == *panel))
+            .map(|(_, tabs)| Rc::clone(tabs))
+    });
+    // Called outside the borrow: the tabs read the files page, which may
+    // ask for the strips to be made again.
     tabs.map(|tabs| tabs()).unwrap_or_default()
 }
 
@@ -274,10 +288,8 @@ impl TabStrip {
                 let Some(page) = frame.page(index) else {
                     continue;
                 };
-                // A page may have no id (libpanel's binding takes one as
-                // never missing, so it is read as a property).
-                let id = page.property::<Option<String>>("id").unwrap_or_default();
-                let own = page_tabs(&id);
+                // By the panel widget: each window's panel answers for itself.
+                let own = page_tabs(&page);
                 if own.is_empty() {
                     tabs.push(tab(&frame, &page));
                 } else {

@@ -231,6 +231,26 @@ fn a_stale_check_is_dropped_and_a_check_asked_for_meanwhile_runs_next() {
 }
 
 #[test]
+fn a_check_from_before_another_folder_was_opened_is_not_taken_for_its() {
+    // The window replaces its session when it opens another folder; the
+    // old folder's check can still be running and must not land.
+    let old_folder = example("stool");
+    let mut old = Session::new(old_folder.clone());
+    let old_ticket = started(&old.apply(Command::Check)).unwrap();
+    let new_folder = example("bookshelf");
+    let mut new = Session::new(new_folder.clone());
+    let new_ticket = started(&new.apply(Command::Check)).unwrap();
+    assert_ne!(old_ticket, new_ticket);
+    assert!(
+        new.finish_check(old_ticket, check::run(&old_folder))
+            .is_empty()
+    );
+    assert!(new.check_status().is_checking());
+    new.finish_check(new_ticket, check::run(&new_folder));
+    assert!(!new.check_status().is_checking());
+}
+
+#[test]
 fn a_folder_that_cant_be_read_says_so() {
     let folder = workspace().join("tests/no_such_folder");
     let mut session = Session::new(folder.clone());
