@@ -334,7 +334,8 @@ impl FilesPage {
         self.callbacks.borrow_mut().on_open = Some(Rc::new(callback));
     }
 
-    /// Something to tell people (a failed save).
+    /// Something brief to tell people (a file changed on disk, a copy
+    /// saved). Failed saves get a dialog instead.
     pub fn connect_notice(&self, callback: impl Fn(String) + 'static) {
         self.callbacks.borrow_mut().on_notice = Some(Rc::new(callback));
     }
@@ -419,14 +420,17 @@ impl FilesPage {
         self.state.borrow().buffers.dirty().count()
     }
 
-    /// Saves every document with unsaved changes.
+    /// Saves every document with unsaved changes. `false` when one
+    /// couldn't be saved: a dialog has said which and what to do, and
+    /// whatever was waiting on the save (closing the window, opening
+    /// another folder) must not go on.
     pub fn save_all(self: &Rc<Self>) -> bool {
         let result = self.state.borrow_mut().buffers.save_all();
         self.refresh_markers();
         match result {
             Ok(()) => true,
             Err(error) => {
-                self.notice(error.to_string());
+                self.save_failed(&error);
                 false
             }
         }
@@ -444,10 +448,95 @@ impl FilesPage {
             return;
         }
         let result = self.state.borrow_mut().buffers.save(&document);
-        if let Err(error) = result {
-            self.notice(error.to_string());
-        }
         self.refresh_markers();
+        if let Err(error) = result {
+            self.save_failed(&error);
+        }
+    }
+
+    /// A save failed: says so in a dialog that stays until it is
+    /// answered, naming the file and what to do, with a way to try again
+    /// or to save a copy somewhere else. The changes stay in the editor.
+    fn save_failed(self: &Rc<Self>, error: &stave_ide::SaveError) {
+        let folder = self.state.borrow().folder.clone();
+        let failure = stave_app::save_failure::describe(error, &folder);
+        // The document whose save failed, to try again or copy.
+        let document = match error {
+            stave_ide::SaveError::Unwritable { path, .. } => Some(Document::File(path.clone())),
+            stave_ide::SaveError::ReadOnly(_) | stave_ide::SaveError::NotOpen(_) => None,
+        };
+        let dialog = adw::AlertDialog::builder()
+            .heading(&failure.heading)
+            .body(&failure.body)
+            .close_response("cancel")
+            .build();
+        dialog.add_response("cancel", "_Cancel");
+        if let Some(document) = document {
+            dialog.add_responses(&[("retry", "_Try Again"), ("copy", "Save a _Copy…")]);
+            dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("copy"));
+            let page = Rc::downgrade(self);
+            dialog.connect_response(None, move |_, response| {
+                let Some(page) = page.upgrade() else { return };
+                match response {
+                    "retry" => page.save_again(&document),
+                    "copy" => page.save_copy(&document),
+                    _ => {}
+                }
+            });
+        }
+        dialog.present(Some(&self.root));
+    }
+
+    /// Tries a failed save again; a second failure says so again.
+    fn save_again(self: &Rc<Self>, document: &Document) {
+        let result = self.state.borrow_mut().buffers.save(document);
+        self.refresh_markers();
+        match result {
+            Ok(()) => self.notice(format!("Saved {}", document.file_name())),
+            Err(error) => self.save_failed(&error),
+        }
+    }
+
+    /// Asks where, then writes a copy of a document's text there. The
+    /// document itself stays open, unsaved, where it was.
+    fn save_copy(self: &Rc<Self>, document: &Document) {
+        let Some(text) = self
+            .state
+            .borrow()
+            .buffers
+            .text(document)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save a Copy")
+            .initial_name(document.file_name())
+            .modal(true)
+            .build();
+        let parent = self.root.root().and_downcast::<gtk::Window>();
+        let page = Rc::downgrade(self);
+        dialog.save(parent.as_ref(), gio::Cancellable::NONE, move |result| {
+            let Ok(file) = result else { return };
+            let Some(path) = file.path() else { return };
+            let Some(page) = page.upgrade() else { return };
+            match stave_app::save_failure::save_copy(&path, &text) {
+                Ok(()) => page.notice(format!(
+                    "Saved a copy as {}; the open file still has unsaved changes",
+                    path.display()
+                )),
+                Err(failure) => {
+                    let dialog = adw::AlertDialog::builder()
+                        .heading(&failure.heading)
+                        .body(&failure.body)
+                        .close_response("close")
+                        .build();
+                    dialog.add_response("close", "_Close");
+                    dialog.present(Some(&page.root));
+                }
+            }
+        });
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
