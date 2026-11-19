@@ -520,7 +520,9 @@ Rules:
 - `assembly drawer[bottom, top] : Drawer { ... }` declares a labelled array:
   `drawer[bottom]`, `drawer[top]`. Two or more names in a declaration are
   labels; anything else is a count. A single label isn't allowed (just name
-  the part).
+  the part): one bracketed name that names nothing is `error[type-mismatch]`,
+  `one label isn't an array: 'only' is the only label of 'shelf'`, with the
+  help to name it `shelf_only` or give two or more labels.
 - **A labelled array is indexed by label only.** In `drawer[top]` the word in
   brackets is looked up among the array's labels and nowhere else, so labels
   never clash with items. `drawer[0]` on a labelled array is
@@ -679,7 +681,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 |---|---|---|---|
 | `goal` | `Text` | no | one sentence about what is being built; shown on the cover |
 | `units` | `mm` \| `cm` \| `m` \| `in` \| `ft` | no (default `mm`) | units used in output |
-| `resolution` | `Length` | no (default `0.5mm`) | the cut list rounds to this, and says where it rounded |
+| `resolution` | `Length` | no (default `0.5mm`) | the cut list rounds to this, and says where it rounded. More than 0mm, or `error[out-of-range]` (`'resolution' must be more than 0mm, found 0mm`) |
 | `style` | `Text` | no | a hint for suggestions |
 | `tools` | list of `Tool` | no | the tools you have. Left out: every tool is assumed |
 | `methods` | list of `Recipe` | no | recipes to prefer, most preferred first |

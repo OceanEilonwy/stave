@@ -2315,7 +2315,7 @@ impl Solver<'_> {
                     return Err(self
                         .error(
                             Code::OutOfRange,
-                            format!("'resolution' must be within more than 0mm, found {value}"),
+                            format!("'resolution' must be more than 0mm, found {value}"),
                             project.file,
                             expr.span,
                             "write a positive length, such as 0.5mm",
