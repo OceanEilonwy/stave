@@ -1310,6 +1310,7 @@ impl Session {
             | EditCommand::Set { .. }
             | EditCommand::Rename(_)
             | EditCommand::PutBack
+            | EditCommand::UseDefault(_)
             | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }) => match self.edit.as_mut() {
                 Some(edit) => events.extend(edit.apply(command).into_iter().map(Event::Edit)),

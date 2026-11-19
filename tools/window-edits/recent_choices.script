@@ -1,0 +1,13 @@
+# A project whose case is joined with screws, for the short list's
+# "used here": a new project, 940 x 1780 x 580mm, one oak board and the
+# standard casework, and a case filling its envelope.
+new "Case test" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop
+create
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+set joinery = screw
+add

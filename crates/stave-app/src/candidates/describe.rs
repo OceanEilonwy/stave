@@ -104,6 +104,7 @@ impl EditScope<'_> {
                 SettingValue::Default | SettingValue::Chosen(_) | SettingValue::Unset => None,
             };
             setting.options = self.options(sources, setting, def);
+            setting.recent = self.recent_values(setting);
             for (position, option) in setting.options.iter_mut().enumerate() {
                 option.position = position;
             }
@@ -215,7 +216,9 @@ impl EditScope<'_> {
                 if out.iter().any(|option: &SettingOption| option.text == text) {
                     continue;
                 }
-                out.push(SettingOption::new(text, first_sentence(&decl.docs)));
+                let mut option = SettingOption::new(text, first_sentence(&decl.docs));
+                option.group = Some(group.clone());
+                out.push(option);
             }
         }
         out

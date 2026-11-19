@@ -72,7 +72,14 @@ impl Window {
                 self.cancel_edit();
                 self.dispatch(stave_app::session::Command::Select(Some(selection)));
             }
+            "repeat" if rest == "open" => {
+                if !self.unfold_repeat() {
+                    return Err("no folded \"Repeat…\" shows".to_owned());
+                }
+            }
             "repeat" => {
+                // "Repeat…" first, as a person would, when it is folded.
+                self.unfold_repeat();
                 let words: Vec<&str> = rest.split_whitespace().collect();
                 let (count, axis) = match words.as_slice() {
                     [count] => (*count, None),
@@ -88,7 +95,7 @@ impl Window {
                 let count: usize = count
                     .parse()
                     .map_err(|_| format!("'{count}' isn't a count"))?;
-                let axis = axis.or_else(|| Some(self.editing.repeats.row.axis()));
+                let axis = axis.or_else(|| Some(self.editing.repeats.row.row.axis()));
                 self.repeat_selected(count, axis);
             }
             "drag" => {

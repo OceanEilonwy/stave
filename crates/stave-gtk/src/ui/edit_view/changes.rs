@@ -256,7 +256,7 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
 
 /// The card for a change of the design.
 pub(in crate::ui) struct ChangeCard {
-    /// The panel, ready to float over the 3D view.
+    /// The card, in the Edit panel.
     pub(in crate::ui) root: gtk::Box,
     body: gtk::Box,
     add: gtk::Button,
@@ -271,13 +271,12 @@ impl ChangeCard {
         let on_action: Rc<RefCell<Option<ActionCallback>>> = Rc::new(RefCell::new(None));
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(14)
-            .css_classes(["stave-inspector"])
+            .spacing(10)
+            .css_classes(["stave-edit-body"])
             .build();
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(560)
+            .vexpand(true)
             .child(&body)
             .build();
         let cancel = gtk::Button::builder()
@@ -295,19 +294,31 @@ impl ChangeCard {
             .build();
         buttons.append(&cancel);
         buttons.append(&add);
+        let foot = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["stave-edit-foot"])
+            .build();
+        foot.append(&buttons);
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-card-panel", "stave-edit-card", "stave-change-card"])
-            .width_request(340)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Start)
+            .css_classes(["stave-edit-card", "stave-change-card"])
+            .hexpand(true)
+            .vexpand(true)
             .accessible_role(gtk::AccessibleRole::Group)
-            .overflow(gtk::Overflow::Hidden)
             .focusable(true)
             .visible(false)
             .build();
         root.append(&scrolled);
-        root.append(&buttons);
+        root.append(&foot);
+        root.connect_map(|root| {
+            if let Some(window) = root.root()
+                && !window.focus().is_some_and(|focus| {
+                    focus == *root.upcast_ref::<gtk::Widget>() || focus.is_ancestor(root)
+                })
+            {
+                root.grab_focus();
+            }
+        });
         let send = {
             let on_action = on_action.clone();
             move |action: ChangeAction| {
@@ -365,8 +376,8 @@ impl ChangeCard {
         self.root
             .update_property(&[gtk::accessible::Property::Label(&words.title)]);
         let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        head.append(&text(&words.eyebrow, &["stave-eyebrow"]));
-        head.append(&text(&words.title, &["stave-inspector-title"]));
+        head.append(&text(&words.eyebrow, &["stave-edit-caption"]));
+        head.append(&text(&words.title, &["stave-edit-title"]));
         self.body.append(&head);
         if !words.lines.is_empty() {
             let lines = gtk::Box::builder()
@@ -679,11 +690,11 @@ impl DependantsDialog {
 }
 
 impl Window {
-    /// Puts the change's card over the 3D view and connects it.
+    /// Connects the change's card (in the Edit panel) and puts the
+    /// removal's dialog over the 3D view.
     pub(in crate::ui) fn connect_changes(self: &Rc<Self>) {
         install_style();
         let card = &self.editing.changes.card;
-        self.widgets.design.add_overlay(&card.root);
         let dialog = &self.editing.changes.dialog;
         self.widgets.design.add_overlay(&dialog.root);
         let window = Rc::downgrade(self);
@@ -737,15 +748,8 @@ impl Window {
             self.close_change_dialog();
             return false;
         };
-        card.show(&words);
         card.root.set_visible(true);
-        let rail = self.right_column();
-        card.root.set_margin_end(
-            super::super::EDGE
-                .saturating_add(rail)
-                .saturating_add(super::super::EDGE),
-        );
-        card.root.set_margin_top(super::super::EDGE);
+        card.show(&words);
         if words.waiting_on_dependants {
             self.ask_about_dependants(item.unwrap_or_default(), &words.dependants);
         } else {
@@ -919,7 +923,7 @@ pub(in crate::ui) struct Changes {
     /// The item whose removal the dialog last asked about, so it asks once.
     asked: RefCell<Option<String>>,
     /// The removal's dialog.
-    dialog: DependantsDialog,
+    pub(in crate::ui) dialog: DependantsDialog,
 }
 
 impl Changes {

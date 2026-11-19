@@ -594,15 +594,10 @@ fn a_menu_entry_is_found_by_its_declaration_when_it_is_chosen() {
     );
 }
 
-#[test]
-fn the_cards_options_show_their_fit_and_a_blamed_setting_can_be_put_back() {
-    on_gtk_thread(options_and_blame_on_the_card);
-}
-
-/// The owner's case: the Case chosen for a new project's envelope, its
-/// joinery's options checked and drawn, a refused one that can't be
-/// chosen, then chigiri typed, blamed, and put back from the card.
-fn options_and_blame_on_the_card() {
+/// The owner's case: a new project, 940 x 1780 x 580mm with one oak
+/// board and the standard casework, the Case chosen for its envelope with
+/// its panel stock, and its joinery's options checked.
+fn case_session(name: &str) -> Session {
     let answers = Answers {
         title: "Case test".to_owned(),
         size: [940.0, 1780.0, 580.0],
@@ -614,7 +609,8 @@ fn options_and_blame_on_the_card() {
         imports: vec!["std:casework".to_owned()],
         tools: Vec::new(),
     };
-    let folder = std::env::temp_dir().join(format!("stave-gtk-options-{}", std::process::id()));
+    let folder =
+        std::env::temp_dir().join(format!("stave-gtk-options-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&folder);
     create_project(&folder, &answers.project().unwrap()).unwrap();
     let mut session = Session::new(folder.clone());
@@ -645,7 +641,63 @@ fn options_and_blame_on_the_card() {
         },
     );
     session.check_setting_options(Some("joinery"), &AtomicBool::new(false));
+    session
+}
 
+/// Every label's text under a widget, one a line.
+fn words_in(widget: &gtk::Widget) -> String {
+    let mut words = String::new();
+    let mut stack = vec![widget.clone()];
+    while let Some(widget) = stack.pop() {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            words.push_str(&label.label());
+            words.push('\n');
+        }
+        let mut child = widget.last_child();
+        while let Some(next) = child {
+            child = next.prev_sibling();
+            stack.push(next);
+        }
+    }
+    words
+}
+
+/// Shows a widget in a window of this size and waits until it is laid
+/// out.
+fn shown_in_window(child: &gtk::Widget, width: i32, height: i32) -> gtk::Window {
+    let window = gtk::Window::builder()
+        .default_width(width)
+        .default_height(height)
+        .decorated(false)
+        .child(child)
+        .build();
+    window.set_size_request(width, height);
+    window.present();
+    let context = glib::MainContext::default();
+    let started = std::time::Instant::now();
+    while (!child.is_mapped() || child.height() <= 1)
+        && started.elapsed() < std::time::Duration::from_secs(10)
+    {
+        context.iteration(false);
+    }
+    for _ in 0..20 {
+        context.iteration(false);
+    }
+    assert!(child.is_mapped(), "the window never came up");
+    window
+}
+
+#[test]
+fn a_settings_short_list_and_its_search_choose_and_a_blamed_setting_can_be_put_back() {
+    on_gtk_thread(short_list_search_and_blame_on_the_card);
+}
+
+/// The Case's joinery: its short list (the default, then "Search all
+/// 18…"), the search dialog finding chigiri by its description (refused:
+/// it can't be chosen) and dowel by its name (chosen with Enter), then
+/// chigiri typed, blamed, and put back from the card.
+fn short_list_search_and_blame_on_the_card() {
+    let mut session = case_session("short");
     let menu = EditMenu::new();
     let card = EditCard::new();
     let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
@@ -654,64 +706,133 @@ fn options_and_blame_on_the_card() {
         card.connect_action(move |action| actions.borrow_mut().push(action));
     }
     draw_edit(&menu, &card, &session, false);
+    // No caption line under a setting: its type and where its value
+    // comes from are its tooltip and its accessible description.
+    let shown = words_in(card.root.upcast_ref());
+    assert!(!shown.contains("your choice"), "{shown}");
+    assert!(!shown.contains("JointKind"), "{shown}");
+    let (_, joinery) = card
+        .entries()
+        .into_iter()
+        .find(|(param, _)| param.as_str() == "joinery")
+        .unwrap();
+    // At its default: empty, the default's value dimmed in its place, in
+    // full, without words that would cut it off.
+    assert_eq!(joinery.text(), "");
+    assert_eq!(
+        joinery.placeholder_text().as_deref(),
+        Some("dowel(count: 4)")
+    );
+    assert!(
+        joinery
+            .tooltip_text()
+            .is_some_and(|tip| tip.contains("JointKind · the default, dowel(count: 4)")),
+        "{:?}",
+        joinery.tooltip_text()
+    );
+
     assert!(card.open_options("joinery"));
-    let (_, toggle, list) = card
+    let (_, toggle, rows) = card
         .option_lists()
         .into_iter()
         .find(|(param, _, _)| param.as_str() == "joinery")
         .unwrap();
     assert!(toggle.is_active());
-    let rows: Vec<gtk::Button> = {
-        let mut rows = Vec::new();
-        let mut child = list.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            if let Ok(button) = widget.downcast::<gtk::Button>() {
-                rows.push(button);
-            }
-        }
-        rows
-    };
-    assert_eq!(rows.len(), 18);
-    let row = |text: &str| -> gtk::Button {
-        rows.iter()
-            .find(|row| {
-                // A row's first label is its option's text.
-                let mut words = String::new();
-                let mut stack = vec![row.upcast_ref::<gtk::Widget>().clone()];
-                while let Some(widget) = stack.pop() {
-                    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-                        words.push_str(&label.label());
-                        words.push('\n');
-                    }
-                    let mut child = widget.first_child();
-                    while let Some(next) = child {
-                        child = next.next_sibling();
-                        stack.push(next);
-                    }
-                }
-                words.lines().any(|line| line == text)
-            })
-            .unwrap_or_else(|| panic!("no row for {text}"))
-            .clone()
-    };
-    // A refused option is greyed, still focusable to read why, and never
-    // reports; one that fits reports the value.
-    let chigiri = row("chigiri");
-    assert!(chigiri.has_css_class("stave-edit-unavailable"));
-    assert!(chigiri.is_focusable());
-    chigiri.emit_clicked();
-    assert!(actions.borrow().is_empty());
-    let dado = row("dado");
-    assert!(!dado.has_css_class("stave-edit-unavailable"));
-    dado.emit_clicked();
+    let texts: Vec<&str> = rows.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(texts, ["dowel(count: 4)", ""], "the default, then Search…");
+    assert!(words_in(rows[0].1.upcast_ref()).contains("default"));
+    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 18…"));
+    rows[0].1.emit_clicked();
+    rows[1].1.emit_clicked();
+    let joinery_name = parse_name("joinery").unwrap();
     assert_eq!(
         actions.borrow_mut().drain(..).collect::<Vec<_>>(),
-        [CardAction::Choose {
-            param: parse_name("joinery").unwrap(),
-            text: "dado".to_owned(),
-        }]
+        [
+            CardAction::UseDefault {
+                param: joinery_name.clone()
+            },
+            CardAction::Search {
+                param: joinery_name.clone()
+            }
+        ]
     );
+    assert_eq!(
+        command_for(CardAction::UseDefault {
+            param: joinery_name.clone()
+        }),
+        Ok(EditCommand::UseDefault(joinery_name.clone()))
+    );
+
+    // The search, as the window wires it: the session's setting, searched
+    // by stave_app.
+    let search = OptionSearch::new();
+    let setting = session
+        .edit()
+        .unwrap()
+        .chosen()
+        .unwrap()
+        .candidate()
+        .settings
+        .iter()
+        .find(|setting| setting.name.as_str() == "joinery")
+        .unwrap()
+        .clone();
+    search.connect_search(move |query| stave_app::choices::search(&setting, query));
+    let chosen: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
+    {
+        let chosen = chosen.clone();
+        search.connect_chosen(move |setting, text| chosen.borrow_mut().push((setting, text)));
+    }
+    // Over the window's panels, as the window puts it.
+    let sheet = gtk::Overlay::builder()
+        .child(&gtk::Label::new(Some("the panels")))
+        .build();
+    sheet.add_overlay(&search.root);
+    let window = shown_in_window(sheet.upcast_ref(), 900, 700);
+    assert!(!search.root.is_visible(), "closed until asked for");
+    search.present("joinery", "");
+    assert!(search.root.is_visible());
+    let all = search.rows();
+    assert_eq!(all.len(), 18, "every option, with nothing typed");
+    // The arrow keys move through them.
+    let first = search.selected().unwrap();
+    search.press_arrow(true);
+    assert_ne!(search.selected().unwrap(), first);
+    search.press_arrow(false);
+    assert_eq!(search.selected().unwrap(), first);
+
+    // "key": chigiri, by its description, refused; Enter chooses nothing.
+    search.type_query("key");
+    let found = search.rows();
+    assert_eq!(
+        found
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>(),
+        ["chigiri"]
+    );
+    let (row, _) = &found[0];
+    assert!(row.has_css_class("refused"));
+    let words = words_in(row.upcast_ref());
+    assert!(words.contains("butterfly key"), "{words}");
+    assert!(words.contains("Can't be used here"), "{words}");
+    search.choose_selected();
+    assert!(chosen.borrow().is_empty());
+    assert_eq!(search.setting().as_deref(), Some("joinery"), "still open");
+
+    // "dow": dowel by its name; it fits, and Enter chooses it.
+    search.type_query("dow");
+    assert_eq!(search.selected().as_deref(), Some("dowel"));
+    let words = words_in(search.rows()[0].0.upcast_ref());
+    assert!(words.contains("Fits"), "{words}");
+    search.choose_selected();
+    assert_eq!(
+        chosen.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [("joinery".to_owned(), "dowel".to_owned())]
+    );
+    assert!(!search.root.is_visible(), "choosing closes it");
+    assert_eq!(search.setting(), None);
+    window.destroy();
 
     // chigiri typed: the card puts the blame first, with the way back.
     send(
@@ -740,4 +861,108 @@ fn options_and_blame_on_the_card() {
     ));
     draw_edit(&menu, &card, &session, false);
     assert!(card.put_back_button().is_none());
+}
+
+/// The room the Edit panel has in the docked layout's default arrangement
+/// at 1440 x 900: its frame, below Parts on the left, is 300 wide and
+/// leaves its content 417 high under its tabs (measured from the window).
+const PANEL_ROOM: (i32, i32) = (300, 417);
+
+#[test]
+fn the_case_card_shows_whole_in_the_edit_panel_at_the_default_size() {
+    on_gtk_thread(case_card_fits);
+}
+
+fn case_card_fits() {
+    let session = case_session("fits");
+    let menu = EditMenu::new();
+    let card = EditCard::new();
+    let panel = crate::ui::edit_panel::EditPanel::new(&[card.root.upcast_ref()]);
+    card.root.set_visible(false);
+    assert!(!panel.update());
+    assert!(panel.is_empty(), "nothing in progress: how to start");
+    // The repeat controls as the window puts them: folded.
+    let fold = item_tools::RepeatFoldRow::new(1);
+    fold.place_apart(&card.repeat_button_slot, &card.repeat_slot);
+    {
+        let chosen = session.edit().unwrap().chosen().unwrap();
+        fold.show(stave_app::item_offer::candidate_repeat_fold(
+            chosen.candidate(),
+            chosen.repeat(),
+            fold.asked(),
+        ));
+    }
+    draw_edit(&menu, &card, &session, false);
+    assert!(panel.update());
+    assert!(!panel.is_empty());
+    let window = shown_in_window(panel.root.upcast_ref(), PANEL_ROOM.0, PANEL_ROOM.1);
+    // Nothing asks for more width than the panel has.
+    let (least, _, _, _) = card.root.measure(gtk::Orientation::Horizontal, -1);
+    assert!(
+        least <= PANEL_ROOM.0,
+        "the card needs {least} pixels across"
+    );
+    // Its body needs no scrolling: everything shows at once, Add and
+    // Cancel below it.
+    let adjustment = card.scrolled().vadjustment();
+    // What it needs: all of its body, and its foot (Repeat…, Cancel, Add).
+    let foot = card.root.height() - card.scrolled().height();
+    let body = card.scrolled().child().map_or(0, |body| {
+        body.measure(gtk::Orientation::Vertical, PANEL_ROOM.0).1
+    });
+    eprintln!(
+        "the Case card needs {} of {} pixels at {} wide (body {body}, foot {foot})",
+        body + foot,
+        PANEL_ROOM.1,
+        PANEL_ROOM.0,
+    );
+    assert!(body + foot <= PANEL_ROOM.1);
+    assert_eq!(card.root.height(), PANEL_ROOM.1);
+    assert!(
+        adjustment.upper() <= adjustment.page_size() + 0.5,
+        "the body scrolls: {} of {}",
+        adjustment.upper(),
+        adjustment.page_size()
+    );
+    let (add, cancel) = card.buttons();
+    assert!(add.is_mapped() && cancel.is_mapped());
+    // "Repeat…" pressed: the count and the direction open above the
+    // buttons, still within the panel's width.
+    assert!(fold.press());
+    fold.show(stave_app::item_offer::RepeatFold::Open);
+    let (least, _, _, _) = card.root.measure(gtk::Orientation::Horizontal, -1);
+    assert!(
+        least <= PANEL_ROOM.0,
+        "open, the card needs {least} pixels across"
+    );
+    window.destroy();
+}
+
+#[test]
+fn repeat_is_folded_until_asked_for() {
+    on_gtk_thread(repeat_fold_row);
+}
+
+fn repeat_fold_row() {
+    use stave_app::item_offer::RepeatFold;
+    let fold = item_tools::RepeatFoldRow::new(1);
+    let unfolded = Rc::new(std::cell::Cell::new(0));
+    {
+        let unfolded = unfolded.clone();
+        fold.connect_unfold(move || unfolded.set(unfolded.get() + 1));
+    }
+    fold.show(RepeatFold::Hidden);
+    assert!(!fold.root.is_visible());
+    assert!(!fold.press(), "hidden: nothing to press");
+    fold.show(RepeatFold::Folded);
+    assert!(fold.unfold_button().is_visible() && !fold.row.root.is_visible());
+    assert!(!fold.asked());
+    assert!(fold.press());
+    assert!(fold.asked());
+    assert_eq!(unfolded.get(), 1);
+    fold.show(RepeatFold::Open);
+    assert!(!fold.unfold_button().is_visible() && fold.row.root.is_visible());
+    assert!(fold.is_open());
+    fold.forget();
+    assert!(!fold.asked());
 }

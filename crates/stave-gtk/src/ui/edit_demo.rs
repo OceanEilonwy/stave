@@ -1,5 +1,5 @@
-//! Shows the editing menu and card over the design from the contract's
-//! hand-built fixture (`stave_app::edit::clothing_cabinet_fixture`), for
+//! Shows the editing menu over the design, or the card in the Edit
+//! panel, from the contract's hand-built fixture (`stave_app::edit::clothing_cabinet_fixture`), for
 //! seeing them before the edit loop drives them: `--edit-fixture menu`
 //! (or `refused`, `fits`, `choose`, `greyed`). What the user does on them
 //! is printed, nothing else; nothing here edits the design.
@@ -119,12 +119,13 @@ fn greyed(candidate: &Candidate) -> Option<Candidate> {
     Some(candidate)
 }
 
-/// Puts the showcase over the design: the menu near the left door, the
-/// card at the top right.
-pub fn show(design: &gtk::Overlay, showcase: Showcase) {
+/// Shows the showcase: the menu over the design near the left door, or
+/// the card in the Edit panel (`panel`, the panel's content, whose own
+/// card it replaces). `true` when a card was put in the panel.
+pub fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> bool {
     let Some(fixture) = clothing_cabinet_fixture() else {
         eprintln!("the editing fixture didn't build");
-        return;
+        return false;
     };
     let heading = fixture.picked.heading();
     match showcase {
@@ -161,10 +162,11 @@ pub fn show(design: &gtk::Overlay, showcase: Showcase) {
             menu.connect_chosen(|declaration| eprintln!("edit menu: chose {declaration:?}"));
             place(&menu.root, gtk::Align::Start, 470);
             design.add_overlay(&menu.root);
+            false
         }
         Showcase::Refused | Showcase::Fits | Showcase::Choose | Showcase::Point => {
             let Some(drawer) = fixture.candidates.first() else {
-                return;
+                return false;
             };
             let name = added_name(&fixture);
             let fits = Fits::new(Vec::new()).map(Verdict::Fits).ok();
@@ -196,13 +198,16 @@ pub fn show(design: &gtk::Overlay, showcase: Showcase) {
                 &FixtureWords,
             );
             card.connect_action(|action| eprintln!("edit card: {action:?}"));
-            place(&card.root, gtk::Align::End, 64);
-            design.add_overlay(&card.root);
+            while let Some(child) = panel.first_child() {
+                panel.remove(&child);
+            }
+            panel.append(&card.root);
+            true
         }
     }
 }
 
-/// Floats a panel at the top of the view, `margin` from one side.
+/// Floats the menu at the top of the view, `margin` from one side.
 fn place(panel: &gtk::Box, side: gtk::Align, margin: i32) {
     panel.set_halign(side);
     panel.set_valign(gtk::Align::Start);

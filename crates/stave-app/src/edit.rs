@@ -327,6 +327,13 @@ pub struct SettingParam {
     /// For a quantity whose param has `within low..high`, the two ends as
     /// written.
     pub range: Option<ValueRange>,
+    /// The values the project's own text already gives settings of the
+    /// same type, as written there, the most recent first (the last
+    /// assembly in file order first, as a copied value is read), each
+    /// once, at most [`crate::choices::RECENT_LIMIT`]: what the card's
+    /// short list offers after the default (see [`crate::choices`]).
+    /// Nothing is remembered outside the `.stave` files.
+    pub recent: Vec<String>,
 }
 
 impl SettingParam {
@@ -343,6 +350,7 @@ impl SettingParam {
             copied_from: None,
             options: Vec::new(),
             range: None,
+            recent: Vec::new(),
         }
     }
 }
@@ -361,6 +369,11 @@ pub struct SettingOption {
     /// copy, as a menu entry's [`Applicability`] is. Always
     /// [`OptionFit::NotChecked`] on a menu entry not chosen.
     pub fit: OptionFit,
+    /// The module its declaration comes from, grouped as the menu groups
+    /// entries (the project's own, imported modules, then `std`); `None`
+    /// for a value that is no declaration (a mount, a `within` value,
+    /// `true`).
+    pub group: Option<MenuGroup>,
     /// Where it is listed by its type, before the refused options are
     /// put last: they keep this order among themselves.
     pub(crate) position: usize,
@@ -373,6 +386,7 @@ impl SettingOption {
             text,
             hint,
             fit: OptionFit::NotChecked,
+            group: None,
             position: 0,
         }
     }
@@ -1047,6 +1061,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             copied_from: None,
             options: Vec::new(),
             range: None,
+            recent: Vec::new(),
         })
     };
     let copied = |from: AssemblyId, value: Option<Expr>| -> Option<SettingValue> {

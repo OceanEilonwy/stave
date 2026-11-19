@@ -78,15 +78,19 @@ line and the rest are skipped:
 | `choose <entry>` | a menu entry, by its label or `group.label` |
 | `bind region\|face\|between ...` | stands for the next click, filling the place the card asks for: found by name, without the scene's pick |
 | `point face <part>.<face>` | the next click made on the model at the middle of that face and picked as the pointer's is (so a wall of a space is reached through the space); it fails if the click would pick something else |
-| `set <name> = <value>` | a setting typed on the card (or chosen from its list) |
-| `options <name>` | the setting's list of options opened on the card (its button pressed), each option checked first, the card scrolled to it |
+| `set <name> = <value>` | a setting typed on the card (or chosen from its short list or its search) |
+| `default <name>` | the default chosen from the setting's short list (`EditCommand::UseDefault`) |
+| `choices <name>` | the setting's short list opened on the card (its ▾ pressed): the default, the values the project already uses, the value it holds now, "Search all …"; its options checked first, the card scrolled to it |
+| `search <name> [<query>]` | "Search…" chosen from the setting's short list, the query typed: the search over every option, each checked first |
+| `options <name>` | the same search with nothing typed: every option of the setting, each with its fit |
 | `put back` | the card's button that puts back the setting a refusal blames |
 | `name <name>` | the name retyped on the card |
 | `fix <problem> <fix>` | a fix's button, both counted from 1 |
 | `add`, `cancel` | the card's buttons (a change's card too) |
 | `pick <name>` | a click on a part, piece of hardware or assembly: selected, Details showing its changes |
-| `repeat <count> [up\|across\|deep]` | the count stepper: on the chosen candidate's card, else on the selected item's |
-| `drag count <count>` | the count handle in the 3D view, dragged until it says × count |
+| `repeat open` | "Repeat…" pressed: the count and the direction open (on the chosen candidate's card, else on the selected item's) |
+| `repeat <count> [up\|across\|deep]` | the count stepper: on the chosen candidate's card, else on the selected item's; "Repeat…" is pressed first when it is folded |
+| `drag count <count>` | the count handle in the 3D view, dragged until it says × count ("Repeat…" pressed first when it is folded: the handle shows only while the repeat controls are open) |
 | `drag boundary <n> <length>` | the n-th boundary handle (from 1), dragged until the piece before it is that long |
 | `mirror` | "And the other side" switched on |
 | `hold <a> to <b>` | "Hold a distance…" from `a`, then a click on `b` (each a part or a space by name) |
@@ -155,11 +159,12 @@ forwards what people do.
 | `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, focus mode); the motion bar and the Cut list's placeholder. |
-| `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
+| `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Edit, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The scene menu's floating box and the moving assemblies' chips on the 3D view; the finder dialog (Ctrl+K). |
 | `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
 | `stave-gtk` | `ui/files.rs`, `editor.rs` | The Code panel: the open files as tabs (each with its dot), a placeholder while none is open, breadcrumbs, the uses panel and the footer; the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
+| `stave-gtk` | `ui/edit_panel.rs`, `option_search.rs` | The Edit panel's content (the card in progress, or how to start one) and the search over a setting's options (below). |
 | `stave-gtk` | `ui/edit_menu.rs`, `edit_card.rs`, `edit_demo.rs` | The editing menu for a selection and the card for a chosen candidate (below), drawn from `stave_app::edit`'s contract values; `edit_demo` shows them from the contract's fixture (`--edit-fixture`). |
 | `stave-gtk` | `ui/edit_view.rs`, `edit_writer.rs`, `edit_script.rs` | Editing on the real session: what the pointer lights and a click starts, the menu and the card drawn from `Session::edit` after each `EditEvent` and what is done on them sent as `EditCommand`s, the ghost; Add's writer through the editor's buffers; `--edit-script`. |
 | `stave-gtk` | `ui/edit_view/` | Beside `edit_view.rs`: `changes.rs` (a change's card and the removal's dialog), `item_tools.rs` (a selected item's changes, in the Details panel), `repeat_handles.rs` (the count stepper on a candidate's card, the count handle and the boundary handles), `hold.rs` (Hold this), `verbs.rs` (the finder's verbs), `editor_link.rs` (pending lines in the editor; editing off while the text doesn't read), `change_steps.rs` (their edit-script steps), `pointing.rs` (what a click binds). |
@@ -272,17 +277,20 @@ PDF doesn't exist yet, and the button says so honestly.
 ```
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
-the 3D View, Parts, Files, Details, Code and Problems.
-Nothing but the problem pins sits over the model. Each panel is a
+the 3D View, Parts, Files, Details, Edit, Code and Problems.
+Nothing but the problem pins, the editing menu at a click and the small
+labels that belong on the model (the ghost's verdict, grips and their
+values, the repeat handles) sits over the model. Each panel is a
 `panel::Widget` in a `panel::Frame` (tabs along the top,
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
 the 3D view) or into another frame, or pick "Move to the Right" (left,
 bottom, top, middle) from its tab's menu; close it with its ×; show an edge
 again from the status bar's toggles. The default layout is board B
-(`Layout::default`): Parts and Files above Details on the left, the 3D
-View in the centre, Code and Problems at the
-bottom, the right edge empty and hidden. The layout is remembered per
+(`Layout::default`): Parts and Files above Details on the left (Edit a
+tab beside Details), the 3D View in the centre, Code and Problems at the
+bottom, the right edge empty and hidden. A layout file older than the
+Edit panel puts it beside Details wherever that file put Details. The layout is remembered per
 user in `~/.config/stave/layout` (saved on every drop and when the
 window closes; one line per panel, `code centre 1 0 0` for side, column,
 frame and tab, and one per edge, `show end true`; a broken file means
@@ -347,6 +355,18 @@ menu puts board B back.
 - **Details panel** is the old card: the selection's account and focus
   mode's controls (focus mode brings it to the front). A selected
   problem isn't explained here; the Problems panel shows it.
+- **Edit panel** holds the edit in progress: the card for a chosen menu
+  entry, the card for a change of the design, or the hold card (see
+  [Editing in the 3D view](#editing-in-the-3d-view)). It is a panel like
+  the others: a tab (beside Details by default), dragged to any area,
+  resized by the splitters, closed and brought back, its place remembered
+  with the rest (`edit start 0 1 1`). When a card appears its tab comes to
+  the front (the panel opens where it last was if it was closed), unless
+  it shares a frame with the 3D View, which it would hide; the card then
+  takes the keyboard. While nothing is in progress it stays where it is
+  and says how to start one ("Nothing being added"); when an edit is added
+  or cancelled and the panel shares a frame with Details, Details comes
+  back to the front, showing what was just added.
 - **Status bar**: "Linked to the text · door_l, line 9" for the
   selection, and a toggle per edge.
 
@@ -590,16 +610,33 @@ the session's.
   the index looked up by the entry's declaration when the command is
   sent, not when it was clicked: a step of the check can sort the menu in
   between (greyed entries go last in their group).
-- **The card** replaces the menu at the top right, kept within the 3D
-  view's height (its body scrolls). Its name, its
-  settings (typed, or picked from the list its button opens under the
-  setting, `SettingParam::options`; one at its default shows what the
-  default stands for, `default_value`, and a `within` range), its fix
-  buttons, the put-back button, Add and Cancel all send the session's
-  commands (`Rename`, `Set`, `ApplyFix`, `PutBack`, `Add`, `Cancel`); what is typed is read with
-  `editing::parse_value` and `parse_name`, and what can't be read is
-  said in a toast. A value too long for its entry is also said in full
-  under it. A place param still unbound shows the contract's
+- **The card** takes the menu's place in the **Edit panel** (see [The
+  window](#the-window)); the menu stays a pop-up at the click. Its name,
+  its settings, its fix buttons, the put-back button, Add and Cancel all
+  send the session's commands (`Rename`, `Set`, `UseDefault`, `ApplyFix`,
+  `PutBack`, `Add`, `Cancel`); what is typed is read with
+  `editing::parse_value` and `parse_name`, and what can't be read is said
+  in a toast. It is compact: the title with where it comes from on one
+  line ("Case · casework · in this space"), the hint on one line (in full
+  in its tooltip), then one row each for the name and the places it fills,
+  the verdict, a small "SETTINGS" caption and **one row per setting**: its
+  name on the left (cut short with "…" when long, in full in its
+  tooltip), its value on the right in an entry with a ▾ beside it. There
+  is no line under a setting: its type and where its value comes from
+  ("Stock · your choice", "Length · the default, 20mm", with a `within`
+  range) are the row's tooltip and the entry's accessible description. A
+  setting at its default shows the value the default stands for
+  (`default_value`, else the default as written: `dowel(count: 4)`) dimmed
+  in the empty entry; one with no value yet says "Choose…" and its name is
+  in the warning colour. A value longer than the entry beside the name can
+  show (`overlay(left: 18mm, right: 18mm, …)`) is also said in full,
+  wrapped, under its row. The body scrolls; Add and Cancel stay at the
+  foot of the panel, always in sight, "Repeat…" on their line. A long
+  verdict's words (a refusal's problems, warnings) scroll in a box of
+  their own, at most 120 pixels tall, so they never push the buttons out
+  of reach; the blame, the verdict's line and the fixes' buttons stay
+  outside it.
+  A place param still unbound shows the contract's
   prompt (`PlaceParam::prompt`, "Point at the side the hinges are screwed
   to."), and the next click on the model binds it (`Bind`), picked for
   what the param holds (`edit_view/pointing.rs`): a space wins over its
@@ -611,25 +648,40 @@ the session's.
   A command that tries the candidate again first shows Checking (the
   spinner, the ghost grey) for a moment so it is drawn, then runs. What
   a widget reports is always sent after its own signal has finished.
+- **A setting's short list.** The ▾ beside a setting opens, in the card
+  under its row (a popover would close each time a check's answer redraws
+  it, and can't be drawn into a screenshot), a short list from
+  `stave_app::choices::short_list`: the default (marked "default"), the
+  values the project's own text already gives settings like it, the most
+  recent first ("used here"), then the value it holds now if neither
+  lists it ("now"); a tick marks the value held now, and a refused one is
+  greyed with the "can't" sign and its reason in its tooltip, and never
+  reports. The default sends `UseDefault` (the setting goes back to its
+  default, so nothing is written for it); another sends `Set`. Last comes
+  "Search all 18…".
+- **The search.** "Search…" opens a dialog in the middle of the window,
+  over a dimmed backdrop (part of the window, as the removal's dialog is,
+  since the window's screenshot doesn't draw an `AdwDialog` opened by an
+  edit script): a field and every option of the setting that matches
+  what is typed (`stave_app::choices::search`: by name, a prefix of it, a
+  part of it, or the first sentence of its doc comment), grouped as the
+  menu groups its entries (the project's own, imported modules, then
+  "Standard · joinery"), the best matches first. Each shows its name, its
+  description and its fit as the card words it (a spinner and "Checking
+  whether it fits…", a tick and "Fits", "Checked once you choose …", or
+  greyed with a "can't" sign, "Can't be used here" and the checker's
+  first error). ↑ and ↓ move, Enter chooses (a refused option can't be
+  chosen: the foot says so instead), Escape or × closes, and the keyboard
+  goes back to the card.
 - **The options, checked.** Once a candidate is chosen, and after each
   change to it, its settings' options are checked on a worker thread
-  (`Session::options_job`, the open list's setting first; cancelled and
-  started again when the candidate changes), each answer handed to
-  `Session::option_fit_found` as it comes and drawn into the lists in
-  place (`EditCard::update_options`), so an open list stays open and the
-  keyboard stays on its option. A setting's list (opened by the ▾ button
-  beside its entry, in the card itself rather than a popover, so it is
-  not closed by each answer and can be drawn into a screenshot) says how
-  many fit, then each option with its state in an icon and words, never
-  by colour alone: a spinner and "Checking whether it fits…"; a tick and
-  "Fits"; an information sign and "Checked once you choose …"; or, greyed
-  with a "can't" sign, "Can't be used here: error[overlap]: …" (the
-  checker's first error, with "(and 1 more)"). The ones that fit come
-  first. A refused option stays focusable, so its reason can be read with
-  the keyboard and is its accessible description, is marked disabled for
-  assistive technology and never reports; the others send `Set`. Each
-  option's hint (its declaration's first sentence) is its tooltip and
-  accessible description. A value can still be typed in the entry.
+  (`Session::options_job`, the setting being searched or whose short list
+  is open first; cancelled and started again when the candidate changes),
+  each answer handed to `Session::option_fit_found` as it comes and drawn
+  in place (`EditCard::update_options`, and the open search), so an open
+  list stays open and the keyboard stays where it was. Each option's
+  hint (its declaration's first sentence) is its accessible description.
+  A value can still be typed in the entry.
 - **Blame and the way back.** When a refusal is blamed on a setting
   (`Chosen::blame`), the verdict box starts with it, in bold ("It stopped
   fitting when joinery became chigiri."), and the button "Put joinery
@@ -707,8 +759,8 @@ the session holds.
   at the boundary. A grip with no direction in space (a count, an angle,
   a length that is no gap) has no place on the model. Labels are moved
   along their line, to either side of it or on past the handle, so they
-  cover no handle, no other label and no floating card (the space's
-  menu, the edit's card), and kept inside the view.
+  cover no handle, no other label and not the space's menu, and are kept
+  inside the view.
 - **Stops.** Once listed, every movable grip's stops are searched on a
   worker thread (`Session::grip_stops_job`, cancelled when the grips
   change), each answer handed to `Session::grip_stops_found` as it
@@ -827,8 +879,8 @@ control on a card, and a verb of the finder; all three call the same
 method of the window (`repeat_selected`, `mirror_selected`,
 `hold_from_selected`, `remove_selected`, `rename_selected`), which sends
 the session's command. Each change is tried at once and shown on **the
-change's card** (`edit_view/changes.rs`, in the card's place at the top
-right): what it does ("Make 3 of drawer"), what it found (the mirror's
+change's card** (`edit_view/changes.rs`, in the Edit panel, in the
+card's place): what it does ("Make 3 of drawer"), what it found (the mirror's
 names, the rule a hold writes and its reason, what a removal takes, the
 files a rename rewrites), the verdict with the checker's problems and a
 button per fix, and Cancel and its commit button (Add, Hold, Remove,
@@ -865,6 +917,14 @@ was. Once written, the window selects the item by its new name.
 - **Repeat** (`edit_view/repeat_handles.rs`): the card of a candidate
   that fills a space (a component with its `Region` bound) has the same
   stepper above its buttons, sending `Repeat` (one piece is no repeat).
+  **Everywhere, the repeat controls are folded** behind a small
+  "Repeat…" (on the line of a card's Cancel and Add; in Details, in the
+  stepper's row) and open to the count and the direction only when it is
+  pressed, or when the count is already more than one: one rule for every
+  component and item, `stave_app::item_offer::repeat_fold` (a case
+  repeated in the envelope is valid, two cases side by side, but rarely
+  wanted, so it takes no room until asked for). On the card the open row
+  says "×" in place of "How many" (in its tooltip), so it fits the panel.
   In the 3D view, a **count handle** (an accent pill "× 1") sits on the
   space at the top (or right, or back) of its first piece, at the
   space's left front edge; dragged toward
@@ -872,7 +932,8 @@ was. Once written, the window selects the item by its new name.
   handle marks, and back, fewer (at most 12); its label follows the
   pointer and the repeat is tried when it is let go, so the ghost shows
   every copy. A selected item that fills a space has the handle too
-  while it is one piece. Which space an item fills is read from the
+  while it is one piece. The handle shows only while the repeat controls
+  are open: folded, they take no room on the model either. Which space an item fills is read from the
   model, not from the picture: the region its component's first `Region`
   param is bound to (`stave_app::spaces::filled_spaces`, following `bay`,
   `drawer_bay[same]`, `case.inside`); the same says whether How many shows
@@ -894,15 +955,14 @@ was. Once written, the window selects the item by its new name.
   controls: the scene menu, the camera column and Pull apart's slider,
   the moving assemblies' chips, the motion slider, the line and the key
   at the top, the cards and the chip at the foot; and the editing's
-  menu and cards); the editing's cards stand at the top right, clear of
-  the camera column;
+  menu; the editing's cards are in the Edit panel, off the view);
   a verdict pill with no room left is hidden (the card says the verdict),
   and a pin with no room is listed in the off-screen chip. A dragged
   handle still measures from the point it stands for.
 - **Hold this** (`edit_view/hold.rs`): "Hold a distance…" among a
   part's changes in Details (or "Hold a distance from this space…" at the foot of a space's
   menu) asks, in the line at the top of the view, for the second thing;
-  the next click on a part or a space is it. **The hold card** then says
+  the next click on a part or a space is it. **The hold card** (in the Edit panel) then says
   "divider.panel to case.top · It is 462mm now" (`Session::measure`, or
   why it can't be measured), and asks At least or At most, the distance
   (starting at the distance now) and why (the rule's message); "Try it"
@@ -1004,13 +1064,12 @@ envelope drawn and lit, waiting for the first click) and
 `new_project_menu.png` (the menu a click in the envelope opens).
 `edit_setting_options.png` and `edit_setting_options_dark.png` (the
 owner's case, `case_test.script`: Case chosen for a new project's
-envelope, `setting_options.edit` opening its joinery's list: the seven
-kinds that fit, then the refused ones greyed with the checker's reason),
-and `edit_setting_blame.png` and `edit_setting_blame_dark.png`
-(`setting_blame.edit`: chigiri typed, the card saying first that it
-stopped fitting when the joinery changed, the put-back button, the
-checker's words below), each 1440x1200 so the list shows both kinds of
-option. The door
+envelope, `setting_options.edit` opening the search over its joinery
+with nothing typed: every kind, those that fit first, the refused ones
+greyed with the checker's reason), and `edit_setting_blame.png` and
+`edit_setting_blame_dark.png` (`setting_blame.edit`: chigiri typed, the
+card saying first that it stopped fitting when the joinery changed, the
+put-back button, the checker's words below). The door
 scripts point at the hinge side with `point`, as the pointer would. The
 door is `crates/stave-gtk/fixtures/door_hits_wall`; the small chest is
 made by `stave edit --script tools/window-edits/small_chest.script`.
@@ -1034,6 +1093,23 @@ finder's "repeat 3", and "add shelf" opening Shelf's card),
 open: two places pending, the bays' line and the drawers' line, and the
 envelope's line lined up again) and `edit_text_broken.png` (a brace
 typed: editing in 3D off, and why).
+
+The Edit panel, on the owner's case (`case_test.script`) and on a
+project whose case is joined with screws (`recent_choices.script`):
+`edit_panel_case.png` and `edit_panel_case_dark.png` (`card_panel.edit`:
+Case chosen for the envelope, its card a tab beside Details, one compact
+row a setting, the defaults dimmed in their entries, "Repeat…" folded
+beside Cancel and Add), `edit_panel_right.png` (the same with the Edit
+panel on the right edge, which is wider: the arrangement read from
+`tools/layouts/edit_right.layout` as a saved one would be, since the
+screenshot tool can't drag a tab), `edit_repeat_open.png`
+(`repeat_open.edit`: "Repeat…" pressed, the count and the direction open
+and the count handle on the model), `edit_short_list.png` and `edit_short_list_dark.png` (`short_list.edit`:
+a shelf's joinery's short list: dado, the default, which fits; screw,
+which the case uses, refused here and greyed; "Search all 18…") and
+`edit_option_search.png` and `edit_option_search_dark.png`
+(`option_search.edit`: the shelf's joinery searched for "edge": groove
+fits, the other four greyed with the checker's reason).
 
 ### The acceptance run
 
@@ -1085,45 +1161,58 @@ does; they decide nothing.
   can't be chosen stays focusable so its reason can be read, is marked
   disabled for assistive technology and never reports.
   `connect_chosen(Fn(Declaration))` reports the entry chosen.
-- **The card** (`EditCard`, `.stave-edit-card`): `show(&CardModel,
-  &dyn Words)`. `CardModel` is the heading, the `&Candidate`, the
-  generated name, the `Option<&Verdict>` (`None` while the candidate
-  isn't complete) and the labels of the fixes added. `Words` is the caller's: an expression as written,
-  an assembly's name and what a bound place param holds, which the
-  contract carries as ids and parsed expressions. From the top: the
-  eyebrow ("IN THIS SPACE · CASEWORK"), the name and hint; the name in a
-  `gtk::EditableLabel`; the place params ("POINT AT": each unbound one
-  says its `PlaceParam::prompt`, or "Click a part on the model for hinge
-  side" without one; a bound one what fills it); the fixes added; the verdict
-  (Checking with a spinner, "It fits" in green with any warnings, or
-  "It doesn't fit: 1 problem" in red with each problem as `stave check`
-  words it, `error[overlap]: …`, its notes and `help:` line, and a
-  button per fix labelled `Fix::label`); then the settings, those that
-  need a choice first (marked in the warning colour), then those with a
-  value (each an entry with its type and "copied from drawer[top]" or
-  "your choice", and a ▾ toggle that shows its `options` in place under
-  it, each with its fit, a refused one greyed and never reporting, the
-  others sending `Choose`), and the ones at their defaults (the entry's placeholder the
-  value the default stands for, "220mm (the default)", the line under it
-  the default as written and its range) folded under "5 more
-  settings, at their defaults". Cancel and Add sit at the bottom; Add is
-  enabled only on Fits with nothing to point at or choose
-  (`can_add`), and its tooltip says why not (`add_blocked_reason`).
-  `CardModel::blame` puts the blame and the put-back button first in the
-  verdict. `update_options(&Candidate)` redraws only the lists of
-  options; `open_options(param)` opens one (unfolding the defaults when
-  it is among them) and `fit_height(px)` keeps the card within the view.
+- **The card** (`EditCard`, `.stave-edit-card`, the Edit panel's
+  content while an edit is in progress): `show(&CardModel, &dyn Words)`.
+  `CardModel` is the heading, the `&Candidate`, the generated name, the
+  `Option<&Verdict>` (`None` while the candidate isn't complete) and the
+  labels of the fixes added. `Words` is the caller's: an expression as
+  written, an assembly's name and what a bound place param holds, which
+  the contract carries as ids and parsed expressions. From the top: the
+  title and where it comes from, the hint on one line; the name in a
+  `gtk::EditableLabel` and the place params (each unbound one says its
+  `PlaceParam::prompt`, or "Click a part on the model for hinge side"
+  without one; a bound one what fills it), one compact row each; the
+  fixes added; the verdict (Checking with a spinner, "It fits" in green
+  with any warnings, or "It doesn't fit: 1 problem" in red with each
+  problem as `stave check` words it, `error[overlap]: …`, its notes and
+  `help:` line, and a button per fix labelled `Fix::label`), in a box of
+  its own that scrolls past 120 pixels (the blame, the verdict's line
+  and the fixes' buttons outside it, always shown); then the settings,
+  one row each:
+  those that need a choice first, then those with a value, then those at
+  their defaults (the default's value dimmed in the entry), each with the
+  ▾ that opens its short list (`stave_app::choices::short_list`) under
+  it. `setting_about` is a row's tooltip ("JointKind · the default,
+  dowel(count: 4)"). At the foot, always in sight: `repeat_slot` (the
+  open count and direction) and, on the buttons' line,
+  `repeat_button_slot` ("Repeat…"), where the window puts its
+  `RepeatFoldRow`; then Cancel and Add. Add is enabled only on Fits with
+  nothing to point at or choose (`can_add`), and its tooltip says why not
+  (`add_blocked_reason`). `CardModel::blame` puts the blame and the
+  put-back button first in the verdict. `update_options(&Candidate)`
+  redraws only the short lists; `open_options(param)` opens one.
   `connect_action(Fn(CardAction))` reports `Rename(text)`,
   `Choose { param, text }` (Enter in a setting's entry, the text as
-  typed, or an option chosen), `Fix { problem, fix }` (indexes in the
-  refusal), `PutBack`, `Add` and `Cancel`. Enter adds when Add is enabled; Escape cancels. The card
-  is focusable and takes the keyboard when it appears and on each
-  `show` (unless the keyboard is already inside it), so these keys
-  reach it before the window's own Escape.
+  typed, or an entry of its short list or of its search), `UseDefault {
+  param }` (the short list's default), `Search { param }` ("Search…",
+  which the window opens), `Fix { problem, fix }` (indexes in the
+  refusal), `PutBack`, `Add` and `Cancel`. Enter adds when Add is
+  enabled; Escape cancels. The card is focusable and takes the keyboard
+  when it is mapped (its tab raised) and on each `show` (unless the
+  keyboard is already inside it), so these keys reach it before the
+  window's own Escape.
+- **The search** (`OptionSearch`, over the window's panels):
+  `present(setting, query)`, `connect_search(Fn(&str) -> Vec<SearchGroup>)`
+  (the window answers with `stave_app::choices::search` on the session's
+  setting), `connect_chosen(Fn(setting, text))`, `refresh()` (after each
+  option's fit is found) and `close()`.
+- **The Edit panel** (`EditPanel`): the three cards (a candidate's, a
+  change's, the hold card), one shown at a time by its owner, or "Nothing
+  being added" and how to start one; `update()` says which.
 
 To see them, `--edit-fixture menu|greyed|refused|fits|choose|point`
-puts one over the design from `clothing_cabinet_fixture()` (the menu
-near the left door, the card at the top right) and prints what is done
+shows one from `clothing_cabinet_fixture()` (the menu over the design
+near the left door, the card in the Edit panel) and prints what is done
 on it:
 
 ```

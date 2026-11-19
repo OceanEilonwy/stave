@@ -440,3 +440,80 @@ fn options_of_a_setting_that_is_not_there_is_an_error() {
         "{text}"
     );
 }
+
+const CASE_CHOICES: &str = r#"new "Case test" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop
+create
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+choices joinery
+search joinery key
+search joinery dow
+set joinery = screw
+add
+select region envelope
+choose casework.Case
+choices joinery
+set joinery = dado
+choices joinery
+default joinery
+choices joinery
+"#;
+
+#[test]
+fn a_script_prints_a_settings_short_list_and_a_searchs_matches() {
+    let folder = scratch_folder("case-choices");
+    std::fs::write(folder.join("case.txt"), CASE_CHOICES).unwrap();
+    let output = stave(&folder, &["edit", "project", "--script", "case.txt"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    let after = |step: &str, nth: usize| -> String {
+        text.split(&format!("> {step}\n"))
+            .nth(nth)
+            .and_then(|rest| rest.split("\n> ").next())
+            .unwrap_or_else(|| panic!("no step {step}: {text}"))
+            .to_owned()
+    };
+    // A new project: the default only, nothing used yet.
+    assert_eq!(
+        after("choices joinery", 1),
+        "joinery: 1 to choose from (0 used in this project), then search 18 options\n  1. dowel(count: 4)  default, now"
+    );
+    // Chigiri is found by its description, refused with the checker's
+    // reason; dowel by its name, and it fits.
+    let key = after("search joinery key", 1);
+    assert!(
+        key.starts_with("joinery: 1 of 18 options match \"key\"\n  Standard · joinery\n    chigiri  by description  refused: error[require]: "),
+        "{key}"
+    );
+    assert!(
+        key.ends_with("Chigiri: a butterfly key let into the face across a seam."),
+        "{key}"
+    );
+    let dow = after("search joinery dow", 1);
+    assert!(
+        dow.starts_with("joinery: 1 of 18 options match \"dow\"\n  Standard · joinery\n    dowel  by name  fits\n"),
+        "{dow}"
+    );
+    // With a case that uses screws in the project, screw is offered as
+    // used; the value chosen is listed as now, and the default again.
+    assert!(
+        after("choices joinery", 2).starts_with(
+            "joinery: 2 to choose from (1 used in this project), then search 18 options\n  1. dowel(count: 4)  default, now\n  2. screw            used, "
+        ),
+        "{text}"
+    );
+    let chosen = after("choices joinery", 3);
+    assert!(
+        chosen.contains("  1. dowel(count: 4)  default\n"),
+        "{chosen}"
+    );
+    assert!(chosen.contains("\n  3. dado             now"), "{chosen}");
+    assert!(
+        after("choices joinery", 4).contains("  1. dowel(count: 4)  default, now"),
+        "{text}"
+    );
+}

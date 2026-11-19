@@ -22,6 +22,7 @@ mod dock;
 mod edit_card;
 mod edit_demo;
 mod edit_menu;
+mod edit_panel;
 mod edit_script;
 mod edit_view;
 mod edit_writer;
@@ -36,6 +37,7 @@ mod header;
 mod icons;
 mod inspector;
 mod new_project;
+mod option_search;
 mod panels;
 mod slider;
 mod style;
@@ -395,6 +397,10 @@ struct Widgets {
     /// inspector), then its editing controls (the "Add onto" button and
     /// the item's changes).
     details: gtk::Box,
+    /// The Edit panel's content: the card in progress, or how to start.
+    edit_holder: gtk::Box,
+    /// Over the window's panels: the search over a setting's options.
+    sheet: gtk::Overlay,
     dock: Rc<Dock>,
     /// The dock and its panels round the 3D view.
     workbench: Rc<workbench::Workbench>,
@@ -509,12 +515,20 @@ impl Window {
             watcher: RefCell::new(None),
             editing: edit_view::EditView::new(),
         });
-        if let Some(showcase) = options.edit_fixture {
-            edit_demo::show(&window.widgets.design, showcase);
-        }
         window.install_actions(options.theme);
         window.connect_events();
         window.connect_editing();
+        if let Some(showcase) = options.edit_fixture {
+            // The fixture's card takes the Edit panel's place of the
+            // session's own.
+            if edit_demo::show(
+                &window.widgets.design,
+                &window.widgets.edit_holder,
+                showcase,
+            ) {
+                window.widgets.workbench.present(workbench::PanelId::Edit);
+            }
+        }
         window.state.borrow_mut().edit_script = options.edit_script;
         if options.new_project {
             window.ask_new_project();
@@ -3605,6 +3619,12 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         .child(&details_box)
         .css_classes(["stave-details"])
         .build();
+    // The Edit panel's content comes with the editing (`edit_view`).
+    let edit_holder = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
     let files = FilesPage::new();
     let file_list = panels::FilesList::new();
     let problems = panels::ProblemsPanel::new();
@@ -3625,6 +3645,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
             (workbench::PanelId::Parts, tree.root.clone().upcast()),
             (workbench::PanelId::Files, file_list.root.clone().upcast()),
             (workbench::PanelId::Details, details.upcast()),
+            (workbench::PanelId::Edit, edit_holder.clone().upcast()),
             (workbench::PanelId::Code, files.root.clone().upcast()),
             (workbench::PanelId::Problems, problems.root.clone().upcast()),
         ],
@@ -3645,8 +3666,10 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&views);
+    // Over the whole window: the search over a setting's options.
+    let sheet = gtk::Overlay::builder().child(&content).build();
     let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&content));
+    toasts.set_child(Some(&sheet));
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header.bar);
@@ -3706,6 +3729,8 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         tree,
         inspector,
         details: details_box,
+        edit_holder,
+        sheet,
         dock,
         workbench,
         problems,

@@ -87,7 +87,7 @@ pub(in crate::ui) fn hold_request(
 
 /// The card that asks how to hold a measured distance.
 pub(in crate::ui) struct HoldCard {
-    /// The panel, ready to float over the 3D view.
+    /// The card, in the Edit panel.
     pub(in crate::ui) root: gtk::Box,
     title: gtk::Label,
     now: gtk::Label,
@@ -104,12 +104,12 @@ impl HoldCard {
     pub(in crate::ui) fn new() -> HoldCard {
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .css_classes(["stave-inspector"])
+            .spacing(10)
+            .css_classes(["stave-edit-body"])
             .build();
         let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        head.append(&label("HOLD A DISTANCE", &["stave-eyebrow"]));
-        let title = label("", &["stave-inspector-title"]);
+        head.append(&label("HOLD A DISTANCE", &["stave-edit-caption"]));
+        let title = label("", &["stave-edit-title"]);
         head.append(&title);
         let now = label("", &["stave-description"]);
         head.append(&now);
@@ -179,18 +179,26 @@ impl HoldCard {
             .build();
         buttons.append(&cancel);
         buttons.append(&try_it);
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&body)
+            .build();
+        let foot = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["stave-edit-foot"])
+            .build();
+        foot.append(&buttons);
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-card-panel", "stave-edit-card", "stave-hold-card"])
-            .width_request(340)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Start)
+            .css_classes(["stave-edit-card", "stave-hold-card"])
+            .hexpand(true)
+            .vexpand(true)
             .accessible_role(gtk::AccessibleRole::Group)
-            .overflow(gtk::Overflow::Hidden)
             .visible(false)
             .build();
-        root.append(&body);
-        root.append(&buttons);
+        root.append(&scrolled);
+        root.append(&foot);
         HoldCard {
             root,
             title,
@@ -262,10 +270,10 @@ impl Hold {
 }
 
 impl Window {
-    /// Puts the hold card over the 3D view and connects it.
+    /// Connects the hold card (in the Edit panel) and the space menu's
+    /// button.
     pub(in crate::ui) fn connect_hold(self: &Rc<Self>) {
         let hold = &self.editing.hold;
-        self.widgets.design.add_overlay(&hold.card.root);
         self.editing.menu.root.append(&hold.from_space);
         let window = Rc::downgrade(self);
         hold.from_space.connect_clicked(move |_| {
@@ -362,6 +370,7 @@ impl Window {
         ));
         self.editing.hold.step.replace(HoldStep::Picking { first });
         self.editing.hold.card.root.set_visible(false);
+        self.update_edit_panel();
     }
 
     /// A click while a hold waits for its second thing: a part or a space
@@ -402,13 +411,8 @@ impl Window {
         self.show_hint("");
         let card = &self.editing.hold.card;
         card.show(&first, &second, &now);
-        let rail = self.right_column();
-        card.root.set_margin_end(
-            super::super::EDGE
-                .saturating_add(rail)
-                .saturating_add(super::super::EDGE),
-        );
-        card.root.set_margin_top(super::super::EDGE);
+        self.update_edit_panel();
+        card.reason.grab_focus();
         self.editing
             .hold
             .step
@@ -446,6 +450,7 @@ impl Window {
             Ok(request) => {
                 self.editing.hold.step.replace(HoldStep::Idle);
                 card.root.set_visible(false);
+                self.update_edit_panel();
                 self.start_change(EditCommand::Hold(request));
             }
             Err(words) => self.edit_toast(&words),
@@ -457,6 +462,7 @@ impl Window {
         let was = self.editing.hold.step.replace(HoldStep::Idle) != HoldStep::Idle;
         if was {
             self.editing.hold.card.root.set_visible(false);
+            self.update_edit_panel();
             self.show_hint("");
             self.show_card();
         }

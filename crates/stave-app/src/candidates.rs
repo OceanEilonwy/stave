@@ -433,6 +433,56 @@ impl<'a> EditScope<'a> {
         })
     }
 
+    /// The values the project's own assemblies already give settings like
+    /// `setting`, as written, the most recent first (the last assembly in
+    /// file order first, as [`EditScope::copied`] reads), each once, at
+    /// most [`crate::choices::RECENT_LIMIT`]. "Like" is the same type for a
+    /// type with a list of options (a stock, a mount, a kind, a `Bool`);
+    /// for a quantity (a length, an angle, a count), whose type every
+    /// size shares, it is also the same param name.
+    pub(crate) fn recent_values(&self, setting: &SettingParam) -> Vec<String> {
+        let defs = &self.model.defs;
+        let Some(module) = defs.modules.get(self.model.root.index()) else {
+            return Vec::new();
+        };
+        let by_name = crate::choices::matched_by_name(setting.ty);
+        let mut out: Vec<String> = Vec::new();
+        for item in module.items.iter().rev() {
+            let DefId::Assembly(assembly_def) = *item else {
+                continue;
+            };
+            let Some(def) = defs.assembly(assembly_def) else {
+                continue;
+            };
+            let AssemblyKind::Instance { args, .. } = &def.kind else {
+                continue;
+            };
+            for (param, _) in args {
+                let Some(param_def) = defs.param(*param) else {
+                    continue;
+                };
+                if type_name(&param_def.ty) != Some(setting.ty)
+                    || (by_name && param_def.decl.name != setting.name.as_str())
+                {
+                    continue;
+                }
+                let Some(value) =
+                    self.written_argument(def.decl.file, &def.decl.name, &param_def.decl.name)
+                else {
+                    continue;
+                };
+                let text = print::expr_text(&value);
+                if !out.contains(&text) {
+                    out.push(text);
+                    if out.len() >= crate::choices::RECENT_LIMIT {
+                        return out;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The expression an assembly's body gives a param, as written.
     fn written_argument(&self, file: FileId, assembly: &str, param: &str) -> Option<ast::Expr> {
         let parsed = self.file(file)?.parse.ast.as_ref()?;

@@ -21,7 +21,7 @@ use adw::prelude::*;
 use stave_app::change::ChangeRequest;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::hold::Measured;
-use stave_app::item_offer::{ItemOffer, MirrorGesture};
+use stave_app::item_offer::{ItemOffer, MirrorGesture, RepeatFold};
 pub(in crate::ui) use stave_app::item_offer::{piece_count, selected_item};
 use stave_app::naming::RepeatCount;
 use stave_app::session::Selection;
@@ -76,6 +76,7 @@ pub(in crate::ui) fn candidate_repeat(
 pub(in crate::ui) struct RepeatRow {
     /// The row.
     pub(in crate::ui) root: gtk::Box,
+    label: gtk::Label,
     count: gtk::SpinButton,
     axis: gtk::DropDown,
     /// Set while the row is filled from the session, so it reports nothing.
@@ -90,13 +91,12 @@ impl RepeatRow {
             .spacing(8)
             .css_classes(["stave-card-row", "stave-repeat-row"])
             .build();
-        root.append(
-            &gtk::Label::builder()
-                .label("How many")
-                .xalign(0.0)
-                .css_classes(["stave-key"])
-                .build(),
-        );
+        let label = gtk::Label::builder()
+            .label("How many")
+            .xalign(0.0)
+            .css_classes(["stave-key"])
+            .build();
+        root.append(&label);
         let adjustment = gtk::Adjustment::new(
             1.0,
             f64::from(u32::try_from(least).unwrap_or(1)),
@@ -108,6 +108,7 @@ impl RepeatRow {
         let count = gtk::SpinButton::builder()
             .adjustment(&adjustment)
             .digits(0)
+            .width_chars(2)
             .numeric(true)
             .tooltip_text("How many pieces fill the space, each the same size")
             .build();
@@ -120,10 +121,22 @@ impl RepeatRow {
         root.append(&axis);
         RepeatRow {
             root,
+            label,
             count,
             axis,
             filling: Rc::new(Cell::new(false)),
         }
+    }
+
+    /// Says "×" in place of "How many" (in full in the stepper's tooltip
+    /// and accessible label), so the row fits the Edit panel's width in
+    /// the default layout, where the docked area would otherwise widen to
+    /// hold it.
+    pub(in crate::ui) fn shorten(&self) {
+        self.label.set_label("×");
+        self.label
+            .set_tooltip_text(Some("How many pieces fill the space, each the same size"));
+        self.root.add_css_class("stave-repeat-short");
     }
 
     /// Shows a count and an axis without reporting them; the axis list
@@ -186,13 +199,117 @@ impl RepeatRow {
     }
 }
 
+/// The repeat controls folded behind a small "Repeat…" button
+/// (`stave_app::item_offer::RepeatFold`, one rule for every card): the
+/// button while folded, the count and the direction once open.
+pub(in crate::ui) struct RepeatFoldRow {
+    /// The button and the row.
+    pub(in crate::ui) root: gtk::Box,
+    unfold: gtk::Button,
+    /// The count and the direction.
+    pub(in crate::ui) row: RepeatRow,
+    /// Whether the user pressed "Repeat…" for what is shown now.
+    asked: Rc<Cell<bool>>,
+}
+
+impl RepeatFoldRow {
+    /// Folded, starting at one piece.
+    pub(in crate::ui) fn new(least: usize) -> RepeatFoldRow {
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["stave-repeat-fold"])
+            .build();
+        let unfold = gtk::Button::builder()
+            .label("Repeat…")
+            .halign(gtk::Align::Start)
+            .css_classes(["flat", "stave-repeat-unfold"])
+            .tooltip_text("Make more than one, each the same size, filling the space")
+            .build();
+        unfold.update_property(&[gtk::accessible::Property::Label("Repeat")]);
+        let row = RepeatRow::new(least);
+        root.append(&unfold);
+        root.append(&row.root);
+        let asked = Rc::new(Cell::new(false));
+        {
+            let asked = asked.clone();
+            unfold.connect_clicked(move |_| asked.set(true));
+        }
+        RepeatFoldRow {
+            root,
+            unfold,
+            row,
+            asked,
+        }
+    }
+
+    /// Shows what the rule says: hidden, the button, or the count and the
+    /// direction.
+    pub(in crate::ui) fn show(&self, fold: RepeatFold) {
+        let (any, open) = match fold {
+            RepeatFold::Hidden => (false, false),
+            RepeatFold::Folded => (true, false),
+            RepeatFold::Open => (true, true),
+        };
+        self.root.set_visible(any);
+        self.unfold.set_visible(any && !open);
+        self.row.root.set_visible(open);
+    }
+
+    /// `true` once the user pressed "Repeat…".
+    pub(in crate::ui) fn asked(&self) -> bool {
+        self.asked.get()
+    }
+
+    /// Puts "Repeat…" in one place and the count and direction in another
+    /// (the candidate's card: "Repeat…" on the line of its buttons, the
+    /// count above them, so folded it takes no line of its own).
+    pub(in crate::ui) fn place_apart(&self, button_slot: &gtk::Box, row_slot: &gtk::Box) {
+        self.root.remove(&self.unfold);
+        self.root.remove(&self.row.root);
+        button_slot.append(&self.unfold);
+        row_slot.append(&self.row.root);
+        self.row.shorten();
+    }
+
+    /// Forgets that "Repeat…" was pressed (something else is shown).
+    pub(in crate::ui) fn forget(&self) {
+        self.asked.set(false);
+    }
+
+    /// `true` while the count and the direction show.
+    pub(in crate::ui) fn is_open(&self) -> bool {
+        self.root.is_visible() && self.row.root.is_visible()
+    }
+
+    /// Presses "Repeat…", as a click does (scripts); `false` when it
+    /// doesn't show.
+    pub(in crate::ui) fn press(&self) -> bool {
+        if !self.unfold.is_visible() || !self.root.is_visible() {
+            return false;
+        }
+        self.unfold.emit_clicked();
+        true
+    }
+
+    /// Calls `callback` after "Repeat…" is pressed.
+    pub(in crate::ui) fn connect_unfold(&self, callback: impl Fn() + 'static) {
+        self.unfold.connect_clicked(move |_| callback());
+    }
+
+    /// The button (for tests).
+    #[cfg(test)]
+    pub(in crate::ui) fn unfold_button(&self) -> gtk::Button {
+        self.unfold.clone()
+    }
+}
+
 /// The changes a selected item's card offers.
 pub(in crate::ui) struct ItemTools {
     /// The panel, at the bottom of the part's card.
     pub(in crate::ui) root: gtk::Box,
     title: gtk::Label,
     name: gtk::EditableLabel,
-    repeat: RepeatRow,
+    repeat: RepeatFoldRow,
     mirror_row: gtk::Box,
     mirror_words: gtk::Label,
     mirror: gtk::Switch,
@@ -256,7 +373,8 @@ impl ItemTools {
         name.update_property(&[gtk::accessible::Property::Label("Name")]);
         name_row.append(&name);
         rows.append(&name_row);
-        let repeat = RepeatRow::new(1);
+        let repeat = RepeatFoldRow::new(1);
+        repeat.root.add_css_class("stave-card-row");
         rows.append(&repeat.root);
         let mirror_row = gtk::Box::builder()
             .spacing(10)
@@ -314,6 +432,11 @@ impl ItemTools {
 impl ItemTools {
     /// Its count stepper.
     pub(in crate::ui) fn repeat_row(&self) -> &RepeatRow {
+        &self.repeat.row
+    }
+
+    /// Its repeat controls, folded or open.
+    pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldRow {
         &self.repeat
     }
 }
@@ -337,7 +460,13 @@ impl Window {
             window.rename_selected(&text);
         });
         let window = Rc::downgrade(self);
-        tools.repeat.connect_changed(move |count, axis| {
+        tools.repeat.connect_unfold(move || {
+            if let Some(window) = window.upgrade() {
+                window.update_item_tools();
+            }
+        });
+        let window = Rc::downgrade(self);
+        tools.repeat.row.connect_changed(move |count, axis| {
             if let Some(window) = window.upgrade() {
                 window.repeat_selected(count, Some(axis));
             }
@@ -399,6 +528,15 @@ impl Window {
             .as_ref()
             .is_none_or(|shown| shown.item != item || shown.design != address);
         if stale {
+            // Another item: "Repeat…" is asked for again.
+            if tools
+                .shown
+                .borrow()
+                .as_ref()
+                .is_none_or(|shown| shown.item != item)
+            {
+                tools.repeat.forget();
+            }
             // The offer reads the project, so it is worked out once per
             // item and result.
             let offer = self.session.borrow().item_offer(&item);
@@ -423,8 +561,11 @@ impl Window {
             .title
             .set_label(&format!("CHANGE {item}").to_uppercase());
         tools.name.set_text(&item);
-        tools.repeat.show(count, tools.repeat.axis(), count < 2);
-        tools.repeat.root.set_visible(offer.repeatable);
+        tools
+            .repeat
+            .row
+            .show(count, tools.repeat.row.axis(), count < 2);
+        tools.repeat.show(offer.repeat_fold(tools.repeat.asked()));
         tools.mirror.set_active(false);
         tools.mirror_row.set_visible(offer.mirror.is_some());
         match &offer.mirror {

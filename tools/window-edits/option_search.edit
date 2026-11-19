@@ -1,0 +1,8 @@
+# The same shelf's joinery searched for "edge": the dialog lists the five
+# options whose name or description says it, groove fitting and the
+# others greyed with the checker's reason.
+select region case.inside
+choose casework.Shelf
+bind between case.side[left] case.side[right]
+set panel_stock = oak_19
+search joinery edge

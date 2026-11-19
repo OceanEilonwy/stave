@@ -136,6 +136,9 @@ pub enum EditCommand {
     /// Put the setting a refusal blames back to the value it had before
     /// the change that made the candidate stop fitting ([`Chosen::blame`]).
     PutBack,
+    /// Put a setting back to its param's own default, so nothing is
+    /// written for it (the short list's "default" entry).
+    UseDefault(Ident),
     /// Name the new item, in place of the generated name.
     Rename(Ident),
     /// Apply one of the refusal's fixes: the fix at `fix` of the problem at
@@ -345,6 +348,8 @@ pub enum Rejection {
     NoSuchFix,
     /// [`EditCommand::PutBack`] with no refusal that blames a setting.
     NothingToPutBack,
+    /// [`EditCommand::UseDefault`] on a setting whose param has no default.
+    NoDefault(String),
     /// Add was asked for a candidate that doesn't fit.
     DoesNotFit,
     /// The edit couldn't start (see [`StartError`]), in words.
@@ -382,6 +387,7 @@ impl Rejection {
             Rejection::NothingToPutBack => {
                 "nothing to put back: no setting change made it stop fitting".to_owned()
             }
+            Rejection::NoDefault(name) => format!("'{name}' has no default: choose a value"),
             Rejection::DoesNotFit => "the edit doesn't fit, so nothing was written".to_owned(),
             Rejection::CantStart(message) | Rejection::CantWrite(message) => message.clone(),
             Rejection::NothingToInclude => {
@@ -762,6 +768,42 @@ impl Edit {
                         name.as_str().to_owned(),
                     ))),
                 }
+            }
+            EditCommand::UseDefault(name) => {
+                let Some(chosen) = self.chosen.as_mut() else {
+                    events.push(EditEvent::Rejected(Rejection::NothingChosen));
+                    return events;
+                };
+                let Some(setting) = chosen
+                    .candidate
+                    .settings
+                    .iter_mut()
+                    .find(|setting| setting.name.as_str() == name.as_str())
+                else {
+                    events.push(EditEvent::Rejected(Rejection::NoSuchSetting(
+                        name.as_str().to_owned(),
+                    )));
+                    return events;
+                };
+                let Some(default) = setting.default_text.clone() else {
+                    events.push(EditEvent::Rejected(Rejection::NoDefault(
+                        name.as_str().to_owned(),
+                    )));
+                    return events;
+                };
+                if setting.value == SettingValue::Default {
+                    return events;
+                }
+                let from = std::mem::replace(&mut setting.value, SettingValue::Default);
+                let change = SettingChange {
+                    setting: setting.name.clone(),
+                    from,
+                    from_text: setting.text.clone(),
+                    to_text: default,
+                    options: setting.options.clone(),
+                };
+                events.push(EditEvent::SettingChanged);
+                self.retry_after_set(change, &mut events);
             }
             EditCommand::PutBack => {
                 let Some(chosen) = self.chosen.as_mut() else {
