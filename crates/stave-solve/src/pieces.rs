@@ -846,30 +846,16 @@ impl Solver<'_> {
                 "a splice joins two pieces, so its kind has two roles that are parts",
             ));
         }
-        let mut glue = true;
-        let mut methods = Vec::new();
-        let mut settings = Vec::new();
-        for (name, setting) in &value.settings {
-            match name.as_str() {
-                "glue" => glue = *setting == Value::Bool(true),
-                "methods" => {
-                    if let Value::List(items) = setting {
-                        for item in items {
-                            if let Value::Recipe(recipe) = item
-                                && let Some(def) = self.model.defs.recipe(*recipe)
-                            {
-                                methods.push(def.decl.name.clone());
-                            }
-                        }
-                    }
-                }
-                _ => settings.push((name.clone(), setting.clone())),
-            }
-        }
+        let methods = value
+            .methods
+            .iter()
+            .filter_map(|recipe| self.model.defs.recipe(*recipe))
+            .map(|def| def.decl.name.clone())
+            .collect();
         Ok(Method {
             value: value.clone(),
-            settings,
-            glue,
+            settings: value.settings.clone(),
+            glue: value.glue.unwrap_or(true),
             methods,
         })
     }

@@ -14,12 +14,14 @@ use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_modules::ModuleId;
 use stave_schema::functions::Builtin;
+use stave_schema::kinds::BaseField;
 use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm};
 use stave_schema::{CutOperation, Operation};
+use std::collections::BTreeMap;
 
 use crate::ids::{
     AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, MadeIndex, ParamDefId,
@@ -1084,6 +1086,9 @@ pub struct KindDef {
     pub requires: Vec<RequireDef>,
     /// Fields of a hardware, fastener or tool kind, by name.
     pub fields: Vec<Setting>,
+    /// Where each entry its base fixes is given, found once when the kind
+    /// is resolved; see [`KindDef::base_entry`].
+    pub base_entries: BTreeMap<BaseField, BaseEntry>,
     /// The joint entries, for a joint kind.
     pub joint: Option<JointKindDef>,
     /// The members with a body (`member arm { ... }`), in source order;
@@ -1095,7 +1100,23 @@ pub struct KindDef {
     pub hardware: Option<HardwareKindDef>,
 }
 
+/// Where a kind gives one of the entries its base fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaseEntry {
+    /// A param of the kind, by its index in [`KindDef::params`]: a kind
+    /// value may set it.
+    Param(usize),
+    /// A field of the kind, by its index in [`KindDef::fields`].
+    Field(usize),
+}
+
 impl KindDef {
+    /// Where the kind gives a base entry (`diameter`, `species`, `model`,
+    /// ...), or `None` when it gives none.
+    pub fn base_entry(&self, field: BaseField) -> Option<BaseEntry> {
+        self.base_entries.get(&field).copied()
+    }
+
     /// The role at `index`.
     pub fn role(&self, index: RoleIndex) -> Option<&RoleDef> {
         self.roles.get(index.index())

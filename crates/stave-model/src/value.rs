@@ -324,11 +324,26 @@ pub struct KindValue {
     pub kind: KindId,
     /// Its name as written where it was named (`hw.brass_knob_26`).
     pub name: String,
-    /// Settings by name, in the order given.
+    /// Settings of the kind's params, by name, in the order given.
     pub settings: Vec<(String, Value)>,
+    /// `glue:`, for a joint kind, when given.
+    pub glue: Option<bool>,
+    /// `methods:`, for a joint kind: the recipes given, in order.
+    pub methods: Vec<RecipeId>,
 }
 
 impl KindValue {
+    /// The kind with nothing set.
+    pub fn new(kind: KindId, name: String) -> KindValue {
+        KindValue {
+            kind,
+            name,
+            settings: Vec::new(),
+            glue: None,
+            methods: Vec::new(),
+        }
+    }
+
     /// A setting by name.
     pub fn setting(&self, name: &str) -> Option<&Value> {
         self.settings

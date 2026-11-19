@@ -19,6 +19,7 @@ use stave_model::instance::ItemSlot;
 use stave_model::solved::CutKind;
 use stave_model::solved::Rules;
 use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
+use stave_schema::kinds::BaseField;
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::{Binding, CutAt};
@@ -485,10 +486,16 @@ impl Solver<'_> {
         let roles = self.hardware_roles(kind, &binding)?;
         let entries = self.hardware_entries(&binding, kind, env.file, span)?;
         let fasteners = self.hardware_fasteners(&binding, kind, &hardware_kind.uses)?;
-        let model = match entries.get("model") {
+        let written_model = self.base_field_in(
+            &KindEnv::of_binding(&binding),
+            BaseField::Model,
+            env.file,
+            span,
+        )?;
+        let model = match written_model {
             Some(Value::Model(model)) => {
                 let declared = self.declared_shapes(&binding, kind)?;
-                Some(self.hardware_model(&binding, kind, model, &declared)?)
+                Some(self.hardware_model(&binding, kind, &model, &declared)?)
             }
             _ => None,
         };
@@ -902,16 +909,16 @@ impl Solver<'_> {
                     Some(count) => solver.eval_count(count, kind_env)?,
                     None => 1,
                 };
-                let mut size = |name: &str| -> Solved<Length> {
-                    match solver.kind_entry(&fastener, name, file, used.span)? {
-                        Value::Length(length) => length
+                let mut size = |field: BaseField| -> Solved<Length> {
+                    match solver.base_field(&fastener, field, file, used.span)? {
+                        Some(Value::Length(length)) => length
                             .to_nearest_length()
                             .ok_or(Failure::Fault(Fault::Overflow)),
                         _ => Err(Fault::Earlier.into()),
                     }
                 };
-                let diameter = size("diameter")?;
-                let length = size("length")?;
+                let diameter = size(BaseField::Diameter)?;
+                let length = size(BaseField::Length)?;
                 let name = solver
                     .model
                     .defs

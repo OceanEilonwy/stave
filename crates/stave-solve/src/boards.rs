@@ -535,20 +535,11 @@ impl Solver<'_> {
                     ).into());
                 }
             };
-            let mut glue = true;
-            let mut settings = Vec::new();
-            for (name, setting) in value.settings {
-                match name.as_str() {
-                    "glue" => glue = setting == Value::Bool(true),
-                    "methods" => {}
-                    _ => settings.push((name, setting)),
-                }
-            }
             methods.push(Method {
                 kind: value.kind,
                 name: value.name,
-                settings,
-                glue,
+                settings: value.settings,
+                glue: value.glue.unwrap_or(true),
                 across,
             });
         }

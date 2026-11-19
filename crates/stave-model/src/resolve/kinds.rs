@@ -7,7 +7,9 @@ use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
-use stave_schema::kinds::{JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base};
+use stave_schema::kinds::{
+    BaseField, JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base,
+};
 use stave_schema::operations::{
     ArgumentDefault, MARK, Selector, cut_operation, operation, retired_argument,
 };
@@ -20,10 +22,10 @@ use super::expr::Expect;
 use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
-    CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
-    KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr,
-    RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef,
-    StepMotionDef, Symbol, UseDef, Word,
+    BaseEntry, CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef,
+    JointMember, KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef,
+    ParamDef, RExpr, RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting,
+    StepDef, StepMotionDef, Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -449,6 +451,20 @@ impl Resolver<'_> {
         } else {
             None
         };
+        // A param of the entry's name is read before a field of it.
+        let spec = base(base_kind);
+        let base_entries = BaseField::ALL
+            .into_iter()
+            .filter(|field| spec.entry(field.word()).is_some())
+            .filter_map(|field| {
+                let word = field.word();
+                let entry = match params.iter().position(|p| p.decl.name == word) {
+                    Some(index) => BaseEntry::Param(index),
+                    None => BaseEntry::Field(kind_fields.iter().position(|f| f.name == word)?),
+                };
+                Some((field, entry))
+            })
+            .collect();
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
             base: base_kind,
@@ -456,6 +472,7 @@ impl Resolver<'_> {
             params,
             requires,
             fields: kind_fields,
+            base_entries,
             joint,
             bodies: bodies.unwrap_or_default(),
             mechanism,

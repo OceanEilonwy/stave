@@ -20,6 +20,7 @@ use stave_model::solved::{
     Size3, SolvedDesign, Station, Stock, Tool,
 };
 use stave_model::value::{ExactBox, Value};
+use stave_schema::kinds::BaseField;
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::{Env, midpoint};
@@ -1075,12 +1076,13 @@ impl Solver<'_> {
                 }
             }
             for (fastener, count, span) in counted {
-                let diameter = match self.kind_entry(&fastener, "diameter", kind.decl.file, span)? {
-                    Value::Length(l) => round_length(l)?,
+                let file = kind.decl.file;
+                let diameter = match self.base_field(&fastener, BaseField::Diameter, file, span)? {
+                    Some(Value::Length(l)) => round_length(l)?,
                     _ => return Err(Fault::Earlier.into()),
                 };
-                let length = match self.kind_entry(&fastener, "length", kind.decl.file, span)? {
-                    Value::Length(l) => round_length(l)?,
+                let length = match self.base_field(&fastener, BaseField::Length, file, span)? {
+                    Some(Value::Length(l)) => round_length(l)?,
                     _ => return Err(Fault::Earlier.into()),
                 };
                 match fastener_totals
@@ -1159,14 +1161,9 @@ impl Solver<'_> {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind = def.decl.name.clone();
-        let says_wood = def.param("species").is_some() || def.field("species").is_some();
-        let wood = if says_wood {
-            match self.kind_entry(item, "species", file, span)? {
-                Value::Word(stave_model::defs::Word::Species(species)) => Some(species),
-                _ => None,
-            }
-        } else {
-            None
+        let wood = match self.base_field(item, BaseField::Species, file, span)? {
+            Some(Value::Word(stave_model::defs::Word::Species(species))) => Some(species),
+            _ => None,
         };
         Ok(solved::MemberItem { kind, wood })
     }
@@ -2336,33 +2333,26 @@ impl Solver<'_> {
             Some(list) => {
                 let mut tools = Vec::new();
                 for tool in list {
-                    let Some(kind) = self.model.defs.kind(*tool) else {
+                    if self.model.defs.kind(*tool).is_none() {
                         continue;
+                    }
+                    let kind_value =
+                        stave_model::value::KindValue::new(*tool, self.kind_name(*tool));
+                    let title = match self.base_field(
+                        &kind_value,
+                        BaseField::Title,
+                        project.file,
+                        project.span,
+                    )? {
+                        Some(Value::Text(text)) => Some(text),
+                        _ => None,
                     };
-                    let kind_value = stave_model::value::KindValue {
-                        kind: *tool,
-                        name: self.kind_name(*tool),
-                        settings: Vec::new(),
-                    };
-                    let title = match kind.field("title") {
-                        Some(_) => match self.kind_entry(
-                            &kind_value,
-                            "title",
-                            project.file,
-                            project.span,
-                        )? {
-                            Value::Text(text) => Some(text),
-                            _ => None,
-                        },
-                        None => None,
-                    };
-                    let powered = match kind.field("powered") {
-                        Some(_) => {
-                            self.kind_entry(&kind_value, "powered", project.file, project.span)?
-                                == Value::Bool(true)
-                        }
-                        None => false,
-                    };
+                    let powered = self.base_field(
+                        &kind_value,
+                        BaseField::Powered,
+                        project.file,
+                        project.span,
+                    )? == Some(Value::Bool(true));
                     tools.push(Tool {
                         name: self.kind_name(*tool),
                         title,

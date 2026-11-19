@@ -8,8 +8,8 @@ use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    ArrayDef, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind, SplitBy,
-    StockField, Symbol, Text, TextPart, Word,
+    ArrayDef, BaseEntry, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind,
+    SplitBy, StockField, Symbol, Text, TextPart, Word,
 };
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
@@ -18,6 +18,7 @@ use stave_model::value::{
     RegionValue, Spacing, Value,
 };
 use stave_schema::functions::Builtin;
+use stave_schema::kinds::{BaseField, JointSetting};
 use stave_schema::words::StockForm;
 
 use crate::fixes::Written;
@@ -294,7 +295,13 @@ impl<'m> Solver<'m> {
                         .into());
                 };
                 for setting in settings {
-                    if value.setting(&setting.name).is_some() {
+                    let joint_setting = JointSetting::from_word(&setting.name);
+                    let given = match joint_setting {
+                        Some(JointSetting::Glue) => value.glue.is_some(),
+                        Some(JointSetting::Methods) => !value.methods.is_empty(),
+                        None => value.setting(&setting.name).is_some(),
+                    };
+                    if given {
                         return Err(self
                             .error(
                                 Code::DuplicateName,
@@ -306,7 +313,11 @@ impl<'m> Solver<'m> {
                             .into());
                     }
                     let v = self.eval(&setting.value, env)?;
-                    value.settings.push((setting.name.clone(), v));
+                    match joint_setting {
+                        Some(JointSetting::Glue) => value.glue = Some(v == Value::Bool(true)),
+                        Some(JointSetting::Methods) => value.methods = recipes(&v),
+                        None => value.settings.push((setting.name.clone(), v)),
+                    }
                 }
                 Ok(Value::Kind(value))
             }
@@ -502,11 +513,10 @@ impl<'m> Solver<'m> {
                 return Ok(if is_tool {
                     Value::Tool(id)
                 } else {
-                    Value::Kind(KindValue {
-                        kind: id,
-                        name: self.model.defs.kind_display(id, Some(env.file)),
-                        settings: Vec::new(),
-                    })
+                    Value::Kind(KindValue::new(
+                        id,
+                        self.model.defs.kind_display(id, Some(env.file)),
+                    ))
                 });
             }
             DefId::Component(_) | DefId::Scene(_) => {
@@ -867,6 +877,63 @@ impl<'m> Solver<'m> {
         Ok(value)
     }
 
+    /// One of the entries a kind value's base fixes (a fastener's
+    /// `diameter`, a tool's `title`), or `None` when its kind gives none.
+    pub(crate) fn base_field(
+        &mut self,
+        kind_value: &KindValue,
+        field: BaseField,
+        file: FileId,
+        span: Span,
+    ) -> Solved<Option<Value>> {
+        let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
+        self.base_field_in(&kind_env, field, file, span)
+    }
+
+    /// One of the entries a kind's base fixes, worked out with the roles
+    /// and settings of `kind_env`, or `None` when the kind gives none.
+    pub(crate) fn base_field_in(
+        &mut self,
+        kind_env: &KindEnv<'_>,
+        field: BaseField,
+        file: FileId,
+        span: Span,
+    ) -> Solved<Option<Value>> {
+        if self.poisoned(DefId::Kind(kind_env.kind)) {
+            return Err(self.skip().into());
+        }
+        let Some(kind) = self.model.defs.kind(kind_env.kind) else {
+            return Err(Fault::Internal("a kind's declaration").into());
+        };
+        match kind.base_entry(field) {
+            None => Ok(None),
+            Some(BaseEntry::Param(index)) => self.kind_param(kind_env, index, file, span).map(Some),
+            Some(BaseEntry::Field(index)) => {
+                let Some(written) = kind.fields.get(index) else {
+                    return Err(Fault::Internal("a kind's field").into());
+                };
+                self.kind_field(kind_env, &written.value).map(Some)
+            }
+        }
+    }
+
+    /// A field of the kind of `kind_env`, worked out in the kind's file.
+    fn kind_field(&mut self, kind_env: &KindEnv<'_>, value: &RExpr) -> Solved<Value> {
+        let Some(kind) = self.model.defs.kind(kind_env.kind) else {
+            return Err(Fault::Internal("a kind's declaration").into());
+        };
+        let Some(ctx) = self.module_ctx(DefId::Kind(kind_env.kind)) else {
+            return Err(Fault::Internal("the file an item is declared in").into());
+        };
+        let env = Env {
+            ctx,
+            file: kind.decl.file,
+            kind: Some(kind_env),
+            array: None,
+        };
+        self.eval(value, &env)
+    }
+
     /// A param or field of a kind value (`slide.clearance`).
     pub(crate) fn kind_entry(
         &mut self,
@@ -889,17 +956,7 @@ impl<'m> Solver<'m> {
             return self.kind_param(&kind_env, index, file, span);
         }
         if let Some(field) = kind.field(name) {
-            let value_expr = &field.value;
-            let Some(ctx) = self.module_ctx(DefId::Kind(kind_value.kind)) else {
-                return Err(Fault::Internal("the file an item is declared in").into());
-            };
-            let env = Env {
-                ctx,
-                file: kind.decl.file,
-                kind: Some(&kind_env),
-                array: None,
-            };
-            return self.eval(value_expr, &env);
+            return self.kind_field(&kind_env, &field.value);
         }
         let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self
@@ -2243,4 +2300,19 @@ impl<'m> Solver<'m> {
 /// The midpoint of two values; `None` on overflow.
 pub(crate) fn midpoint(a: ExactLength, b: ExactLength) -> Option<ExactLength> {
     a.checked_add(b)?.checked_div(Rational::from(2i64))
+}
+
+/// The recipes a `methods:` value names: one recipe or a list of them.
+pub(crate) fn recipes(value: &Value) -> Vec<stave_model::ids::RecipeId> {
+    match value {
+        Value::Recipe(recipe) => vec![*recipe],
+        Value::List(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Recipe(recipe) => Some(*recipe),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
