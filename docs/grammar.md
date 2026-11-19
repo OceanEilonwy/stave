@@ -2097,9 +2097,12 @@ kind brass_knob_26 : pull {
 }
 ```
 
-A butt hinge sinks a leaf into each part and cuts a mortise for each; a
-cup hinge bores its cup; a pull drills a hole for each screw. Each is a
-`cut` of the kind (see [Faces to cut](#faces-to-cut)). `fastener` kinds are
+A butt hinge sinks a leaf into each part and cuts a mortise for each (its
+rule `leaf_fits` keeps each leaf on the wood: no wider than
+`contact(piece, on).width`, the patch where the two parts close, which on
+a box side's edge is the side's thickness); a cup hinge bores its cup; a
+pull drills a hole for each screw. Each is a `cut` of the kind (see
+[Faces to cut](#faces-to-cut)). `fastener` kinds are
 only ever used through a `uses:` or as what a joint member is (`member pin :
 dowel_pin(...)`), and `tool` kinds are listed in a
 project's `tools:` and a recipe's `tools:`.
