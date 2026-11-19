@@ -156,5 +156,6 @@ pub(crate) fn unchecked(message: &str) -> Diagnostic {
         merged: Vec::new(),
         help: None,
         fixes: Vec::new(),
+        cause: None,
     }
 }
