@@ -136,12 +136,13 @@ shot $window/library.png examples/japanese_joinery --theme light
 shot $window/library_dark.png examples/japanese_joinery --theme dark
 
 # The editing menu and card (docs/editing.md), drawn from the contract's
-# hand-built fixture (stave_app::edit) until the edit loop drives them: the
-# menu for a click in door_bay[left] (Drawer fits, FramePanelDoor still
-# being checked; then greyed with an illustrative reason, dark); the card
-# for Drawer refused with the checker's problem and its fix, then fitting
-# with Add enabled (dark); with a setting that needs a choice; and
-# FramePanelDoor waiting for its hinge side to be pointed at.
+# hand-built fixture (stave_app::edit): the menu for a click in
+# door_bay[left] (Drawer fits, FramePanelDoor still being checked; then
+# greyed with an illustrative reason, dark); the card, in the Edit panel
+# beside Details, for Drawer refused with the checker's problem and its fix
+# in its own scrolling box, then fitting with Add enabled (dark); with a
+# setting that needs a choice; and FramePanelDoor waiting for its hinge
+# side to be pointed at.
 shot $window/edit_menu.png $cabinet --theme light --edit-fixture menu
 shot $window/edit_menu_greyed_dark.png $cabinet --theme dark --edit-fixture greyed
 shot $window/edit_card_refused.png $cabinet --theme light --edit-fixture refused
@@ -194,17 +195,39 @@ shot $window/new_project.png "$scratch/chest" --theme light --new-project
 shot $window/new_project_opened.png "$scratch/hall_table" --theme light
 shot $window/new_project_menu.png "$scratch/hall_table" --theme light --edit-script $edits/envelope_menu.edit
 # The owner's case (docs/editing.md, "Options are checked"): Case
-# chosen for a new project's envelope, its wood picked, and its joinery's
-# list open: the seven kinds that fit first, then the refused ones greyed
-# with the checker's reason (light and dark); then chigiri typed: the card
-# says first that it stopped fitting when the joinery changed and offers
-# to put it back, the checker's words below (light and dark). Taller
-# than the default size so the list shows both kinds of option.
+# chosen for a new project's envelope, its wood picked, and the search
+# over its joinery opened with nothing typed: every kind, those that fit
+# first, then the refused ones greyed with the checker's reason (light and
+# dark); then chigiri typed: the card says first that it stopped fitting
+# when the joinery changed and offers to put it back, the checker's words
+# below in their own scrolling box (light and dark).
 "$stave" edit "$scratch/case_test" --script $edits/case_test.script >/dev/null
-shot $window/edit_setting_options.png "$scratch/case_test" --theme light --size 1440x1200 --edit-script $edits/setting_options.edit
-shot $window/edit_setting_options_dark.png "$scratch/case_test" --theme dark --size 1440x1200 --edit-script $edits/setting_options.edit
-shot $window/edit_setting_blame.png "$scratch/case_test" --theme light --size 1440x1200 --edit-script $edits/setting_blame.edit
-shot $window/edit_setting_blame_dark.png "$scratch/case_test" --theme dark --size 1440x1200 --edit-script $edits/setting_blame.edit
+shot $window/edit_setting_options.png "$scratch/case_test" --theme light --edit-script $edits/setting_options.edit
+shot $window/edit_setting_options_dark.png "$scratch/case_test" --theme dark --edit-script $edits/setting_options.edit
+shot $window/edit_setting_blame.png "$scratch/case_test" --theme light --edit-script $edits/setting_blame.edit
+shot $window/edit_setting_blame_dark.png "$scratch/case_test" --theme dark --edit-script $edits/setting_blame.edit
+# The Edit panel (docs/gui.md, "The window" and "Editing in the 3D
+# view"): the Case's card as a tab beside Details, one compact row a
+# setting, the defaults dimmed, "Repeat…" folded beside Cancel and Add
+# (light and dark); the same with the Edit panel on the right edge, which
+# is wider (a saved arrangement, tools/layouts/edit_right.layout, since
+# the screenshot tool can't drag a tab); "Repeat…" pressed, the count and
+# the direction open.
+shot $window/edit_panel_case.png "$scratch/case_test" --theme light --edit-script $edits/card_panel.edit
+shot $window/edit_panel_case_dark.png "$scratch/case_test" --theme dark --edit-script $edits/card_panel.edit
+shot $window/edit_panel_right.png "$scratch/case_test" --theme light --edit-script $edits/card_panel.edit --layout tools/layouts/edit_right.layout
+shot $window/edit_repeat_open.png "$scratch/case_test" --theme light --edit-script $edits/repeat_open.edit
+# A setting's short list and its search (docs/editing.md, "The short list
+# and the search"), on a project whose case is joined with screws: a
+# shelf's joinery's short list (dado, the default, fitting; screw, used by
+# the case, refused here and greyed; "Search all 18…"), then the search
+# for "edge": groove fits, the others greyed with the checker's reason
+# (light and dark).
+"$stave" edit "$scratch/recent" --script $edits/recent_choices.script >/dev/null
+shot $window/edit_short_list.png "$scratch/recent" --theme light --edit-script $edits/short_list.edit
+shot $window/edit_short_list_dark.png "$scratch/recent" --theme dark --edit-script $edits/short_list.edit
+shot $window/edit_option_search.png "$scratch/recent" --theme light --edit-script $edits/option_search.edit
+shot $window/edit_option_search_dark.png "$scratch/recent" --theme dark --edit-script $edits/option_search.edit
 
 # Changing what is there (docs/gui.md, "Changing what is there"): the small
 # chest with a divider and two drawers, and the side table as far as its

@@ -270,6 +270,7 @@ returned `Event::Edit(EditEvent)`s name, as for every other command.
 | `Bind(Picked)` | binds the next place param still to point at with a further pick |
 | `Set { name, value }` | sets a setting to a value typed in the card (an `Expr`; `editing::parse_value` reads one) |
 | `PutBack` | puts the setting a refusal blames back to the value it had before (see [Blame and the way back](#blame-and-the-way-back)) |
+| `UseDefault(name)` | puts a setting back to its param's own default, so nothing is written for it (the short list's default; see [The short list and the search](#the-short-list-and-the-search)); a refusal that follows is blamed as a `Set`'s is |
 | `Rename(name)` | names the new item, in place of the generated name |
 | `Repeat(Option<Repeat>)` | makes the chosen entry `count` pieces filling its region, split along `axis` (`candidates::Repeat { count: RepeatCount, axis: Axis }`), or one again (`None`) |
 | `RepeatItem { item, count, axis }` | starts a change: repeats an assembly of the project that fills a region `count` times, or changes the count of one already repeated (`axis: Option<Axis>`, needed for a first repeat only) |
@@ -324,7 +325,7 @@ would be written as typed.
 | `DragMoved`, `ParamPicked` | the grip being dragged moved, or a param was picked for it; `VerdictChanged` follows when the verdict did |
 | `Committed` | the candidate or change was written; the committed design is the session's result (with `ResultChanged`); `Session::last_commit` lists the files written |
 | `Cancelled` | the edit or change was dropped |
-| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`; `PutBack` with nothing blamed: `NothingToPutBack`; a grip command with no grips listed: `NoGrips`; a grip index the listing doesn't have: `NoSuchGrip`; a drag command with no drag: `NotDragging`; a pick that is not one of the choices: `NotAChoice`); nothing changed |
+| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`; `PutBack` with nothing blamed: `NothingToPutBack`; `UseDefault` on a setting with no default: `NoDefault`; a grip command with no grips listed: `NoGrips`; a grip index the listing doesn't have: `NoSuchGrip`; a drag command with no drag: `NotDragging`; a pick that is not one of the choices: `NotAChoice`); nothing changed |
 
 Each change to the candidate writes its patch again (the candidate's
 `add`, then each fix applied) and re-runs the scratch check, so the
@@ -390,6 +391,8 @@ by `candidates::describe::fill_default_values`):
 | `SettingParam::options` | what it can be set to, by its type, each a `SettingOption { text, hint }`: the stocks in scope for a `Stock`; the mounts the project's assemblies write, then `overlay()` and `inset(reveal: 2mm)`, for a `Mount`; the kinds of that class in scope for a kind type (`side_mount_slide`, `hw.brass_knob_26`); the values of a `within [..]` list for a quantity; `true` and `false` for a `Bool` |
 | `SettingOption::fit` | on the chosen candidate, whether it fits with the setting set to that option (`OptionFit`: `NotChecked`, `NeedsChoice(names)`, `Fits`, or `Refused(OptionRefusal { first, more })`, the checker's first error and how many more); the refused options come after the rest (see [Options are checked](#options-are-checked)) |
 | `SettingParam::range` | the two ends of a `within low..high`, as written (`ValueRange { low, high }`) |
+| `SettingParam::recent` | the values the project's own text already gives settings like it, as written there, the most recent first (the last assembly in file order first, as a copied value is read), each once, at most four (`choices::RECENT_LIMIT`). "Like" is the same type for a type with a list of options (a stock, a mount, a kind, a `Bool`); for a quantity, whose type every size shares, also the same param name. Read when the candidate is described; nothing is kept outside the `.stave` files |
+| `SettingOption::group` | the module an option's declaration comes from, as the menu groups entries (`MenuGroup`: the project's own, an imported module, a standard one); `None` for a value that is no declaration (a mount, a `within` value, `true`) |
 | `Chosen::blame` | the setting change that made the candidate stop fitting (`Blame { setting, from, from_text, to_text }`, with `Blame::text` and `Blame::put_back_label`; see [Blame and the way back](#blame-and-the-way-back)) |
 | `Problem::rendered` | the error as `stave check` prints it: message, place, source excerpt, notes, help and fixes |
 | `Problem::fixes` | the fixes the diagnostic holds, as patches (`Fix::patch`, labelled by `Fix::label`) |
@@ -453,6 +456,59 @@ joinery's 18 options fit (cope_and_stick, dado, dowel, glued_face,
 groove, screw) and 12 are refused; the four edge joints say why in
 woodworking words, through `edge_to_edge`. Checking all 18 takes
 about 0.2 seconds in a debug build on the machine it was written on.
+
+### The short list and the search
+
+A setting's control offers a short list, and a search over every option
+(`stave_app::choices`, plain functions of a `SettingParam`, tested
+without a window):
+
+- **`short_list(setting)`** gives, in order: the param's default as its
+  declaration writes it (`ChoiceRole::Default`, `dowel(count: 4)`), then
+  `SettingParam::recent`, the values the project already uses for
+  settings like it, most recent first (`Recent`), then the value the
+  setting holds now when neither lists it (`Current`). Each text once;
+  each `ShortChoice` says whether it is the value held now (`current`; the
+  default while the setting is left at it), its fit when its text is one
+  of the setting's options (`None` for `dowel(count: 4)`, which is no
+  option as written) and its hint. A refused one can't be chosen
+  (`ShortChoice::choosable`); the default always can, and choosing it
+  sends `UseDefault`.
+- **`search(setting, query)`** gives every option whose name or
+  description (the first sentence of its doc comment) holds every word
+  typed, case aside, grouped by the module it comes from in menu order
+  (`SearchGroup`: the project's own, imported modules by name, then
+  `std`, then values that are no declaration, titled by `group_title`),
+  and in each group the best matches first (`Match`: the name exactly,
+  the start of the name, inside the name, then in the description), ties
+  in the order the session lists the options (those that fit before the
+  refused). An empty query lists every option. Each `SearchHit` carries
+  the option with its fit as the session has it now, and a refused one
+  can't be chosen.
+
+On the Case in a new project's envelope, the joinery's short list is the
+default alone; once the project has a case joined with `screw`, a shelf's
+or another case's joinery lists `screw` after its default. A search for
+"key" finds `chigiri` by its description ("Chigiri: a butterfly key let
+into the face across a seam."), refused as a case's corner; one for "dow"
+finds `dowel` by its name, which fits. On the command line
+(`tools/window-edits/recent_choices.script`, then a shelf between the
+case's sides):
+
+```
+> choices joinery
+joinery: 2 to choose from (1 used in this project), then search 18 options
+  1. dado   default, now, fits
+  2. screw  used, refused: error[unknown-field]: the kind 'screw' has no field 'depth'
+> search joinery edge
+joinery: 5 of 18 options match "edge"
+  Standard · joinery
+    glued_edge         by name  refused: error[unknown-field]: the kind 'glued_edge' has no field 'depth'
+                       A glued edge joint (a rub joint): two boards planed straight and square along their edges and glued edge to edge.
+    ...
+    groove             by description  fits
+                       A groove: a housing along the grain that holds the edge of a panel, such as a door panel in its frame or a drawer bottom in the drawer box.
+```
 
 ### Blame and the way back
 
@@ -530,6 +586,9 @@ before what it prints.
 | `bind <selection>` | points at what the card asks for |
 | `set <name> = <value>` | sets a setting |
 | `options <setting>` | checks the chosen entry's setting's options and lists each with whether it fits |
+| `choices <setting>` | checks them and prints the setting's short list: its default, the values the project already uses (`used`), the value it holds now (`now`), each with its fit when it is an option |
+| `search <setting> [<words>]` | checks them and prints the options the words match, grouped by module, each with how it matched (`by name`, `by description`), its fit and its description |
+| `default <setting>` | puts a setting back to its default |
 | `put back` | puts back the setting a refusal blames to its value before |
 | `name <name>` | names the new item |
 | `repeat <count> <axis>` | makes the chosen entry `count` pieces split along `across`, `up` or `deep`; `repeat 1` makes it one again |
@@ -761,6 +820,17 @@ ones reflected front to back, is mirrored `about: mid(top.board, deep)`,
 the plane written as the mid-plane of a part it names (else of a region)
 that the plane halves. A plane the component itself lies astride (the
 apron's mid-plane across) is not offered: its image would be itself.
+
+**The repeat controls are folded.** A repeat is valid wherever a
+component fills a space (two cases side by side in the envelope), but
+rarely wanted, so in the window its controls take no room until asked
+for: everywhere, behind a small "Repeat…", opening to the count and the
+direction when it is pressed or when the count is already more than one.
+It is one rule, never a particular component's
+(`item_offer::repeat_fold(applies, pieces, asked)`: `Hidden`, `Folded`
+or `Open`), for a chosen candidate (`candidate_repeat_fold`: it applies
+to a component whose `Region` is bound) and for a selected item
+(`ItemOffer::repeat_fold`).
 
 **A mirrored pair from one.** A component that fills a whole space and
 is handed (a door filling the space above a divider, hinged to the left

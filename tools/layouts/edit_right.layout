@@ -1,0 +1,11 @@
+# The Edit panel dragged to the right edge, which is wider (460 pixels to
+# the left edge's 300), as a saved arrangement records it.
+parts start 0 0
+files start 0 1
+details start 1 0
+edit end 0 0
+code bottom 0 0
+problems bottom 0 1
+show start true
+show end true
+show bottom true

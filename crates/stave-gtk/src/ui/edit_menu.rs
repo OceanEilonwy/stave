@@ -104,11 +104,7 @@ fn group_order(group: &MenuGroup) -> (u8, &str) {
 /// The words over a group: "In this project", "casework", "Standard ·
 /// joinery".
 pub fn group_title(group: &MenuGroup) -> String {
-    match group {
-        MenuGroup::Project => "In this project".to_owned(),
-        MenuGroup::Module(name) => name.as_str().to_owned(),
-        MenuGroup::Standard(name) => format!("Standard · {}", name.as_str()),
-    }
+    stave_app::choices::group_title(group)
 }
 
 /// The entries grouped and ordered as the menu lists them.

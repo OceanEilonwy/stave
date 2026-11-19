@@ -327,11 +327,17 @@ the checker's fixes on the card).
   tools); a click in a space, in the gap between two parts, or "Add
   something onto its … face" in Details opens a menu drawn from the
   components and kinds in scope, each tried (greyed with the reason when
-  it doesn't fit); the card asks for what is still to point at and the
-  settings, with a ghost and "It fits" / "It doesn't fit"; each
-  setting's options checked the same way on a worker thread, the ones
-  that fit first and the refused ones greyed with the checker's reason
-  and not choosable; a refusal caused by the setting just changed says
+  it doesn't fit); the card, in the docked Edit panel (a tab beside
+  Details by default, dragged, resized and remembered like any panel),
+  asks for what is still to point at and the settings, one compact row
+  each, with a ghost and "It fits" / "It doesn't fit"; each setting's ▾
+  opens a short list (its default, the values the project already uses,
+  the value it holds now) and "Search…", a dialog over every option by
+  name or description, grouped by module; each option checked the same
+  way on a worker thread, the refused ones greyed with the checker's
+  reason and not choosable; the repeat controls folded behind
+  "Repeat…" until asked for or already more than one; a refusal caused
+  by the setting just changed says
   so first ("It stopped fitting when joinery became chigiri.") with a
   button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
   side", hold a distance, remove with what depends on it); count and
@@ -340,8 +346,9 @@ the checker's fixes on the card).
 - **Command line**: `stave edit <folder> --patch <file> [--commit]` and
   `stave edit <folder> --script <file>` (a whole build as steps, with
   `options <setting>` listing a setting's options and whether each fits,
-  the blame printed when a `set` makes it stop fitting, and `put
-  back`).
+  `choices <setting>` its short list, `search <setting> <words>` the
+  options the words match, `default <setting>`, the blame printed when a
+  `set` makes it stop fitting, and `put back`).
 
 **Accepted in the window**: the clothing cabinet and the side table were
 built from empty projects by the window's scripted input (the same
@@ -413,9 +420,9 @@ open in the editor the change stays unsaved there.
   too close to … another cut"). Its help names the pull's screw hole
   but not the setting to change: `front_screw_inset: 30mm` on the
   drawer, or `pull_kind: bar_pull(centres: 128mm)`, makes it fit.
-- Grip labels overlap each other and are drawn over the cards; the typed
-  grip's panel covers the change card's title; the Details panel's
-  "CHANGE …" heading overlaps the row above it.
+- Grip labels overlap each other; the Details panel's "CHANGE …"
+  heading overlaps the row above it. (The cards are in the Edit panel
+  now, so no grip label or grip panel is drawn over one.)
 - Library place params prompt "Point at the under." (they have `//`
   comments, not `///`); the card shows raw param names.
 - **Only the four edge joints say where they apply.** `chigiri`,
@@ -440,11 +447,15 @@ open in the editor the change stays unsaved there.
   are listed as fitting the Case's joinery, so the card offers them
   among the options that fit. `glued_face` needs a face-to-face
   question and `cope_and_stick` an end meeting an edge in one plane.
-- **The card's list of options is drawn in the card, not as a popover**,
-  so the card grows by the list's height while it is open; on a short
-  view (the docked layout at 1440x900 leaves the card about 360 pixels)
-  only a few options show at once and the list scrolls with the card.
-  Each option's hint is in its tooltip, not on the row.
+- **The Edit panel's height depends on the project.** In the default
+  layout the left edge is split between Parts and the Details/Edit frame
+  by what each holds, so on a new project (Parts empty) the Edit panel
+  has 417 pixels at 1440x900 and the Case card (394) shows whole; on the
+  finished clothing cabinet its long parts list leaves the frame about
+  300 pixels, and a card with a refusal scrolls (Add and Cancel stay in
+  sight). Drag the splitter, or the tab to the right edge (460 wide).
+- A refused entry of a setting's short list says why only in its tooltip
+  (the search dialog says it on the row).
 - A mirrored pair split up or deep has no gesture.
 - The full list, with what was decided and left out, is in
   `docs/workpacks/2026-11-18-graphical-editing.md`.

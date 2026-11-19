@@ -42,15 +42,20 @@ pub enum PanelId {
     Code,
     /// The problems, as a list.
     Problems,
+    /// The edit in progress: the card for a chosen candidate, a change of
+    /// the design, or a hold being set up; how to start one while there
+    /// is none.
+    Edit,
 }
 
 impl PanelId {
     /// Every panel, in the order the menu lists them.
-    pub const ALL: [PanelId; 6] = [
+    pub const ALL: [PanelId; 7] = [
         PanelId::View,
         PanelId::Parts,
         PanelId::Files,
         PanelId::Details,
+        PanelId::Edit,
         PanelId::Code,
         PanelId::Problems,
     ];
@@ -64,6 +69,7 @@ impl PanelId {
             PanelId::Details => "details",
             PanelId::Code => "code",
             PanelId::Problems => "problems",
+            PanelId::Edit => "edit",
         }
     }
 
@@ -81,6 +87,7 @@ impl PanelId {
             PanelId::Details => "Details",
             PanelId::Code => "Code",
             PanelId::Problems => "Problems",
+            PanelId::Edit => "Edit",
         }
     }
 
@@ -93,6 +100,7 @@ impl PanelId {
             PanelId::Details => "dialog-information-symbolic",
             PanelId::Code => "text-x-generic-symbolic",
             PanelId::Problems => "dialog-warning-symbolic",
+            PanelId::Edit => "document-edit-symbolic",
         }
     }
 }
@@ -210,8 +218,9 @@ pub struct Layout {
 }
 
 impl Default for Layout {
-    /// Board B: Parts and Files above Details on the left, the 3D view in
-    /// the centre, Code and Problems at the bottom, nothing on the right.
+    /// Board B: Parts and Files above Details on the left (the Edit panel
+    /// a tab beside Details), the 3D view in the centre, Code and Problems
+    /// at the bottom, nothing on the right.
     fn default() -> Layout {
         Layout {
             places: BTreeMap::from([
@@ -219,6 +228,7 @@ impl Default for Layout {
                 (PanelId::Parts, Place::new(Side::Start, 0, 0, 0)),
                 (PanelId::Files, Place::new(Side::Start, 0, 0, 1)),
                 (PanelId::Details, Place::new(Side::Start, 0, 1, 0)),
+                (PanelId::Edit, Place::new(Side::Start, 0, 1, 1)),
                 (PanelId::Code, Place::new(Side::Bottom, 0, 0, 0)),
                 (PanelId::Problems, Place::new(Side::Bottom, 0, 0, 1)),
             ]),
@@ -264,7 +274,9 @@ impl Layout {
     /// Reads a layout file. Lines it doesn't understand are left out (a
     /// line without a column, `code end 0 0`, means column 0); a panel the
     /// file doesn't mention at all (one newer than the file) goes where
-    /// the default puts it; a file naming no panel gives the default.
+    /// the default puts it, the Edit panel as a tab beside Details
+    /// wherever the file put Details; a file naming no panel gives the
+    /// default.
     pub fn from_text(text: &str) -> Layout {
         let mut places = BTreeMap::new();
         let mut closed = Vec::new();
@@ -299,8 +311,28 @@ impl Layout {
         if places.is_empty() {
             return Layout::default();
         }
+        let beside_details = places.get(&PanelId::Details).map(|details| {
+            let last_tab = places
+                .values()
+                .filter(|place| {
+                    place.side == details.side
+                        && place.column == details.column
+                        && place.frame == details.frame
+                })
+                .map(|place| place.tab)
+                .max()
+                .unwrap_or(details.tab);
+            Place {
+                tab: last_tab.saturating_add(1),
+                ..*details
+            }
+        });
         for (id, place) in Layout::default().places {
             if !closed.contains(&id) {
+                let place = match (id, beside_details) {
+                    (PanelId::Edit, Some(beside)) => beside,
+                    _ => place,
+                };
                 places.entry(id).or_insert(place);
             }
         }
@@ -515,11 +547,13 @@ impl Workbench {
                 let frame = new_frame();
                 paned.append(&frame);
                 self.fill(&frame, &tabs);
+                self.show_first(&frame, &tabs);
             }
         }
         for ((column, row), tabs) in layout.frames(Side::Centre) {
             let frame = self.grid.column(column).row(row);
             self.fill(&frame, &tabs);
+            self.show_first(&frame, &tabs);
         }
         for side in Side::EDGES {
             let shown = layout.revealed.get(&side).copied().unwrap_or(false)
@@ -536,6 +570,28 @@ impl Workbench {
                 frame.add(widget);
             }
         }
+    }
+
+    /// Shows a frame's first tab: a layout opens on Details, not on the
+    /// Edit panel beside it.
+    fn show_first(&self, frame: &panel::Frame, tabs: &[PanelId]) {
+        if let Some(first) = tabs.first().and_then(|id| self.panels.get(id)) {
+            frame.set_visible_child(first);
+        }
+    }
+
+    /// `true` when two panels are tabs of the same frame.
+    pub fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
+        let frame = |id| self.panels.get(&id).and_then(frame_of);
+        matches!((frame(first), frame(second)), (Some(a), Some(b)) if a == b)
+    }
+
+    /// `true` while a panel is its frame's shown tab.
+    pub fn is_shown(&self, id: PanelId) -> bool {
+        self.panels.get(&id).is_some_and(|widget| {
+            frame_of(widget)
+                .is_some_and(|frame| frame.visible_child().is_some_and(|shown| shown == *widget))
+        })
     }
 
     /// Where the panels are now.
@@ -734,7 +790,10 @@ mod tests {
         let layout = Layout::default();
         assert_eq!(
             layout.frames(Side::Start).into_values().collect::<Vec<_>>(),
-            vec![vec![PanelId::Parts, PanelId::Files], vec![PanelId::Details]]
+            vec![
+                vec![PanelId::Parts, PanelId::Files],
+                vec![PanelId::Details, PanelId::Edit]
+            ]
         );
         assert_eq!(
             layout.frames(Side::Centre),
@@ -817,6 +876,83 @@ mod tests {
             layout.places.get(&PanelId::Code),
             Some(&Place::new(Side::End, 0, 0, 0))
         );
+    }
+
+    #[test]
+    fn an_older_file_puts_the_edit_panel_beside_details_wherever_details_is() {
+        let layout = Layout::from_text("details end 0 0\nproblems end 0 1\n");
+        assert_eq!(
+            layout.places.get(&PanelId::Edit),
+            Some(&Place::new(Side::End, 0, 0, 2))
+        );
+        // Closed, it stays closed.
+        let layout = Layout::from_text("details end 0 0\nclosed edit\n");
+        assert_eq!(layout.places.get(&PanelId::Edit), None);
+        // Dragged elsewhere, it stays there.
+        let layout = Layout::from_text("details start 1 0\nedit end 0 0\nshow end true\n");
+        assert_eq!(
+            layout.places.get(&PanelId::Edit),
+            Some(&Place::new(Side::End, 0, 0, 0))
+        );
+    }
+
+    #[test]
+    fn the_edit_panel_is_docked_like_any_other() {
+        crate::ui::gtk_test::on_gtk_thread(edit_panel_docks);
+    }
+
+    /// The Edit panel through the same dock as the others: a tab beside
+    /// Details by default, which stays in front; brought forward; moved to
+    /// the right edge; its place in the layout that is remembered.
+    fn edit_panel_docks() {
+        let contents = PanelId::ALL
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    gtk::Label::new(Some(id.title())).upcast::<gtk::Widget>(),
+                )
+            })
+            .collect();
+        let workbench = Workbench::new(contents, Remember::Nothing).unwrap();
+        let window = gtk::Window::builder()
+            .default_width(1200)
+            .default_height(800)
+            .child(&workbench.root)
+            .build();
+        window.present();
+        let context = glib::MainContext::default();
+        for _ in 0..50 {
+            context.iteration(false);
+        }
+        let layout = workbench.layout();
+        assert_eq!(
+            layout.places.get(&PanelId::Edit),
+            Some(&Place::new(Side::Start, 0, 1, 1))
+        );
+        assert!(workbench.share_a_frame(PanelId::Edit, PanelId::Details));
+        assert!(workbench.is_shown(PanelId::Details), "Details shows first");
+        assert!(!workbench.is_shown(PanelId::Edit));
+        // An edit starts: its tab comes to the front.
+        workbench.bring_forward_beside_view(PanelId::Edit);
+        assert!(workbench.is_shown(PanelId::Edit));
+        // Dragged to the right edge (as its tab's menu moves it).
+        workbench.move_to(PanelId::Edit, Side::End);
+        let layout = workbench.layout();
+        assert_eq!(
+            layout.places.get(&PanelId::Edit),
+            Some(&Place::new(Side::End, 0, 0, 0))
+        );
+        assert_eq!(layout.revealed.get(&Side::End), Some(&true));
+        assert!(!workbench.share_a_frame(PanelId::Edit, PanelId::Details));
+        assert!(layout.to_text().contains("edit end 0 0 0"));
+        assert_eq!(Layout::from_text(&layout.to_text()), layout);
+        // Beside the 3D View, it isn't brought over the model.
+        workbench.move_to(PanelId::View, Side::End);
+        workbench.present(PanelId::View);
+        workbench.bring_forward_beside_view(PanelId::Edit);
+        assert!(workbench.is_shown(PanelId::View));
+        window.destroy();
     }
 
     #[test]

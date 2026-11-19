@@ -49,7 +49,9 @@ use stave_scene::{
 
 use super::edit_card::{CardAction, CardModel, EditCard, Words};
 use super::edit_menu::{Checked, EditMenu, MenuItem};
+use super::edit_panel::EditPanel;
 use super::edit_writer::BufferWriter;
+use super::option_search::OptionSearch;
 use super::{EDGE, Window};
 use crate::render::{Backdrop, Frame, Image};
 
@@ -64,13 +66,19 @@ const CHECKING_DELAY: Duration = Duration::from_millis(40);
 /// How strongly a ghost takes its verdict's colour.
 const GHOST_TINT: f32 = 0.62;
 
-/// The editing widgets that float over the 3D view, and what only they
-/// need.
+/// The editing widgets (the menu at the click, the cards in the Edit
+/// panel, the labels on the model), and what only they need.
 pub(super) struct EditView {
-    /// The menu for a selection.
+    /// The menu for a selection, a pop-up at the click.
     pub(super) menu: EditMenu,
-    /// The card for a chosen candidate.
+    /// The card for a chosen candidate, in the Edit panel.
     pub(super) card: EditCard,
+    /// The Edit panel: the card in progress, or how to start.
+    pub(super) panel: EditPanel,
+    /// Whether the panel showed a card when last drawn.
+    panel_shown: Cell<bool>,
+    /// The search over a setting's options.
+    pub(super) search: Rc<OptionSearch>,
     /// The verdict in words beside the ghost, so it never rests on colour
     /// alone.
     verdict: gtk::Label,
@@ -136,9 +144,6 @@ impl EditView {
         menu.root.set_valign(gtk::Align::Start);
         menu.root.set_visible(false);
         let card = EditCard::new();
-        card.root.set_halign(gtk::Align::End);
-        card.root.set_valign(gtk::Align::Start);
-        card.root.set_margin_top(EDGE);
         card.root.set_visible(false);
         let verdict = gtk::Label::builder()
             .halign(gtk::Align::Start)
@@ -154,17 +159,27 @@ impl EditView {
             .margin_bottom(16)
             .visible(false)
             .build();
+        let changes = changes::Changes::new();
+        let hold = hold::Hold::new();
+        let panel = EditPanel::new(&[
+            card.root.upcast_ref(),
+            changes.card.root.upcast_ref(),
+            hold.card.root.upcast_ref(),
+        ]);
         EditView {
             menu,
             card,
+            panel,
+            panel_shown: Cell::new(false),
+            search: OptionSearch::new(),
             verdict,
             face_button,
             editor_open: Rc::new(Cell::new(false)),
             grips: grips::GripView::new(),
             state: RefCell::new(EditState::default()),
-            changes: changes::Changes::new(),
+            changes,
             tools: item_tools::ItemTools::new(),
-            hold: hold::Hold::new(),
+            hold,
             repeats: repeat_handles::Repeats::new(),
             pending: editor_link::PendingPanel::new(),
             pending_marked: RefCell::new(None),
@@ -272,6 +287,11 @@ pub(super) fn command_for(action: CardAction) -> Result<EditCommand, String> {
             .map(|value| EditCommand::Set { name: param, value })
             .map_err(|error| format!("'{text}' isn't a value Stave can read: {}", error.0)),
         CardAction::Fix { problem, fix } => Ok(EditCommand::ApplyFix { problem, fix }),
+        CardAction::UseDefault { param } => Ok(EditCommand::UseDefault(param)),
+        CardAction::Search { param } => Err(format!(
+            "the search over {} is opened by the window, not sent",
+            param.as_str()
+        )),
         CardAction::PutBack => Ok(EditCommand::PutBack),
         CardAction::Add => Ok(EditCommand::Add),
         CardAction::Cancel => Ok(EditCommand::Cancel),
@@ -287,6 +307,7 @@ fn tries_again(command: &EditCommand) -> bool {
             | EditCommand::Bind(_)
             | EditCommand::Set { .. }
             | EditCommand::PutBack
+            | EditCommand::UseDefault(_)
             | EditCommand::Rename(_)
             | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }
@@ -415,8 +436,10 @@ impl Window {
         let editing = &self.editing;
         let design = &self.widgets.design;
         design.add_overlay(&editing.menu.root);
-        design.add_overlay(&editing.card.root);
         design.add_overlay(&editing.verdict);
+        self.widgets.edit_holder.append(&editing.panel.root);
+        self.widgets.sheet.add_overlay(&editing.search.root);
+        self.connect_option_search();
         self.widgets.details.append(&editing.face_button);
         self.install_edit_writer();
         self.connect_changes();
@@ -715,6 +738,10 @@ impl Window {
 
     /// What the card reports, as the session's command.
     fn card_action(self: &Rc<Self>, action: CardAction) {
+        if let CardAction::Search { param } = &action {
+            self.open_option_search(param.as_str(), "");
+            return;
+        }
         match command_for(action) {
             Ok(command) => self.send_edit_later(command),
             Err(words) => self.edit_toast(&words),
@@ -834,6 +861,7 @@ impl Window {
         match event {
             EditEvent::Started => {
                 self.stop_options_check();
+                self.editing.repeats.row.forget();
                 let generation = {
                     let mut state = self.editing.state.borrow_mut();
                     state.generation = state.generation.wrapping_add(1);
@@ -848,8 +876,14 @@ impl Window {
                 self.check_menu_soon(generation, MENU_STEP);
             }
             EditEvent::MenuChanged => self.refresh_edit(),
-            EditEvent::Chosen
-            | EditEvent::PlaceBound
+            EditEvent::Chosen => {
+                // Another candidate: "Repeat…" is asked for again.
+                self.editing.repeats.row.forget();
+                self.update_ghost();
+                self.refresh_edit();
+                self.start_options_check();
+            }
+            EditEvent::PlaceBound
             | EditEvent::SettingChanged
             | EditEvent::Renamed
             | EditEvent::FixApplied
@@ -868,9 +902,15 @@ impl Window {
                 self.refresh_edit();
             }
             EditEvent::OptionsChanged => {
-                let session = self.session.borrow();
-                if let Some(chosen) = session.edit().and_then(Edit::chosen) {
-                    self.editing.card.update_options(chosen.candidate());
+                {
+                    let session = self.session.borrow();
+                    if let Some(chosen) = session.edit().and_then(Edit::chosen) {
+                        self.editing.card.update_options(chosen.candidate());
+                    }
+                }
+                // An open search shows each answer as it comes.
+                if self.editing.search.setting().is_some() {
+                    self.editing.search.refresh();
                 }
             }
             EditEvent::Committed => {
@@ -934,12 +974,38 @@ impl Window {
         } else {
             self.editing.verdict.set_visible(false);
         }
+        self.update_edit_panel();
         self.update_face_button();
         self.request_render();
     }
 
-    /// The menu near where it was asked for, inside the view; the card at
-    /// the top right, clear of the camera column.
+    /// Shows the card in progress in the Edit panel, or how to start. When
+    /// a card appears, the panel opens (where it last was, if it was
+    /// closed) and its tab comes to the front, unless it shares a frame
+    /// with the 3D view (it would hide the model being pointed at); the
+    /// card takes the keyboard as it is mapped. When the edit is added or
+    /// cancelled the panel says how to start again, and if it shares a
+    /// frame with Details, Details comes back to the front.
+    pub(super) fn update_edit_panel(&self) {
+        let shows = self.editing.panel.update();
+        let was = self.editing.panel_shown.replace(shows);
+        let workbench = &self.widgets.workbench;
+        if shows && !was {
+            workbench.bring_forward_beside_view(super::workbench::PanelId::Edit);
+        } else if !shows
+            && was
+            && workbench.share_a_frame(
+                super::workbench::PanelId::Edit,
+                super::workbench::PanelId::Details,
+            )
+            && workbench.is_shown(super::workbench::PanelId::Edit)
+        {
+            workbench.present(super::workbench::PanelId::Details);
+        }
+    }
+
+    /// The menu near where it was asked for, inside the view (the cards
+    /// are in the Edit panel).
     fn place_edit_widgets(&self) {
         let (width, height) = (
             f64::from(self.widgets.design.width()),
@@ -955,19 +1021,20 @@ impl Window {
         let menu_width = 340.0;
         let left = (x + 24.0).min(width - menu_width - f64::from(EDGE));
         // Clear of the dock at the bottom: as high as it must be to show
-        // whole.
-        let (_, natural, _, _) = menu.measure(gtk::Orientation::Vertical, 340);
+        // whole. A widget is measured with its margins, so the width asked
+        // about holds the margins it was last placed with (measured at
+        // 340 alone, a menu placed 593 pixels in "needs at least 913", as
+        // GTK warned on every run that opened a menu).
+        let across = 340_i32
+            .saturating_add(menu.margin_start())
+            .saturating_add(menu.margin_end());
+        let (_, natural, _, _) = menu.measure(gtk::Orientation::Vertical, across);
+        let natural = natural
+            .saturating_sub(menu.margin_top())
+            .saturating_sub(menu.margin_bottom());
         let top = (y - 60.0).min(height - f64::from(natural) - 96.0);
         menu.set_margin_start(crate::convert::int_of(left.max(f64::from(EDGE))));
         menu.set_margin_top(crate::convert::int_of(top.max(f64::from(EDGE))));
-        let rail = self.right_column();
-        self.editing
-            .card
-            .root
-            .set_margin_end(EDGE.saturating_add(rail).saturating_add(EDGE));
-        // Clear of the view's foot, as the menu is.
-        let room = crate::convert::int_of(height).saturating_sub(EDGE.saturating_mul(3));
-        self.editing.card.fit_height(room);
     }
 
     /// Works the menu's applicability out a step at a time, drawing what
@@ -1058,7 +1125,14 @@ impl Window {
         if job.tries().is_empty() {
             return;
         }
-        let job = match self.editing.card.open_setting() {
+        // The setting being searched, else the one whose short list is
+        // open, is checked first.
+        let job = match self
+            .editing
+            .search
+            .setting()
+            .or_else(|| self.editing.card.open_setting())
+        {
             Some(open) => job.prefer(&open),
             None => job,
         };
@@ -1084,21 +1158,115 @@ impl Window {
         });
     }
 
-    /// Opens the list of a setting's options on the card, checking them
-    /// first (an edit script's `options` step).
-    pub(super) fn open_setting_options(self: &Rc<Self>, setting: &str) -> Result<(), String> {
+    /// Opens the search over every option of a setting, checking them
+    /// first (an edit script's `options` and `search` steps), with `query`
+    /// typed.
+    pub(super) fn open_setting_options(
+        self: &Rc<Self>,
+        setting: &str,
+        query: &str,
+    ) -> Result<(), String> {
+        let events = self
+            .session
+            .borrow_mut()
+            .check_setting_options(Some(setting), &AtomicBool::new(false));
+        self.handle(events);
+        if self.setting_has_options(setting) {
+            self.open_option_search(setting, query);
+            Ok(())
+        } else {
+            Err(format!("the card has no options to search for '{setting}'"))
+        }
+    }
+
+    /// Opens a setting's short list on the card, checking its options
+    /// first (an edit script's `choices` step).
+    pub(super) fn open_setting_choices(self: &Rc<Self>, setting: &str) -> Result<(), String> {
         let events = self
             .session
             .borrow_mut()
             .check_setting_options(Some(setting), &AtomicBool::new(false));
         self.handle(events);
         if self.editing.card.open_options(setting) {
-            self.place_edit_widgets();
             self.editing.card.scroll_to_open_options_now();
             Ok(())
         } else {
-            Err(format!("the card has no list of options for '{setting}'"))
+            Err(format!("the card has no short list for '{setting}'"))
         }
+    }
+
+    /// `true` when the chosen candidate's setting has options to search.
+    fn setting_has_options(&self, setting: &str) -> bool {
+        self.session
+            .borrow()
+            .edit()
+            .and_then(Edit::chosen)
+            .and_then(|chosen| {
+                chosen
+                    .candidate()
+                    .settings
+                    .iter()
+                    .find(|each| each.name.as_str() == setting)
+                    .map(|each| !each.options.is_empty())
+            })
+            .unwrap_or(false)
+    }
+
+    /// The search dialog asks the session what a query matches, and what
+    /// is chosen in it is set as a value typed on the card would be.
+    fn connect_option_search(self: &Rc<Self>) {
+        let search = &self.editing.search;
+        let window = Rc::downgrade(self);
+        search.connect_search(move |query| {
+            let Some(window) = window.upgrade() else {
+                return Vec::new();
+            };
+            let Some(name) = window.editing.search.setting() else {
+                return Vec::new();
+            };
+            let session = window.session.borrow();
+            session
+                .edit()
+                .and_then(Edit::chosen)
+                .and_then(|chosen| {
+                    chosen
+                        .candidate()
+                        .settings
+                        .iter()
+                        .find(|setting| setting.name.as_str() == name)
+                        .map(|setting| stave_app::choices::search(setting, query))
+                })
+                .unwrap_or_default()
+        });
+        let window = Rc::downgrade(self);
+        search.connect_chosen(move |setting, text| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let Ok(param) = parse_name(&setting) else {
+                return;
+            };
+            window.card_action(CardAction::Choose { param, text });
+        });
+        // Closed, the keyboard goes back to the card, so Enter and Escape
+        // work there again.
+        let window = Rc::downgrade(self);
+        search.connect_closed(move || {
+            if let Some(window) = window.upgrade()
+                && window.editing.card.root.is_visible()
+            {
+                window.editing.card.root.grab_focus();
+            }
+        });
+    }
+
+    /// Opens the search over a setting's options, `query` typed; the
+    /// options' check is started again with that setting first.
+    pub(super) fn open_option_search(self: &Rc<Self>, setting: &str, query: &str) {
+        self.editing.search.present(setting, query);
+        // Checked with that setting first.
+        self.stop_options_check();
+        self.start_options_check();
     }
 
     // ---- the ghost ----

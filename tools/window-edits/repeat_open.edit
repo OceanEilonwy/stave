@@ -1,0 +1,7 @@
+# The same Case with "Repeat…" pressed: the count and the direction open
+# above Cancel and Add (a case repeated would stand side by side in the
+# envelope: valid, rarely wanted, so folded until asked for).
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+repeat open

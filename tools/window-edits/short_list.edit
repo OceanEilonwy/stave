@@ -1,0 +1,9 @@
+# A shelf chosen for the case's inside, between its sides, and its
+# joinery's short list opened: dado, the default (it fits, and holds now),
+# screw, which the case already uses (refused here, greyed, with the
+# checker's reason in its tooltip), then "Search all 18…".
+select region case.inside
+choose casework.Shelf
+bind between case.side[left] case.side[right]
+set panel_stock = oak_19
+choices joinery

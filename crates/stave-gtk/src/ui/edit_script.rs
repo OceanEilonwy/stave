@@ -145,7 +145,20 @@ impl Window {
                 self.send_edit(EditCommand::Set { name, value });
             }
             "options" => {
-                self.open_setting_options(rest)?;
+                self.open_setting_options(rest, "")?;
+            }
+            "choices" => {
+                self.open_setting_choices(rest)?;
+            }
+            "search" => {
+                let (setting, query) = rest
+                    .split_once(char::is_whitespace)
+                    .map_or((rest, ""), |(setting, query)| (setting, query.trim()));
+                self.open_setting_options(setting, query.trim_matches('"'))?;
+            }
+            "default" => {
+                let name = parse_name(rest).map_err(|error| error.0)?;
+                self.send_edit(EditCommand::UseDefault(name));
             }
             "put" if rest == "back" => {
                 let button = self

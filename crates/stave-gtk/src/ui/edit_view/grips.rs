@@ -1617,7 +1617,8 @@ impl Window {
 
     /// Puts the handles, labels and panel where the grips show, after a
     /// frame of the 3D view is drawn; hides them where grips don't belong
-    /// (focus mode, pulled apart, another view, a menu entry chosen).
+    /// (focus mode, pulled apart, another view, a menu entry chosen, the
+    /// removal's dialog asking over the view).
     pub(in crate::ui) fn place_grips(self: &Rc<Self>) {
         let hidden = {
             let session = self.session.borrow();
@@ -1627,6 +1628,7 @@ impl Window {
                 || session.showing_older()
                 || session.edit().is_some_and(|edit| edit.chosen().is_some())
                 || session.grips().is_none()
+                || self.editing.changes.dialog.root.is_visible()
         };
         let grips = &self.editing.grips;
         if hidden {

@@ -61,9 +61,10 @@ use stave_app::Opened;
 use stave_app::candidates::Repeat;
 use stave_app::candidates::new_project::{BoardForm, NewProject, NewStock, StockCut};
 use stave_app::change::{Change, ChangeDetail, new_project_file};
+use stave_app::choices::ChoiceRole;
 use stave_app::edit::{
     Applicability, Blame, Candidate, FacingPair, MenuGroup, OptionFit, PartFace, Picked, PlaceSlot,
-    SettingValue, Verdict,
+    SettingParam, SettingValue, Verdict,
 };
 use stave_app::editing::{
     Edit, EditCommand, EditEvent, Progress, entry_matches, parse_length, parse_name, parse_value,
@@ -166,6 +167,15 @@ pub enum Step {
     /// List a setting's options, each with whether the candidate fits
     /// with it (`options joinery`).
     Options(String),
+    /// Print a setting's short list: its default, the values the project
+    /// already uses for settings like it, the value it holds now
+    /// (`choices joinery`).
+    Choices(String),
+    /// Print the options of a setting a search matches, grouped as the
+    /// menu groups them (`search joinery key`).
+    Search(String, String),
+    /// Put a setting back to its default (`default joinery`).
+    UseDefault(String),
     /// Put back the setting a refusal blames to its value before.
     PutBack,
     /// Name the new item.
@@ -315,7 +325,7 @@ fn without_comment(line: &str) -> &str {
     line
 }
 
-const STEPS: &str = "new, import, stock, tools, create, select, list, choose, bind, set, name, repeat, spaced, shares, offer mirror, mirror, measure, hold, remove, include dependants, rename, grips, stops, drag, grip, pick, solved, plain, fix, show, commit, add or cancel";
+const STEPS: &str = "new, import, stock, tools, create, select, list, choose, bind, set, options, choices, search, default, put back, name, repeat, spaced, shares, offer mirror, mirror, measure, hold, remove, include dependants, rename, grips, stops, drag, grip, pick, solved, plain, fix, show, commit, add or cancel";
 
 fn parse_step(line: &str) -> Result<Step> {
     let words: Vec<&str> = line.split_whitespace().collect();
@@ -340,6 +350,12 @@ fn parse_step(line: &str) -> Result<Step> {
         }
         ["name", name] => Ok(Step::Name((*name).to_owned())),
         ["options", setting] => Ok(Step::Options((*setting).to_owned())),
+        ["choices", setting] => Ok(Step::Choices((*setting).to_owned())),
+        ["search", setting, query @ ..] => Ok(Step::Search(
+            (*setting).to_owned(),
+            query.join(" ").trim_matches('"').to_owned(),
+        )),
+        ["default", setting] => Ok(Step::UseDefault((*setting).to_owned())),
         ["put", "back"] => Ok(Step::PutBack),
         ["repeat", count] => Ok(Step::RepeatChosen(chosen_repeat(count, None)?)),
         ["repeat", first, second] if first.parse::<usize>().is_ok() => {
@@ -758,34 +774,26 @@ impl Runner<'_> {
                 out,
             ),
             Step::Options(name) => {
-                let edit = self.edit()?;
-                let Some(chosen) = edit.chosen() else {
-                    bail!("choose something from the menu first");
-                };
-                if !chosen
-                    .candidate()
-                    .settings
-                    .iter()
-                    .any(|setting| setting.name.as_str() == name)
-                {
-                    bail!("there is no setting called '{name}'");
-                }
-                let never = std::sync::atomic::AtomicBool::new(false);
-                let events: Vec<EditEvent> = self
-                    .session
-                    .check_setting_options(Some(name), &never)
-                    .into_iter()
-                    .filter_map(|event| match event {
-                        Event::Edit(event) => Some(event),
-                        _ => None,
-                    })
-                    .collect();
-                if let Some(failed) = rejected(&events) {
-                    writeln!(out, "rejected: {failed}")?;
+                if !self.check_options_of(name, out)? {
                     return Ok(false);
                 }
                 options_list(self.edit()?, name, out)?;
                 Ok(true)
+            }
+            Step::Choices(name) | Step::Search(name, _) => {
+                if !self.check_options_of(name, out)? {
+                    return Ok(false);
+                }
+                match step {
+                    Step::Search(_, query) => search_list(self.edit()?, name, query, out)?,
+                    _ => short_list(self.edit()?, name, out)?,
+                }
+                Ok(true)
+            }
+            Step::UseDefault(name) => {
+                self.edit()?;
+                let events = self.send(EditCommand::UseDefault(parse_name(name)?));
+                self.outcome(&events, verbose, out)
             }
             Step::PutBack => {
                 self.edit()?;
@@ -1088,6 +1096,39 @@ impl Runner<'_> {
             GripAction::Follows(follows) => follows.value,
         };
         amount_like(now, text)
+    }
+
+    /// Checks every option of the chosen entry's setting, as the card
+    /// does when its list is opened; `false` (said in `out`) when the
+    /// session rejected it.
+    fn check_options_of(&mut self, name: &str, out: &mut String) -> Result<bool> {
+        let edit = self.edit()?;
+        let Some(chosen) = edit.chosen() else {
+            bail!("choose something from the menu first");
+        };
+        if !chosen
+            .candidate()
+            .settings
+            .iter()
+            .any(|setting| setting.name.as_str() == name)
+        {
+            bail!("there is no setting called '{name}'");
+        }
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let events: Vec<EditEvent> = self
+            .session
+            .check_setting_options(Some(name), &never)
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Edit(event) => Some(event),
+                _ => None,
+            })
+            .collect();
+        if let Some(failed) = rejected(&events) {
+            writeln!(out, "rejected: {failed}")?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn edit(&self) -> Result<&Edit> {
@@ -1486,6 +1527,109 @@ fn list(edit: &Edit, out: &mut String) -> Result<()> {
 fn blame_lines(blame: &Blame, out: &mut String) -> Result<()> {
     writeln!(out, "  {}", blame.text())?;
     writeln!(out, "  'put back': {}", blame.put_back_label())?;
+    Ok(())
+}
+
+/// The chosen entry's setting by name.
+fn chosen_setting<'e>(edit: &'e Edit, name: &str) -> Result<&'e SettingParam> {
+    edit.chosen()
+        .and_then(|chosen| {
+            chosen
+                .candidate()
+                .settings
+                .iter()
+                .find(|setting| setting.name.as_str() == name)
+        })
+        .ok_or_else(|| anyhow::anyhow!("there is no setting called '{name}'"))
+}
+
+/// A fit in the words the lists use.
+fn fit_words(fit: &OptionFit) -> String {
+    match fit {
+        OptionFit::NotChecked => "not checked".to_owned(),
+        OptionFit::NeedsChoice(names) => format!("not tried: choose {} first", names_text(names)),
+        OptionFit::Fits => "fits".to_owned(),
+        OptionFit::Refused(refusal) => format!("refused: {}", refusal.line()),
+    }
+}
+
+/// A setting's short list, as the card's control opens it: the default,
+/// the values the project already uses, the value it holds now, numbered
+/// from 1, then how many options the search goes through.
+fn short_list(edit: &Edit, name: &str, out: &mut String) -> Result<()> {
+    let setting = chosen_setting(edit, name)?;
+    let choices = stave_app::choices::short_list(setting);
+    let recent = choices
+        .iter()
+        .filter(|choice| choice.role == ChoiceRole::Recent)
+        .count();
+    writeln!(
+        out,
+        "{name}: {} to choose from ({recent} used in this project), then search {} option{}",
+        choices.len(),
+        setting.options.len(),
+        if setting.options.len() == 1 { "" } else { "s" }
+    )?;
+    let width = choices
+        .iter()
+        .map(|choice| choice.text.len())
+        .max()
+        .unwrap_or(0);
+    for (index, choice) in choices.iter().enumerate() {
+        let pad = " ".repeat(width - choice.text.len());
+        let mut words = vec![choice.role.word().to_owned()];
+        if choice.current && choice.role != ChoiceRole::Current {
+            words.push("now".to_owned());
+        }
+        if let Some(fit) = &choice.fit {
+            words.push(fit_words(fit));
+        }
+        writeln!(
+            out,
+            "{:>3}. {}{pad}  {}",
+            index + 1,
+            choice.text,
+            words.join(", ")
+        )?;
+    }
+    Ok(())
+}
+
+/// The options of a setting a search matches, as the search dialog lists
+/// them: grouped by the module each comes from, the best matches first,
+/// each with how it matched, its fit and its description.
+fn search_list(edit: &Edit, name: &str, query: &str, out: &mut String) -> Result<()> {
+    let setting = chosen_setting(edit, name)?;
+    let groups = stave_app::choices::search(setting, query);
+    let found: usize = groups.iter().map(|group| group.hits.len()).sum();
+    writeln!(
+        out,
+        "{name}: {found} of {} option{} match \"{query}\"",
+        setting.options.len(),
+        if setting.options.len() == 1 { "" } else { "s" }
+    )?;
+    for group in &groups {
+        writeln!(out, "  {}", group.title())?;
+        let width = group
+            .hits
+            .iter()
+            .map(|hit| hit.option.text.len())
+            .max()
+            .unwrap_or(0);
+        for hit in &group.hits {
+            let pad = " ".repeat(width - hit.option.text.len());
+            writeln!(
+                out,
+                "    {}{pad}  by {}  {}",
+                hit.option.text,
+                hit.matched.word(),
+                fit_words(&hit.option.fit)
+            )?;
+            if let Some(hint) = &hit.option.hint {
+                writeln!(out, "    {}  {hint}", " ".repeat(width))?;
+            }
+        }
+    }
     Ok(())
 }
 
