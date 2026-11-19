@@ -285,3 +285,189 @@ impl Window {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::Instant;
+
+    use super::*;
+    use crate::ui::edit_view::unchecked;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use relm4::Controller;
+    use stave_app::edit::Picked;
+    use stave_app::session::Selection;
+
+    /// Runs the main loop until `done` holds or `limit` has passed, so the
+    /// window's timers (the menu's check steps, the card's short wait
+    /// before a command that tries the candidate again) get their turn.
+    fn settle_until(limit: Duration, done: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            settle();
+            if done() {
+                return true;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A fresh copy of the door fixture (a cabinet with a bay to add a
+    /// door to) in a temporary folder of its own.
+    fn door_project() -> PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("stave-gtk-editing-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/door_hits_wall/cabinet.stave");
+        std::fs::copy(source, folder.join("cabinet.stave")).unwrap();
+        folder.canonicalize().unwrap()
+    }
+
+    /// Launches a project window on `folder`, as the application does.
+    fn launch(application: &adw::Application, folder: PathBuf) -> Controller<Window> {
+        let options = Options {
+            layout: Some(std::env::temp_dir().join("stave-editing-test-no-layout")),
+            ..Options::default()
+        };
+        let builder = Window::builder();
+        let root = builder.widget().clone();
+        let widgets =
+            build_widgets(&root, application, &folder, &gio::Menu::new(), &options).unwrap();
+        builder
+            .launch(WindowInit {
+                widgets,
+                folder,
+                options,
+            })
+            .detach()
+    }
+
+    /// Queues an editing message for the window, as its widgets do.
+    fn send(controller: &Controller<Window>, message: EditingInput) {
+        controller.sender().send(message.into()).unwrap();
+    }
+
+    #[test]
+    fn an_edit_runs_through_the_windows_queued_messages() {
+        on_gtk_thread(edit_through_messages);
+    }
+
+    /// The editing group on a real window: each message (and each signal
+    /// a widget fires while one is handled) is only queued, and is
+    /// handled once the main loop runs: a click in the bay opens the
+    /// menu, its entries are checked a step at a time, a pressed entry
+    /// becomes the card after the short wait, the card's Cancel ends the
+    /// edit, and a link's click selects what it names.
+    fn edit_through_messages() {
+        let application = adw::Application::new(
+            Some("org.stave.WindowTest.Editing"),
+            gio::ApplicationFlags::NON_UNIQUE,
+        );
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let controller = launch(&application, door_project());
+        let checked = settle_until(Duration::from_secs(60), || {
+            controller.model().session.drawable().is_some()
+        });
+        assert!(checked, "the project is checked and drawable");
+        let (bay, side_l) = {
+            let model = controller.model();
+            let (design, _) = model.session.drawable().unwrap();
+            let bay = design.regions.iter().find(|r| r.name == "bay").unwrap().id;
+            let side = design.parts.iter().find(|p| p.name == "side_l").unwrap().id;
+            (bay, side)
+        };
+
+        // A click in the bay: queued, then the menu.
+        send(
+            &controller,
+            EditingInput::Dispatch(Command::Edit(EditCommand::Start(Picked::Region(bay)))),
+        );
+        assert!(
+            controller.model().session.edit().is_none(),
+            "the click is only queued"
+        );
+        settle();
+        assert!(controller.model().session.edit().is_some());
+        assert!(controller.model().editing.menu.root.is_visible());
+
+        // The entries are checked a step at a time, from timers.
+        let all_checked = settle_until(Duration::from_secs(60), || {
+            controller
+                .model()
+                .session
+                .edit()
+                .is_some_and(|edit| unchecked(edit) == 0)
+        });
+        assert!(all_checked, "every entry of the menu is checked");
+
+        // Pressing the Door entry: nothing is chosen under the press, the
+        // card shows once the short wait is over.
+        let button = {
+            let model = controller.model();
+            let door = model
+                .session
+                .edit()
+                .unwrap()
+                .menu()
+                .iter()
+                .find(|candidate| candidate.entry.label.as_str() == "Door")
+                .unwrap()
+                .declaration;
+            let rows = model.editing.menu.rows();
+            rows.into_iter()
+                .find(|(declaration, _)| *declaration == door)
+                .map(|(_, button)| button)
+                .unwrap()
+        };
+        // No borrow of the model is held while the button's signal runs.
+        button.emit_clicked();
+        assert!(
+            controller
+                .model()
+                .session
+                .edit()
+                .is_some_and(|edit| edit.chosen().is_none()),
+            "the press is only queued"
+        );
+        let chosen = settle_until(Duration::from_secs(30), || {
+            controller
+                .model()
+                .session
+                .edit()
+                .is_some_and(|edit| edit.chosen().is_some())
+        });
+        assert!(chosen, "the Door entry is chosen");
+        assert!(controller.model().editing.card.root.is_visible());
+        assert!(!controller.model().editing.menu.root.is_visible());
+
+        // The card's Cancel ends the edit.
+        send(&controller, EditingInput::CardAction(CardAction::Cancel));
+        let cancelled = settle_until(Duration::from_secs(30), || {
+            controller.model().session.edit().is_none()
+        });
+        assert!(cancelled, "Cancel drops the edit");
+        assert!(!controller.model().editing.card.root.is_visible());
+
+        // A link's click selects what it names, once handled.
+        let part = Selection::Part(side_l);
+        send(
+            &controller,
+            EditingInput::LinkClicked(LinkTarget::Select(part.clone())),
+        );
+        assert_ne!(controller.model().session.selection(), Some(&part));
+        settle();
+        assert_eq!(controller.model().session.selection(), Some(&part));
+
+        controller.widget().close();
+        settle();
+        drop(controller);
+        settle();
+    }
+}
