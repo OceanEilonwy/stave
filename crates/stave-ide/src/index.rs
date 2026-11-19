@@ -262,7 +262,7 @@ pub(crate) struct ModuleData {
 #[derive(Debug, Clone)]
 pub(crate) struct Scopes<K>(BTreeMap<K, BTreeMap<String, SymbolId>>);
 
-impl<K: Ord> Scopes<K> {
+impl<K: Ord + Copy> Scopes<K> {
     fn new() -> Self {
         Self(BTreeMap::new())
     }
