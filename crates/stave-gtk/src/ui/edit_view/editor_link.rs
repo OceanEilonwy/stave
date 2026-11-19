@@ -18,7 +18,6 @@
 
 use stave_app::i18n::{fill_in, ntr, tr};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use stave_app::session::{Editor, LineNumber, Session, SourceLocation};
@@ -417,16 +416,16 @@ impl Window {
     /// section of the card in progress, or takes them away; with the
     /// editor open, its text goes to the first place and the old lines are
     /// marked.
-    pub(in crate::ui) fn update_pending(self: &Rc<Self>) {
+    pub(in crate::ui) fn update_pending(&mut self) {
         let (texts, writer, editor_open) = {
-            let session = self.session.borrow();
+            let session = &self.session;
             let writer = if session.change().is_some() {
                 Writer::Change
             } else {
                 Writer::Apply
             };
             (
-                pending_texts(&session),
+                pending_texts(session),
                 writer,
                 session.editor() == Editor::Open,
             )
@@ -498,14 +497,14 @@ impl Window {
                     buffer.apply_tag(&tag, &start, &end);
                 }
             }
-            self.editing.pending_marked.replace(Some(path));
+            self.editing.pending_marked = Some(path);
         }
     }
 
     /// For a rename alone (it is tried without a patch): each file it
     /// rewrites, with the name changed as a word.
     fn rename_texts(&self) -> Vec<(PathBuf, String)> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let Some(change) = session.change() else {
             return Vec::new();
         };
@@ -522,7 +521,7 @@ impl Window {
     }
 
     /// Takes the pending marks off the text.
-    fn clear_pending_marks(&self) {
+    fn clear_pending_marks(&mut self) {
         let Some(path) = self.editing.pending_marked.take() else {
             return;
         };

@@ -5,22 +5,28 @@
 //! (Exploded.dc.html, a small 12 px handle with a thin ring), focus mode's
 //! scrub and a problem's swing (22 px handles).
 //!
-//! Only what people do calls the change callback; [`Slider::set_value`]
-//! never does, so the window can move it without hearing back.
+//! It is a relm4 component, [`SliderComponent`], and the worked example in
+//! docs/relm4-migration.md: its model is the only state, only
+//! [`SliderComponent::update`] changes it, and its widget's handlers only
+//! send [`SliderInput`] messages. [`Slider`] keeps the older callback API
+//! in front of it until its callers move to relm4 too.
+//!
+//! Only what people do sends [`SliderOutput::Changed`] (and so calls the
+//! change callback); [`Slider::set_value`] never does, so the window can
+//! move it without hearing back.
 //!
 //! It mirrors for right-to-left text (drawing, pointer and arrow keys),
 //! moves with the scroll wheel, and tells a screen reader its value in
 //! words and where it is blocked.
 
-use stave_app::i18n::{fill_in, tr};
-use std::cell::RefCell;
-use std::rc::{Rc, Weak};
+use std::cell::Ref;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
+use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::{fill_in, tr};
 
-/// Called with the new value when people move the slider.
-type ChangeCallback = Rc<dyn Fn(f64)>;
+use super::relm4_shim::Bridge;
 
 /// The design's red (#e01b24) and its pale stripe (#f6b8bb).
 const BLOCKED: (f64, f64, f64) = (0.878, 0.106, 0.141);
@@ -33,50 +39,63 @@ const MINIMUM_HEIGHT: i32 = 24;
 /// How far one notch of the scroll wheel moves it, as a part of the range.
 const SCROLL_STEP: f64 = 0.05;
 
-struct State {
+/// What the slider draws: its range, its value, where it is blocked and
+/// how its handle is drawn. It is small and `Copy`, so each redraw takes
+/// a copy of it rather than sharing it with the drawing area.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Track {
     lower: f64,
     upper: f64,
     value: f64,
     /// Where the blocked range starts, in the slider's units.
     blocked_from: Option<f64>,
-    /// The value in words for screen readers ("45°"), if given.
-    value_text: Option<String>,
     /// The handle's diameter and its ring's width, in pixels.
     handle: f64,
     ring: f64,
-    on_change: Option<ChangeCallback>,
 }
 
-impl State {
-    fn fraction(&self, value: f64) -> f64 {
-        let span = self.upper - self.lower;
-        if span <= 0.0 {
-            0.0
-        } else {
-            ((value - self.lower) / span).clamp(0.0, 1.0)
-        }
-    }
-
-    /// `true` when the value is in the blocked range.
-    fn past_blocked(&self) -> bool {
-        self.blocked_from.is_some_and(|from| self.value >= from)
-    }
-
-    /// The value in words for screen readers, saying when it is blocked:
-    /// "2.6°, blocked".
-    fn spoken_value(&self) -> Option<String> {
-        let text = self.value_text.as_deref()?;
-        Some(if self.past_blocked() {
-            fill_in(&tr("{value}, blocked"), &[("value", &text)])
-        } else {
-            text.to_owned()
-        })
-    }
+/// The slider's state: what it draws, and its value in words for screen
+/// readers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliderComponent {
+    track: Track,
+    /// The value in words for screen readers ("45°"), if given.
+    value_text: Option<String>,
 }
 
-/// Which way an arrow key or scroll moves the value: `1.0` up, `-1.0`
-/// down. Left and Right swap when the text runs right to left; Up and
-/// Down don't.
+/// What a slider is made with.
+#[derive(Debug)]
+pub struct SliderInit {
+    /// What screen readers call it ("Door angle").
+    pub label: String,
+    /// Its height in pixels.
+    pub height: i32,
+    /// The handle's diameter in pixels.
+    pub handle: f64,
+    /// The width of the handle's ring in pixels.
+    pub ring: f64,
+}
+
+/// A key that moves the slider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Down, or the arrow towards the low end (Left, or Right when the
+    /// text runs right to left): a hundredth down.
+    Down,
+    /// Up, or the arrow towards the high end: a hundredth up.
+    Up,
+    /// Page Down: a tenth down.
+    PageDown,
+    /// Page Up: a tenth up.
+    PageUp,
+    /// Home: to the lower end.
+    Home,
+    /// End: to the upper end.
+    End,
+}
+
+/// Which way an arrow key moves the value: `1.0` up, `-1.0` down. Left
+/// and Right swap when the text runs right to left; Up and Down don't.
 fn key_direction(key: gdk::Key, right_to_left: bool) -> Option<f64> {
     let towards = |right: bool| if right != right_to_left { 1.0 } else { -1.0 };
     match key {
@@ -88,262 +107,394 @@ fn key_direction(key: gdk::Key, right_to_left: bool) -> Option<f64> {
     }
 }
 
-/// A slider.
-#[derive(Clone)]
-pub struct Slider {
-    /// The widget.
-    pub root: gtk::DrawingArea,
-    state: Rc<RefCell<State>>,
+/// `true` when the text runs right to left in `widget`, so a slider's low
+/// end is on the right.
+fn right_to_left(widget: &impl IsA<gtk::Widget>) -> bool {
+    widget.direction() == gtk::TextDirection::Rtl
 }
 
-/// A slider held weakly, for its own widget's handlers: the widget keeps
-/// its controllers, so a strong hold there would keep it forever.
-struct WeakSlider {
-    root: glib::WeakRef<gtk::DrawingArea>,
-    state: Weak<RefCell<State>>,
+impl Step {
+    /// The step a key makes, if it makes one, in a slider whose text runs
+    /// right to left or not.
+    fn from_key(key: gdk::Key, right_to_left: bool) -> Option<Step> {
+        if let Some(direction) = key_direction(key, right_to_left) {
+            return Some(if direction > 0.0 {
+                Step::Up
+            } else {
+                Step::Down
+            });
+        }
+        match key {
+            gdk::Key::Page_Down => Some(Step::PageDown),
+            gdk::Key::Page_Up => Some(Step::PageUp),
+            gdk::Key::Home => Some(Step::Home),
+            gdk::Key::End => Some(Step::End),
+            _ => None,
+        }
+    }
 }
 
-impl WeakSlider {
-    /// The slider, while it is still there.
-    fn upgrade(&self) -> Option<Slider> {
-        Some(Slider {
-            root: self.root.upgrade()?,
-            state: self.state.upgrade()?,
+/// What a slider is told.
+#[derive(Debug)]
+pub enum SliderInput {
+    /// People pressed or dragged to `x` pixels across a slider `width`
+    /// pixels wide.
+    PointedAt {
+        /// Where, from the slider's left edge.
+        x: f64,
+        /// The slider's width when they did.
+        width: f64,
+        /// Whether its text ran right to left, so its low end was on the
+        /// right.
+        right_to_left: bool,
+    },
+    /// People pressed a key that moves it.
+    Stepped(Step),
+    /// People turned the scroll wheel `dx` notches across and `dy` down.
+    Scrolled {
+        /// Notches to the right.
+        dx: f64,
+        /// Notches down.
+        dy: f64,
+        /// Whether its text ran right to left: then right is lower.
+        right_to_left: bool,
+    },
+    /// Move it, without telling anyone.
+    SetValue(f64),
+    /// Set its range, without telling anyone.
+    SetRange {
+        /// The lower end.
+        lower: f64,
+        /// The upper end (raised to `lower` if below it).
+        upper: f64,
+    },
+    /// Hatch the track red from here to the end, describing it to screen
+    /// readers in these words ("blocked from 0.6°") (`None`: nothing
+    /// blocked).
+    SetBlocked(Option<(f64, String)>),
+    /// Say the value in words for screen readers ("45°"; "45°, blocked"
+    /// once it is in the blocked range).
+    SetValueText(String),
+}
+
+/// What a slider tells its owner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SliderOutput {
+    /// People moved it to this value.
+    Changed(f64),
+}
+
+impl Track {
+    fn fraction(&self, value: f64) -> f64 {
+        let span = self.upper - self.lower;
+        if span <= 0.0 {
+            0.0
+        } else {
+            ((value - self.lower) / span).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Sets the value as people did: `Some(value)` when it moved.
+    fn change(&mut self, value: f64) -> Option<f64> {
+        let value = value.clamp(self.lower, self.upper);
+        if (value - self.value).abs() < f64::EPSILON {
+            return None;
+        }
+        self.value = value;
+        Some(value)
+    }
+
+    /// `true` when the value is in the blocked range.
+    fn past_blocked(&self) -> bool {
+        self.blocked_from.is_some_and(|from| self.value >= from)
+    }
+}
+
+impl SliderComponent {
+    /// Draws a copy of the slider as it is now; the drawing area keeps the
+    /// copy until the next update hands it a new one.
+    fn painter(&self) -> impl Fn(&gtk::DrawingArea, &gtk::cairo::Context, i32, i32) + 'static {
+        let look = self.track;
+        move |area, context, width, height| draw(&look, area, context, width, height)
+    }
+
+    /// The value in words for screen readers, saying when it is blocked:
+    /// "2.6°, blocked".
+    fn spoken_value(&self) -> Option<String> {
+        let text = self.value_text.as_deref()?;
+        Some(if self.track.past_blocked() {
+            fill_in(&tr("{value}, blocked"), &[("value", &text)])
+        } else {
+            text.to_owned()
         })
     }
 }
 
-impl Slider {
-    fn downgrade(&self) -> WeakSlider {
-        WeakSlider {
-            root: self.root.downgrade(),
-            state: Rc::downgrade(&self.state),
+#[relm4::component(pub)]
+impl Component for SliderComponent {
+    type Init = SliderInit;
+    type Input = SliderInput;
+    type Output = SliderOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::DrawingArea::builder()
+            .accessible_role(gtk::AccessibleRole::Slider)
+            .build() -> gtk::DrawingArea {
+            set_content_height: height.max(MINIMUM_HEIGHT),
+            set_hexpand: true,
+            set_focusable: true,
+            add_css_class: "stave-slider",
+            update_property: &[gtk::accessible::Property::Label(&label)],
+
+            // A copy of the model to draw, and what screen readers hear,
+            // after every update.
+            #[watch]
+            set_draw_func: model.painter(),
+            #[watch]
+            update_property: &[
+                gtk::accessible::Property::ValueMin(model.track.lower),
+                gtk::accessible::Property::ValueMax(model.track.upper),
+                gtk::accessible::Property::ValueNow(model.track.value),
+            ],
+
+            // Its focus ring comes and goes with the keyboard focus.
+            connect_has_focus_notify => |area| area.queue_draw(),
+            // Right to left draws it the other way round.
+            connect_direction_changed => |area, _| area.queue_draw(),
+
+            // Press or drag anywhere on it to set the value.
+            add_controller = gtk::GestureDrag {
+                connect_drag_begin[sender] => move |gesture, x, _| {
+                    let Some(area) = gesture.widget() else {
+                        return;
+                    };
+                    area.grab_focus();
+                    let width = f64::from(area.width());
+                    let right_to_left = right_to_left(&area);
+                    sender
+                        .input_sender()
+                        .emit(SliderInput::PointedAt { x, width, right_to_left });
+                },
+                connect_drag_update[sender] => move |gesture, dx, _| {
+                    let (Some(area), Some((x, _))) = (gesture.widget(), gesture.start_point()) else {
+                        return;
+                    };
+                    let width = f64::from(area.width());
+                    let right_to_left = right_to_left(&area);
+                    sender.input_sender().emit(SliderInput::PointedAt {
+                        x: x + dx,
+                        width,
+                        right_to_left,
+                    });
+                },
+            },
+
+            // Arrow keys move it by a hundredth, Page keys by a tenth.
+            add_controller = gtk::EventControllerKey {
+                connect_key_pressed[sender] => move |controller, key, _, _| {
+                    let backwards = controller.widget().is_some_and(|area| right_to_left(&area));
+                    let Some(step) = Step::from_key(key, backwards) else {
+                        return glib::Propagation::Proceed;
+                    };
+                    sender.input_sender().emit(SliderInput::Stepped(step));
+                    glib::Propagation::Stop
+                },
+            },
+
+            // The wheel moves it a twentieth a notch: up or right (left,
+            // right to left) for more.
+            add_controller = gtk::EventControllerScroll::new(
+                gtk::EventControllerScrollFlags::BOTH_AXES
+                    | gtk::EventControllerScrollFlags::DISCRETE,
+            ) {
+                connect_scroll[sender] => move |controller, dx, dy| {
+                    let right_to_left = controller.widget().is_some_and(|area| right_to_left(&area));
+                    sender
+                        .input_sender()
+                        .emit(SliderInput::Scrolled { dx, dy, right_to_left });
+                    glib::Propagation::Stop
+                },
+            },
         }
     }
 
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let SliderInit {
+            label,
+            height,
+            handle,
+            ring,
+        } = init;
+        let model = SliderComponent {
+            track: Track {
+                lower: 0.0,
+                upper: 1.0,
+                value: 0.0,
+                blocked_from: None,
+                handle,
+                ring,
+            },
+            value_text: None,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: SliderInput, sender: ComponentSender<Self>, root: &Self::Root) {
+        let track = &mut self.track;
+        let moved = match message {
+            SliderInput::PointedAt {
+                x,
+                width,
+                right_to_left,
+            } => {
+                let inset = track.handle / 2.0;
+                let usable = (width - track.handle).max(1.0);
+                let x = if right_to_left { width - x } else { x };
+                let fraction = ((x - inset) / usable).clamp(0.0, 1.0);
+                track.change(track.lower + fraction * (track.upper - track.lower))
+            }
+            SliderInput::Stepped(step) => {
+                let hundredth = (track.upper - track.lower) / 100.0;
+                let next = match step {
+                    Step::Down => track.value - hundredth,
+                    Step::Up => track.value + hundredth,
+                    Step::PageDown => track.value - hundredth * 10.0,
+                    Step::PageUp => track.value + hundredth * 10.0,
+                    Step::Home => track.lower,
+                    Step::End => track.upper,
+                };
+                track.change(next)
+            }
+            SliderInput::Scrolled {
+                dx,
+                dy,
+                right_to_left,
+            } => {
+                let across = if right_to_left { -dx } else { dx };
+                let notches = across - dy;
+                if notches == 0.0 {
+                    None
+                } else {
+                    track.change(track.value + notches * SCROLL_STEP * (track.upper - track.lower))
+                }
+            }
+            SliderInput::SetValue(value) => {
+                track.value = value.clamp(track.lower, track.upper);
+                None
+            }
+            SliderInput::SetRange { lower, upper } => {
+                track.lower = lower;
+                track.upper = upper.max(lower);
+                track.value = track.value.clamp(track.lower, track.upper);
+                None
+            }
+            SliderInput::SetBlocked(blocked) => {
+                match &blocked {
+                    Some((_, words)) => {
+                        root.update_property(&[gtk::accessible::Property::Description(words)]);
+                    }
+                    None => root.reset_property(gtk::AccessibleProperty::Description),
+                }
+                track.blocked_from = blocked.map(|(from, _)| from);
+                None
+            }
+            SliderInput::SetValueText(text) => {
+                self.value_text = Some(text);
+                None
+            }
+        };
+        if let Some(text) = self.spoken_value() {
+            root.update_property(&[gtk::accessible::Property::ValueText(&text)]);
+        }
+        if let Some(value) = moved {
+            // Nobody listening is not a mistake: the owner may not want
+            // to hear.
+            let _ = sender.output(SliderOutput::Changed(value));
+        }
+    }
+}
+
+/// A slider, behind the callback API the window still uses: it owns the
+/// component (dropping it shuts the component down), passes its setters
+/// on as [`SliderInput`] messages and its [`SliderOutput`] to the
+/// callback.
+///
+/// Setters are queued: they take effect when the main loop next runs,
+/// after whatever called them has returned.
+pub struct Slider {
+    /// The widget.
+    pub root: gtk::DrawingArea,
+    bridge: Bridge<SliderComponent>,
+}
+
+impl Slider {
     /// A slider from 0 to 1, `height` pixels tall (at least 24), with a
     /// handle `handle` pixels across and a ring `ring` pixels wide.
     pub fn new(label: &str, height: i32, handle: f64, ring: f64) -> Slider {
-        let root = gtk::DrawingArea::builder()
-            .content_height(height.max(MINIMUM_HEIGHT))
-            .hexpand(true)
-            .focusable(true)
-            .css_classes(["stave-slider"])
-            .accessible_role(gtk::AccessibleRole::Slider)
-            .build();
-        root.update_property(&[gtk::accessible::Property::Label(label)]);
-        let state = Rc::new(RefCell::new(State {
-            lower: 0.0,
-            upper: 1.0,
-            value: 0.0,
-            blocked_from: None,
-            value_text: None,
+        let bridge = Bridge::<SliderComponent>::launch(SliderInit {
+            label: label.to_owned(),
+            height,
             handle,
             ring,
-            on_change: None,
-        }));
-        let slider = Slider { root, state };
-        slider.connect();
-        slider.announce();
-        slider
-    }
-
-    fn connect(&self) {
-        let state = self.state.clone();
-        self.root
-            .set_draw_func(move |area, context, width, height| {
-                draw(&state.borrow(), area, context, width, height);
-            });
-
-        // Its focus ring comes and goes with the keyboard focus.
-        self.root.connect_has_focus_notify(|area| area.queue_draw());
-        // Right to left draws it the other way round.
-        self.root
-            .connect_direction_changed(|area, _| area.queue_draw());
-
-        // Press or drag anywhere on it to set the value.
-        let drag = gtk::GestureDrag::new();
-        let this = self.downgrade();
-        drag.connect_drag_begin(move |_, x, _| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            this.root.grab_focus();
-            this.set_from_x(x);
         });
-        let this = self.downgrade();
-        drag.connect_drag_update(move |gesture, dx, _| {
-            let Some(this) = this.upgrade() else {
-                return;
-            };
-            if let Some((x, _)) = gesture.start_point() {
-                this.set_from_x(x + dx);
-            }
-        });
-        self.root.add_controller(drag);
-
-        // Arrow keys move it by a hundredth, Page keys by a tenth.
-        let keys = gtk::EventControllerKey::new();
-        let this = self.downgrade();
-        keys.connect_key_pressed(move |_, key, _, _| {
-            let Some(this) = this.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            let (lower, upper, value) = {
-                let state = this.state.borrow();
-                (state.lower, state.upper, state.value)
-            };
-            let step = (upper - lower) / 100.0;
-            let next = if let Some(direction) = key_direction(key, this.right_to_left()) {
-                value + direction * step
-            } else {
-                match key {
-                    gdk::Key::Page_Down => value - step * 10.0,
-                    gdk::Key::Page_Up => value + step * 10.0,
-                    gdk::Key::Home => lower,
-                    gdk::Key::End => upper,
-                    _ => return glib::Propagation::Proceed,
-                }
-            };
-            this.change(next);
-            glib::Propagation::Stop
-        });
-        self.root.add_controller(keys);
-
-        // The wheel moves it a twentieth a notch: up or right (left, right
-        // to left) for more.
-        let scroll = gtk::EventControllerScroll::new(
-            gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
-        );
-        let this = self.downgrade();
-        scroll.connect_scroll(move |_, dx, dy| {
-            let Some(this) = this.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            this.scroll(dx, dy);
-            glib::Propagation::Stop
-        });
-        self.root.add_controller(scroll);
-    }
-
-    /// `true` when the text runs right to left, so the slider's low end is
-    /// on the right.
-    fn right_to_left(&self) -> bool {
-        self.root.direction() == gtk::TextDirection::Rtl
-    }
-
-    /// Moves it by a scroll of `dx`, `dy` notches.
-    fn scroll(&self, dx: f64, dy: f64) {
-        let across = if self.right_to_left() { -dx } else { dx };
-        let notches = across - dy;
-        if notches == 0.0 {
-            return;
-        }
-        let (lower, upper, value) = {
-            let state = self.state.borrow();
-            (state.lower, state.upper, state.value)
-        };
-        self.change(value + notches * SCROLL_STEP * (upper - lower));
-    }
-
-    fn set_from_x(&self, x: f64) {
-        let width = f64::from(self.root.width());
-        let (lower, upper, handle) = {
-            let state = self.state.borrow();
-            (state.lower, state.upper, state.handle)
-        };
-        let inset = handle / 2.0;
-        let usable = (width - handle).max(1.0);
-        let x = if self.right_to_left() { width - x } else { x };
-        let fraction = ((x - inset) / usable).clamp(0.0, 1.0);
-        self.change(lower + fraction * (upper - lower));
-    }
-
-    /// Sets the value as people did, and tells the callback.
-    fn change(&self, value: f64) {
-        let callback = {
-            let mut state = self.state.borrow_mut();
-            let value = value.clamp(state.lower, state.upper);
-            if (value - state.value).abs() < f64::EPSILON {
-                return;
-            }
-            state.value = value;
-            state.on_change.clone()
-        };
-        self.root.queue_draw();
-        self.announce();
-        if let Some(callback) = callback {
-            callback(self.value());
-        }
-    }
-
-    fn announce(&self) {
-        let state = self.state.borrow();
-        self.root.update_property(&[
-            gtk::accessible::Property::ValueMin(state.lower),
-            gtk::accessible::Property::ValueMax(state.upper),
-            gtk::accessible::Property::ValueNow(state.value),
-        ]);
-        if let Some(text) = state.spoken_value() {
-            self.root
-                .update_property(&[gtk::accessible::Property::ValueText(&text)]);
+        Slider {
+            root: bridge.widget().clone(),
+            bridge,
         }
     }
 
     /// Calls `callback` with the value whenever people move it.
     pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
-        self.state.borrow_mut().on_change = Some(Rc::new(callback));
+        self.bridge.connect(move |output| match output {
+            SliderOutput::Changed(value) => callback(value),
+        });
     }
 
-    /// The value.
+    /// The value, as of the last message the slider handled.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept for the slider's API; only tests read it now"
+        )
+    )]
     pub fn value(&self) -> f64 {
-        self.state.borrow().value
+        self.model().track.value
     }
 
     /// Moves it, without calling back.
     pub fn set_value(&self, value: f64) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.value = value.clamp(state.lower, state.upper);
-        }
-        self.root.queue_draw();
-        self.announce();
+        self.bridge.send(SliderInput::SetValue(value));
     }
 
     /// Sets its range, without calling back.
     pub fn set_range(&self, lower: f64, upper: f64) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.lower = lower;
-            state.upper = upper.max(lower);
-            state.value = state.value.clamp(state.lower, state.upper);
-        }
-        self.root.queue_draw();
-        self.announce();
+        self.bridge.send(SliderInput::SetRange { lower, upper });
     }
 
     /// Hatches the track red from `from` to the end, and gives `words`
     /// ("blocked from 0.6°") as its description for screen readers
     /// (`None`: nothing blocked).
     pub fn set_blocked(&self, blocked: Option<(f64, &str)>) {
-        self.state.borrow_mut().blocked_from = blocked.map(|(from, _)| from);
-        match blocked {
-            Some((_, words)) => self
-                .root
-                .update_property(&[gtk::accessible::Property::Description(words)]),
-            None => self
-                .root
-                .reset_property(gtk::AccessibleProperty::Description),
-        }
-        self.root.queue_draw();
-        self.announce();
+        self.bridge.send(SliderInput::SetBlocked(
+            blocked.map(|(from, words)| (from, words.to_owned())),
+        ));
     }
 
     /// Says the value in words for screen readers ("45°"; "45°, blocked"
     /// once it is in the blocked range).
     pub fn set_value_text(&self, text: &str) {
-        self.state.borrow_mut().value_text = Some(text.to_owned());
-        self.announce();
+        self.bridge.send(SliderInput::SetValueText(text.to_owned()));
+    }
+
+    fn model(&self) -> Ref<'_, SliderComponent> {
+        self.bridge.model()
     }
 }
 
@@ -371,7 +522,7 @@ fn rounded_bar(context: &gtk::cairo::Context, left: f64, right: f64, middle: f64
 }
 
 fn draw(
-    state: &State,
+    state: &Track,
     area: &gtk::DrawingArea,
     context: &gtk::cairo::Context,
     width: i32,
@@ -388,7 +539,7 @@ fn draw(
     let style = adw::StyleManager::default();
     let (dark, high_contrast) = (style.is_dark(), style.is_high_contrast());
     // Right to left: the same picture, mirrored.
-    if area.direction() == gtk::TextDirection::Rtl {
+    if right_to_left(area) {
         context.translate(width, 0.0);
         context.scale(-1.0, 1.0);
     }
@@ -487,7 +638,39 @@ fn draw(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// The slider's press-and-drag controller, to fire its signals as GTK
+    /// would.
+    fn drag_of(slider: &Slider) -> Option<gtk::GestureDrag> {
+        let controllers = slider.root.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::GestureDrag>().ok())
+    }
+
+    /// Fires `drag-begin` at `x` pixels across, as a press there would.
+    fn press(drag: &gtk::GestureDrag, x: f64) {
+        drag.emit_by_name::<()>("drag-begin", &[&x, &0.0_f64]);
+    }
+
+    /// The slider's scroll-wheel controller, to fire its signal as GTK
+    /// would.
+    fn scroll_of(slider: &Slider) -> Option<gtk::EventControllerScroll> {
+        let controllers = slider.root.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::EventControllerScroll>().ok())
+    }
+
+    /// Fires `scroll` by `dx`, `dy` notches, as the wheel would.
+    fn wheel(scroll: &gtk::EventControllerScroll, dx: f64, dy: f64) {
+        scroll.emit_by_name::<bool>("scroll", &[&dx, &dy]);
+    }
 
     #[test]
     fn left_and_right_swap_right_to_left() {
@@ -502,37 +685,42 @@ mod tests {
 
     #[test]
     fn it_is_heard_mirrored_scrolled_and_blocked() {
-        crate::ui::gtk_test::on_gtk_thread(heard_mirrored_scrolled_and_blocked);
+        on_gtk_thread(heard_mirrored_scrolled_and_blocked);
     }
 
     /// The pointer and the wheel follow the text's direction, it is never
     /// shorter than 24 px, and a screen reader hears where it is blocked
-    /// and when the value is past that.
+    /// and when the value is past that. Presses and turns of the wheel go
+    /// through the slider's own controllers, which read its direction.
     fn heard_mirrored_scrolled_and_blocked() {
         let slider = Slider::new("Swing it", 18, 22.0, 2.0);
         assert_eq!(slider.root.content_height(), MINIMUM_HEIGHT);
+        let (Some(drag), Some(scroll)) = (drag_of(&slider), scroll_of(&slider)) else {
+            panic!("the slider has drag and scroll controllers");
+        };
         let window = gtk::Window::builder()
             .default_width(222)
             .child(&slider.root)
             .build();
         window.present();
-        let context = glib::MainContext::default();
-        for _ in 0..20 {
-            context.iteration(false);
-        }
+        settle();
         let width = f64::from(slider.root.width());
         assert!(width > 22.0, "the slider has room: {width}");
         // Near the left end: low left to right, high right to left.
-        slider.set_from_x(11.0);
+        press(&drag, 11.0);
+        settle();
         assert!(slider.value() < 0.01, "{}", slider.value());
         slider.root.set_direction(gtk::TextDirection::Rtl);
-        slider.set_from_x(11.0);
+        press(&drag, 11.0);
+        settle();
         assert!(slider.value() > 0.99, "{}", slider.value());
         // Right to left, the wheel's right is lower; up is always higher.
         slider.set_value(0.5);
-        slider.scroll(1.0, 0.0);
+        wheel(&scroll, 1.0, 0.0);
+        settle();
         assert!((slider.value() - 0.45).abs() < 1e-9, "{}", slider.value());
-        slider.scroll(0.0, -2.0);
+        wheel(&scroll, 0.0, -2.0);
+        settle();
         assert!((slider.value() - 0.55).abs() < 1e-9, "{}", slider.value());
 
         let description = gtk::AccessibleProperty::Description;
@@ -541,44 +729,130 @@ mod tests {
             description
         ));
         slider.set_blocked(Some((0.6, "blocked from 0.6°")));
+        settle();
         assert!(gtk::test_accessible_has_property(&slider.root, description));
         slider.set_value_text("0.5°");
-        assert_eq!(
-            slider.state.borrow().spoken_value().as_deref(),
-            Some("0.5°")
-        );
+        settle();
+        assert_eq!(slider.model().spoken_value().as_deref(), Some("0.5°"));
         slider.set_value(0.7);
         slider.set_value_text("0.7°");
+        settle();
         assert_eq!(
-            slider.state.borrow().spoken_value().as_deref(),
+            slider.model().spoken_value().as_deref(),
             Some("0.7°, blocked")
         );
         slider.set_blocked(None);
+        settle();
         assert!(!gtk::test_accessible_has_property(
             &slider.root,
             description
         ));
-        assert_eq!(
-            slider.state.borrow().spoken_value().as_deref(),
-            Some("0.7°")
-        );
+        assert_eq!(slider.model().spoken_value().as_deref(), Some("0.7°"));
         window.destroy();
     }
 
     #[test]
     fn a_dropped_slider_is_freed() {
-        crate::ui::gtk_test::on_gtk_thread(slider_is_freed);
+        on_gtk_thread(slider_is_freed);
     }
 
-    /// Its own widget's handlers hold it weakly, so letting go of the
-    /// slider frees the widget, its state and the callback.
+    /// Dropping the slider drops its controller, which shuts the
+    /// component down when the main loop next runs: the widget, the
+    /// model (and the input channel the runtime held) and the callback
+    /// are all freed.
     fn slider_is_freed() {
         let slider = Slider::new("Together … apart", 24, 12.0, 1.0);
-        slider.connect_changed(|_| {});
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        slider.connect_changed(move |_| {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
         let root = slider.root.downgrade();
-        let state = Rc::downgrade(&slider.state);
+        let input = slider.bridge.sender().clone();
+        settle();
+        assert!(root.upgrade().is_some(), "the widget lives while held");
         drop(slider);
+        settle();
         assert!(root.upgrade().is_none(), "the widget is freed");
-        assert!(state.upgrade().is_none(), "the state is freed");
+        assert!(
+            input.send(SliderInput::SetValue(0.5)).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn setters_move_it_without_calling_back() {
+        on_gtk_thread(setters_do_not_call_back);
+    }
+
+    fn setters_do_not_call_back() {
+        let slider = Slider::new("Door angle", 22, 22.0, 2.0);
+        let calls = Rc::new(RefCell::new(0));
+        let counted = Rc::clone(&calls);
+        slider.connect_changed(move |_| *counted.borrow_mut() += 1);
+        slider.set_range(0.0, 2.0);
+        slider.set_value(3.0);
+        slider.set_blocked(Some((1.5, "blocked from 1.5")));
+        slider.set_value_text("90°");
+        settle();
+        assert_eq!(slider.value(), 2.0, "clamped to the range");
+        assert_eq!(slider.model().track.blocked_from, Some(1.5));
+        assert_eq!(*calls.borrow(), 0, "setters never call back");
+    }
+
+    #[test]
+    fn a_signal_fired_while_handling_an_output_is_queued_not_re_entered() {
+        on_gtk_thread(signals_are_queued);
+    }
+
+    /// The old slider called its callback from inside its own change,
+    /// with GTK's signal still on the stack, and a callback that moved
+    /// the slider re-entered it. Now a press only queues a message; the
+    /// update runs later, and its output reaches the callback after the
+    /// update has returned (reading the model there would panic if it
+    /// had not). A signal fired from inside the callback is queued too.
+    fn signals_are_queued() {
+        let slider = Rc::new(Slider::new("Door angle", 22, 22.0, 2.0));
+        let Some(drag) = drag_of(&slider) else {
+            panic!("the slider has a drag controller");
+        };
+        // (what the callback heard, the value it read, the value it read
+        // after firing a press from inside)
+        let heard: Rc<RefCell<Vec<(f64, f64, f64)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&slider);
+        let inner = drag.clone();
+        slider.connect_changed(move |value| {
+            let Some(slider) = weak.upgrade() else {
+                return;
+            };
+            let read = slider.value();
+            let first = log.borrow().is_empty();
+            if first {
+                // Moving it from here is queued, and never calls back.
+                slider.set_value(0.25);
+                // GTK firing the slider's own signal from in here only
+                // queues a message: the value doesn't change under us.
+                press(&inner, 0.0);
+            }
+            log.borrow_mut().push((value, read, slider.value()));
+        });
+
+        // An unrealised slider is 0 px wide: any press past the handle is
+        // the upper end.
+        press(&drag, 1000.0);
+        assert!(heard.borrow().is_empty(), "nothing has run yet");
+        assert_eq!(slider.value(), 0.0, "the press is only queued");
+
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(1.0, 1.0, 1.0), (0.0, 0.0, 0.0)],
+            "each output after its update, the inner press after the first"
+        );
+        assert_eq!(slider.value(), 0.0, "the inner press came last");
     }
 }

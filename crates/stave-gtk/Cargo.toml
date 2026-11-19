@@ -23,6 +23,9 @@ adw = { package = "libadwaita", version = "0.9", features = ["v1_8"] }
 panel = { package = "libpanel", version = "0.7", features = ["v1_8"] }
 png = "0.18"
 pollster = "0.4"
+# gnome_47 is the level of our gtk4 feature (v4_16); our own libadwaita and
+# libpanel features (v1_8) stay as they are, since features only add.
+relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "libpanel", "gnome_47"] }
 sourceview5 = { version = "=0.11.3", features = ["v5_22"] }
 stave-app = { path = "../stave-app" }
 stave-geom = { path = "../stave-geom" }

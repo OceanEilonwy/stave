@@ -9,17 +9,17 @@
 //! what it remembers between runs (`remember`).
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
-use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use super::remember::Remembered;
 use super::start_page::StartPage;
-use super::{Options, Theme, Window, style};
+use super::update::project::ProjectInput;
+use super::{Options, Theme, Window, WindowInit, WindowInput, WindowOutput, build_widgets, style};
 
 /// The application's id, and its desktop file's, metainfo's and icon's
 /// name. Under the domain of the project's own repository.
@@ -320,96 +320,197 @@ pub(super) const OTHER_KEYS: &[(KeySection, &str, &str)] = &[
     ),
 ];
 
-/// The application: its windows, what it remembers, and the command
-/// line's options for the first window.
+/// What one of the application's own actions sends.
+type ShellAction = fn() -> ShellInput;
+
+/// Which project window: numbered as they open, never reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WindowId(u64);
+
+/// A project window the application owns while it is open.
+struct OpenWindow {
+    id: WindowId,
+    /// The folder it shows.
+    folder: PathBuf,
+    /// Its component: dropping it shuts the window's component down.
+    controller: Controller<Window>,
+}
+
+/// The application: a relm4 component with no widget of its own. It owns
+/// each project window's [`Controller`] from opening until GTK takes its
+/// window out of the application (GtkApplication's `window-removed`, when
+/// the window is closed), and the start page while it shows. GApplication's signals, the application's
+/// actions, the windows and the start page only send it [`ShellInput`]s.
 pub(super) struct Shell {
     application: adw::Application,
-    /// The project windows, owned here from opening until their GTK
-    /// window is destroyed. The windows' own handlers hold them only
-    /// weakly (so a closed window is freed), which makes this their one
-    /// owner: without it a window is dropped as soon as it opens and its
-    /// background check's result has nowhere to land.
-    windows: RefCell<Vec<Rc<Window>>>,
-    /// The start page, while it shows. A `Cell`, not a `RefCell`: it is
-    /// only taken and set, so no borrow can be held while closing the page
-    /// re-enters `start_closed` through GTK's `close-request` signal.
-    start: Cell<Option<Rc<StartPage>>>,
+    /// The open project windows, in the order they opened.
+    windows: Vec<OpenWindow>,
+    /// The number the next window gets.
+    next_window: u64,
+    /// The start page, while it shows.
+    start: Option<StartPage>,
     /// The command line's options, taken by the first project window.
-    first: Cell<Option<Options>>,
+    first: Option<Options>,
     /// The style the window starts with: the command line's, or the one
     /// remembered.
     theme: Theme,
     /// What is remembered from one run to the next.
-    remembered: Cell<Remembered>,
+    remembered: Remembered,
     /// Remembering is on (off for screenshots).
     remembers: bool,
     /// A failure to save the settings has been reported.
-    reported: Cell<bool>,
+    reported: bool,
     /// The Open Recent submenu every project window's menu shares.
     recent: gio::Menu,
+    /// Where the application's own messages go.
+    sender: ComponentSender<Shell>,
 }
 
-impl Shell {
-    /// The application for these options.
-    pub(super) fn new(application: &adw::Application, options: Options) -> Rc<Shell> {
+/// What the application is made with.
+pub(super) struct ShellInit {
+    /// The GApplication it runs in.
+    pub(super) application: adw::Application,
+    /// The command line's options.
+    pub(super) options: Options,
+}
+
+/// What the application is told.
+#[derive(Debug)]
+pub(super) enum ShellInput {
+    /// GApplication started: the style, the actions and their keys.
+    Startup,
+    /// Stave was started (or started again) with no folder. The hold
+    /// keeps the application running until a window shows.
+    Activate(gio::ApplicationHoldGuard),
+    /// Stave was asked to open these folders.
+    Open(Vec<PathBuf>, gio::ApplicationHoldGuard),
+    /// Opens a project folder, or brings forward the window showing it.
+    OpenFolder(PathBuf),
+    /// Opens a project just written by the New Project dialog, and
+    /// welcomes it.
+    OpenNewProject(PathBuf),
+    /// The Quit action.
+    Quit,
+    /// The About action.
+    About,
+    /// The Keyboard Shortcuts action.
+    Shortcuts,
+    /// A style was chosen in the menu.
+    SetTheme(Theme),
+    /// The start page has closed.
+    StartClosed,
+    /// A project window said something.
+    Window(WindowId, WindowOutput),
+    /// GTK took this window out of the application: it has closed.
+    WindowRemoved(gtk::Window),
+}
+
+impl Component for Shell {
+    type Init = ShellInit;
+    type Input = ShellInput;
+    type Output = ();
+    type CommandOutput = ();
+    type Root = ();
+    type Widgets = ();
+
+    fn init_root() {}
+
+    fn init(init: ShellInit, (): (), sender: ComponentSender<Shell>) -> ComponentParts<Shell> {
+        let ShellInit {
+            application,
+            options,
+        } = init;
         let remembers = options.window_screenshot.is_none();
         let remembered = if remembers {
             Remembered::load()
         } else {
             Remembered::default()
         };
-        Rc::new(Shell {
-            application: application.clone(),
-            windows: RefCell::new(Vec::new()),
-            start: Cell::new(None),
+        // A window leaves the application when it is closed: its
+        // controller goes then.
+        let input = sender.input_sender().clone();
+        application.connect_window_removed(move |_, window| {
+            input.emit(ShellInput::WindowRemoved(window.clone()));
+        });
+        let model = Shell {
+            application,
+            windows: Vec::new(),
+            next_window: 0,
+            start: None,
             theme: options.theme.unwrap_or(remembered.theme),
-            first: Cell::new(Some(options)),
-            remembered: Cell::new(remembered),
+            first: Some(options),
+            remembered,
             remembers,
-            reported: Cell::new(false),
+            reported: false,
             recent: gio::Menu::new(),
-        })
+            sender,
+        };
+        ComponentParts { model, widgets: () }
     }
 
+    fn update(&mut self, message: ShellInput, _sender: ComponentSender<Shell>, (): &()) {
+        match message {
+            ShellInput::Startup => self.startup(),
+            ShellInput::Activate(hold) => {
+                self.activate();
+                drop(hold);
+            }
+            ShellInput::Open(folders, hold) => {
+                for folder in folders {
+                    self.open_folder(&folder);
+                }
+                drop(hold);
+            }
+            ShellInput::OpenFolder(folder) => {
+                self.open_folder(&folder);
+            }
+            ShellInput::OpenNewProject(folder) => {
+                if let Some(id) = self.open_folder(&folder) {
+                    self.send_to(id, ProjectInput::Welcome);
+                }
+            }
+            ShellInput::Quit => self.quit(),
+            ShellInput::About => self.about(),
+            ShellInput::Shortcuts => self.shortcuts(),
+            ShellInput::SetTheme(theme) => self.set_theme(theme),
+            ShellInput::StartClosed => self.start = None,
+            ShellInput::Window(id, output) => self.window_said(id, output),
+            // Dropping the controller shuts the window's component down
+            // (its model and widgets go when the main loop next runs).
+            ShellInput::WindowRemoved(window) => self
+                .windows
+                .retain(|open| open.controller.widget().upcast_ref::<gtk::Window>() != &window),
+        }
+    }
+}
+
+impl Shell {
     /// The application is starting: the stylesheet, the style, the
     /// application's actions and every action's keys.
-    pub(super) fn startup(self: &Rc<Self>) {
+    fn startup(&mut self) {
         if let Some(display) = gdk::Display::default() {
             style::install(&display);
         }
         gtk::Window::set_default_icon_name(APP_ID);
         adw::StyleManager::default().set_color_scheme(self.theme.scheme());
         let application = &self.application;
-        let quit = gio::SimpleAction::new("quit", None);
-        let this = Rc::downgrade(self);
-        quit.connect_activate(move |_, _| {
-            if let Some(shell) = this.upgrade() {
-                shell.quit();
-            }
-        });
-        application.add_action(&quit);
-        let about = gio::SimpleAction::new("about", None);
-        let this = Rc::downgrade(self);
-        about.connect_activate(move |_, _| {
-            if let Some(shell) = this.upgrade() {
-                shell.about();
-            }
-        });
-        application.add_action(&about);
-        let shortcuts = gio::SimpleAction::new("shortcuts", None);
-        let this = Rc::downgrade(self);
-        shortcuts.connect_activate(move |_, _| {
-            if let Some(shell) = this.upgrade() {
-                shell.shortcuts();
-            }
-        });
-        application.add_action(&shortcuts);
+        let actions: [(&str, ShellAction); 3] = [
+            ("quit", || ShellInput::Quit),
+            ("about", || ShellInput::About),
+            ("shortcuts", || ShellInput::Shortcuts),
+        ];
+        for (name, message) in actions {
+            let action = gio::SimpleAction::new(name, None);
+            let input = self.sender.input_sender().clone();
+            action.connect_activate(move |_, _| input.emit(message()));
+            application.add_action(&action);
+        }
         let style = gio::SimpleAction::new_stateful(
             "style",
             Some(glib::VariantTy::STRING),
             &self.theme.word().to_variant(),
         );
-        let this = Rc::downgrade(self);
+        let input = self.sender.input_sender().clone();
         style.connect_activate(move |action, parameter| {
             let Some(theme) = parameter
                 .and_then(glib::Variant::str)
@@ -418,9 +519,7 @@ impl Shell {
                 return;
             };
             action.set_state(&theme.word().to_variant());
-            if let Some(shell) = this.upgrade() {
-                shell.set_theme(theme);
-            }
+            input.emit(ShellInput::SetTheme(theme));
         });
         application.add_action(&style);
         for accelerator in ACCELERATORS
@@ -434,23 +533,28 @@ impl Shell {
 
     /// Stave was started (or started again) with no folder: the window
     /// already open comes forward, or the start page shows.
-    pub(super) fn activate(self: &Rc<Self>) {
+    fn activate(&mut self) {
         if let Some(window) = self.application.active_window() {
             window.present();
             return;
         }
         let new_project = self.first.take().is_some_and(|options| options.new_project);
-        let page = StartPage::new(self);
+        let page = StartPage::new(
+            &self.application,
+            self.recent_projects(),
+            self.sender.input_sender().clone(),
+        );
         page.window.present();
         if new_project {
             page.ask_new_project();
         }
-        self.start.set(Some(page));
+        self.start = Some(page);
     }
 
     /// Opens a project folder in a window of its own, or brings forward
     /// the window already showing it. A `.stave` file opens its folder.
-    pub(super) fn open_folder(self: &Rc<Self>, folder: &Path) -> Option<Rc<Window>> {
+    /// The window it opened, if it opened one.
+    fn open_folder(&mut self, folder: &Path) -> Option<WindowId> {
         let folder = match project_folder(folder) {
             Ok(folder) => folder,
             Err(error) => {
@@ -459,14 +563,14 @@ impl Shell {
                 return None;
             }
         };
-        if let Some(window) = self.window_showing(&folder) {
-            window.widgets.window.present();
-            return Some(window);
+        if let Some(open) = self.windows.iter().find(|open| open.folder == folder) {
+            open.controller.widget().present();
+            return Some(open.id);
         }
         let mut options = self.first.take().unwrap_or_default();
         if options.size.is_none() {
             if self.remembers {
-                let remembered = self.remembered.get();
+                let remembered = self.remembered;
                 options.size = Some((
                     u32::try_from(remembered.size.0).unwrap_or(1200),
                     u32::try_from(remembered.size.1).unwrap_or(800),
@@ -476,71 +580,75 @@ impl Shell {
                 options.size = Some(SCREENSHOT_SIZE);
             }
         }
-        match Window::open(&self.application, folder.clone(), options, self.clone()) {
-            Ok(window) => {
-                self.own(&window);
-                self.record_recent(&folder);
-                if let Some(page) = self.start.take() {
-                    page.window.close();
-                }
-                Some(window)
-            }
+        let builder = Window::builder();
+        let root = builder.widget().clone();
+        let widgets = match build_widgets(&root, &self.application, &folder, &self.recent, &options)
+        {
+            Ok(widgets) => widgets,
             Err(error) => {
+                // The root was never shown; nothing else holds it.
+                root.destroy();
                 eprintln!("error: {error:#}");
                 self.notice(&format!("{error:#}"));
-                None
+                return None;
+            }
+        };
+        let id = WindowId(self.next_window);
+        self.next_window = self.next_window.saturating_add(1);
+        let controller = builder
+            .launch(WindowInit {
+                widgets,
+                folder: folder.clone(),
+                options,
+            })
+            .forward(self.sender.input_sender(), move |output| {
+                ShellInput::Window(id, output)
+            });
+        self.windows.push(OpenWindow {
+            id,
+            folder: folder.clone(),
+            controller,
+        });
+        self.record_recent(&folder);
+        if let Some(page) = self.start.take() {
+            page.window.close();
+        }
+        Some(id)
+    }
+
+    /// A project window said something.
+    fn window_said(&mut self, id: WindowId, output: WindowOutput) {
+        match output {
+            WindowOutput::GoToFolder(folder) => {
+                if let Some(open) = self.windows.iter().find(|open| open.folder == folder) {
+                    open.controller.widget().present();
+                } else {
+                    self.send_to(id, ProjectInput::OpenHere(folder));
+                }
+            }
+            WindowOutput::Opened(folder) => {
+                self.record_recent(&folder);
+                if let Some(open) = self.windows.iter_mut().find(|open| open.id == id) {
+                    open.folder = folder;
+                }
+            }
+            WindowOutput::Closing {
+                size,
+                maximized,
+                hold,
+            } => {
+                self.remember_window(size, maximized);
+                drop(hold);
             }
         }
     }
 
-    /// The application.
-    pub(super) fn application(&self) -> &adw::Application {
-        &self.application
-    }
-
-    /// The start page has closed.
-    pub(super) fn start_closed(&self) {
-        self.start.take();
-    }
-
-    /// Keeps a project window alive until its GTK window is destroyed.
-    fn own(self: &Rc<Self>, window: &Rc<Window>) {
-        self.windows.borrow_mut().push(Rc::clone(window));
-        let shell = Rc::downgrade(self);
-        let closing = Rc::downgrade(window);
-        window.widgets.window.connect_destroy(move |_| {
-            let Some(shell) = shell.upgrade() else {
-                return;
-            };
-            // Taken out under the borrow, dropped after it: dropping the
-            // window drops its widgets, whose own handlers may look at the
-            // windows again.
-            let gone = {
-                let mut windows = shell.windows.borrow_mut();
-                let at = windows
-                    .iter()
-                    .position(|window| std::ptr::eq(Rc::as_ptr(window), closing.as_ptr()));
-                at.map(|at| windows.remove(at))
-            };
-            drop(gone);
-        });
-    }
-
-    /// The open project windows.
-    fn windows(&self) -> Vec<Rc<Window>> {
-        self.windows
-            .borrow()
-            .iter()
-            .filter(|window| window.widgets.window.application().is_some())
-            .cloned()
-            .collect()
-    }
-
-    /// The project window showing this folder.
-    pub(super) fn window_showing(&self, folder: &Path) -> Option<Rc<Window>> {
-        self.windows()
-            .into_iter()
-            .find(|window| window.session.borrow().folder() == folder)
+    /// Sends a message to a project window.
+    fn send_to(&self, id: WindowId, message: impl Into<WindowInput>) {
+        if let Some(open) = self.windows.iter().find(|open| open.id == id) {
+            // Fails only once the window has shut down.
+            let _ = open.controller.sender().send(message.into());
+        }
     }
 
     /// Closes every window, each asking about its unsaved changes; the
@@ -553,18 +661,23 @@ impl Shell {
 
     /// Shows a short line in the window in front.
     fn notice(&self, text: &str) {
-        let toast = || adw::Toast::builder().title(text).timeout(5).build();
         let active = self.application.active_window();
-        let windows = self.windows();
-        let in_front = windows
+        let in_front = self
+            .windows
             .iter()
-            .find(|window| Some(window.widgets.window.upcast_ref()) == active.as_ref())
-            .or(windows.first());
-        if let Some(window) = in_front {
-            window.widgets.toasts.add_toast(toast());
-        } else if let Some(page) = self.start.take() {
-            page.toasts.add_toast(toast());
-            self.start.set(Some(page));
+            .find(|open| Some(open.controller.widget().upcast_ref()) == active.as_ref())
+            .or(self.windows.first());
+        if let Some(open) = in_front {
+            self.send_to(
+                open.id,
+                ProjectInput::Notice {
+                    text: text.to_owned(),
+                    seconds: 5,
+                },
+            );
+        } else if let Some(page) = &self.start {
+            page.toasts
+                .add_toast(adw::Toast::builder().title(text).timeout(5).build());
         }
     }
 
@@ -601,36 +714,35 @@ impl Shell {
     }
 
     /// The style was chosen in the menu: it shows and is remembered.
-    fn set_theme(&self, theme: Theme) {
+    fn set_theme(&mut self, theme: Theme) {
         adw::StyleManager::default().set_color_scheme(theme.scheme());
         if !self.remembers {
             return;
         }
-        let mut remembered = self.remembered.get();
+        let mut remembered = self.remembered;
         remembered.theme = theme;
         self.remember(remembered);
     }
 
     /// A project window is closing: its size and whether it is maximised
     /// are remembered.
-    pub(super) fn remember_window(&self, window: &adw::ApplicationWindow) {
+    fn remember_window(&mut self, (width, height): (i32, i32), maximized: bool) {
         if !self.remembers {
             return;
         }
-        let mut remembered = self.remembered.get();
-        let (width, height) = window.default_size();
+        let mut remembered = self.remembered;
         if width > 0 && height > 0 {
             remembered.size = (width, height);
         }
-        remembered.maximized = window.is_maximized();
+        remembered.maximized = maximized;
         self.remember(remembered);
     }
 
-    fn remember(&self, remembered: Remembered) {
-        self.remembered.set(remembered);
+    fn remember(&mut self, remembered: Remembered) {
+        self.remembered = remembered;
         if let Err(error) = remembered.save() {
             eprintln!("warning: {error:#}");
-            if !self.reported.replace(true) {
+            if !std::mem::replace(&mut self.reported, true) {
                 self.notice(&fill_in(
                     &tr("Stave couldn't save its settings for next time: {error}"),
                     &[("error", &format!("{error:#}"))],
@@ -640,7 +752,7 @@ impl Shell {
     }
 
     /// Puts a project folder at the top of the recent projects.
-    pub(super) fn record_recent(&self, folder: &Path) {
+    fn record_recent(&self, folder: &Path) {
         if !self.remembers {
             return;
         }
@@ -661,7 +773,7 @@ impl Shell {
 
     /// The project folders opened lately, newest first, that are still
     /// there.
-    pub(super) fn recent_projects(&self) -> Vec<PathBuf> {
+    fn recent_projects(&self) -> Vec<PathBuf> {
         let items = gtk::RecentManager::default()
             .items()
             .into_iter()
@@ -685,11 +797,6 @@ impl Shell {
             );
             self.recent.append_item(&item);
         }
-    }
-
-    /// The Open Recent submenu.
-    pub(super) fn recent_menu(&self) -> &gio::Menu {
-        &self.recent
     }
 }
 
@@ -942,6 +1049,7 @@ mod tests {
     }
 
     fn shortcuts_run_actions() {
+        use std::cell::RefCell;
         use std::rc::Rc;
         let ran: Rc<RefCell<Vec<String>>> = Rc::default();
         let group = gio::SimpleActionGroup::new();

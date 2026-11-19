@@ -13,6 +13,16 @@
 //! this page tells it where the cursor is ([`FilesPage::connect_link`]),
 //! where to go ([`FilesPage::connect_go`]) and when typing has paused
 //! ([`FilesPage::connect_check`]), and it calls back with a place to show.
+//!
+//! It is not a relm4 component yet (docs/relm4-migration.md): the window
+//! still asks it things that must be answered at once and that change
+//! it (`save_all`'s success, `buffer_for` opening a tab, `forget_unsaved`
+//! just before closing), and reads its open buffers right after writing
+//! to them (an edit's check reads `overlay_for_check`). A component
+//! would answer those from a model that lags its text buffers until its
+//! queued messages run. Until the window asks by message, no borrow of
+//! its state is held across a widget call or a callback, and every
+//! closure holds it weakly.
 
 use stave_app::i18n::{fill_in, ntr, tr, trc};
 use std::cell::{Cell, RefCell};
@@ -103,6 +113,18 @@ struct Tab {
     label: gtk::Label,
     /// The dot for the file's worst problem.
     dot: gtk::Box,
+}
+
+/// What one tab on the rail shows, worked out before the widgets change.
+struct TabMarkers {
+    button: gtk::Button,
+    label: gtk::Label,
+    dot: gtk::Box,
+    /// The file's name, with a • while unsaved.
+    words: String,
+    active: bool,
+    mark: Option<stave_app::problems::Mark>,
+    tooltip: String,
 }
 
 /// Whether the analysis was built from a document's text, worked out once
@@ -539,9 +561,12 @@ impl FilesPage {
         let document = self.active_document();
         let Some(document) = document else { return };
         if document.is_read_only() {
+            // Worded before the notice, so nothing is borrowed while the
+            // window hears it.
+            let shown = document.display(&self.state.borrow().folder);
             self.notice(fill_in(
                 &tr("{file} is part of the standard library and can't be changed"),
-                &[("file", &document.display(&self.state.borrow().folder))],
+                &[("file", &shown)],
             ));
             return;
         }
@@ -1021,10 +1046,11 @@ impl FilesPage {
             .build();
         row.append(&dot);
         row.append(&tab_label);
+        let tooltip = document.display(&self.state.borrow().folder);
         let button = gtk::Button::builder()
             .child(&row)
             .css_classes(["flat", "stave-code-tab"])
-            .tooltip_text(document.display(&self.state.borrow().folder))
+            .tooltip_text(tooltip)
             .build();
         let page = Rc::downgrade(self);
         let key = document.clone();
@@ -1421,29 +1447,47 @@ impl FilesPage {
     /// Marks unsaved tabs, the active one, each file's worst problem, and
     /// names the active file over the text.
     fn refresh_markers(&self) {
-        let state = self.state.borrow();
-        for (index, tab) in state.tabs.iter().enumerate() {
-            let dirty = state.buffers.is_dirty(&tab.document);
-            let name = tab.document.file_name();
-            tab.label
-                .set_label(&if dirty { format!("{name} •") } else { name });
-            if Some(index) == state.active {
+        // What each tab shows, worked out first: no borrow is held while
+        // the widgets change (a widget change can emit a signal).
+        let shown: Vec<TabMarkers> = {
+            let state = self.state.borrow();
+            state
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| {
+                    let dirty = state.buffers.is_dirty(&tab.document);
+                    let name = tab.document.file_name();
+                    let place = tab.document.display(&state.folder);
+                    TabMarkers {
+                        button: tab.button.clone(),
+                        label: tab.label.clone(),
+                        dot: tab.dot.clone(),
+                        words: if dirty { format!("{name} •") } else { name },
+                        active: Some(index) == state.active,
+                        mark: state.marks.file(&tab.document.source_path()),
+                        tooltip: if dirty {
+                            fill_in(
+                                &tr("{file} — not saved (Ctrl+S saves)"),
+                                &[("file", &place)],
+                            )
+                        } else {
+                            place
+                        },
+                    }
+                })
+                .collect()
+        };
+        for tab in shown {
+            tab.label.set_label(&tab.words);
+            if tab.active {
                 tab.button.add_css_class("active");
             } else {
                 tab.button.remove_css_class("active");
             }
-            let mark = state.marks.file(&tab.document.source_path());
-            super::style::show_mark(&tab.dot, mark);
-            tab.button.set_tooltip_text(Some(&if dirty {
-                fill_in(
-                    &tr("{file} — not saved (Ctrl+S saves)"),
-                    &[("file", &tab.document.display(&state.folder))],
-                )
-            } else {
-                tab.document.display(&state.folder)
-            }));
+            super::style::show_mark(&tab.dot, tab.mark);
+            tab.button.set_tooltip_text(Some(&tab.tooltip));
         }
-        drop(state);
         super::tab_strip::page_tabs_changed();
     }
 
@@ -1926,9 +1970,11 @@ impl FilesPage {
                 self.cursor_moved();
             }
         }
-        let page = self.clone();
-        // Once the text is laid out.
+        // Once the text is laid out; held weakly, like every other timer
+        // here, so a closed window's page isn't kept for it.
+        let page = Rc::downgrade(self);
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            let Some(page) = page.upgrade() else { return };
             if let Some(text) = &wish.typing
                 && let Some(buffer) = page.active_buffer()
             {
@@ -2013,4 +2059,44 @@ fn markup_line(text: &str, start: u32, tokens: &[stave_ide::SemanticToken], dark
         out.push_str(&escape(rest));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn a_dropped_page_is_freed() {
+        on_gtk_thread(page_is_freed);
+    }
+
+    /// Every handler and timer of the page holds it weakly: once the
+    /// window lets go of it, the page and its widgets are freed, with a
+    /// folder opened, its analysis running and the window's callbacks
+    /// connected.
+    fn page_is_freed() {
+        let page = FilesPage::new();
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        page.connect_notice(move |_| {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/side_table")
+            .canonicalize()
+            .unwrap_or_default();
+        page.set_folder(&folder);
+        let weak = Rc::downgrade(&page);
+        let root = page.root.downgrade();
+        settle();
+        assert!(root.upgrade().is_some(), "the widget lives while held");
+        drop(page);
+        settle();
+        assert!(weak.upgrade().is_none(), "the page is freed");
+        assert!(root.upgrade().is_none(), "its widget is freed");
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
 }

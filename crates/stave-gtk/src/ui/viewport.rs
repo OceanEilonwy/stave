@@ -12,8 +12,13 @@
 //! slid open) it shows the last frame stretched, and reports the new size
 //! once it has held still for [`SETTLE`], so the scene isn't drawn again at
 //! every pixel of the drag.
+//!
+//! It is a GObject subclass (it draws in `snapshot` and sizes itself in
+//! `measure`), so it stays a widget rather than a relm4 component; its
+//! state is in [`Cell`]s, and nothing of it is borrowed while it calls the
+//! resize handler, so the handler may call back into it.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -32,13 +37,16 @@ mod imp {
 
     #[derive(Default)]
     pub struct Viewport {
-        pub frame: RefCell<Option<gtk::gdk::Texture>>,
-        pub on_resize: RefCell<Option<ResizeHandler>>,
+        /// The frame shown.
+        pub frame: Cell<Option<gtk::gdk::Texture>>,
+        /// Called with the new size in device pixels.
+        pub on_resize: Cell<Option<ResizeHandler>>,
+        /// How it asks for room.
         pub sizing: Cell<super::Sizing>,
         /// The size last reported, in device pixels.
         pub reported: Cell<(u32, u32)>,
         /// A report waiting for the size to hold still.
-        pub settling: RefCell<Option<glib::SourceId>>,
+        pub settling: Cell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -67,12 +75,21 @@ mod imp {
     }
 
     impl Viewport {
-        fn report_size(&self) {
+        /// The frame shown, copied out of its cell.
+        pub(super) fn frame(&self) -> Option<gtk::gdk::Texture> {
+            let frame = self.frame.take();
+            self.frame.set(frame.clone());
+            frame
+        }
+
+        /// Tells the handler the size in device pixels.
+        pub(super) fn report_size(&self) {
             let (width, height) = self.obj().device_size();
             self.reported.set((width, height));
             // Cloned out so that the handler may set a new one, or come
             // back here through a synchronous allocation.
-            let handler = self.on_resize.borrow().clone();
+            let handler = self.on_resize.take();
+            self.on_resize.set(handler.clone());
             if let Some(handler) = handler {
                 handler(width, height);
             }
@@ -95,7 +112,7 @@ mod imp {
                 self.stop_settling();
                 return;
             }
-            let showing = self.frame.borrow().is_some() && self.reported.get().0 > 1;
+            let showing = self.frame().is_some() && self.reported.get().0 > 1;
             let settles = showing && self.sizing.get() == super::Sizing::View;
             self.stop_settling();
             if !settles {
@@ -111,7 +128,7 @@ mod imp {
                     imp.report_size();
                 }
             });
-            self.settling.replace(Some(source));
+            self.settling.set(Some(source));
         }
     }
 
@@ -159,8 +176,8 @@ mod imp {
                 crate::convert::f32_of_int(widget.width()),
                 crate::convert::f32_of_int(widget.height()),
             );
-            if let Some(frame) = self.frame.borrow().as_ref() {
-                snapshot.append_texture(frame, &bounds);
+            if let Some(frame) = self.frame() {
+                snapshot.append_texture(&frame, &bounds);
             }
         }
     }
@@ -241,7 +258,7 @@ impl Viewport {
 
     /// Shows a frame.
     pub fn show_frame(&self, frame: gtk::gdk::Texture) {
-        self.imp().frame.replace(Some(frame));
+        self.imp().frame.set(Some(frame));
         self.queue_draw();
     }
 
@@ -301,6 +318,77 @@ impl Viewport {
     /// once on a change of scale or the first allocation, and once a resize
     /// of the 3D view has held still for [`SETTLE`].
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
-        self.imp().on_resize.replace(Some(Rc::new(handler)));
+        self.imp().on_resize.set(Some(Rc::new(handler)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn the_resize_handler_may_call_back_into_the_viewport() {
+        on_gtk_thread(handler_calls_back);
+    }
+
+    /// The handler runs with nothing of the viewport borrowed: it may
+    /// show a frame, ask the size and connect a new handler from inside.
+    fn handler_calls_back() {
+        let viewport = Viewport::default();
+        let heard: Rc<RefCell<Vec<(u32, u32)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = viewport.downgrade();
+        viewport.connect_resized(move |width, height| {
+            log.borrow_mut().push((width, height));
+            let Some(viewport) = weak.upgrade() else {
+                return;
+            };
+            let bytes = glib::Bytes::from_owned(vec![0_u8; 4]);
+            let texture =
+                gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4);
+            viewport.show_frame(texture.upcast());
+            let _ = viewport.device_size();
+            let again = Rc::clone(&log);
+            viewport.connect_resized(move |width, height| {
+                again.borrow_mut().push((width + 1000, height));
+            });
+        });
+        viewport.imp().report_size();
+        viewport.imp().report_size();
+        // Unallocated, it is a logical pixel square, at the screen's scale.
+        let (width, height) = viewport.device_size();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(width, height), (width + 1000, height)],
+            "the second report reached the handler set from inside the first"
+        );
+        assert!(viewport.imp().frame().is_some(), "the frame is shown");
+    }
+
+    #[test]
+    fn a_dropped_viewport_frees_its_handler() {
+        on_gtk_thread(viewport_is_freed);
+    }
+
+    fn viewport_is_freed() {
+        let viewport = Viewport::picture(Sizing::Picture {
+            natural_width: 320,
+            minimum_height: 110,
+        });
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        viewport.connect_resized(move |_, _| {
+            let _ = &held;
+        });
+        let handler = Rc::downgrade(&token);
+        drop(token);
+        let weak = viewport.downgrade();
+        drop(viewport);
+        settle();
+        assert!(weak.upgrade().is_none(), "the viewport is freed");
+        assert!(handler.upgrade().is_none(), "its handler is freed");
     }
 }
