@@ -1486,7 +1486,7 @@ impl Solver<'_> {
             return 1;
         };
         match self.model.item(DefId::Hardware(inst.def), inst.ctx) {
-            Some(ItemSlot::Hardware(slot)) => slot.all().len(),
+            Some(ItemSlot::Hardware(slot)) => slot.as_slice().len(),
             _ => 1,
         }
     }

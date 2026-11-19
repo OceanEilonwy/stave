@@ -1646,11 +1646,11 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let inst = model.parts.get(part.index()).ok_or(Halt)?;
         let index = inst.ctx.element.unwrap_or(0);
         let siblings = match model.item(DefId::Part(inst.def), inst.ctx) {
-            Some(ItemSlot::Part(slot)) => slot.all(),
-            _ => vec![part],
+            Some(ItemSlot::Part(slot)) => slot.as_slice(),
+            _ => std::slice::from_ref(&part),
         };
-        let mut sizes = Vec::new();
-        for sibling in siblings {
+        let mut sizes = Vec::with_capacity(siblings.len());
+        for &sibling in siblings {
             sizes.push(self.size_along(sibling, axis)?);
         }
         let n = sizes.len();
@@ -1722,9 +1722,9 @@ impl<'s, 'm> Tracer<'s, 'm> {
             let Some(first) = binding.roles.first() else {
                 continue;
             };
-            if first.parts().is_some_and(|parts| parts.contains(&part)) {
+            if first.part_list().is_some_and(|parts| parts.contains(&part)) {
                 for other in binding.roles.iter().skip(1) {
-                    for candidate in other.parts().unwrap_or_default() {
+                    for &candidate in other.part_list().as_deref().unwrap_or_default() {
                         if candidate != part && !partners.contains(&candidate) {
                             partners.push(candidate);
                         }

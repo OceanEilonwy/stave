@@ -360,7 +360,7 @@ impl Solver<'_> {
             };
             let fits = match role_def.ty {
                 RoleType::Part => matches!(value, Value::Part(_)),
-                RoleType::Parts => value.parts().is_some(),
+                RoleType::Parts => value.is_parts(),
                 RoleType::Region => matches!(value, Value::Region(_)),
             };
             if !fits {

@@ -50,13 +50,21 @@ pub enum Slot<T> {
     Many(Vec<T>),
 }
 
-impl<T: Copy> Slot<T> {
-    /// Every element.
-    pub fn all(&self) -> Vec<T> {
+impl<T> Slot<T> {
+    /// Every element, borrowed: the item alone, or the array's elements.
+    pub fn as_slice(&self) -> &[T] {
         match self {
-            Slot::One(item) => vec![*item],
-            Slot::Many(items) => items.clone(),
+            Slot::One(item) => std::slice::from_ref(item),
+            Slot::Many(items) => items,
         }
+    }
+}
+
+impl<T: Copy> Slot<T> {
+    /// Every element, copied out. Prefer [`Slot::as_slice`] to count,
+    /// test or walk them.
+    pub fn all(&self) -> Vec<T> {
+        self.as_slice().to_vec()
     }
 
     /// The element at an index of an array; the item itself otherwise.

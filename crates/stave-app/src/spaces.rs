@@ -63,9 +63,9 @@ pub fn filled_spaces(model: &Model, item: &str) -> Vec<RegionId> {
         return Vec::new();
     };
     let found: Option<Vec<RegionId>> = slot
-        .all()
-        .into_iter()
-        .map(|assembly| space_of(model, assembly))
+        .as_slice()
+        .iter()
+        .map(|assembly| space_of(model, *assembly))
         .collect();
     found.unwrap_or_default()
 }

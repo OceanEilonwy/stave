@@ -591,6 +591,27 @@ impl Value {
         }
     }
 
+    /// `true` when the value is a part, parts, or a list of them: what
+    /// [`Value::parts`] would give, without collecting it.
+    pub fn is_parts(&self) -> bool {
+        match self {
+            Value::Part(_) | Value::Parts(_) => true,
+            Value::List(items) => items.iter().all(Value::is_parts),
+            _ => false,
+        }
+    }
+
+    /// Every part in the value, borrowed when it is already a list of
+    /// parts and collected only when it is one part or a nested list.
+    pub fn part_list(&self) -> Option<std::borrow::Cow<'_, [PartId]>> {
+        match self {
+            Value::Part(part) => Some(std::borrow::Cow::Borrowed(std::slice::from_ref(part))),
+            Value::Parts(parts) => Some(std::borrow::Cow::Borrowed(parts)),
+            Value::List(_) => self.parts().map(std::borrow::Cow::Owned),
+            _ => None,
+        }
+    }
+
     /// Every part in the value, flattening lists.
     pub fn parts(&self) -> Option<Vec<PartId>> {
         match self {

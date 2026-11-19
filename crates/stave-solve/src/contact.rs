@@ -144,7 +144,7 @@ impl Solver<'_> {
         env: &Env<'_>,
     ) -> Solved<PartId> {
         let value = self.eval(expr, env)?;
-        match value.parts().as_deref() {
+        match value.part_list().as_deref() {
             Some([one]) => Ok(*one),
             _ => {
                 let word = function.word();

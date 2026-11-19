@@ -1382,9 +1382,9 @@ impl<'m> Solver<'m> {
             let Some(first) = binding.roles.first() else {
                 continue;
             };
-            if first.parts().is_some_and(|parts| parts.contains(&part)) {
+            if first.part_list().is_some_and(|parts| parts.contains(&part)) {
                 for other in binding.roles.iter().skip(1) {
-                    for candidate in other.parts().unwrap_or_default() {
+                    for &candidate in other.part_list().as_deref().unwrap_or_default() {
                         if candidate != part && !partners.contains(&candidate) {
                             partners.push(candidate);
                         }
@@ -1933,16 +1933,17 @@ impl<'m> Solver<'m> {
     }
 
     fn part_siblings(&mut self, part: PartId, axis: Axis) -> Solved<Siblings> {
-        let Some(inst) = self.model.parts.get(part.index()) else {
+        let model = self.model;
+        let Some(inst) = model.parts.get(part.index()) else {
             return Err(Fault::Internal("a part").into());
         };
         let index = inst.ctx.element.unwrap_or(0);
-        let all = match self.model.item(DefId::Part(inst.def), inst.ctx) {
-            Some(ItemSlot::Part(slot)) => slot.all(),
-            _ => vec![part],
+        let all = match model.item(DefId::Part(inst.def), inst.ctx) {
+            Some(ItemSlot::Part(slot)) => slot.as_slice(),
+            _ => std::slice::from_ref(&part),
         };
-        let mut sizes = Vec::new();
-        for sibling in all {
+        let mut sizes = Vec::with_capacity(all.len());
+        for &sibling in all {
             sizes.push(self.size_along(sibling, axis)?);
         }
         Ok(Siblings {
