@@ -812,7 +812,7 @@ fn dovetail_pair_sloped(
             slope: tail,
         },
     }];
-    let design = design_of_all(vec![beam_a.clone(), beam_b]);
+    let design = design_of_all(vec![beam_a, beam_b]);
     let solids = design
         .parts()
         .iter()
