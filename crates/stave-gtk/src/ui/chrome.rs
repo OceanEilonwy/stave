@@ -10,6 +10,7 @@
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::{fill_in, tr};
 
 use super::relm4_shim::Bridge;
 
@@ -139,9 +140,9 @@ impl Component for MotionBarComponent {
                     scale.set_range(0.0, shown.full.max(0.1));
                     scale.set_value(shown.value);
                     scale.unblock_signal(&widgets.moved);
-                    scale.update_property(&[gtk::accessible::Property::Label(&format!(
-                        "Open {}",
-                        shown.name
+                    scale.update_property(&[gtk::accessible::Property::Label(&fill_in(
+                        &tr("Open {name}"),
+                        &[("name", &shown.name)],
                     ))]);
                 }
                 self.shown = shown;
@@ -198,8 +199,8 @@ impl MotionBar {
 /// The Cut list view, until it is built.
 pub fn cut_list_page() -> adw::StatusPage {
     adw::StatusPage::builder()
-        .title("Cut list is coming")
-        .description("Every board to cut, sized and rounded once, will be listed here. It isn't part of this version yet.")
+        .title(tr("Cut list is coming"))
+        .description(tr("Every board to cut, sized and rounded once, will be listed here. It isn't part of this version yet."))
         .css_classes(["stave-placeholder"])
         .build()
 }

@@ -22,6 +22,7 @@
 use adw::prelude::*;
 use gtk::gdk;
 use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
+use stave_app::i18n::{fill_in, tr};
 use stave_app::problems::MotionCard;
 
 use super::icons::{self, PathIcon};
@@ -45,9 +46,13 @@ fn play_button(label: &str) -> (gtk::Button, PathIcon) {
 /// Shows play or pause on a play button.
 pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label: &str) {
     icon.set_shape(if playing { icons::PAUSE } else { icons::PLAY });
-    let text = if playing { "Pause" } else { label };
-    button.set_tooltip_text(Some(text));
-    button.update_property(&[gtk::accessible::Property::Label(text)]);
+    let text = if playing {
+        tr("Pause")
+    } else {
+        label.to_owned()
+    };
+    button.set_tooltip_text(Some(&text));
+    button.update_property(&[gtk::accessible::Property::Label(&text)]);
 }
 
 /// The step line's markup: the lead in bold, the call in monospace.
@@ -129,7 +134,7 @@ impl Component for StepCardComponent {
             set_margin_bottom: 16,
             add_css_class: "stave-focus-card",
             set_visible: false,
-            update_property: &[gtk::accessible::Property::Label("Assembly steps")],
+            update_property: &[gtk::accessible::Property::Label(&tr("Assembly steps"))],
 
             #[local_ref]
             play -> gtk::Button {
@@ -189,7 +194,7 @@ impl Component for StepCardComponent {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let play = &init.play;
-        let scrub = Slider::new("Apart to together", 22, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Apart to together"), 22, 22.0, 2.0);
         let input = sender.input_sender().clone();
         scrub.connect_changed(move |value| input.emit(StepCardInput::Scrubbed(value)));
         let scrub_area = &scrub.root.clone();
@@ -240,7 +245,7 @@ pub struct StepCard {
 impl StepCard {
     /// A hidden card.
     pub fn new() -> StepCard {
-        let (play, play_icon) = play_button("Play the assembly");
+        let (play, play_icon) = play_button(&tr("Play the assembly"));
         let bridge = Bridge::<StepCardComponent>::launch(StepCardInit { play: play.clone() });
         StepCard {
             root: bridge.widget().clone(),
@@ -331,7 +336,7 @@ impl Component for SwingCardComponent {
             set_spacing: 14,
             add_css_class: "stave-focus-card",
             set_visible: false,
-            update_property: &[gtk::accessible::Property::Label("Swing the door")],
+            update_property: &[gtk::accessible::Property::Label(&tr("Swing the door"))],
 
             #[local_ref]
             play -> gtk::Button {
@@ -363,7 +368,7 @@ impl Component for SwingCardComponent {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let play = &init.play;
-        let scrub = Slider::new("Door angle", 22, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Door angle"), 22, 22.0, 2.0);
         let input = sender.input_sender().clone();
         scrub.connect_changed(move |value| input.emit(SwingCardInput::Scrubbed(value)));
         let scrub_area = &scrub.root.clone();
@@ -381,13 +386,13 @@ impl Component for SwingCardComponent {
             SwingCardInput::ShowName { name, turns } => {
                 self.name = name;
                 let label = if turns {
-                    "Door angle"
+                    tr("Door angle")
                 } else {
-                    "How far it slides out"
+                    tr("How far it slides out")
                 };
                 self.scrub
                     .root
-                    .update_property(&[gtk::accessible::Property::Label(label)]);
+                    .update_property(&[gtk::accessible::Property::Label(&label)]);
             }
             SwingCardInput::ShowValue(text) => {
                 self.scrub.set_value_text(&text);
@@ -421,7 +426,7 @@ pub struct SwingCard {
 impl SwingCard {
     /// A hidden card.
     pub fn new() -> SwingCard {
-        let (play, play_icon) = play_button("Play the swing");
+        let (play, play_icon) = play_button(&tr("Play the swing"));
         let bridge = Bridge::<SwingCardComponent>::launch(SwingCardInit { play: play.clone() });
         SwingCard {
             root: bridge.widget().clone(),
@@ -629,19 +634,17 @@ impl PicturesComponent {
             picture.connect_resized(move |width, height| {
                 input.emit(PicturesInput::SlotResized { width, height });
             });
-            let words = if index == 0 {
-                "closed"
+            let template = if index == 0 {
+                tr("{caption} closed")
             } else if index + 1 == count {
-                "fully open"
+                tr("{caption} fully open")
             } else {
-                "part way"
+                tr("{caption} part way")
             };
+            let caption_markup = format!("<b>{}</b>", gtk::glib::markup_escape_text(&caption));
             let label = gtk::Label::builder()
                 .use_markup(true)
-                .label(format!(
-                    "<b>{}</b> {words}",
-                    gtk::glib::markup_escape_text(&caption)
-                ))
+                .label(fill_in(&template, &[("caption", &caption_markup)]))
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .css_classes(["stave-picture-caption"])
@@ -652,7 +655,10 @@ impl PicturesComponent {
             let button = gtk::Button::builder()
                 .child(&cell)
                 .css_classes(["stave-picture"])
-                .tooltip_text(format!("Show it at {caption}"))
+                .tooltip_text(fill_in(
+                    &tr("Show it at {caption}"),
+                    &[("caption", &caption)],
+                ))
                 .build();
             let input = sender.input_sender().clone();
             button.connect_clicked(move |_| input.emit(PicturesInput::Pressed(index)));
@@ -927,7 +933,7 @@ impl Component for ProblemCardComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let scrub = Slider::new("Swing it", 26, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Swing it"), 26, 22.0, 2.0);
         let input = sender.input_sender().clone();
         scrub.connect_changed(move |value| input.emit(ProblemCardInput::Moved(value)));
         let scrub_area = &scrub.root.clone();
@@ -954,9 +960,9 @@ impl Component for ProblemCardComponent {
             } => {
                 let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
                 let lead = card.lead();
-                self.lead = format!(
-                    "<b>{}</b> <span alpha=\"70%\">to see where it hits</span>",
-                    escape(&lead)
+                self.lead = fill_in(
+                    &tr("{name} <span alpha=\"70%\">to see where it hits</span>"),
+                    &[("name", &format!("<b>{}</b>", escape(&lead)))],
                 );
                 let (full, contact, value) = if card.turns {
                     (
@@ -972,7 +978,7 @@ impl Component for ProblemCardComponent {
                     )
                 };
                 self.scrub.set_range(0.0, full.max(0.1));
-                self.scrub.set_blocked_from(Some(contact));
+                self.scrub.set_blocked(Some((contact, &card.blocked)));
                 self.scrub.set_value(value);
                 self.scrub
                     .root

@@ -19,6 +19,7 @@
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
+use stave_app::i18n::{fill_in, tr};
 
 use super::icons::{self, PathIcon};
 use super::relm4_shim::Bridge;
@@ -47,11 +48,11 @@ fn icon_toggle(shape: icons::Shape, label: &str, tooltip: &str) -> gtk::ToggleBu
 }
 
 /// The play button's tooltip.
-fn play_tooltip(playing: bool) -> &'static str {
+fn play_tooltip(playing: bool) -> String {
     if playing {
-        "Pause"
+        tr("Pause")
     } else {
-        "Play: pull apart from together"
+        tr("Play: pull apart from together")
     }
 }
 
@@ -141,14 +142,14 @@ impl Component for ViewToolbarComponent {
             add_css_class: "stave-camera",
             add_css_class: "stave-pull-popout",
             set_widget_name: "pull-apart-slider",
-            update_property: &[gtk::accessible::Property::Label("Pull apart")],
+            update_property: &[gtk::accessible::Property::Label(&tr("Pull apart"))],
             #[watch]
             set_visible: model.on && model.offered,
 
             #[local_ref]
             play -> gtk::Button {
                 #[watch]
-                set_tooltip_text: Some(play_tooltip(model.playing)),
+                set_tooltip_text: Some(&play_tooltip(model.playing)),
                 connect_clicked[sender] => move |_| {
                     sender.input_sender().emit(ViewToolbarInput::PlayPressed);
                 },
@@ -166,13 +167,13 @@ impl Component for ViewToolbarComponent {
                     set_orientation: gtk::Orientation::Horizontal,
 
                     gtk::Label {
-                        set_label: "together",
+                        set_label: &tr("together"),
                         set_xalign: 0.0,
                         set_hexpand: true,
                         add_css_class: "stave-tool-end",
                     },
                     gtk::Label {
-                        set_label: "apart",
+                        set_label: &tr("apart"),
                         set_xalign: 1.0,
                         add_css_class: "stave-tool-end",
                     },
@@ -229,7 +230,7 @@ impl Component for ViewToolbarComponent {
             play_icon,
         } = init;
         let (section, xray, pull, play, play_icon) = (&section, &xray, &pull, &play, &play_icon);
-        let slider = Slider::new("How far apart", 18, 12.0, 1.5);
+        let slider = Slider::new(&tr("How far apart"), 24, 12.0, 1.5);
         let input = sender.input_sender().clone();
         slider.connect_changed(move |value| input.emit(ViewToolbarInput::Moved(value)));
         let slider_area = &slider.root.clone();
@@ -253,8 +254,10 @@ impl Component for ViewToolbarComponent {
                 self.on = on;
                 self.playing = playing;
                 self.slider.set_value(f64::from(amount));
-                self.slider
-                    .set_value_text(&format!("{}%, parts apart", percent(amount)));
+                self.slider.set_value_text(&fill_in(
+                    &tr("{percent}%, parts apart"),
+                    &[("percent", &percent(amount))],
+                ));
                 None
             }
             ViewToolbarInput::Offer(offered) => {
@@ -315,13 +318,13 @@ impl ViewToolbar {
     pub fn new() -> ViewToolbar {
         let xray = icon_toggle(
             icons::XRAY,
-            "X-ray",
-            "X-ray: see through everything but the selection",
+            &tr("X-ray"),
+            &tr("X-ray: see through everything but the selection"),
         );
         let pull = icon_toggle(
             icons::PULL_APART,
-            "Pull apart",
-            "Pull apart: move the parts away from each other along their joints",
+            &tr("Pull apart"),
+            &tr("Pull apart: move the parts away from each other along their joints"),
         );
         let play_icon = PathIcon::new(icons::PLAY, 13);
         let play = gtk::Button::builder()
@@ -330,7 +333,7 @@ impl ViewToolbar {
             .css_classes(["stave-tool-play", "circular", "flat"])
             .valign(gtk::Align::Center)
             .build();
-        play.update_property(&[gtk::accessible::Property::Label("Play pull apart")]);
+        play.update_property(&[gtk::accessible::Property::Label(&tr("Play pull apart"))]);
         let line = gtk::Separator::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-camera-separator"])
@@ -582,13 +585,17 @@ impl CameraToolbar {
     pub fn new(tools: &ViewToolbar) -> CameraToolbar {
         let fit = icon_button(
             icons::FIT,
-            "Fit to view (F)",
+            &tr("Fit to view (F)"),
             &["stave-camera-button", "flat"],
         );
-        let front = icon_button(icons::FRONT, "Front view", &["stave-camera-button", "flat"]);
+        let front = icon_button(
+            icons::FRONT,
+            &tr("Front view"),
+            &["stave-camera-button", "flat"],
+        );
         let turn = icon_button(
             icons::TURN,
-            "Turn to the back",
+            &tr("Turn to the back"),
             &["stave-camera-button", "flat"],
         );
         let bridge = Bridge::<CameraComponent>::launch(CameraInit {
@@ -638,7 +645,7 @@ pub fn contact_key() -> gtk::Box {
         false,
         10,
     ));
-    root.append(&gtk::Label::new(Some("Shared wood at first contact")));
+    root.append(&gtk::Label::new(Some(&tr("Shared wood at first contact"))));
     root
 }
 
@@ -694,7 +701,7 @@ impl Component for PlanSwitchComponent {
             set_margin_end: 12,
             add_css_class: "stave-plan-switch",
             set_visible: false,
-            update_property: &[gtk::accessible::Property::Label("Hinge view")],
+            update_property: &[gtk::accessible::Property::Label(&tr("Hinge view"))],
 
             // Both buttons are set from the model in `Show`, with this
             // handler blocked (pressing either button toggles this one).
@@ -792,8 +799,8 @@ impl PlanSwitch {
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button
         };
-        let from_above = toggle(icons::FROM_ABOVE, "From above");
-        let in_3d = toggle(icons::PARTS, "In 3D");
+        let from_above = toggle(icons::FROM_ABOVE, &tr("From above"));
+        let in_3d = toggle(icons::PARTS, &tr("In 3D"));
         in_3d.set_group(Some(&from_above));
         let bridge = Bridge::<PlanSwitchComponent>::launch(PlanSwitchInit {
             from_above: from_above.clone(),
@@ -902,7 +909,7 @@ impl Component for EmptyViewComponent {
     ) -> ComponentParts<Self> {
         let open = &init;
         let model = EmptyViewComponent {
-            title: "Checking…".to_owned(),
+            title: tr("Checking…"),
             description: String::new(),
             offers_open: false,
         };
@@ -946,7 +953,7 @@ impl EmptyView {
     /// The page, saying "Checking…".
     pub fn new() -> EmptyView {
         let open = gtk::Button::builder()
-            .label("Open a Project…")
+            .label(tr("Open a Project…"))
             .action_name("win.open")
             .halign(gtk::Align::Center)
             .css_classes(["pill", "suggested-action"])
