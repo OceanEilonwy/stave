@@ -213,6 +213,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 HardwareBase::Hinge => "Hinge",
                 HardwareBase::Pull => "Pull",
                 HardwareBase::Support => "Support",
+                HardwareBase::Fitting => "Fitting",
             };
             let piece = design.part(hardware.piece).map_or("?", |p| p.name.as_str());
             let members = hardware.members.iter().map(|member| Row {

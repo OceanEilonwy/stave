@@ -1193,6 +1193,8 @@ pub enum MountedBase {
     Pull,
     /// A shelf support.
     Support,
+    /// Any other mounted fitting.
+    Fitting,
 }
 
 impl MountedBase {
@@ -1203,6 +1205,7 @@ impl MountedBase {
             BaseKind::Hinge => Some(MountedBase::Hinge),
             BaseKind::Pull => Some(MountedBase::Pull),
             BaseKind::Support => Some(MountedBase::Support),
+            BaseKind::Fitting => Some(MountedBase::Fitting),
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }
@@ -1214,6 +1217,7 @@ impl MountedBase {
             MountedBase::Hinge => BaseKind::Hinge,
             MountedBase::Pull => BaseKind::Pull,
             MountedBase::Support => BaseKind::Support,
+            MountedBase::Fitting => BaseKind::Fitting,
         }
     }
 }
@@ -1577,6 +1581,14 @@ pub enum MountSelector {
         part: RoleIndex,
         /// The direction the end faces.
         toward: Direction,
+    },
+    /// `end(p, nearer: q)`: of the two ends of `p`'s length, the one
+    /// nearer the middle of `q`.
+    EndNearer {
+        /// The part whose end it is.
+        part: RoleIndex,
+        /// The part or region whose middle decides.
+        other: RoleIndex,
     },
     /// `face(p, toward: q)`: of `p`'s two faces across the entry's axis,
     /// the one nearer the middle of `q`.

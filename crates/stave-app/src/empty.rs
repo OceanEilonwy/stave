@@ -231,9 +231,13 @@ pub fn library(checked: &Checked) -> Option<Library> {
         let group = match *id {
             DefId::Kind(kind) => match defs.kind(kind).map(|kind| kind.base()) {
                 Some(BaseKind::Joint) => LibraryGroup::Joints,
-                Some(BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull | BaseKind::Support) => {
-                    LibraryGroup::Hardware
-                }
+                Some(
+                    BaseKind::Slide
+                    | BaseKind::Hinge
+                    | BaseKind::Pull
+                    | BaseKind::Support
+                    | BaseKind::Fitting,
+                ) => LibraryGroup::Hardware,
                 Some(BaseKind::Fastener) => LibraryGroup::Fasteners,
                 Some(BaseKind::Tool) => LibraryGroup::Tools,
                 None => continue,

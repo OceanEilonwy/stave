@@ -1,0 +1,62 @@
+stave 1
+
+// A solid top held to a frame of aprons by tabletop fasteners (grammar,
+// "Fittings"): each one sits in a recess in an apron's top edge and is
+// screwed up into the top, so the top can move across its grain.
+
+project "Top on fasteners" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 600mm, max_length: 2400mm }
+
+/// The top: one wide board, held only by the fasteners.
+part top : oak_19 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part apron_front : oak_19 {
+  length: 500mm
+  width:  80mm
+  place {
+    orient(length: right, width: up)
+    against(top.bottom)
+    center(top, across)
+    flush(top.front, inset: 40mm)
+  }
+}
+
+part apron_back = mirror(apron_front, about: mid(top, deep))
+
+part apron_left : oak_19 {
+  length: between(apron_front.back, apron_back.front)
+  width:  80mm
+  place {
+    orient(length: back, width: up)
+    against(top.bottom)
+    flush(apron_front.left)
+    center(top, deep)
+  }
+}
+
+part apron_right = mirror(apron_left, about: mid(top, across))
+
+joint corners : dowel([apron_left, apron_right], into: [apron_front, apron_back], count: 2)
+
+// Three fasteners along each long apron, none in the short ones: the top
+// moves most across its width, front to back.
+hardware ties_front[left, middle, right] : tabletop_fastener(apron_front, tabletop: top) {
+  place {
+    spaced(ends(inset: 60mm), from: apron_front.left, to: apron_front.right)
+  }
+}
+
+hardware ties_back[left, middle, right] : tabletop_fastener(apron_back, tabletop: top) {
+  place {
+    spaced(ends(inset: 60mm), from: apron_back.left, to: apron_back.right)
+  }
+}

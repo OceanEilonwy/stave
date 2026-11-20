@@ -193,6 +193,12 @@ const SUPPORT: BaseSpec = BaseSpec {
     optional: &HARDWARE_OPTIONAL,
 };
 
+const FITTING: BaseSpec = BaseSpec {
+    base: BaseKind::Fitting,
+    required: &[],
+    optional: &HARDWARE_OPTIONAL,
+};
+
 const FASTENER: BaseSpec = BaseSpec {
     base: BaseKind::Fastener,
     required: &[
@@ -228,6 +234,7 @@ pub fn base(base: BaseKind) -> &'static BaseSpec {
         BaseKind::Hinge => &HINGE,
         BaseKind::Pull => &PULL,
         BaseKind::Support => &SUPPORT,
+        BaseKind::Fitting => &FITTING,
         BaseKind::Fastener => &FASTENER,
         BaseKind::Tool => &TOOL,
     }
@@ -296,6 +303,7 @@ mod tests {
             BaseKind::Hinge,
             BaseKind::Pull,
             BaseKind::Support,
+            BaseKind::Fitting,
             BaseKind::Fastener,
             BaseKind::Tool,
         ];
@@ -355,7 +363,7 @@ mod tests {
         }
     }
 
-    /// A slide, hinge or pull kind has no fixed entries but the ones every
+    /// A slide, hinge, pull, support or fitting kind has no fixed entries but the ones every
     /// piece of hardware may have: the grammar's table of what such a kind
     /// may contain lists them.
     #[test]
@@ -367,6 +375,7 @@ mod tests {
             BaseKind::Hinge,
             BaseKind::Pull,
             BaseKind::Support,
+            BaseKind::Fitting,
         ] {
             let spec = base(base_kind);
             assert!(spec.required.is_empty());

@@ -113,7 +113,7 @@ grammar position only:
 |---|---|
 | `as` | after the string of an `import` |
 | `mirror`, `about` | directly after the `=` of a `part` or `assembly`, and as that call's named argument |
-| `joint`, `slide`, `hinge`, `pull`, `support`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
+| `joint`, `slide`, `hinge`, `pull`, `support`, `fitting`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
 | `adjust`, `on` | `adjust` at the start of an entry in a hardware `kind` body, when not followed by `:`; `on` between its two members (`adjust arm on plate: across within 2mm`) |
@@ -304,7 +304,7 @@ project       = "project" , STRING , block(field) ;
 library       = "library" , STRING , [ block(field) ] ;
 
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
-base_kind     = "joint" | "slide" | "hinge" | "pull" | "support" | "fastener" | "tool" ;
+base_kind     = "joint" | "slide" | "hinge" | "pull" | "support" | "fitting" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | mount | mechanism | adjust | field ;
 member        = "member" , IDENT , [ ":" , expr ] , [ block(member_entry) ] ;
@@ -605,7 +605,7 @@ without an import or a prefix:
 | Module | Folder | Provides |
 |---|---|---|
 | `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`, `mitre`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
-| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`, `shelf_pin`) and fasteners (`dowel_pin`, `wood_screw`) |
+| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`, `shelf_pin`, `tabletop_fastener`, `cam_lock`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
 Beginners write `dado(...)`, not `joinery.dado(...)`. Anything from outside
@@ -918,17 +918,22 @@ declare: `glue: Bool` (default `true`) and `methods:` (a list of recipes to
 prefer for this joint's cuts). A kind can't declare a role, param or made part
 named `glue` or `methods`.
 
-### `kind name : slide | hinge | pull | support | fastener | tool { }`
+### `kind name : slide | hinge | pull | support | fitting | fastener | tool { }`
 
 A hardware kind is a product or a family of products. The base (`slide`,
-`hinge`, `pull`, `support`) gives the words a message uses ("opened",
-"pulled out", "rests on") and the kind's type (`SlideKind`, `HingeKind`,
-`PullKind`, `SupportKind`); it decides nothing else. A `support` is
-hardware a part rests on without being joined to it: the pins under an
-adjustable shelf (see [Shelf supports](#shelf-supports)). What the
-hardware joins, where it sits, what it is made of, how it moves and what
-it cuts are all written in the kind. A `slide`, `hinge`, `pull` or
-`support` kind may contain:
+`hinge`, `pull`, `support`, `fitting`) gives the words a message uses
+("opened", "pulled out", "rests on", "fitted") and the kind's type
+(`SlideKind`, `HingeKind`, `PullKind`, `SupportKind`, `FittingKind`); it
+decides nothing else. A `support` is hardware a part rests on without
+being joined to it: the pins under an adjustable shelf (see [Shelf
+supports](#shelf-supports)). A `fitting` is every other piece of mounted
+hardware: a tabletop fastener, a knock-down fitting, a catch, a lid stay
+(see [Fittings](#fittings)). Its words are neutral, so a product that is
+no slide, hinge, pull or support is written as a fitting rather than
+under a base whose words would be wrong. What the hardware joins, where
+it sits, what it is made of, how it moves and what it cuts are all
+written in the kind. A `slide`, `hinge`, `pull`, `support` or `fitting`
+kind may contain:
 
 | Entry | Required | Meaning |
 |---|---|---|
@@ -1137,7 +1142,7 @@ kind euro_hinge : hinge {
 
 | Entry | Value | Meaning |
 |---|---|---|
-| `face` | a face word, `face(piece, nearer: r)` or `face(piece, toward: q)` | the face of the piece it is mounted on. A call's `face:` setting (every slide, hinge, pull and support call accepts one) overrides it |
+| `face` | a face word, `face(piece, nearer: r)` or `face(piece, toward: q)` | the face of the piece it is mounted on. A call's `face:` setting (every slide, hinge, pull, support and fitting call accepts one) overrides it |
 | `across` | a mount term, or `open` | where the frame's origin is across the mount face |
 | `along` | a mount term, or `open` | where the frame's origin is along the piece's length |
 
@@ -1161,17 +1166,19 @@ face; a face is chosen across the axis the entry is for:
 | `edge(p, nearer: q)` | of the two edges of the mount face that run along the piece's length, the one nearer the middle of `q` (the lower one when they are equally near) |
 | `edge(p, flush_with: q)` | the edge of the mount face where `p`'s neighbouring face lies in a face of `q` (a butt hinge's pin edge, where the two parts are flush); if neither or both are, the edge nearer the middle of `q` |
 | `end(p, toward: dir)` | the end of `p`'s length that faces the direction `dir` (`front`); `p`'s length must run along that direction's axis (`error[type-mismatch]` otherwise) |
+| `end(p, nearer: q)` | of the two ends of `p`'s length, the one nearer the middle of `q` (the lower one when they are equally near): a cam lock's cam is set in from the end of the panel that meets the other panel, whichever end that is. An end places along `p`'s length only: on another axis it is `error[type-mismatch]` (`an end of shelf measures along its length, which runs 'across', not 'deep'`, help `measure along from an end, and across from an edge`). `end(p)` with neither `toward:` nor `nearer:`, or with both, is `error[type-mismatch]` |
 | `face(p, toward: q)` | of `p`'s two faces across this entry's axis, the one nearer the middle of `q` |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters (as in [Faces to cut](#faces-to-cut)) |
 | `face(p, nearer: r)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the same-named face of region `r` (the lower one when they are equally near) |
 | `face(p, toward: q)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the middle of `q`, a `Part` role (the lower one when the middles are level): a shelf pin goes into the face of the side the shelf is on. `q` a `Region` role is `error[type-mismatch]` (`'toward' of a mount's face needs a role that is one part`); for a region write `nearer:` |
 
 The frame's directions on the mount face: `along` runs along the piece's
-length (its width when the mount face is an end of the piece), from the end
-when `along` is `from(end(...))`, otherwise the way the piece's length
-runs; `across` runs from the edge when `across` is `from(edge(...))`, toward
-the middle of the face, otherwise toward `right`, `up` or `back`; `depth`
-runs into the piece.
+length (its width when the mount face is an end of the piece), away from
+the anchor when `along` is `from(...)` (from the end, into the piece),
+otherwise the way the piece's length runs; `across` runs away from the
+anchor when `across` is `from(...)` (from the edge, toward the middle of
+the face), otherwise toward `right`, `up` or `back`; `depth` runs into the
+piece.
 
 **`open`** leaves an axis to the design: the hardware's `place { }` sets it,
 with the same terms as for parts (`center`, `flush`, `against`, `spaced` for
@@ -2633,6 +2640,83 @@ checker: the pegs are under the shelf because the design puts them
 role's part must meet the hardware, and they stay out of its wood like
 every member (see [One collision model](#one-collision-model)).
 
+#### Fittings
+
+A `fitting` kind is mounted hardware that is no slide, hinge, pull or
+support: a tabletop fastener, a cam lock or another knock-down fitting, a
+magnetic catch, a lid stay. The base gives neutral words ("fitted"; the
+window calls one a "fitting") and the type `FittingKind`, and decides
+nothing else: a fitting may hold every entry a slide, hinge, pull or
+support may (`roles`, `mount`, `member`, `adjust`, `mechanism`, `cut`,
+`uses`, catalogue data), and it is placed, drawn, checked, held and cut
+exactly as they are. A fitting with a `mechanism` moves as it says (a lid
+stay follows its lid); one without doesn't move. Nothing about any
+fitting is built into the checker: `std:hardware`'s `tabletop_fastener`
+and `cam_lock` are written in `.stave` like the rest.
+
+```
+/// A tabletop fastener (a figure-8): one end screwed down into a recess
+/// in the apron's top edge, the other screwed up into the top.
+kind tabletop_fastener : fitting {
+  roles {
+    piece:    Part                   // the apron
+    tabletop: Part                   // the top
+  }
+  param end_diameter    = 16mm
+  param centres         = 18mm
+  param plate_thickness = 3mm
+  param screw_diameter  = 3.5mm
+  param screw_length    = 13mm
+  require recess_fits : piece.thickness >= end_diameter + 2mm "the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron"
+
+  mount {
+    face:   top
+    across: from(edge(piece, nearer: tabletop), inset: end_diameter / 2 + 1mm)
+    along:  open
+  }
+  member lower_end {
+    with:  piece
+    shape: cylinder(diameter: end_diameter, depth: 0mm..plate_thickness)
+  }
+  member lower_screw {
+    with:  piece
+    shape: cylinder(diameter: screw_diameter, depth: 0mm..plate_thickness + screw_length)
+  }
+  member upper_end {
+    with:  tabletop
+    shape: cylinder(diameter: end_diameter, depth: 0mm..plate_thickness, at: point(across: -centres))
+  }
+  member upper_screw {
+    with:  tabletop
+    shape: cylinder(diameter: screw_diameter, depth: -screw_length..0mm, at: point(across: -centres))
+  }
+
+  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness) }
+  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length) }
+  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length) }
+}
+
+// Three along each long apron; the top is held by them, with no joint.
+hardware ties_front[left, middle, right] : tabletop_fastener(apron_front, tabletop: top) {
+  place {
+    spaced(ends(inset: 60mm), from: apron_front.left, to: apron_front.right)
+  }
+}
+```
+
+A fitting holds the parts its roles name, as every piece of hardware does
+(see [Held](#held)), so a top on tabletop fasteners, or a panel on cam
+locks, needs no joint. `cam_lock(bottom, into: side_l)` sets its cam
+`setback` in from the end of the panel that meets the side, with
+`along: from(end(piece, nearer: into), inset: setback)`, so the same kind
+serves both ends of a panel; its bolt is a cylinder laid along the panel
+(`axis: along`) through a hole the kind drills into the panel's end.
+
+A fitting is not a joint: it doesn't add to a part's cut size, has no
+`insert` or `cut_first`, and isn't a pair. A screw that only fastens two
+parts together is a joint's (`screw`, `pocket_screw`); a fitting is a
+product with its own pieces, placed on a face of its piece.
+
 #### Rows of holes
 
 The spare holes that let a shelf move are cut with nothing in them, so no
@@ -2837,7 +2921,7 @@ hexadecimal digits is `error[type-mismatch]`.
 
 #### Shapes
 
-A hinge, slide, pull or support kind is made of **members**, each written `member
+A hinge, slide, pull, support or fitting kind is made of **members**, each written `member
 name { ... }` with a doc comment a beginner can read. A viewer numbers the
 members in the order written, labels them on the drawing and shows the doc
 comment as the caption. A member may have **any name**; nothing in Stave
@@ -4152,8 +4236,8 @@ The complete list of types. A `param` may name any of them.
 | `Spacing` | `evenly`, `ends`, `ends(inset: d)`, `pitch(d)`, `gap(d)` |
 | `Patch` | `contact(a, b)`: where two parts touch (not a patch file, see [Patches](#patches)) |
 | `JointKind` | a kind value of base `joint` |
-| `HardwareKind` | a kind value of base `slide`, `hinge`, `pull` or `support` |
-| `SlideKind`, `HingeKind`, `PullKind`, `SupportKind`, `FastenerKind` | a kind value of that base |
+| `HardwareKind` | a kind value of base `slide`, `hinge`, `pull`, `support` or `fitting` |
+| `SlideKind`, `HingeKind`, `PullKind`, `SupportKind`, `FittingKind`, `FastenerKind` | a kind value of that base |
 | `Tool` | a kind of base `tool` |
 | `Recipe` | a `recipe` item |
 

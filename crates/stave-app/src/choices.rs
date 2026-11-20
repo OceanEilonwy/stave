@@ -39,6 +39,7 @@ pub fn matched_by_name(ty: TypeName) -> bool {
         | TypeName::HingeKind
         | TypeName::PullKind
         | TypeName::SupportKind
+        | TypeName::FittingKind
         | TypeName::FastenerKind
         | TypeName::Tool
         | TypeName::Bool
