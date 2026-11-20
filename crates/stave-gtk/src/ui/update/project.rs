@@ -1,7 +1,7 @@
 //! The project: its folder, checking, the editor's files, saving and the
 //! command line's wishes, closing, and the window's actions for them.
 
-use super::{Unprinted, add_action};
+use super::add_action;
 use crate::ui::files::{CursorName, FilesOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
@@ -56,7 +56,7 @@ pub(in crate::ui) enum ProjectInput {
     /// Lays the panels out as they first were.
     ResetLayout,
     /// The editor's cursor rests on a name.
-    TextLinked(Unprinted<CursorName>),
+    TextLinked(CursorName),
     /// The editor goes to a place: where the cursor was becomes the place
     /// Back returns to.
     Go {
@@ -68,7 +68,7 @@ pub(in crate::ui) enum ProjectInput {
     /// The editor asks to show a name in the 3D view.
     ShowIn3d {
         /// The analysis the name is in.
-        analysis: Unprinted<Rc<Analysis>>,
+        analysis: Rc<Analysis>,
         /// The name.
         symbol: SymbolId,
     },
@@ -248,13 +248,12 @@ pub(in crate::ui) fn wire(window: &Window) {
     widgets.files.connect_outputs(move |output| {
         sender.emit(
             match output {
-                FilesOutput::Link(found) => ProjectInput::TextLinked(Unprinted(found)),
+                FilesOutput::Link(found) => ProjectInput::TextLinked(found),
                 FilesOutput::Go { from, to } => ProjectInput::Go { from, to },
                 FilesOutput::Check => ProjectInput::Dispatch(Command::Check),
-                FilesOutput::ShowIn3d { analysis, symbol } => ProjectInput::ShowIn3d {
-                    analysis: Unprinted(analysis),
-                    symbol,
-                },
+                FilesOutput::ShowIn3d { analysis, symbol } => {
+                    ProjectInput::ShowIn3d { analysis, symbol }
+                }
                 FilesOutput::Open => ProjectInput::Dispatch(Command::ShowEditor(Editor::Open)),
                 FilesOutput::Notice(text) => ProjectInput::Notice { text, seconds: 4 },
                 FilesOutput::Saved { ok, then } => ProjectInput::FilesSaved { ok, then },
@@ -354,17 +353,14 @@ impl Window {
                 self.widgets.workbench.move_to(panel, side);
             }
             ProjectInput::ResetLayout => self.widgets.workbench.reset(),
-            ProjectInput::TextLinked(Unprinted(found)) => self.text_linked(found),
+            ProjectInput::TextLinked(found) => self.text_linked(found),
             ProjectInput::Go { from, to } => {
                 if let Some(from) = from {
                     self.dispatch(Command::Link(Some(Selection::Location(from))));
                 }
                 self.dispatch(Command::GoToSource(to));
             }
-            ProjectInput::ShowIn3d {
-                analysis: Unprinted(analysis),
-                symbol,
-            } => {
+            ProjectInput::ShowIn3d { analysis, symbol } => {
                 let session = &self.session;
                 let selection = session.drawable().and_then(|(design, _)| {
                     link::selection_for(design, &analysis, symbol, session.selection())

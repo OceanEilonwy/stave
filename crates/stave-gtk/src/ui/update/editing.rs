@@ -4,7 +4,6 @@
 //! `edit_view` files; this group turns their widgets' outputs into
 //! [`EditingInput`]s and hands each to its handler.
 
-use super::Unprinted;
 use crate::ui::edit_card::CardAction;
 use crate::ui::edit_view::changes::ChangeAction;
 use crate::ui::edit_view::grip_panel::PanelAction;
@@ -54,7 +53,7 @@ pub(in crate::ui) enum EditingInput {
         budget: Duration,
     },
     /// An option's fit was found on the worker thread.
-    OptionFitFound(Unprinted<Box<FoundFit>>),
+    OptionFitFound(Box<FoundFit>),
     /// An option was chosen in the search dialog.
     OptionChosen {
         /// The setting.
@@ -136,7 +135,7 @@ pub(in crate::ui) enum EditingInput {
     /// Lists the grips shown again.
     RelistGrips,
     /// A grip's stops were found on the worker thread.
-    GripStopsFound(Unprinted<Box<FoundStops>>),
+    GripStopsFound(Box<FoundStops>),
     /// A grip's number was clicked: it turns into an entry.
     OpenGripEntry(usize),
     /// A value was typed into a grip's entry.
@@ -227,7 +226,7 @@ impl Window {
             EditingInput::CheckMenuStep { generation, budget } => {
                 self.check_menu_step(generation, budget);
             }
-            EditingInput::OptionFitFound(Unprinted(found)) => {
+            EditingInput::OptionFitFound(found) => {
                 let events = self.session.option_fit_found(*found);
                 self.handle(events);
             }
@@ -264,7 +263,7 @@ impl Window {
             EditingInput::GripPanel(action) => self.grip_panel_asked(action),
             EditingInput::ShowGrips(wanted) => self.show_grips(wanted),
             EditingInput::RelistGrips => self.relist_grips(),
-            EditingInput::GripStopsFound(Unprinted(found)) => {
+            EditingInput::GripStopsFound(found) => {
                 let events = self.session.grip_stops_found(*found);
                 self.handle(events);
             }

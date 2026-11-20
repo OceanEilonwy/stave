@@ -432,8 +432,9 @@ them.
   message. With nothing to remove the key goes on to other widgets. The
   copy is written only by `update` and read only by that handler, so it
   is not the shared state rule 11 warns about.
-- `update::Unprinted<T>` gives `Debug` to a payload that has none
-  (`files::CursorName`, the analysis, a found fit or stop).
+- Every message payload has `Debug` of its own (`files::CursorName`,
+  `stave_ide::Analysis`, `stave_app`'s `FoundFit` and `FoundStops` all
+  derive it), so there is no wrapper that hides one.
 
 ### Edit card and menu: answers by message
 
@@ -661,5 +662,3 @@ All three were on `main` before the move, not caused by it.
 - `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an
   `Rc<RefCell<..>>` shared with their draw function: give the draw
   function a copy, as the slider does.
-- Replace `Unprinted` payloads with `Debug` types where the types can
-  have it.

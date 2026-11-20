@@ -58,7 +58,6 @@ use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearc
 use super::update::editing::EditingInput;
 use super::{EDGE, Window, WindowInput};
 use crate::render::{Backdrop, Frame, Ticket};
-use crate::ui::update::Unprinted;
 use relm4::{Component, ComponentController, Controller};
 
 /// How long one step of the menu's check runs before the window draws
@@ -1223,7 +1222,7 @@ impl Window {
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
                 if input
-                    .send(EditingInput::OptionFitFound(Unprinted(Box::new(found))).into())
+                    .send(EditingInput::OptionFitFound(Box::new(found)).into())
                     .is_err()
                 {
                     return;
