@@ -8,6 +8,6 @@ stave 1
 // the same way (see examples/clothing_cabinet/hardware).
 
 library "Hardware" {
-  about:   "Slides, hinges, pulls and fasteners"
+  about:   "Slides, hinges, pulls, shelf supports and fasteners"
   license: "AGPL-3.0-or-later"
 }

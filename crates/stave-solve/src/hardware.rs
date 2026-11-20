@@ -379,6 +379,24 @@ pub(crate) struct SlantedCut<'a> {
     pub span: Span,
 }
 
+/// The most spare holes a row may have toward one direction: a bound,
+/// so a slip of the pen can't ask for millions.
+const MAX_ROW: u32 = 1000;
+
+/// Where a row of holes is cut, for [`Solver::row_copies`].
+struct RowAt<'a> {
+    binding: &'a Binding,
+    kind: &'a KindDef,
+    part: PartId,
+    part_box: &'a ExactBox,
+    frame: &'a Frame,
+    /// The hardware's name, for messages.
+    name: &'a str,
+    cut: Option<&'a CutName>,
+    file: stave_lang::FileId,
+    span: Span,
+}
+
 /// A placed piece of hardware.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Placed {
@@ -713,6 +731,7 @@ impl Solver<'_> {
             (Some(face), _) => face,
             (None, FaceRule::Word(face)) => face,
             (None, FaceRule::Nearer { part, region }) => self.face_nearer(binding, part, region)?,
+            (None, FaceRule::Toward { part, other }) => self.face_toward(binding, part, other)?,
         };
         let face_axis = mount_face.axis();
         let face_position = if mount_face.is_positive() {
@@ -1112,6 +1131,34 @@ impl Solver<'_> {
             )))
     }
 
+    /// `face(piece, toward: other)`: of the two faces across the piece's
+    /// thickness, the one nearer the middle of the other role's part; the
+    /// lower one when the middles are level.
+    fn face_toward(
+        &mut self,
+        binding: &Binding,
+        part: RoleIndex,
+        other: RoleIndex,
+    ) -> Solved<Face> {
+        let part_id = self.role_part(binding, part)?;
+        let part_box = self.drawn_box(part_id)?;
+        let other_box = self.role_box(binding, other)?;
+        let axis = self
+            .part_orientation(part_id)?
+            .direction(PartAxis::Thickness)
+            .axis();
+        let middle = midpoint(part_box.min(axis), part_box.max(axis)).ok_or(Fault::Overflow)?;
+        let other_middle =
+            midpoint(other_box.min(axis), other_box.max(axis)).ok_or(Fault::Overflow)?;
+        let positive = other_middle > middle;
+        Face::ALL
+            .into_iter()
+            .find(|face| face.axis() == axis && face.is_positive() == positive)
+            .ok_or(Failure::Fault(Fault::Internal(
+                "the face a piece of hardware sits on",
+            )))
+    }
+
     /// The plane a `from(anchor, inset: d)` names across a world axis, and
     /// the origin's coordinate on it.
     fn term_plane(
@@ -1476,6 +1523,7 @@ impl Solver<'_> {
                 Ok(kinds)
             })?;
             let part_box = self.drawn_box(part)?;
+            let first = out.len();
             for shape in &placed.shapes {
                 let Some(face) = crossing_face(&shape.world, &part_box, frame) else {
                     let part_name = self.part_name(part);
@@ -1520,6 +1568,146 @@ impl Solver<'_> {
                         slant,
                         kind: kind_of_cut.clone(),
                     });
+                }
+            }
+            if let Some(row) = &cut.row {
+                let own: Vec<HardwareCut> = out.get(first..).unwrap_or_default().to_vec();
+                let at = RowAt {
+                    binding,
+                    kind,
+                    part,
+                    part_box: &part_box,
+                    frame,
+                    name,
+                    cut: cut.name.as_ref(),
+                    file,
+                    span,
+                };
+                let copies = self.row_copies(&at, row, &own)?;
+                out.extend(copies);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The copies a `row(...)` cut adds beside the member's own cuts
+    /// (grammar, "Rows of holes"): each moved a whole number of pitches
+    /// toward a direction along the face it is cut in, with nothing in
+    /// it. A copy that would not lie wholly on that face, along the row,
+    /// is `error[wall]`.
+    fn row_copies(
+        &mut self,
+        at: &RowAt<'_>,
+        row: &stave_model::defs::RowDef,
+        own: &[HardwareCut],
+    ) -> Solved<Vec<HardwareCut>> {
+        let what = at
+            .cut
+            .map_or_else(|| "hole".to_owned(), stave_model::defs::CutName::words);
+        let part_name = self.part_name(at.part);
+        let name = at.name;
+        let (pitch, counts) = self.in_kind(at.binding, at.kind, |solver, kind_env| {
+            let pitch = solver.kind_length(&row.pitch, kind_env)?;
+            let mut counts = Vec::new();
+            for copies in &row.copies {
+                let Value::Count(count) = solver.eval(&copies.count, kind_env)? else {
+                    return Err(Fault::Earlier.into());
+                };
+                counts.push((copies.toward, count));
+            }
+            Ok((pitch, counts))
+        })?;
+        if pitch <= ExactLength::ZERO {
+            let pitch_text = self.describe(&Value::Length(pitch));
+            return Err(self
+                .error(
+                    Code::OutOfRange,
+                    format!("{name}: the row of {what}s has a pitch of {pitch_text}"),
+                    at.file,
+                    at.span,
+                    "the pitch is how far apart the holes are, from centre to centre; make it more than 0mm",
+                )
+                .into());
+        }
+        let depth_axis = at.frame.depth.axis();
+        let length_axis = self
+            .part_orientation(at.part)?
+            .direction(PartAxis::Length)
+            .axis();
+        let mut out = Vec::new();
+        for (toward, count) in counts {
+            let word = toward.word();
+            let whole = if count.is_integer() && !count.is_negative() {
+                u32::try_from(count.numerator())
+                    .ok()
+                    .filter(|n| *n <= MAX_ROW)
+            } else {
+                None
+            };
+            let Some(whole) = whole else {
+                let count_text = self.describe(&Value::Count(count));
+                return Err(self
+                    .error(
+                        Code::OutOfRange,
+                        format!("{name}: the row of {what}s has {count_text} holes {word}"),
+                        at.file,
+                        at.span,
+                        format!("give a whole number of spare holes {word}, from 0 to {MAX_ROW}"),
+                    )
+                    .into());
+            };
+            let axis = toward.axis();
+            if axis == depth_axis {
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!("{name}: the row of {what}s runs {word}, into {part_name}"),
+                        at.file,
+                        at.span,
+                        format!(
+                            "a row of holes runs along the face of {part_name} it is drilled in; name a direction along that face"
+                        ),
+                    )
+                    .into());
+            }
+            for step in 1..=whole {
+                let mut offset = pitch
+                    .checked_mul(Rational::from_int(i128::from(step)))
+                    .ok_or(Fault::Overflow)?;
+                if !toward.is_positive() {
+                    offset = offset.checked_neg().ok_or(Fault::Overflow)?;
+                }
+                for cut in own {
+                    let low = cut
+                        .shape
+                        .min(axis)
+                        .checked_add(offset)
+                        .ok_or(Fault::Overflow)?;
+                    let high = cut
+                        .shape
+                        .max(axis)
+                        .checked_add(offset)
+                        .ok_or(Fault::Overflow)?;
+                    if low < at.part_box.min(axis) || high > at.part_box.max(axis) {
+                        let room = step - 1;
+                        let side = if axis == length_axis { "end" } else { "edge" };
+                        return Err(self
+                            .error(
+                                Code::Wall,
+                                format!(
+                                    "{name}: its row of {what}s runs off {part_name}: hole {step} {word} is past its {side}"
+                                ),
+                                at.file,
+                                at.span,
+                                format!(
+                                    "there is room for {room} {word} from where it sits; drill fewer holes {word}, or move it"
+                                ),
+                            )
+                            .into());
+                    }
+                    let mut copy = cut.clone();
+                    copy.shape = cut.shape.with(axis, low, high);
+                    out.push(copy);
                 }
             }
         }

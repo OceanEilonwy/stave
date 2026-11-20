@@ -113,7 +113,7 @@ grammar position only:
 |---|---|
 | `as` | after the string of an `import` |
 | `mirror`, `about` | directly after the `=` of a `part` or `assembly`, and as that call's named argument |
-| `joint`, `slide`, `hinge`, `pull`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
+| `joint`, `slide`, `hinge`, `pull`, `support`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
 | `adjust`, `on` | `adjust` at the start of an entry in a hardware `kind` body, when not followed by `:`; `on` between its two members (`adjust arm on plate: across within 2mm`) |
@@ -304,7 +304,7 @@ project       = "project" , STRING , block(field) ;
 library       = "library" , STRING , [ block(field) ] ;
 
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
-base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
+base_kind     = "joint" | "slide" | "hinge" | "pull" | "support" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | mount | mechanism | adjust | field ;
 member        = "member" , IDENT , [ ":" , expr ] , [ block(member_entry) ] ;
@@ -605,7 +605,7 @@ without an import or a prefix:
 | Module | Folder | Provides |
 |---|---|---|
 | `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
-| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
+| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`, `shelf_pin`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
 Beginners write `dado(...)`, not `joinery.dado(...)`. Anything from outside
@@ -621,7 +621,7 @@ imports them and uses their items qualified, like any library.
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:casework` | `std/casework` | cabinet components (`Case`, `Back`, `Divider`, `Shelf`, `HangingRail`, `Feet`, `Drawer`, `FramePanelDoor`), used as `casework.Drawer` after `import "std:casework"` |
+| `std:casework` | `std/casework` | cabinet components (`Case`, `Back`, `Divider`, `Shelf`, `AdjustableShelf`, `HangingRail`, `Feet`, `Drawer`, `FramePanelDoor`), used as `casework.Drawer` after `import "std:casework"` |
 | `std:frames` | `std/frames` | table and stand components (`Top`, `Legs`, `Apron`, `Stretcher`, `Cleat`, `Slats`), used as `frames.Legs` after `import "std:frames"` |
 
 A standard module never reaches into a project: everything a component needs
@@ -896,14 +896,17 @@ declare: `glue: Bool` (default `true`) and `methods:` (a list of recipes to
 prefer for this joint's cuts). A kind can't declare a role, param or made part
 named `glue` or `methods`.
 
-### `kind name : slide | hinge | pull | fastener | tool { }`
+### `kind name : slide | hinge | pull | support | fastener | tool { }`
 
 A hardware kind is a product or a family of products. The base (`slide`,
-`hinge`, `pull`) gives the words a message uses ("opened", "pulled out")
-and the kind's type (`SlideKind`, `HingeKind`, `PullKind`); it decides
-nothing else. What the hardware joins, where it sits, what it is made of,
-how it moves and what it cuts are all written in the kind. A `slide`,
-`hinge` or `pull` kind may contain:
+`hinge`, `pull`, `support`) gives the words a message uses ("opened",
+"pulled out", "rests on") and the kind's type (`SlideKind`, `HingeKind`,
+`PullKind`, `SupportKind`); it decides nothing else. A `support` is
+hardware a part rests on without being joined to it: the pins under an
+adjustable shelf (see [Shelf supports](#shelf-supports)). What the
+hardware joins, where it sits, what it is made of, how it moves and what
+it cuts are all written in the kind. A `slide`, `hinge`, `pull` or
+`support` kind may contain:
 
 | Entry | Required | Meaning |
 |---|---|---|
@@ -914,7 +917,7 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `member` | no | its pieces, each with its shapes (see [Shapes](#shapes)) |
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
-| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)); a name is what messages call the cut (see [Named cuts](#named-cuts)) |
+| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)); a name is what messages call the cut (see [Named cuts](#named-cuts)). `row(crossing(role, member), pitch:, up:, ...)` makes the same cut again in a row beside it (see [Rows of holes](#rows-of-holes)) |
 | `uses` | no | fasteners it consumes without placing them, as a joint's `uses:`: counted, never placed |
 | `model` | no | a `Model`, for looks |
 | `moving`, `license` | no | `Text` |
@@ -1112,7 +1115,7 @@ kind euro_hinge : hinge {
 
 | Entry | Value | Meaning |
 |---|---|---|
-| `face` | a face word, or `face(piece, nearer: r)` | the face of the piece it is mounted on. A call's `face:` setting (every slide, hinge and pull call accepts one) overrides it |
+| `face` | a face word, `face(piece, nearer: r)` or `face(piece, toward: q)` | the face of the piece it is mounted on. A call's `face:` setting (every slide, hinge, pull and support call accepts one) overrides it |
 | `across` | a mount term, or `open` | where the frame's origin is across the mount face |
 | `along` | a mount term, or `open` | where the frame's origin is along the piece's length |
 
@@ -1139,6 +1142,7 @@ face; a face is chosen across the axis the entry is for:
 | `face(p, toward: q)` | of `p`'s two faces across this entry's axis, the one nearer the middle of `q` |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters (as in [Faces to cut](#faces-to-cut)) |
 | `face(p, nearer: r)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the same-named face of region `r` (the lower one when they are equally near) |
+| `face(p, toward: q)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the middle of `q`, a `Part` role (the lower one when the middles are level): a shelf pin goes into the face of the side the shelf is on. `q` a `Region` role is `error[type-mismatch]` (`'toward' of a mount's face needs a role that is one part`); for a region write `nearer:` |
 
 The frame's directions on the mount face: `along` runs along the piece's
 length (its width when the mount face is an end of the piece), from the end
@@ -2293,6 +2297,125 @@ and checked by the member's shape, and one in a `uses:` is only counted.
 The entry is still accepted, so an older library checks, but the standard
 fasteners don't write it.
 
+#### Shelf supports
+
+An adjustable shelf is not joined to the sides: it rests on pins pushed
+into holes in them, and lifts off to move to another row of holes. A
+`support` kind says so. Its first role is the part the support goes into
+(the cabinet side) and another names the part that rests on it; a member
+carried by each touches or enters that part, as for any hardware (see
+[Hardware placement](#hardware-placement), **Contact**). The shelf is not
+a joint pair, so it doesn't have to touch the side: it usually stands a
+millimetre or two clear of it at each end so it lifts out.
+
+```
+/// A shelf pin: a short pin pushed into a hole in a cabinet side.
+kind shelf_pin : support {
+  roles {
+    piece: Part                      // the cabinet side it is pushed into
+    shelf: Part                      // the shelf that rests on it
+  }
+  param diameter     = 5mm
+  param hole_depth   = 8mm
+  param projection   = 8mm
+  param hole_spacing = 32mm
+  param holes_above  = 0
+  param holes_below  = 0
+
+  mount {
+    face:   face(piece, toward: shelf)
+    across: open
+    along:  open
+  }
+  /// The shank: the half of the pin pushed into the hole.
+  member shank {
+    with:  piece
+    shape: cylinder(diameter: diameter, depth: 0mm..hole_depth)
+  }
+  /// The peg: the half that stands out of the side, under the shelf.
+  member peg {
+    with:  shelf
+    shape: cylinder(diameter: diameter, depth: -projection..0mm)
+  }
+  cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
+    drill(diameter: diameter, depth: hole_depth)
+  }
+}
+
+part shelf : pine_19 {
+  length: between(side_l.right, side_r.left) - 2mm   // 1mm clear at each end
+  width:  250mm
+  place {
+    flush(side_l.bottom, inset: 400mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 10mm)
+  }
+}
+
+// Two pins in each side, 37mm in from the front and back of the shelf,
+// their tops against its underside; five spare holes above and below.
+hardware pins_l[front, back] : shelf_pin(side_l, shelf: shelf, holes_above: 5, holes_below: 5) {
+  place {
+    spaced(ends(inset: 37mm), from: shelf.front, to: shelf.back)
+    against(shelf.bottom)
+  }
+}
+```
+
+The shelf is held by its pins (see [Held](#held)): a support holds the
+parts its roles name, as every piece of hardware does, so the shelf needs
+no `loose: true` and no joint. Nothing about resting is built into the
+checker: the pegs are under the shelf because the design puts them
+`against(shelf.bottom)`, they touch it because the contact rule says every
+role's part must meet the hardware, and they stay out of its wood like
+every member (see [One collision model](#one-collision-model)).
+
+#### Rows of holes
+
+The spare holes that let a shelf move are cut with nothing in them, so no
+member makes them. A hardware kind's cut makes them with `row`:
+
+```
+cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
+  drill(diameter: diameter, depth: hole_depth)
+}
+```
+
+`row(crossing(role, member), pitch: d, <direction>: n, ...)` is the cut on
+`crossing(role, member)` (see [Faces to cut](#faces-to-cut)), made as
+usual, and then made again `n` times toward each direction named, each
+copy `d` further on, centre to centre: `up: 5, down: 3` makes the hole the
+pin is in and five spare holes above it and three below. The directions
+are the six direction words (`up`, `down`, `left`, `right`, `front`,
+`back`), each at most once and at least one (`error[missing-field]`,
+`a row needs a direction and how many spare holes go that way`); `pitch:`
+is required. The pitch is a `Length` and each count a `Count`, over the
+kind's params, so a design chooses them with the call
+(`shelf_pin(side_l, shelf: shelf, holes_above: 5)`). The copies share the
+cut's name in messages and in the cut list, where each is a hole of its
+own.
+
+At the hardware's call, in layer 4:
+
+- a pitch of `0mm` or less is `error[out-of-range]` (`pins_l[front]: the
+  row of pin holes has a pitch of 0mm`);
+- a count that is not a whole number from 0 to 1000 is
+  `error[out-of-range]`;
+- a direction across the face the hole is drilled in, into the part, is
+  `error[type-mismatch]` (`pins_l[front]: the row of pin holes runs left,
+  into side_l`, help `a row of holes runs along the face of side_l it is
+  drilled in; name a direction along that face`);
+- a copy that doesn't lie wholly on the part, measured along the row, is
+  `error[wall]`: `pins_l[front]: its row of pin holes runs off side_l:
+  hole 16 up is past its end`, with the help `there is room for 15 up
+  from where it sits; drill fewer holes up, or move it`.
+
+A copy that lies on the part is checked like every hole: it keeps a wall
+to the faces and to other closed cuts (see [Cuts stay in their
+part](#cuts-stay-in-their-part)). `row` is for hardware kinds; a joint
+kind lays out a row of holes with a member's `count:` (see [Joint
+members](#joint-members)), so `row` there is `error[type-mismatch]`.
+
 #### Adjustment
 
 Real hardware has screws that set it: a cup hinge's arm slides on its
@@ -2451,7 +2574,7 @@ hexadecimal digits is `error[type-mismatch]`.
 
 #### Shapes
 
-A hinge, slide or pull kind is made of **members**, each written `member
+A hinge, slide, pull or support kind is made of **members**, each written `member
 name { ... }` with a doc comment a beginner can read. A viewer numbers the
 members in the order written, labels them on the drawing and shows the doc
 comment as the caption. A member may have **any name**; nothing in Stave
@@ -3332,7 +3455,9 @@ only says the parts meet; a group it leaves loose is reported naming it:
 it`. A part made of boards and the parts its board joints make hold each
 other; a piece of hardware holds the part it is
 mounted on, the parts its roles name, the parts that carry its members and
-the parts its members touch. A part that nothing joins to the ground part
+the parts its members touch. So a shelf resting on pins (a
+[support](#shelf-supports)) is held by them, though it touches no part
+and no joint binds it. A part that nothing joins to the ground part
 this way is `warning[loose-part]` (layer 4), once for each group of parts
 joined only to each other, at the group's first part. It is a question
 about the whole project, asked only once the design has no errors: a part
@@ -3382,7 +3507,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
-| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly`, or for a joint member's `count:` of 0 `<joint>: it places no <screw>s, so nothing joins its parts` |
+| 2, 4 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly`, or for a joint member's `count:` of 0 `<joint>: it places no <screw>s, so nothing joins its parts`, or for a [row of holes](#rows-of-holes) `<hardware>: the row of <pin hole>s has a pitch of <0mm>` or `... has <2.5> holes <up>` (layer 4) |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
@@ -3399,7 +3524,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, `<joint>: once cut, <a> and <b> touch only along an edge`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, or `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut); see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
@@ -3760,8 +3885,8 @@ The complete list of types. A `param` may name any of them.
 | `Spacing` | `evenly`, `ends`, `ends(inset: d)`, `pitch(d)`, `gap(d)` |
 | `Patch` | `contact(a, b)`: where two parts touch (not a patch file, see [Patches](#patches)) |
 | `JointKind` | a kind value of base `joint` |
-| `HardwareKind` | a kind value of base `slide`, `hinge` or `pull` |
-| `SlideKind`, `HingeKind`, `PullKind`, `FastenerKind` | a kind value of that base |
+| `HardwareKind` | a kind value of base `slide`, `hinge`, `pull` or `support` |
+| `SlideKind`, `HingeKind`, `PullKind`, `SupportKind`, `FastenerKind` | a kind value of that base |
 | `Tool` | a kind of base `tool` |
 | `Recipe` | a `recipe` item |
 

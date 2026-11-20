@@ -600,6 +600,9 @@ pub enum BaseKind {
     Hinge,
     /// A knob or pull.
     Pull,
+    /// A shelf support: hardware a part rests on without being joined to
+    /// it, such as the pins under an adjustable shelf.
+    Support,
     /// A dowel pin, screw or other fastener that joints consume.
     Fastener,
     /// A tool that recipes need.
@@ -608,11 +611,12 @@ pub enum BaseKind {
 
 impl BaseKind {
     /// Every base kind, in the order the grammar lists them.
-    pub const ALL: [BaseKind; 6] = [
+    pub const ALL: [BaseKind; 7] = [
         BaseKind::Joint,
         BaseKind::Slide,
         BaseKind::Hinge,
         BaseKind::Pull,
+        BaseKind::Support,
         BaseKind::Fastener,
         BaseKind::Tool,
     ];
@@ -624,6 +628,7 @@ impl BaseKind {
             BaseKind::Slide => "slide",
             BaseKind::Hinge => "hinge",
             BaseKind::Pull => "pull",
+            BaseKind::Support => "support",
             BaseKind::Fastener => "fastener",
             BaseKind::Tool => "tool",
         }
@@ -638,7 +643,7 @@ impl BaseKind {
     /// declaration.
     pub fn is_mounted_hardware(self) -> bool {
         match self {
-            BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull => true,
+            BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull | BaseKind::Support => true,
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => false,
         }
     }
@@ -1991,7 +1996,7 @@ pub enum TypeName {
     Patch,
     /// A kind value of base `joint`.
     JointKind,
-    /// A kind value of base `slide`, `hinge` or `pull`.
+    /// A kind value of base `slide`, `hinge`, `pull` or `support`.
     HardwareKind,
     /// A kind value of base `slide`.
     SlideKind,
@@ -1999,6 +2004,8 @@ pub enum TypeName {
     HingeKind,
     /// A kind value of base `pull`.
     PullKind,
+    /// A kind value of base `support`.
+    SupportKind,
     /// A kind value of base `fastener`.
     FastenerKind,
     /// A kind of base `tool`.
@@ -2009,7 +2016,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 30] = [
+    pub const ALL: [TypeName; 31] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -2037,6 +2044,7 @@ impl TypeName {
         TypeName::SlideKind,
         TypeName::HingeKind,
         TypeName::PullKind,
+        TypeName::SupportKind,
         TypeName::FastenerKind,
         TypeName::Tool,
         TypeName::Recipe,
@@ -2072,6 +2080,7 @@ impl TypeName {
             TypeName::SlideKind => "SlideKind",
             TypeName::HingeKind => "HingeKind",
             TypeName::PullKind => "PullKind",
+            TypeName::SupportKind => "SupportKind",
             TypeName::FastenerKind => "FastenerKind",
             TypeName::Tool => "Tool",
             TypeName::Recipe => "Recipe",
@@ -2091,6 +2100,7 @@ impl TypeName {
             BaseKind::Slide => Some(TypeName::SlideKind),
             BaseKind::Hinge => Some(TypeName::HingeKind),
             BaseKind::Pull => Some(TypeName::PullKind),
+            BaseKind::Support => Some(TypeName::SupportKind),
             BaseKind::Fastener => Some(TypeName::FastenerKind),
             BaseKind::Tool => None,
         }

@@ -1,0 +1,65 @@
+// expect: error[type-mismatch] a joint kind can't cut a row of holes with row(...)
+stave 1
+
+project "A row in a joint" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part bottom : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint bottom_dowels : dowel(bottom, into: [side_l, side_r], count: 2)
+
+/// The shelf: 1mm clear of each side, so it lifts out.
+part shelf : pine_19 {
+  length: 598mm
+  width:  260mm
+  place {
+    flush(side_l.bottom, inset: 400mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 10mm)
+  }
+}
+
+kind pegged : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  member peg {
+    on:    contact(piece, into)
+    shape: cylinder(diameter: 6mm, depth: -10mm..10mm)
+  }
+  cut peg_hole: row(crossing(into, peg), pitch: 32mm, up: 2) {
+    drill(diameter: 6mm, depth: 10mm)
+  }
+}

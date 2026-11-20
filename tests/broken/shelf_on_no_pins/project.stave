@@ -1,0 +1,54 @@
+// expect: warning[loose-part] shelf is loose: no joint or hardware joins it to side_l or to anything joined to side_l
+stave 1
+
+project "A shelf in the air" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part bottom : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint bottom_dowels : dowel(bottom, into: [side_l, side_r], count: 2)
+
+/// The shelf: 1mm clear of each side, so it lifts out.
+part shelf : pine_19 {
+  length: 598mm
+  width:  260mm
+  place {
+    flush(side_l.bottom, inset: 400mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 10mm)
+  }
+}
+
+// The pins are left out: nothing holds the shelf, which is not meant to
+// lift out on its own (it has no loose: true).

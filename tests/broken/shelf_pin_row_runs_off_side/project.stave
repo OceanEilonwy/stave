@@ -1,0 +1,66 @@
+// expect: error[wall] pins: its row of pin holes runs off side_l: hole 16 up is past its end
+stave 1
+
+project "The spare holes" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part bottom : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint bottom_dowels : dowel(bottom, into: [side_l, side_r], count: 2)
+
+/// The shelf: 1mm clear of each side, so it lifts out.
+part shelf : pine_19 {
+  length: 598mm
+  width:  260mm
+  place {
+    flush(side_l.bottom, inset: 400mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 10mm)
+  }
+}
+
+// Sixteen spare holes 32mm apart reach past the top of the 900mm side.
+hardware pins : shelf_pin(side_l, shelf: shelf, holes_above: 16) {
+  place {
+    flush(shelf.front, inset: 40mm)
+    against(shelf.bottom)
+  }
+}
+
+hardware pins_r[front, back] : shelf_pin(side_r, shelf: shelf) {
+  place {
+    spaced(ends(inset: 40mm), from: shelf.front, to: shelf.back)
+    against(shelf.bottom)
+  }
+}

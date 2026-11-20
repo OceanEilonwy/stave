@@ -10,7 +10,7 @@ stave 1
 // (the opening, the stock, the shop's own hardware) comes in as a param, so
 // the library stands alone.
 //
-// Components: Case, Back, Divider, Shelf, HangingRail, Feet, Drawer, FramePanelDoor
+// Components: Case, Back, Divider, Shelf, AdjustableShelf, HangingRail, Feet, Drawer, FramePanelDoor
 
 library "Casework" {
   about:   "Cases, backs, dividers, shelves, rails, feet, drawers and doors for cabinets"

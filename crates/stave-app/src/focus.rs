@@ -1056,11 +1056,12 @@ fn hardware_focus(
         None => Play::Fixed(anchors),
     };
     // The base's words; the kind's doc comment, shown under it, says which
-    // hinge, slide or pull it is.
+    // hinge, slide, pull or support it is.
     let heading = match hardware.base {
         HardwareBase::Hinge => tr("How this hinge works"),
         HardwareBase::Slide => tr("How this drawer slide works"),
         HardwareBase::Pull => tr("How this pull is fixed"),
+        HardwareBase::Support => tr("What this shelf rests on"),
     };
     let title = title(design, target);
     Some(Focus {

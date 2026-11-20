@@ -319,7 +319,8 @@ impl<'a> EditScope<'a> {
             ast::BaseKind::Joint
             | ast::BaseKind::Slide
             | ast::BaseKind::Hinge
-            | ast::BaseKind::Pull => {}
+            | ast::BaseKind::Pull
+            | ast::BaseKind::Support => {}
             ast::BaseKind::Fastener | ast::BaseKind::Tool => return None,
         }
         let mut place = Vec::new();
@@ -350,7 +351,10 @@ impl<'a> EditScope<'a> {
         let mounted_on = match (picked, kind.base()) {
             (
                 Picked::Face(face),
-                ast::BaseKind::Slide | ast::BaseKind::Hinge | ast::BaseKind::Pull,
+                ast::BaseKind::Slide
+                | ast::BaseKind::Hinge
+                | ast::BaseKind::Pull
+                | ast::BaseKind::Support,
             ) => Some(*face),
             _ => None,
         };

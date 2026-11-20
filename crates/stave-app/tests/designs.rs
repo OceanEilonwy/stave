@@ -268,3 +268,44 @@ fn a_housing_narrower_than_its_batten_overlaps_it() {
         "{all:?}"
     );
 }
+
+#[test]
+fn shelf_on_pins_rests_on_them_with_a_row_of_spare_holes() {
+    use stave_model::solved::CutPlace;
+    // Clean: the shelf is held by its pins, with no joint and no
+    // `loose: true`.
+    let opened = clean("shelf_on_pins");
+    let design = solved(&opened);
+    assert!(part(design, "shelf").cuts.is_empty());
+    for side in ["side_l", "side_r"] {
+        let holes: Vec<_> = part(design, side)
+            .cuts
+            .iter()
+            .filter(|cut| cut.name.as_ref().is_some_and(|n| n.as_str() == "pin_hole"))
+            .collect();
+        // Two pins, each with its own hole, three spare holes above and
+        // two below.
+        assert_eq!(holes.len(), 2 * 6, "{side}");
+        assert!(
+            holes
+                .iter()
+                .all(|cut| cut.kind.operation() == CutOperation::Drill)
+        );
+        let mut starts: Vec<Length> = holes
+            .iter()
+            .filter_map(|cut| match &cut.place {
+                CutPlace::Member { shape, .. } => Some(shape.min.length),
+                CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Crossing { .. } => None,
+            })
+            .collect();
+        starts.sort();
+        starts.dedup();
+        // The pin's hole has its top at the shelf's underside, 400mm up;
+        // the spare holes are 32mm apart, centre to centre.
+        let expected: Vec<Length> = [331, 363, 395, 427, 459, 491]
+            .into_iter()
+            .map(|at| mm(&at.to_string()))
+            .collect();
+        assert_eq!(starts, expected, "{side}");
+    }
+}

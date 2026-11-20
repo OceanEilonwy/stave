@@ -187,6 +187,12 @@ const PULL: BaseSpec = BaseSpec {
     optional: &HARDWARE_OPTIONAL,
 };
 
+const SUPPORT: BaseSpec = BaseSpec {
+    base: BaseKind::Support,
+    required: &[],
+    optional: &HARDWARE_OPTIONAL,
+};
+
 const FASTENER: BaseSpec = BaseSpec {
     base: BaseKind::Fastener,
     required: &[
@@ -221,6 +227,7 @@ pub fn base(base: BaseKind) -> &'static BaseSpec {
         BaseKind::Slide => &SLIDE,
         BaseKind::Hinge => &HINGE,
         BaseKind::Pull => &PULL,
+        BaseKind::Support => &SUPPORT,
         BaseKind::Fastener => &FASTENER,
         BaseKind::Tool => &TOOL,
     }
@@ -288,6 +295,7 @@ mod tests {
             BaseKind::Slide,
             BaseKind::Hinge,
             BaseKind::Pull,
+            BaseKind::Support,
             BaseKind::Fastener,
             BaseKind::Tool,
         ];
@@ -354,7 +362,12 @@ mod tests {
     fn mounted_hardware_entries_match_the_grammar() {
         let rows = table_rows("| Entry | Required | Meaning |\n");
         let entries: Vec<String> = rows.iter().flat_map(|row| ticked(&row[0])).collect();
-        for base_kind in [BaseKind::Slide, BaseKind::Hinge, BaseKind::Pull] {
+        for base_kind in [
+            BaseKind::Slide,
+            BaseKind::Hinge,
+            BaseKind::Pull,
+            BaseKind::Support,
+        ] {
             let spec = base(base_kind);
             assert!(spec.required.is_empty());
             for field in spec.optional {

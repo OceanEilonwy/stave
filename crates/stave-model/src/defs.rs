@@ -1139,6 +1139,8 @@ pub enum MountedBase {
     Hinge,
     /// A knob or pull.
     Pull,
+    /// A shelf support.
+    Support,
 }
 
 impl MountedBase {
@@ -1148,6 +1150,7 @@ impl MountedBase {
             BaseKind::Slide => Some(MountedBase::Slide),
             BaseKind::Hinge => Some(MountedBase::Hinge),
             BaseKind::Pull => Some(MountedBase::Pull),
+            BaseKind::Support => Some(MountedBase::Support),
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }
@@ -1158,6 +1161,7 @@ impl MountedBase {
             MountedBase::Slide => BaseKind::Slide,
             MountedBase::Hinge => BaseKind::Hinge,
             MountedBase::Pull => BaseKind::Pull,
+            MountedBase::Support => BaseKind::Support,
         }
     }
 }
@@ -1454,6 +1458,15 @@ pub enum FaceRule {
         /// The region role.
         region: RoleIndex,
     },
+    /// `face: face(piece, toward: on)`: of the two faces across the
+    /// piece's thickness, the one nearer the middle of another role's
+    /// part.
+    Toward {
+        /// The role whose part the hardware is mounted on.
+        part: RoleIndex,
+        /// The `Part` role it faces.
+        other: RoleIndex,
+    },
 }
 
 /// One axis of a hardware kind's `mount { }`.
@@ -1542,7 +1555,37 @@ pub struct MemberCutDef {
     pub body: BodyId,
     /// The operations in order.
     pub operations: Vec<OperationDef>,
+    /// `row(crossing(role, member), pitch:, up:, ...)`: the same cut made
+    /// again beside each of the member's, in a hardware kind only.
+    pub row: Option<RowDef>,
     /// The whole entry.
+    pub span: Span,
+}
+
+/// `row(crossing(role, member), pitch: d, up: n, down: m)` (grammar,
+/// "Rows of holes"): a hardware cut made again `n` times a pitch apart
+/// toward each direction it names, beside the member's own, with nothing
+/// in the copies: the spare holes that let an adjustable shelf move.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowDef {
+    /// `pitch:`, from one copy's centre to the next: a length over the
+    /// kind's params and roles.
+    pub pitch: RExpr,
+    /// How many copies toward each direction, in source order; each
+    /// direction at most once.
+    pub copies: Vec<RowCopies>,
+    /// The whole `row(...)`.
+    pub span: Span,
+}
+
+/// One direction of a [`RowDef`]: `up: holes_above`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowCopies {
+    /// The way the copies run from the member's own cut.
+    pub toward: Direction,
+    /// How many copies: a whole count over the kind's params.
+    pub count: RExpr,
+    /// The argument, for messages.
     pub span: Span,
 }
 

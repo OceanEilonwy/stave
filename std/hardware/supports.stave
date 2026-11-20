@@ -1,0 +1,47 @@
+stave 1
+
+/// A shelf pin: a short steel pin pushed into a hole in a cabinet side, for
+/// an adjustable shelf to rest on. Four of them hold a shelf, two in each
+/// side; a row of spare holes above and below lets the shelf move up or
+/// down without glue or tools.
+kind shelf_pin : support {
+  roles {
+    piece: Part                      // the cabinet side the pin is pushed into
+    shelf: Part                      // the shelf that rests on it
+  }
+  /// Diameter of the pin and of its holes.
+  param diameter = 5mm within [5mm, 6mm]
+  /// How deep each hole is drilled, and how far the pin goes in.
+  param hole_depth = 8mm
+  /// How far the pin stands out of the side, under the shelf.
+  param projection = 8mm
+  /// From one hole of the row to the next, centre to centre.
+  param hole_spacing = 32mm
+  /// Spare holes drilled above the pin, for moving the shelf up.
+  param holes_above = 0
+  /// Spare holes drilled below the pin, for moving the shelf down.
+  param holes_below = 0
+
+  // In the face of the side the shelf is on; the design says where: two
+  // pins spaced along the shelf's depth, their tops against its underside.
+  mount {
+    face:   face(piece, toward: shelf)
+    across: open
+    along:  open
+  }
+
+  /// The shank: the half of the pin pushed into the hole in the side.
+  member shank {
+    with:  piece
+    shape: cylinder(diameter: diameter, depth: 0mm..hole_depth)
+  }
+  /// The peg: the half that stands out of the side. The shelf rests on it.
+  member peg {
+    with:  shelf
+    shape: cylinder(diameter: diameter, depth: -projection..0mm)
+  }
+
+  cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
+    drill(diameter: diameter, depth: hole_depth)
+  }
+}
