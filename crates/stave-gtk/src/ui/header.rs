@@ -5,19 +5,18 @@
 //! there is more than one view; at the right a find button (the finder,
 //! Ctrl+K), the problems chip (the status pill between previous and next,
 //! stepping through the problems) and the build button. Back and forward
-//! live in the View menu and on Alt+← and Alt+→. In a very narrow window the menu bar folds into one menu
-//! button. It also makes the scene menu, which floats on the 3D view. It
-//! only shows what the session says; the window wires its buttons to
-//! session commands.
+//! live in the View menu and on Alt+← and Alt+→. In a narrow window the
+//! switcher drops its words, and in a very narrow one the menu bar folds
+//! into one menu button. It only shows what the session says; the window
+//! wires its buttons to session commands.
 //!
 //! It is a relm4 component, [`HeaderComponent`]: its model (what the
 //! session last said) is the only state, only its update changes it, and
 //! its widgets' handlers only send [`HeaderInput`] messages. [`Header`]
 //! owns its controller and keeps the setters as plain methods; people's
 //! choices go to the owner as the message it chose when it made the bar.
-//! The window still reaches into several of the bar's widgets (the
-//! breakpoint swaps the menus, the dock holds the scene menu), so
-//! [`Header`] makes them and hands them to the component at launch.
+//! The window's breakpoints reach the bar's widgets only through it: the
+//! bar adds its own setters to each ([`HeaderInput::Narrow`]).
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -49,14 +48,13 @@ pub struct PillShown {
     pub line: String,
 }
 
-/// The scenes to choose from and the one showing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScenesShown {
-    /// Each scene's title.
-    pub titles: Vec<String>,
-    /// The one showing, by its place in `titles`.
-    pub current: usize,
-}
+/// A window at most this wide (in sp) shows the switcher's icons without
+/// their words.
+const WORDLESS_AT: f64 = 760.0;
+
+/// A window at most this wide (in sp) folds the menu bar into one menu
+/// button and draws the switcher compact.
+const FOLDED_AT: f64 = 600.0;
 
 /// The title bar's state: what the session last said. `None` keeps the
 /// look the bar was made with ("Not checked yet", the folder's name).
@@ -66,7 +64,6 @@ pub struct HeaderComponent {
     title: Option<(String, String)>,
     /// The view showing.
     view: View,
-    scenes: Option<ScenesShown>,
     pill: Option<PillShown>,
     /// The build button's state and tooltip.
     build: Option<(Build, String)>,
@@ -85,8 +82,16 @@ pub enum HeaderInput {
     },
     /// Show this view in the switcher, without telling anyone.
     ShowView(View),
-    /// Fill the scene menu.
-    ShowScenes(ScenesShown),
+    /// Narrow the bar while this breakpoint (a window at most `width` sp
+    /// wide) applies: at most 760 sp the switcher drops its words, at
+    /// most 600 sp the menu bar folds into one menu button and the
+    /// switcher is drawn compact. The bar adds its own setters to it.
+    Narrow {
+        /// The breakpoint.
+        breakpoint: adw::Breakpoint,
+        /// The widest window it applies to, in sp.
+        width: f64,
+    },
     /// Show the problems chip.
     ShowPill(PillShown),
     /// Show the build button building or ready, with this tooltip.
@@ -98,8 +103,6 @@ pub enum HeaderInput {
     },
     /// People chose a view in the switcher.
     ViewChosen(View),
-    /// People chose the scene at this place in the scene menu.
-    SceneChosen(usize),
 }
 
 /// What the title bar tells its owner.
@@ -107,12 +110,10 @@ pub enum HeaderInput {
 pub enum HeaderOutput {
     /// People chose this view.
     View(View),
-    /// People chose the scene at this place in the scene menu.
-    Scene(usize),
 }
 
-/// The bar's widgets, made by [`Header`] (the window still reaches into
-/// them) and handed to the component, which owns their state.
+/// The bar's widgets, made by [`Header`] (tests read some of them) and
+/// handed to the component, which owns their state.
 #[derive(Clone, Debug)]
 pub struct HeaderParts {
     menu_bar: gtk::PopoverMenuBar,
@@ -123,9 +124,6 @@ pub struct HeaderParts {
     find: gtk::Button,
     switcher: adw::ToggleGroup,
     switcher_labels: Vec<gtk::Label>,
-    scene: gtk::MenuButton,
-    scene_label: gtk::Label,
-    scenes: gtk::ListBox,
     chip: gtk::Box,
     pill: gtk::Button,
     previous: gtk::Button,
@@ -239,28 +237,6 @@ impl HeaderParts {
         middle.append(&title);
         middle.append(&switcher);
 
-        let scene_label = gtk::Label::new(Some(&tr("Rest")));
-        let scene_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let scene_icon = PathIcon::new(icons::SCENE, 15);
-        scene_icon.add_css_class("dim");
-        let chevron = PathIcon::new(icons::CHEVRON_DOWN, 10);
-        chevron.add_css_class("dim");
-        scene_content.append(&scene_icon);
-        scene_content.append(&scene_label);
-        scene_content.append(&chevron);
-        let scenes = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["navigation-sidebar"])
-            .build();
-        let popover = gtk::Popover::builder().child(&scenes).build();
-        let scene = gtk::MenuButton::builder()
-            .child(&scene_content)
-            .popover(&popover)
-            .tooltip_text(tr("Scene"))
-            .css_classes(["stave-scene"])
-            .valign(gtk::Align::Center)
-            .build();
-
         let pill_icon = PathIcon::new(icons::PENDING, 16);
         let pill_spinner = adw::Spinner::builder()
             .width_request(14)
@@ -351,9 +327,6 @@ impl HeaderParts {
             find,
             switcher,
             switcher_labels,
-            scene,
-            scene_label,
-            scenes,
             chip,
             pill,
             previous,
@@ -383,15 +356,6 @@ impl HeaderComponent {
             parts.switcher.block_signal(&widgets.view_chosen);
             parts.switcher.set_active_name(Some(self.view.word()));
             parts.switcher.unblock_signal(&widgets.view_chosen);
-        }
-        if let Some(scenes) = &self.scenes {
-            parts.scene_label.set_label(
-                &scenes
-                    .titles
-                    .get(scenes.current)
-                    .map_or_else(|| tr("Rest"), Clone::clone),
-            );
-            parts.scene.set_sensitive(!scenes.titles.is_empty());
         }
         if let Some(shown) = &self.pill {
             show_pill(parts, shown);
@@ -454,23 +418,25 @@ fn show_pill(parts: &HeaderParts, shown: &PillShown) {
         .update_property(&[gtk::accessible::Property::Label(&tooltip)]);
 }
 
-/// Fills the scene menu: a row per title, the current one in bold.
-fn fill_scenes(scenes: &gtk::ListBox, shown: &ScenesShown) {
-    while let Some(row) = scenes.row_at_index(0) {
-        scenes.remove(&row);
-    }
-    for (index, title) in shown.titles.iter().enumerate() {
-        let label = gtk::Label::builder()
-            .label(title)
-            .xalign(0.0)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-        let row = gtk::ListBoxRow::builder().child(&label).build();
-        if index == shown.current {
-            label.add_css_class("heading");
+/// Adds the bar's own setters to a breakpoint for a window at most
+/// `width` sp wide: the switcher's words go at most 760 sp; at most 600
+/// sp the menu bar folds into one menu button and the switcher is drawn
+/// compact. Only the last breakpoint that matches applies, so a narrower
+/// one repeats the wider ones' setters.
+fn narrow(parts: &HeaderParts, breakpoint: &adw::Breakpoint, width: f64) {
+    if width <= WORDLESS_AT {
+        for label in &parts.switcher_labels {
+            breakpoint.add_setter(label, "visible", Some(&false.to_value()));
         }
-        scenes.append(&row);
+    }
+    if width <= FOLDED_AT {
+        breakpoint.add_setter(&parts.menu_bar, "visible", Some(&false.to_value()));
+        breakpoint.add_setter(&parts.menu_button, "visible", Some(&true.to_value()));
+        breakpoint.add_setter(
+            &parts.switcher,
+            "css-classes",
+            Some(&["stave-switcher", "compact"].to_value()),
+        );
     }
 }
 
@@ -500,24 +466,15 @@ impl Component for HeaderComponent {
         root.pack_end(&parts.chip);
         root.pack_end(&parts.find);
 
-        let view_chosen = {
-            let sender = sender.clone();
-            parts.switcher.connect_active_name_notify(move |group| {
-                if let Some(view) = group.active_name().and_then(|name| View::from_word(&name)) {
-                    sender.input_sender().emit(HeaderInput::ViewChosen(view));
-                }
-            })
-        };
-        parts.scenes.connect_row_activated(move |_, row| {
-            if let Ok(index) = usize::try_from(row.index()) {
-                sender.input_sender().emit(HeaderInput::SceneChosen(index));
+        let view_chosen = parts.switcher.connect_active_name_notify(move |group| {
+            if let Some(view) = group.active_name().and_then(|name| View::from_word(&name)) {
+                sender.input_sender().emit(HeaderInput::ViewChosen(view));
             }
         });
 
         let model = HeaderComponent {
             title: None,
             view: View::Design,
-            scenes: None,
             pill: None,
             build: None,
         };
@@ -535,10 +492,8 @@ impl Component for HeaderComponent {
                 self.view = view;
                 None
             }
-            HeaderInput::ShowScenes(scenes) => {
-                self.scenes = Some(scenes);
-                None
-            }
+            // The bar's own widgets: `update_with_view` adds the setters.
+            HeaderInput::Narrow { .. } => None,
             HeaderInput::ShowPill(pill) => {
                 self.pill = Some(pill);
                 None
@@ -551,7 +506,6 @@ impl Component for HeaderComponent {
                 self.view = view;
                 Some(HeaderOutput::View(view))
             }
-            HeaderInput::SceneChosen(index) => Some(HeaderOutput::Scene(index)),
         };
         if let Some(output) = output {
             // Nobody listening is not a mistake: the owner may not want
@@ -567,15 +521,10 @@ impl Component for HeaderComponent {
         sender: ComponentSender<Self>,
         root: &Self::Root,
     ) {
-        let refill = matches!(message, HeaderInput::ShowScenes(_));
-        if matches!(message, HeaderInput::SceneChosen(_)) {
-            // The menu closes on a choice, before the owner hears it.
-            widgets.parts.scene.popdown();
+        if let HeaderInput::Narrow { breakpoint, width } = &message {
+            narrow(&widgets.parts, breakpoint, *width);
         }
         self.update(message, sender.clone(), root);
-        if refill && let Some(scenes) = &self.scenes {
-            fill_scenes(&widgets.parts.scenes, scenes);
-        }
         self.update_view(widgets, sender);
     }
 
@@ -584,48 +533,19 @@ impl Component for HeaderComponent {
     }
 }
 
-/// The title bar, behind the API the window still uses: it owns the
-/// component (dropping it shuts the component down), passes its setters
-/// on as [`HeaderInput`] messages and keeps the widgets the window
-/// reaches into.
+/// The title bar: it owns the component (dropping it shuts the component
+/// down) and passes its setters on as [`HeaderInput`] messages. The
+/// window places its root ([`Header::bar`]); every other widget of the
+/// bar is the bar's own.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
 pub struct Header {
     /// The bar itself.
     pub bar: adw::HeaderBar,
-    /// The menu bar: Project, Edit, View, Help.
-    pub menu_bar: gtk::PopoverMenuBar,
-    /// The same menus in one button, shown instead of the menu bar when
-    /// the window is very narrow.
-    pub menu_button: gtk::MenuButton,
-    /// The project's name, its folder under it; in the middle of the bar
-    /// while the switcher is hidden.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "it shortens itself in a narrow window; tests read it"
-        )
-    )]
-    pub title: adw::WindowTitle,
-    /// Design / Cut list.
-    pub switcher: adw::ToggleGroup,
-    switcher_labels: Vec<gtk::Label>,
-    /// The scene menu (shown in the dock).
-    pub scene: gtk::MenuButton,
-    /// The scenes, in the scene menu's popover.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the window hears the scene chosen as an output; tests read the rows"
-        )
-    )]
-    pub scenes: gtk::ListBox,
-    /// The pill's icon, for tests to read its shape.
+    /// The bar's widgets, for tests to read.
     #[cfg(test)]
-    pill_icon: PathIcon,
+    parts: HeaderParts,
     controller: Controller<HeaderComponent>,
 }
 
@@ -641,29 +561,15 @@ impl Header {
         message: impl Fn(HeaderOutput) -> M + 'static,
     ) -> Header {
         let parts = HeaderParts::new(folder_label, menus);
-        let menu_bar = parts.menu_bar.clone();
-        let menu_button = parts.menu_button.clone();
-        let title = parts.title.clone();
-        let switcher = parts.switcher.clone();
-        let switcher_labels = parts.switcher_labels.clone();
-        let scene = parts.scene.clone();
-        let scenes = parts.scenes.clone();
         #[cfg(test)]
-        let pill_icon = parts.pill_icon.clone();
+        let kept = parts.clone();
         let controller = HeaderComponent::builder()
             .launch(parts)
             .forward(owner, message);
         Header {
             bar: controller.widget().clone(),
-            menu_bar,
-            menu_button,
-            title,
-            switcher,
-            switcher_labels,
-            scene,
-            scenes,
             #[cfg(test)]
-            pill_icon,
+            parts: kept,
             controller,
         }
     }
@@ -686,17 +592,16 @@ impl Header {
         self.send(HeaderInput::ShowView(view));
     }
 
-    /// The switcher's words, hidden when the window is narrow.
-    pub fn switcher_labels(&self) -> &[gtk::Label] {
-        &self.switcher_labels
-    }
-
-    /// The scenes to choose from (titles) and the one showing.
-    pub fn show_scenes(&self, titles: &[String], current: usize) {
-        self.send(HeaderInput::ShowScenes(ScenesShown {
-            titles: titles.to_vec(),
-            current,
-        }));
+    /// Narrows the bar while `breakpoint` (a window at most `width` sp
+    /// wide) applies: at most 760 sp the switcher drops its words; at most
+    /// 600 sp the menu bar folds into one menu button and the switcher is
+    /// drawn compact. The bar adds its own setters, when the main loop
+    /// next runs.
+    pub fn narrow(&self, breakpoint: &adw::Breakpoint, width: f64) {
+        self.send(HeaderInput::Narrow {
+            breakpoint: breakpoint.clone(),
+            width,
+        });
     }
 
     /// The problems chip: the pill's colour and words, the arrows when
@@ -769,7 +674,7 @@ mod tests {
         let callback = Rc::downgrade(&token);
         drop(token);
         let bar = header.bar.downgrade();
-        let switcher = header.switcher.downgrade();
+        let switcher = header.parts.switcher.downgrade();
         let input = header.controller.sender().clone();
         settle();
         assert!(bar.upgrade().is_some(), "the bar lives while held");
@@ -794,7 +699,6 @@ mod tests {
         let header = header_for(&owner);
         header.show_title("Hall table", "~/Projects/hall_table");
         header.show_view(View::CutList);
-        header.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 1);
         header.show_pill(
             &Pill {
                 tone: Tone::Errors,
@@ -805,20 +709,22 @@ mod tests {
             "2 problems",
         );
         header.show_build(Build::Building, "Building the plan");
-        assert_eq!(header.title.title(), "hall_table", "only queued so far");
-        settle();
-        assert_eq!(header.title.title(), "Hall table");
-        assert_eq!(header.title.subtitle(), "~/Projects/hall_table");
         assert_eq!(
-            header.title.tooltip_text().as_deref(),
+            header.parts.title.title(),
+            "hall_table",
+            "only queued so far"
+        );
+        settle();
+        assert_eq!(header.parts.title.title(), "Hall table");
+        assert_eq!(header.parts.title.subtitle(), "~/Projects/hall_table");
+        assert_eq!(
+            header.parts.title.tooltip_text().as_deref(),
             Some("~/Projects/hall_table")
         );
         assert_eq!(
-            header.switcher.active_name().as_deref(),
+            header.parts.switcher.active_name().as_deref(),
             Some(View::CutList.word())
         );
-        assert!(header.scenes.row_at_index(1).is_some());
-        assert!(header.scenes.row_at_index(2).is_none());
         assert_eq!(header.model().view, View::CutList);
         assert!(heard.borrow().is_empty(), "setters never call back");
     }
@@ -846,12 +752,18 @@ mod tests {
             if first {
                 // GTK firing the switcher's signal from in here only
                 // queues a message: the model doesn't change under us.
-                header.switcher.set_active_name(Some(View::Design.word()));
+                header
+                    .parts
+                    .switcher
+                    .set_active_name(Some(View::Design.word()));
             }
             log.borrow_mut().push((output, header.model().view));
         });
 
-        header.switcher.set_active_name(Some(View::CutList.word()));
+        header
+            .parts
+            .switcher
+            .set_active_name(Some(View::CutList.word()));
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         assert_eq!(
             header.model().view,
@@ -873,64 +785,73 @@ mod tests {
         settle();
         assert_eq!(heard.borrow().len(), 2, "showing a view never calls back");
         assert_eq!(
-            header.switcher.active_name().as_deref(),
+            header.parts.switcher.active_name().as_deref(),
             Some(View::CutList.word())
         );
     }
 
     #[test]
-    fn choosing_a_scene_closes_the_menu_then_tells_the_owner() {
-        on_gtk_thread(a_scene_chosen_closes_the_menu);
+    fn a_narrow_window_drops_the_switchers_words_then_folds_the_menus() {
+        on_gtk_thread(narrow_window);
     }
 
-    /// The header closes its own scene menu when people choose a scene,
-    /// and only then says which: the owner never reaches into it.
-    fn a_scene_chosen_closes_the_menu() {
-        let (owner, outputs) = relm4::channel();
-        let header = Rc::new(header_for(&owner));
-        let window = gtk::Window::new();
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.append(&header.bar);
-        column.append(&header.scene);
-        window.set_child(Some(&column));
+    /// The bar adds its own setters to the window's breakpoints: at most
+    /// 760 sp the switcher's words go; at most 600 sp the menu bar folds
+    /// into the menu button and the switcher is drawn compact.
+    fn narrow_window() {
+        let header = header();
+        let breakpoint = |width| {
+            adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+                adw::BreakpointConditionLengthType::MaxWidth,
+                width,
+                adw::LengthUnit::Sp,
+            ))
+        };
+        let (wordless, folded) = (breakpoint(760.0), breakpoint(600.0));
+        header.narrow(&wordless, 760.0);
+        header.narrow(&folded, 600.0);
+        // The window's breakpoints, on a bin the test lays out at each
+        // width.
+        let bin = adw::BreakpointBin::builder()
+            .width_request(300)
+            .height_request(60)
+            .child(&header.bar)
+            .build();
+        bin.add_breakpoint(wordless);
+        bin.add_breakpoint(folded);
+        let window = gtk::Window::builder().child(&bin).build();
+        settle();
         window.present();
-        header.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 0);
         settle();
-        header.scene.popup();
-        settle();
-        let shown = header
-            .scene
-            .popover()
-            .is_some_and(|popover| popover.is_visible());
-        let heard: Rc<RefCell<Vec<(HeaderOutput, bool)>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&header);
-        handle_each(outputs, move |output| {
-            let Some(header) = weak.upgrade() else {
-                return;
-            };
-            let open = header
-                .scene
-                .popover()
-                .is_some_and(|popover| popover.is_visible());
-            log.borrow_mut().push((output, open));
-        });
-        assert!(shown, "the scene menu is open");
-        let row = header.scenes.row_at_index(1).expect("a second scene");
-        row.emit_activate();
-        settle();
+        // A widget's own `visible`, whether its parents show or not (the
+        // switcher is hidden while only one view is made).
+        let visible = |widget: &gtk::Widget| widget.property::<bool>("visible");
+        // What the bar shows `width` px wide: all the switcher's words,
+        // the menu bar, the menu button, a compact switcher.
+        let shown_at = |width: i32| {
+            for _ in 0..3 {
+                bin.allocate(width, 60, -1, None);
+                settle();
+            }
+            let parts = &header.parts;
+            (
+                parts
+                    .switcher_labels
+                    .iter()
+                    .all(|label| visible(label.upcast_ref())),
+                visible(parts.menu_bar.upcast_ref()),
+                visible(parts.menu_button.upcast_ref()),
+                parts.switcher.has_css_class("compact"),
+            )
+        };
         assert_eq!(
-            *heard.borrow(),
-            vec![(HeaderOutput::Scene(1), false)],
-            "the owner hears the choice with the menu already closed"
+            shown_at(1000),
+            (true, true, false, false),
+            "wide: all of it"
         );
-        assert!(
-            !header
-                .scene
-                .popover()
-                .is_some_and(|popover| popover.is_visible()),
-            "and stays closed"
-        );
+        assert_eq!(shown_at(700), (false, true, false, false), "no words");
+        assert_eq!(shown_at(500), (false, false, true, true), "folded");
+        assert_eq!(shown_at(1000), (true, true, false, false), "all back");
         window.destroy();
         settle();
     }
@@ -968,7 +889,7 @@ mod tests {
             };
             header.show_pill(&pill, 1, "");
             settle();
-            header.pill_icon.shape()
+            header.parts.pill_icon.shape()
         };
         assert_eq!(shape(Tone::Errors), icons::ALERT);
         assert_eq!(shape(Tone::Warnings), icons::WARNING);
@@ -981,7 +902,7 @@ mod tests {
         on_gtk_thread(|| {
             let header = header();
             assert_eq!(
-                header.menu_button.icon_name().as_deref(),
+                header.parts.menu_button.icon_name().as_deref(),
                 Some("open-menu-symbolic")
             );
         });
@@ -996,10 +917,10 @@ mod tests {
             header.show_title("Shelf", "~/shelf");
             settle();
             let middle = header.bar.title_widget().expect("a title widget");
-            assert!(header.title.is_ancestor(&middle));
-            assert!(header.title.is_visible());
-            assert!(!header.switcher.is_visible());
-            assert_eq!(header.title.subtitle(), "~/shelf");
+            assert!(header.parts.title.is_ancestor(&middle));
+            assert!(header.parts.title.is_visible());
+            assert!(!header.parts.switcher.is_visible());
+            assert_eq!(header.parts.title.subtitle(), "~/shelf");
         });
     }
 
@@ -1075,7 +996,7 @@ mod tests {
         on_gtk_thread(|| {
             let header = header();
             let mut children = Vec::new();
-            let mut button = header.switcher.first_child();
+            let mut button = header.parts.switcher.first_child();
             while let Some(current) = button {
                 if let Some(child) = current
                     .downcast_ref::<gtk::ToggleButton>()

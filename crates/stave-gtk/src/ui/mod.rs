@@ -1247,12 +1247,7 @@ pub(in crate::ui) fn build_widgets(
     let plan_switch = PlanSwitch::new(&to_window, update::selection::plan_switch_said);
     let step_card = StepCard::new(&to_window, update::selection::step_card_said);
     let problem_card = ProblemCard::new(&to_window, update::selection::problem_card_said);
-    let dock = Dock::new(
-        &header.scene,
-        &motion,
-        &to_window,
-        update::selection::dock_said,
-    );
+    let dock = Dock::new(&to_window, update::selection::dock_said);
     let hint = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -1275,12 +1270,47 @@ pub(in crate::ui) fn build_widgets(
         .tooltip_text(tr("Show the problem off screen"))
         .visible(false)
         .build();
-    let figure = gtk::Overlay::builder()
-        .child(&viewport)
-        .vexpand(true)
-        .overflow(gtk::Overflow::Hidden)
-        .css_classes(["stave-viewport", "stave-figure"])
-        .build();
+    // The view's controls float on it; the tool groups dock where the
+    // layout says (given once the workbench is made, below), and a group
+    // dragged to a new spot is remembered with the layout. Each control is
+    // placed in a float of the floats' own; its own component shows,
+    // hides and styles it.
+    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
+        (view_layout::Floating::Camera, camera.root.clone().upcast()),
+        (
+            view_layout::Floating::PullSlider,
+            view_toolbar.popout.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::PlanSwitch,
+            plan_switch.root.clone().upcast(),
+        ),
+        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
+        (view_layout::Floating::Hint, hint_box.clone().upcast()),
+        (
+            view_layout::Floating::ContactKey,
+            contact_key.clone().upcast(),
+        ),
+        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
+        (view_layout::Floating::Motion, motion.root.clone().upcast()),
+        (
+            view_layout::Floating::StepCard,
+            step_card.root.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::ProblemCard,
+            problem_card.root.clone().upcast(),
+        ),
+        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
+    ];
+    // The groups are laid out for their spots, and follow the workbench
+    // when it moves them, by the window's messages (`update/rendering.rs`).
+    let floats = floating::Floats::new(
+        &viewport,
+        floating,
+        &to_window,
+        update::rendering::floats_said,
+    );
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -1291,7 +1321,7 @@ pub(in crate::ui) fn build_widgets(
         .css_classes(["stave-stage"])
         .build();
     stage.append(&caption.root);
-    stage.append(&figure);
+    stage.append(&floats.root);
     stage.append(&pictures.root);
     stage.append(&swing_card.root);
     let empty = view_tools::EmptyView::new();
@@ -1361,46 +1391,8 @@ pub(in crate::ui) fn build_widgets(
         update::project::workbench_said,
     )?;
 
-    // The view's controls float on it; the tool groups dock where the
-    // layout says, and a group dragged to a new spot is remembered with
-    // the layout.
-    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
-        (view_layout::Floating::Camera, camera.root.clone().upcast()),
-        (
-            view_layout::Floating::PullSlider,
-            view_toolbar.popout.clone().upcast(),
-        ),
-        (
-            view_layout::Floating::PlanSwitch,
-            plan_switch.root.clone().upcast(),
-        ),
-        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
-        (view_layout::Floating::Hint, hint_box.clone().upcast()),
-        (
-            view_layout::Floating::ContactKey,
-            contact_key.clone().upcast(),
-        ),
-        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
-        (view_layout::Floating::Motion, motion.root.clone().upcast()),
-        (
-            view_layout::Floating::StepCard,
-            step_card.root.clone().upcast(),
-        ),
-        (
-            view_layout::Floating::ProblemCard,
-            problem_card.root.clone().upcast(),
-        ),
-        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
-    ];
-    // The groups are laid out for their spots, and follow the workbench
-    // when it moves them, by the window's messages (`update/rendering.rs`).
-    let floats = floating::Floats::new(
-        &figure,
-        floating,
-        workbench.tool_spots(),
-        &to_window,
-        update::rendering::floats_said,
-    );
+    // Each tool group laid out for the spot the workbench starts it in.
+    floats.refresh(workbench.tool_spots());
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1442,23 +1434,11 @@ pub(in crate::ui) fn build_widgets(
     // itself. Only the last breakpoint that matches applies, so each
     // repeats the wider ones. The side edges narrow too, then fold away,
     // so the Model keeps room.
-    for (width, level) in [(1000.0, 0), (860.0, 1), (760.0, 2), (600.0, 3)] {
+    for width in [1000.0, 860.0, 760.0, 600.0] {
+        // Each of the bar and the workbench adds its own setters.
         let narrow = breakpoint(width);
         workbench.narrow_edges(&narrow, width);
-        if level >= 2 {
-            for label in header.switcher_labels() {
-                narrow.add_setter(label, "visible", Some(&false.to_value()));
-            }
-        }
-        if level >= 3 {
-            narrow.add_setter(&header.menu_bar, "visible", Some(&false.to_value()));
-            narrow.add_setter(&header.menu_button, "visible", Some(&true.to_value()));
-            narrow.add_setter(
-                &header.switcher,
-                "css-classes",
-                Some(&["stave-switcher", "compact"].to_value()),
-            );
-        }
+        header.narrow(&narrow, width);
         window.add_breakpoint(narrow);
     }
 

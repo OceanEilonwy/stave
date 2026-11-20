@@ -155,6 +155,7 @@ impl Component for InspectorComponent {
             set_vhomogeneous: false,
             set_interpolate_size: true,
 
+            #[name = "empty_page"]
             add_named[Some(Page::Empty.name())] = &adw::StatusPage {
                 set_title: &tr("Nothing selected"),
                 set_description: Some(&tr("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written.")),
@@ -205,6 +206,8 @@ impl Component for InspectorComponent {
             unsaved: BTreeSet::new(),
         };
         let widgets = view_output!();
+        // Its empty state reads whole in any frame it is docked in.
+        super::empty_state::fit(&widgets.empty_page);
         ComponentParts { model, widgets }
     }
 
