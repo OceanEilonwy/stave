@@ -9,6 +9,8 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# For the page assembler binary (`src/bin/stave-viewer-page.rs`) only.
+anyhow = "1"
 glam = "0.30"
 serde_json = "1"
 stave-check = { path = "../stave-check" }
@@ -25,7 +27,7 @@ thiserror = "2"
 js-sys = "0.3"
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Navigator", "Window"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Navigator", "Window", "console"] }
 wgpu = "30"
 
 [dev-dependencies]

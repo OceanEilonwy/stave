@@ -34,7 +34,12 @@
 #![warn(missing_docs)]
 
 mod files;
+pub mod page;
 mod project;
+mod view;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 pub use files::{Files, FilesError};
 pub use project::{Motion, Project, SuggestionVerdict};
+pub use view::{Drawing, NoSuchMotion, Picked, View};

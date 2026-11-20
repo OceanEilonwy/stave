@@ -4388,6 +4388,7 @@ dependencies = [
 name = "stave-web"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "glam",
  "js-sys",
  "serde_json",
