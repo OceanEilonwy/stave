@@ -173,7 +173,7 @@ pub(super) fn heard(output: &ShowcaseOutput) {
         ShowcaseOutput::Card(EditCardOutput::Action(action)) => {
             eprintln!("edit card: {action:?}");
         }
-        ShowcaseOutput::Menu(EditMenuOutput::Drawn)
+        ShowcaseOutput::Menu(EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace)
         | ShowcaseOutput::Card(
             EditCardOutput::OptionsOpen(_) | EditCardOutput::Link(_) | EditCardOutput::Hover(_),
         ) => {}
@@ -232,6 +232,7 @@ pub(super) fn show<M: 'static>(
             let _ = menu.sender().send(EditMenuInput::Show {
                 heading,
                 items: MenuEntry::list(&items),
+                from_space: false,
             });
             place(menu.widget(), gtk::Align::Start, 470);
             design.add_overlay(menu.widget());
