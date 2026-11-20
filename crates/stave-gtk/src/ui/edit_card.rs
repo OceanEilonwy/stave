@@ -578,8 +578,15 @@ fn fill_card(root: &gtk::Box, slots: CardSlots) -> CardFrame {
         .build();
     name.update_property(&[gtk::accessible::Property::Label(&tr("Name"))]);
     let (apply_buttons, cancel, add) = sections::footer_buttons();
-    let buttons = gtk::Box::builder()
-        .spacing(8)
+    // "Repeat…" at the start of the line, Cancel and Add at its end; in a
+    // panel too narrow for all three (the docked layout's default Edit
+    // panel at GNOME's default font), Cancel and Add go on a line of their
+    // own under it rather than widening the card past its panel.
+    let buttons = adw::WrapBox::builder()
+        .child_spacing(8)
+        .line_spacing(6)
+        .justify(adw::JustifyMode::Spread)
+        .justify_last_line(true)
         .css_classes(["stave-edit-buttons"])
         .build();
     buttons.append(&repeat_button_slot);
