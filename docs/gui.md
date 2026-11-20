@@ -364,7 +364,7 @@ The desktop file, the AppStream metainfo and the icons are in `data/`;
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
 the 3D view (its tab reads "Model"), Parts, Files, Details, Edit, Code,
-Problems and Output.
+Problems, Output and Versions.
 Nothing but the problem pins, the editing menu at a click and the small
 labels that belong on the model (the ghost's verdict, grips and their
 values, the repeat handles) sits over the model. Each panel is a
@@ -381,13 +381,13 @@ status bar's Panels menu (Code also from "Edit the Text" and Ctrl+E; Edit
 when an edit starts), into its home on the compact board (H2,
 `Layout::board`): Parts in a frame above Files on the left; the Model in
 the centre with Code as the next tab of the same frame (so the open files
-sit beside the Model); Details with Edit as tabs on the right; Problems
-and Output at the bottom. Choosing a part reveals its line in the Code
+sit beside the Model); Details with Edit as tabs on the right; Problems,
+Output and Versions at the bottom. Choosing a part reveals its line in the Code
 panel only while that panel is open. The edges start 272 px (left), 340 px
 (right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
 the sides to 220 and 260. A layout file older than the Edit panel puts it
 beside Details wherever that file put Details, and a panel a file doesn't
-mention (Output, in a board B file) goes where the compact board puts it, so a
+mention (Output or Versions, in a board B file) goes where the compact board puts it, so a
 saved board B still opens as board B. The layout is remembered per user
 in `~/.config/stave/layout` (saved on every drop and when the window
 closes; a broken file means the default) and never in a `.stave` file:
@@ -498,6 +498,8 @@ first launch's three panels back, the tool groups in their usual spots.
   back to the front, showing what was just added.
 - **Output panel** lists what each check said, one line each ("Checked 5
   files · 0 errors · 0 warnings · 26 ms"), the newest at the foot.
+- **Versions panel** lists the suggestions AI apps made, then the
+  project's versions, newest first; see [Versions](#versions).
 - **Status bar**: the bottom panels folded into it. On its left,
   "Problems N" (the count green at none, amber otherwise) and "Output"
   are tab-like buttons: each opens the bottom edge on its panel
@@ -795,6 +797,65 @@ free of its warning.
   handle ringed red past it), "closed 0°", "blocked from 0.6°", "opens to
   110°". The line at the top of the view says "Posed at contact · door
   at 2.6°".
+
+## Versions
+
+A project's versions are every saved state of it, kept in the project
+folder (`.stave/history/`), with the suggestions AI apps make
+(`docs/superpowers/specs/2026-11-20-ai-integration-design.md`,
+"Revisions"). The window names them in plain words only: Versions,
+Suggestions, Apply, Discard, Undo. Everyone works on a line of their own
+and the project's main line moves only when a line is merged into it; the
+window's line is the folder.
+
+- **Saving merges.** Every save the Code panel makes (Ctrl+S, saving them
+  all, trying a failed save again: `FilesOutput::SavedFiles`) is recorded
+  as the person's version ("Saved shelf.stave", "Saved 3 files") and
+  merged into the main line (`stave_app::versions::save`), off the main
+  thread. A save is never refused for problems in the design; one
+  identical to the main line records nothing. An edit added in the 3D
+  view straight to a file with no tab open is recorded with the next save.
+- **Turning versions on.** The first save after opening a project whose
+  versions are off asks, once, "Turn on versions for this project?"
+  (Not Now / Turn On). Turn On records the project as it is ("Turned on
+  versions"). Not Now is remembered for that project in
+  `~/.config/stave/versions-not-now` (one folder per line) and never asked
+  again; Escape puts the question away until the project is next opened.
+  The Versions panel of a project whose versions are off says so and has
+  a Turn On of its own. A project inside another project's history (a
+  folder in a git repository that isn't its root, as `examples/` is)
+  can't have versions: nothing is asked, and the panel says why, naming
+  the folder around it, and that a copy of the project in a folder of its
+  own can have them.
+- **Catching up.** When someone else moves the main line (an AI app
+  applies a suggestion, or undoes), the window hears it from
+  `.stave/history` (`HistoryWatcher`) and catches up: main's changes are
+  written into the folder at once, and the check that follows reloads the
+  Code panel's clean files, as for any file changed on disk. If the window
+  holds unsaved changes in a file main changed, nothing is written: a
+  toast says "shelf.stave changed in the project; your unsaved changes are
+  kept, and the two meet when you save", and the next save merges both
+  (`stave_app::versions::when_to_catch_up`). Where both changed the same
+  lines, the file is written with both kept between conflict marker lines
+  (`docs/grammar.md`, "Conflicts"), and a toast says so. Opening a project
+  catches it up too.
+- **The Versions panel** (`VersionsPanel`, at the bottom beside Output on
+  the compact board): "Suggestions" with Undo beside the heading, each
+  suggestion its title over "From Claude Desktop" and three buttons:
+  **Show** tries its patches on the design and shows the result as a
+  ghost over the model, a change in progress like any other (nothing is
+  written unless it is added); **Apply** tries its patches again on the
+  main line as it is now and, when every one fits and the design checks
+  with no errors, makes the result the main line's latest version, by the
+  person (refused otherwise, saying why; when a patch no longer fits, the
+  suggestion is moved onto the main line, and one whose changes then
+  clash says so and can't be applied until they are resolved); **Discard**
+  throws it away. Then "Versions": each its message over who made it and
+  when ("Henry, 2026-11-20 10:00"), the latest 50. **Undo** undoes the
+  last change to the project by anyone, the person or an AI app (an AI
+  app's own undo reaches only its own changes), and the folder catches
+  up. Each ends in a toast ("Applied “Widen the drawer”", "Undid “save:
+  Saved shelf.stave”") or says why not.
 
 ## Focus mode
 

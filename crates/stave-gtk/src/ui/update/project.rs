@@ -275,6 +275,10 @@ pub(in crate::ui) fn wire(window: &Window) {
 /// launch).
 pub(in crate::ui) fn files_said(output: FilesOutput<Box<WindowInput>>) -> WindowInput {
     match output {
+        // Saving merges into the project's versions.
+        FilesOutput::SavedFiles(files) => {
+            return crate::ui::versions::VersionsInput::Saved(files).into();
+        }
         FilesOutput::Link(found) => ProjectInput::TextLinked(found),
         FilesOutput::Go { from, to } => ProjectInput::Go { from, to },
         FilesOutput::Check => ProjectInput::Dispatch(Command::Check),
@@ -437,7 +441,12 @@ impl Window {
                 }
             }
             ProjectInput::FilesOpened(documents) => self.widgets.files.set_documents(documents),
-            ProjectInput::Unsaved(unsaved) => self.widgets.inspector.show_unsaved(unsaved),
+            ProjectInput::Unsaved(unsaved) => {
+                // Catching up with the project's versions never writes
+                // over these.
+                self.versions.set_unsaved(unsaved.clone());
+                self.widgets.inspector.show_unsaved(unsaved);
+            }
             ProjectInput::FileTabs(tabs) => {
                 // The open files as tabs beside the Model, wherever the
                 // Code panel is docked.
@@ -456,7 +465,8 @@ impl Window {
                 | workbench::PanelId::Details
                 | workbench::PanelId::Edit
                 | workbench::PanelId::Problems
-                | workbench::PanelId::Output => {}
+                | workbench::PanelId::Output
+                | workbench::PanelId::Versions => {}
             },
             ProjectInput::CaptureTick(capture) => self.capture_tick(capture),
         }
@@ -1017,6 +1027,7 @@ impl Window {
             state.opening = None;
         }
         self.watch();
+        self.versions_opened();
         self.show_folder();
         self.widgets.tree.show_tree(
             inspect::PartsTree::default(),

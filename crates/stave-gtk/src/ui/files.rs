@@ -295,6 +295,11 @@ pub enum FilesOutput<Then> {
         /// What waited on it.
         then: Option<Then>,
     },
+    /// These files were saved to disk (by Ctrl+S, saving them all, or
+    /// trying a failed save again), sent before any [`FilesOutput::Saved`]
+    /// answering the same saving: the window merges them into the
+    /// project's versions.
+    SavedFiles(Vec<PathBuf>),
     /// The answer to [`FilesInput::CountUnsaved`].
     UnsavedCounted {
         /// How many documents have unsaved changes.
@@ -416,6 +421,15 @@ fn same_text(analysis: &Analysis, document: &Document, text: &str) -> Option<sta
 
 fn escape(text: &str) -> String {
     glib::markup_escape_text(text).to_string()
+}
+
+/// Where a saved document is on disk: a file of the project's (the
+/// standard library's are never saved).
+fn saved_path(document: &Document) -> Option<PathBuf> {
+    match document {
+        Document::File(path) => Some(path.clone()),
+        Document::Std { .. } => None,
+    }
 }
 
 /// The whole text of a buffer.
@@ -682,8 +696,18 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             FilesInput::Save => self.save(),
             FilesInput::Format => self.format(),
             FilesInput::SaveAll { then } => {
+                let dirty: Vec<Document> = self.buffers.dirty().cloned().collect();
                 let result = self.buffers.save_all();
                 self.refresh_markers();
+                // Every file saved, even when a later one failed.
+                let saved: Vec<PathBuf> = dirty
+                    .iter()
+                    .filter(|document| !self.buffers.is_dirty(document))
+                    .filter_map(saved_path)
+                    .collect();
+                if !saved.is_empty() {
+                    self.tell(FilesOutput::SavedFiles(saved));
+                }
                 let ok = match result {
                     Ok(()) => true,
                     Err(error) => {
@@ -985,8 +1009,16 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         }
         let result = self.buffers.save(&document);
         self.refresh_markers();
-        if let Err(error) = result {
-            self.save_failed(&error);
+        match result {
+            Ok(()) => self.tell_saved(&document),
+            Err(error) => self.save_failed(&error),
+        }
+    }
+
+    /// Tells the window a document was saved to disk.
+    fn tell_saved(&self, document: &Document) {
+        if let Some(path) = saved_path(document) {
+            self.tell(FilesOutput::SavedFiles(vec![path]));
         }
     }
 
@@ -1028,10 +1060,13 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         let result = self.buffers.save(document);
         self.refresh_markers();
         match result {
-            Ok(()) => self.notice(fill_in(
-                &tr("Saved {file}"),
-                &[("file", &document.file_name())],
-            )),
+            Ok(()) => {
+                self.tell_saved(document);
+                self.notice(fill_in(
+                    &tr("Saved {file}"),
+                    &[("file", &document.file_name())],
+                ));
+            }
             Err(error) => self.save_failed(&error),
         }
     }
@@ -2593,6 +2628,76 @@ mod tests {
             std::fs::read_to_string(&path).is_ok_and(|text| text.ends_with("// typed\n")),
             "written to disk"
         );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn saving_tells_the_owner_which_files_were_written() {
+        on_gtk_thread(saving_names_the_files);
+    }
+
+    /// Saving the file showing, and saving them all, each tells the owner
+    /// the files written (for the versions: a save is merged into the
+    /// project's main line), the latter before its answer; saving with
+    /// nothing unsaved names none.
+    fn saving_names_the_files() {
+        let folder = scratch_copy("wall_shelf", "saved-files");
+        let path = folder.join("shelf.stave");
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        page.open_document(&Document::File(path.clone()));
+        settle();
+        let documents = heard
+            .borrow_mut()
+            .drain(..)
+            .filter_map(|output| match output {
+                FilesOutput::Documents(documents) => Some(documents),
+                _ => None,
+            })
+            .next_back();
+        page.set_documents(documents.unwrap_or_default());
+        let Some(buffer) = page.open_buffer(&path) else {
+            panic!("the file's buffer is published");
+        };
+        let saved = |heard: &RefCell<Vec<FilesOutput<&'static str>>>| -> Vec<Vec<PathBuf>> {
+            heard
+                .borrow()
+                .iter()
+                .filter_map(|output| match output {
+                    FilesOutput::SavedFiles(files) => Some(files.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        buffer.insert(&mut buffer.end_iter(), "\n// one\n");
+        settle();
+        heard.borrow_mut().clear();
+        page.save();
+        settle();
+        assert_eq!(saved(&heard), vec![vec![path.clone()]]);
+
+        buffer.insert(&mut buffer.end_iter(), "// two\n");
+        settle();
+        heard.borrow_mut().clear();
+        page.save_all(Some("go on"));
+        settle();
+        assert_eq!(saved(&heard), vec![vec![path.clone()]]);
+        let order: Vec<bool> = heard
+            .borrow()
+            .iter()
+            .filter_map(|output| match output {
+                FilesOutput::SavedFiles(_) => Some(true),
+                FilesOutput::Saved { .. } => Some(false),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, [true, false], "the files come before the answer");
+
+        heard.borrow_mut().clear();
+        page.save_all(None);
+        settle();
+        assert!(saved(&heard).is_empty(), "nothing was unsaved");
         let _ = std::fs::remove_dir_all(&folder);
     }
 

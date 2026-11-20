@@ -57,6 +57,7 @@ pub mod session;
 pub mod solve_edit;
 pub mod spaces;
 pub mod stops;
+pub mod versions;
 pub mod view;
 
 use stave_lang::{Diagnostic, SourceMap};
