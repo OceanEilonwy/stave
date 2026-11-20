@@ -329,6 +329,17 @@ impl TabStripComponent {
                     }
             });
             made.mark(marked);
+            // The strip scrolls when its tabs don't fit: the marked one is
+            // brought into sight.
+            if marked
+                && let Some(viewport) = made
+                    .root
+                    .parent()
+                    .and_then(|tabs| tabs.parent())
+                    .and_downcast::<gtk::Viewport>()
+            {
+                viewport.scroll_to(&made.root, None);
+            }
         }
         let menu = shown.as_ref().and_then(|page| page.menu_model());
         self.menu.set_visible(menu.is_some());
@@ -488,6 +499,10 @@ mod imp {
     pub struct TabStrip {
         /// The frame whose pages are the tabs (the `frame` property).
         pub frame: glib::WeakRef<panel::Frame>,
+        /// Holds the tabs, scrolling them sideways when there are more
+        /// than fit: a strip as wide as all its tabs would widen its dock
+        /// column with every file opened.
+        pub scroller: gtk::ScrolledWindow,
         /// Widgets the frame adds at the end, then the menu.
         pub end: gtk::Box,
         /// The shown panel's menu.
@@ -546,15 +561,19 @@ mod imp {
             self.menu.add_css_class("flat");
             self.menu.add_css_class("stave-tab-menu");
             self.end.append(&self.menu);
+            self.scroller
+                .set_hscrollbar_policy(gtk::PolicyType::External);
+            self.scroller.set_vscrollbar_policy(gtk::PolicyType::Never);
+            self.scroller.set_propagate_natural_width(true);
+            self.scroller.set_hexpand(true);
+            self.scroller.set_parent(&*obj);
             self.end.set_parent(&*obj);
         }
 
         fn dispose(&self) {
             // The component shuts down when the strip is freed and drops
             // its controller; its shutdown stops watching the frame.
-            if let Some(tabs) = self.tabs.get() {
-                tabs.widget().unparent();
-            }
+            self.scroller.unparent();
             self.end.unparent();
         }
     }
@@ -616,9 +635,8 @@ impl TabStrip {
                 own,
             })
             .forward(owner, message);
-        // Before the menu, as the strip lays them out.
-        tabs.widget()
-            .insert_before(&strip, Some(imp.end.upcast_ref::<gtk::Widget>()));
+        // In the scroller, before the menu.
+        imp.scroller.set_child(Some(tabs.widget()));
         let _ = tabs
             .sender()
             .send(TabStripInput::SetFrame(imp.frame.upgrade()));
@@ -969,6 +987,44 @@ mod tests {
             *shown.borrow(),
             vec![(PanelId::Code, 0), (PanelId::Code, 1)],
             "each after its update, the inner click after the first"
+        );
+    }
+
+    #[test]
+    fn more_tabs_never_make_the_strip_wider_than_it_must_be() {
+        on_gtk_thread(more_tabs_scroll);
+    }
+
+    /// Selecting things in the 3D view opens their files as the Code
+    /// panel's own tabs. The strip used to be as wide as all its tabs at
+    /// least, so each file opened widened the dock column holding it and
+    /// the 3D view jumped narrower. The tabs now scroll sideways: the
+    /// strip's least width stays what it was with two tabs.
+    fn more_tabs_scroll() {
+        let (owner, _) = recorder::<TabStripOutput>();
+        let (_frame, strip, _model, _code) =
+            frame_with_two_panels_under(TabStrip::new(two_files(), &owner, std::convert::identity));
+        settle();
+        let least = |strip: &TabStrip| strip.measure(gtk::Orientation::Horizontal, -1).0;
+        let before = least(&strip);
+        let many: Vec<PageTab> = (0..12)
+            .map(|index| PageTab {
+                title: format!("a_long_file_name_{index}.stave"),
+                tooltip: String::new(),
+                unsaved: false,
+                mark: None,
+                active: index == 11,
+            })
+            .collect();
+        let mut own = OwnTabs::new();
+        own.insert(PanelId::Code, many);
+        strip.show_own_tabs(own);
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 13, "the Model, then twelve files");
+        assert!(
+            least(&strip) <= before,
+            "the strip asks for {} px with twelve files, {before} px with two",
+            least(&strip)
         );
     }
 

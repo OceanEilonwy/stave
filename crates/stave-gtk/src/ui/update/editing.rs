@@ -143,6 +143,16 @@ pub(in crate::ui) enum EditingInput {
     RelistGrips,
     /// A grip's stops were found on the worker thread.
     GripStopsFound(Box<FoundStops>),
+    /// The full offer for a selected item was worked out on a worker
+    /// thread.
+    ItemOfferFound {
+        /// The item.
+        item: String,
+        /// The shown design it was asked for, by address.
+        design: usize,
+        /// What the session offers for it.
+        offer: Option<Box<stave_app::item_offer::ItemOffer>>,
+    },
     /// A grip's number was clicked: it turns into an entry.
     OpenGripEntry(usize),
     /// A value was typed into a grip's entry.
@@ -272,6 +282,11 @@ impl Window {
                 let events = self.session.grip_stops_found(*found);
                 self.handle(events);
             }
+            EditingInput::ItemOfferFound {
+                item,
+                design,
+                offer,
+            } => self.item_offer_found(&item, design, offer.map(|offer| *offer)),
             EditingInput::OpenGripEntry(index) => self.open_entry(index),
             EditingInput::GripTyped { index, text } => self.apply_typed(index, &text),
             EditingInput::CloseGripTyping(index) => self.close_typing(index),

@@ -626,3 +626,28 @@ fn only_a_project_with_parts_and_no_errors_can_be_built() {
         "Nothing to build: the project has no parts yet"
     );
 }
+
+#[test]
+fn the_quick_item_offer_agrees_with_the_full_one_worked_out_off_the_main_thread() {
+    // A card shows the quick offer the moment an item is selected and the
+    // full one when its job, run on another thread, comes back: both say
+    // the same pieces and repeat; only the full one knows the mirror.
+    let session = checked_session(example("clothing_cabinet"));
+    for item in ["case", "divider", "shelf", "drawer"] {
+        let quick = session
+            .quick_item_offer(item)
+            .expect("the cabinet is shown");
+        assert_eq!(quick.mirror, None, "{item}");
+        let job = session.item_offer_job(item);
+        let full = std::thread::spawn(move || job.run())
+            .join()
+            .expect("the job runs")
+            .expect("the cabinet places");
+        assert_eq!(
+            (quick.pieces, quick.repeatable),
+            (full.pieces, full.repeatable),
+            "{item}"
+        );
+        assert_eq!(Some(full), session.item_offer(item), "{item}");
+    }
+}
