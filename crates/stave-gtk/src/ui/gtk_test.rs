@@ -80,6 +80,26 @@ pub(crate) fn settle() {
     }
 }
 
+/// Settles until `done` holds, or `limit` has passed: `true` when it
+/// holds. For what finishes on a later frame or timer, not when the main
+/// loop is next idle: [`settle`] returns as soon as nothing is due, and
+/// an animation (libadwaita's dialogs fade out even when force-closed,
+/// holding the dialog until the last frame) runs on the frame clock's
+/// time, so it may still be running then, more so on a busy machine.
+pub(crate) fn settle_until(limit: std::time::Duration, done: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        settle();
+        if done() {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 /// The buttons under `root` (itself included) that show no words and have
 /// no accessible name, by their tooltip: a screen reader would call each
 /// just "button". A menu button counts as one button, not its inner one.

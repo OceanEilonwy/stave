@@ -38,8 +38,8 @@ impl EditPanel {
             .vexpand(true)
             .hexpand(true)
             .build();
+        // Each card's own component makes its root fill the height.
         for card in cards {
-            card.set_vexpand(true);
             holder.append(*card);
         }
         let root = gtk::Stack::builder().hexpand(true).vexpand(true).build();

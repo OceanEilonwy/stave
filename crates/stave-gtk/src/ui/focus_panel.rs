@@ -55,8 +55,14 @@ fn check(title: &str) -> gtk::CheckButton {
 }
 
 /// A toggle row around `check`: bold title, dim words, the check box at
-/// the end. Returns the row and its words.
-fn toggle_row(title: &str, words: &str, check: &gtk::CheckButton) -> (gtk::Box, gtk::Label) {
+/// the end. A click on its words calls `pressed`. Returns the row and its
+/// words.
+fn toggle_row(
+    title: &str,
+    words: &str,
+    check: &gtk::CheckButton,
+    pressed: impl Fn() + 'static,
+) -> (gtk::Box, gtk::Label) {
     let text = gtk::Label::builder()
         .use_markup(true)
         .xalign(0.0)
@@ -70,14 +76,10 @@ fn toggle_row(title: &str, words: &str, check: &gtk::CheckButton) -> (gtk::Box, 
         .build();
     row.append(&text);
     row.append(check);
-    // Clicking anywhere on the row toggles it, as clicking the box would.
+    // Clicking anywhere on the row toggles it, as clicking the box would:
+    // the component's update turns the box.
     let click = gtk::GestureClick::new();
-    let target = check.downgrade();
-    click.connect_released(move |_, _, _, _| {
-        if let Some(check) = target.upgrade() {
-            check.set_active(!check.is_active());
-        }
-    });
+    click.connect_released(move |_, _, _, _| pressed());
     text.add_controller(click);
     (row, text)
 }
@@ -133,6 +135,20 @@ pub enum FocusPanelInput {
     TintToggled(bool),
     /// People turned Fade other parts on or off.
     FadeToggled(bool),
+    /// People clicked a toggle row's words: its box turns, as a click on
+    /// the box would.
+    RowPressed(FocusToggle),
+}
+
+/// One of the panel's three toggles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusToggle {
+    /// X-ray.
+    Xray,
+    /// Tint cut faces.
+    Tint,
+    /// Fade other parts.
+    Fade,
 }
 
 /// What the focus panel tells its owner.
@@ -220,9 +236,28 @@ impl Component for FocusPanelComponent {
         let members = card();
         let rows = card();
 
-        let (xray_row, xray_label) = toggle_row(&tr("X-ray"), &tr("see into the part"), &xray);
-        let (tint_row, _) = toggle_row(&tr("Tint cut faces"), &tr("holes, mortises, dados"), &tint);
-        let (fade_row, _) = toggle_row(&tr("Fade other parts"), "", &fade);
+        let pressed = |toggle: FocusToggle| {
+            let input = sender.input_sender().clone();
+            move || input.emit(FocusPanelInput::RowPressed(toggle))
+        };
+        let (xray_row, xray_label) = toggle_row(
+            &tr("X-ray"),
+            &tr("see into the part"),
+            &xray,
+            pressed(FocusToggle::Xray),
+        );
+        let (tint_row, _) = toggle_row(
+            &tr("Tint cut faces"),
+            &tr("holes, mortises, dados"),
+            &tint,
+            pressed(FocusToggle::Tint),
+        );
+        let (fade_row, _) = toggle_row(
+            &tr("Fade other parts"),
+            "",
+            &fade,
+            pressed(FocusToggle::Fade),
+        );
         let checks = [
             (
                 &xray,
@@ -343,6 +378,17 @@ impl Component for FocusPanelComponent {
             FocusPanelInput::XrayToggled(on) => Some(FocusPanelOutput::Xray(on)),
             FocusPanelInput::TintToggled(on) => Some(FocusPanelOutput::Tint(on)),
             FocusPanelInput::FadeToggled(on) => Some(FocusPanelOutput::Fade(on)),
+            FocusPanelInput::RowPressed(toggle) => {
+                let [xray, tint, fade] = &widgets.checks;
+                let (check, _) = match toggle {
+                    FocusToggle::Xray => xray,
+                    FocusToggle::Tint => tint,
+                    FocusToggle::Fade => fade,
+                };
+                // People's change: its handler reports it.
+                check.set_active(!check.is_active());
+                None
+            }
         };
         if let Some(output) = output {
             // Nobody listening is not a mistake.
@@ -709,6 +755,25 @@ mod tests {
                 FocusPanelOutput::Fade(false),
             ]
         );
+        // A click on a toggle row's words only queues; the panel's
+        // update turns the box, and its handler reports people's change.
+        heard.borrow_mut().clear();
+        let words = panel
+            .tint
+            .parent()
+            .and_then(|row| row.first_child())
+            .expect("the tint row's words");
+        let click = words
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|found| found.downcast::<gtk::GestureClick>().ok())
+            .expect("the words take a click");
+        click.emit_by_name::<()>("released", &[&1_i32, &0.0_f64, &0.0_f64]);
+        assert!(!panel.tint.is_active(), "the click is only queued");
+        settle();
+        assert!(panel.tint.is_active(), "the box turned");
+        assert_eq!(*heard.borrow(), vec![FocusPanelOutput::Tint(true)]);
         let root = panel.root.downgrade();
         let done = panel.done.downgrade();
         let input = panel.controller.sender().clone();

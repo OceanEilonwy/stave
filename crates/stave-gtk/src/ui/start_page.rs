@@ -403,7 +403,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{listener, on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, settle, settle_until};
 
     /// The folder a test's page is told was chosen, as the file chooser
     /// would tell it.
@@ -596,7 +596,14 @@ mod tests {
         }
         settle();
         assert!(page.model().new_project.is_none(), "let go once closed");
-        assert!(shown.upgrade().is_none(), "and freed");
+        // The dialog fades out on the window's frame clock even when
+        // force-closed, and holds itself until the fade's last frame.
+        assert!(
+            settle_until(std::time::Duration::from_secs(10), || shown
+                .upgrade()
+                .is_none()),
+            "and freed"
+        );
 
         page.widget().close();
         settle();

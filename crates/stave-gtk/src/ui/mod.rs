@@ -590,6 +590,10 @@ pub(in crate::ui) struct Widgets {
     /// A short line at the top of the view: focus mode, posed problems.
     hint: gtk::Label,
     hint_box: gtk::Box,
+    /// Low in the view: why editing in 3D is off while the text doesn't
+    /// read.
+    block_line: gtk::Label,
+    block_box: gtk::Box,
     /// The problems pinned off screen: one chip at the view's edge.
     edge_pin: gtk::Button,
     edge_label: gtk::Label,
@@ -1271,6 +1275,19 @@ pub(in crate::ui) fn build_widgets(
         .visible(false)
         .build();
     hint_box.append(&hint);
+    // Why editing in 3D is off while the text doesn't read: low in the
+    // view, just above the foot, wrapped, where it covers neither the
+    // parts list nor a card.
+    let block_line = gtk::Label::builder()
+        .wrap(true)
+        .max_width_chars(56)
+        .justify(gtk::Justification::Center)
+        .build();
+    let block_box = gtk::Box::builder()
+        .css_classes(["stave-chip"])
+        .visible(false)
+        .build();
+    block_box.append(&block_line);
     let edge_label = gtk::Label::new(None);
     edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     edge_label.set_max_width_chars(60);
@@ -1315,6 +1332,7 @@ pub(in crate::ui) fn build_widgets(
             problem_card.root.clone().upcast(),
         ),
         (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
+        (view_layout::Floating::BlockLine, block_box.clone().upcast()),
     ];
     // The groups are laid out for their spots, and follow the workbench
     // when it moves them, by the window's messages (`update/rendering.rs`).
@@ -1477,6 +1495,8 @@ pub(in crate::ui) fn build_widgets(
         file_list,
         hint,
         hint_box,
+        block_line,
+        block_box,
         edge_pin,
         edge_label,
         finder,
