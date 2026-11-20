@@ -58,7 +58,6 @@ mod view_tools;
 mod viewport;
 mod workbench;
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -106,6 +105,10 @@ use viewport::Viewport;
 /// Moving the mouse less than this many pixels between press and release
 /// is a click, not a drag.
 const CLICK_SLOP: f64 = 4.0;
+
+/// The window's action that removes the selection (Delete): enabled only
+/// while Delete has something to do ([`Window::offer_removal`]).
+pub(in crate::ui) const REMOVE_SELECTED: &str = "remove-selected";
 
 /// A mouse's Back button (the thumb button nearer the wrist), as GDK
 /// numbers it.
@@ -524,11 +527,13 @@ struct State {
     marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
-    /// Whether Delete has something to remove ([`Window::has_removable`]),
-    /// set after each message. The window's key handler reads this copy
-    /// to take Delete or pass it on, without asking the model from inside
-    /// GTK's signal.
-    removable: Rc<Cell<bool>>,
+    /// Whether a file of the project doesn't read (a syntax error), so
+    /// editing in 3D is off: worked out when the editor's analysis
+    /// arrives ([`ProjectInput::Analysed`](update::project::ProjectInput::Analysed)).
+    text_blocked: bool,
+    /// The question about unsaved changes is showing, and this waits on
+    /// people's answer.
+    unsaved_then: Option<Box<WindowInput>>,
 }
 
 /// The clock of something that plays frame by frame: the frame time it
@@ -809,7 +814,8 @@ impl Component for Window {
                 hovered: Vec::new(),
                 marks: Rc::default(),
                 edit_script: options.edit_script,
-                removable: Rc::default(),
+                text_blocked: false,
+                unsaved_then: None,
             },
             pins: Pins::default(),
             watcher: None,
@@ -818,6 +824,9 @@ impl Component for Window {
             sender,
             style_handler: None,
         };
+        update::add_action(&root, REMOVE_SELECTED, &window.input(), || {
+            update::editing::EditingInput::RemoveSelected
+        });
         update::project::wire(&window);
         update::selection::wire(&mut window);
         update::rendering::wire(&mut window);
@@ -852,7 +861,7 @@ impl Component for Window {
         root.present();
         window.show_folder();
         window.dispatch(Command::Check);
-        window.state.removable.set(window.has_removable());
+        window.offer_removal();
         ComponentParts {
             model: window,
             widgets: (),
@@ -871,8 +880,9 @@ impl Component for Window {
             WindowInput::Editing(message) => self.update_editing(message),
             WindowInput::Rendering(message) => self.update_rendering(message),
         }
-        // The selection and the change in progress change only here.
-        self.state.removable.set(self.has_removable());
+        // The selection, the change in progress and whether the text
+        // reads change only here.
+        self.offer_removal();
     }
 
     fn shutdown(&mut self, _widgets: &mut (), _output: relm4::Sender<WindowOutput>) {
@@ -883,6 +893,22 @@ impl Component for Window {
 }
 
 impl Window {
+    /// Enables the window's `remove-selected` action (Delete) while there
+    /// is something to remove, or while the text doesn't read (then Delete
+    /// says why editing in 3D is off); disables it otherwise, so the Delete
+    /// key's handler passes the key on to other widgets. Called at the end
+    /// of every message: the key's handler reads the action's state, never
+    /// the model.
+    fn offer_removal(&self) {
+        let offered = self.state.text_blocked || self.has_removable();
+        if let Some(action) = self.widgets.window.lookup_action(REMOVE_SELECTED)
+            && let Ok(action) = action.downcast::<gio::SimpleAction>()
+            && action.is_enabled() != offered
+        {
+            action.set_enabled(offered);
+        }
+    }
+
     /// A clone of the window's input sender, for a handler, a timer or
     /// background work to send messages with. Sending fails quietly once
     /// the window has gone.
@@ -1270,7 +1296,7 @@ pub(in crate::ui) fn build_widgets(
         .hexpand(true)
         .vexpand(true)
         .build();
-    let files = Files::new();
+    let files = Files::new(&to_window, update::project::files_said);
     let file_list = panels::FilesList::new(&to_window, update::selection::file_list_said);
     let problems = panels::ProblemsPanel::new(&to_window, update::selection::problems_said);
     let output = output::OutputPanel::new();
@@ -1483,6 +1509,8 @@ fn narrow(value: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 

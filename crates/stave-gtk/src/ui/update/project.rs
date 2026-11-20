@@ -65,6 +65,9 @@ pub(in crate::ui) enum ProjectInput {
         /// Where it goes.
         to: SourceLocation,
     },
+    /// The editor has analysed the project again: the window keeps it,
+    /// and whether the text reads.
+    Analysed(Rc<Analysis>),
     /// The editor asks to show a name in the 3D view.
     ShowIn3d {
         /// The analysis the name is in.
@@ -119,14 +122,10 @@ pub(in crate::ui) enum ProjectInput {
     },
     /// Ctrl+F with the keyboard outside the text: the finder.
     SearchElsewhere,
-    /// People answered the question about unsaved changes.
-    UnsavedAnswered {
-        /// What they chose.
-        answer: UnsavedAnswer,
-        /// What was waiting on the answer: sent unless they chose to stay
-        /// or saving failed.
-        then: Box<WindowInput>,
-    },
+    /// People answered the question about unsaved changes. What was
+    /// waiting on the answer (kept in the window's state while the
+    /// question shows) is sent unless they chose to stay or saving failed.
+    UnsavedAnswered(UnsavedAnswer),
     /// With `--window-screenshot`: look again whether the window has
     /// drawn, and save it once it has.
     CaptureTick(Capture),
@@ -246,36 +245,10 @@ pub(in crate::ui) fn wire(window: &Window) {
         sender.emit(ProjectInput::GoToFolder(path).into());
     }));
 
-    // The editor tells the window where the cursor is, where to go, when
-    // typing has paused and when a tab was chosen, and answers what the
-    // window asked; it publishes its buffers, its unsaved files and its
-    // tabs.
-    let sender = input.clone();
-    widgets.files.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                FilesOutput::Link(found) => ProjectInput::TextLinked(found),
-                FilesOutput::Go { from, to } => ProjectInput::Go { from, to },
-                FilesOutput::Check => ProjectInput::Dispatch(Command::Check),
-                FilesOutput::ShowIn3d { analysis, symbol } => {
-                    ProjectInput::ShowIn3d { analysis, symbol }
-                }
-                FilesOutput::Open => ProjectInput::Dispatch(Command::ShowEditor(Editor::Open)),
-                FilesOutput::Notice(text) => ProjectInput::Notice { text, seconds: 4 },
-                FilesOutput::Saved { ok, then } => ProjectInput::FilesSaved { ok, then },
-                FilesOutput::UnsavedCounted { count, then } => {
-                    ProjectInput::UnsavedCounted { count, then }
-                }
-                FilesOutput::Documents(documents) => ProjectInput::FilesOpened(documents),
-                // Kept by the page itself as it arrives.
-                FilesOutput::Analysed(_) => return,
-                FilesOutput::Unsaved(unsaved) => ProjectInput::Unsaved(unsaved),
-                FilesOutput::Tabs(tabs) => ProjectInput::FileTabs(tabs),
-                FilesOutput::NotInText => ProjectInput::SearchElsewhere,
-            }
-            .into(),
-        );
-    });
+    // The editor's outputs (where the cursor is, where to go, when typing
+    // has paused, a tab chosen, the answers to what the window asked, its
+    // buffers, its analysis, its unsaved files and its tabs) were
+    // forwarded when `build_widgets` launched it (`files_said`).
     // The workbench's outputs (the layout not saved, the tool groups
     // moved, one of the Code panel's tabs chosen) were forwarded when
     // `build_widgets` launched it.
@@ -291,6 +264,27 @@ pub(in crate::ui) fn wire(window: &Window) {
             glib::Propagation::Proceed
         }
     });
+}
+
+/// The Code panel's outputs as the window's messages (forwarded at
+/// launch).
+pub(in crate::ui) fn files_said(output: FilesOutput<Box<WindowInput>>) -> WindowInput {
+    match output {
+        FilesOutput::Link(found) => ProjectInput::TextLinked(found),
+        FilesOutput::Go { from, to } => ProjectInput::Go { from, to },
+        FilesOutput::Check => ProjectInput::Dispatch(Command::Check),
+        FilesOutput::ShowIn3d { analysis, symbol } => ProjectInput::ShowIn3d { analysis, symbol },
+        FilesOutput::Open => ProjectInput::Dispatch(Command::ShowEditor(Editor::Open)),
+        FilesOutput::Notice(text) => ProjectInput::Notice { text, seconds: 4 },
+        FilesOutput::Saved { ok, then } => ProjectInput::FilesSaved { ok, then },
+        FilesOutput::UnsavedCounted { count, then } => ProjectInput::UnsavedCounted { count, then },
+        FilesOutput::Documents(documents) => ProjectInput::FilesOpened(documents),
+        FilesOutput::Analysed(analysis) => ProjectInput::Analysed(analysis),
+        FilesOutput::Unsaved(unsaved) => ProjectInput::Unsaved(unsaved),
+        FilesOutput::Tabs(tabs) => ProjectInput::FileTabs(tabs),
+        FilesOutput::NotInText => ProjectInput::SearchElsewhere,
+    }
+    .into()
 }
 
 /// The workbench's outputs as the window's messages (forwarded at
@@ -409,12 +403,21 @@ impl Window {
                     self.ask_unsaved_question(count, then);
                 }
             }
-            ProjectInput::UnsavedAnswered { answer, then } => match answer {
-                // Saving answers by message; `then` goes on if it worked.
-                UnsavedAnswer::Save => self.widgets.files.save_all(Some(then)),
-                UnsavedAnswer::Discard => self.send(*then),
-                UnsavedAnswer::Stay => self.state.closing = false,
-            },
+            ProjectInput::UnsavedAnswered(answer) => {
+                let Some(then) = self.state.unsaved_then.take() else {
+                    return;
+                };
+                match answer {
+                    // Saving answers by message; `then` goes on if it worked.
+                    UnsavedAnswer::Save => self.widgets.files.save_all(Some(then)),
+                    UnsavedAnswer::Discard => self.send(*then),
+                    UnsavedAnswer::Stay => self.state.closing = false,
+                }
+            }
+            ProjectInput::Analysed(analysis) => {
+                self.state.text_blocked = edit_view::block_line(&analysis).is_some();
+                self.widgets.files.set_analysis(analysis);
+            }
             ProjectInput::FilesSaved { ok, then } => {
                 if ok {
                     if let Some(then) = then {
@@ -973,15 +976,15 @@ impl Window {
         ]);
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        // The answer and what waits on it go back to the window as a
-        // message: the dialog holds no part of the window.
+        // What waits on the answer stays with the window; the answer
+        // comes back as a message, and the dialog holds no part of the
+        // window.
+        self.state.unsaved_then = Some(then);
         let input = self.input();
-        let then = Cell::new(Some(then));
         dialog.connect_response(None, move |_, response| {
-            let Some(then) = then.take() else { return };
             let answer = UnsavedAnswer::from_response(response);
             // The window may have gone; then nobody needs to know.
-            let _ = input.send(ProjectInput::UnsavedAnswered { answer, then }.into());
+            let _ = input.send(ProjectInput::UnsavedAnswered(answer).into());
         });
         dialog.present(Some(&self.widgets.window));
     }
@@ -1058,7 +1061,7 @@ impl Window {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
@@ -1206,6 +1209,102 @@ mod tests {
             drop(self.controller);
             settle();
         }
+    }
+
+    /// Presses Delete on the window as GTK would, with no modifiers:
+    /// whether the window took it.
+    fn press_delete(root: &adw::ApplicationWindow) -> bool {
+        use gtk::glib::translate::IntoGlib;
+        let Some(keys) = root
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter_map(|found| found.downcast::<gtk::EventControllerKey>().ok())
+            .find(|keys| {
+                keys.name()
+                    .is_some_and(|name| name == crate::ui::update::rendering::DELETE_KEYS)
+            })
+        else {
+            panic!("the window has its Delete key controller");
+        };
+        keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &gdk::Key::Delete.into_glib(),
+                &0u32,
+                &gdk::ModifierType::empty(),
+            ],
+        )
+    }
+
+    #[test]
+    fn delete_is_taken_while_the_text_does_not_read() {
+        on_gtk_thread(delete_while_the_text_is_broken);
+    }
+
+    /// With nothing selected, Delete is passed on while the text reads;
+    /// once a file has a syntax error (the editor's new analysis reaches
+    /// the window as a message), the window takes Delete, to say why
+    /// editing in 3D is off; once the text reads again, Delete is passed
+    /// on again.
+    fn delete_while_the_text_is_broken() {
+        let opened = Opened::open_copy("org.stave.ProjectTest.DeleteBroken");
+        let analysed =
+            |opened: &Opened| opened.controller.model().widgets.files.analysis().is_some();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !analysed(&opened) && std::time::Instant::now() < deadline {
+            settle();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(analysed(&opened), "the editor has analysed the project");
+        assert!(
+            opened.controller.model().session.selection().is_none(),
+            "nothing is selected"
+        );
+        assert!(
+            !press_delete(&opened.root),
+            "the text reads: Delete is passed on"
+        );
+
+        let path = opened.folder.join("shelf.stave");
+        opened
+            .controller
+            .model()
+            .widgets
+            .files
+            .open_document(&stave_ide::Document::File(path.clone()));
+        settle();
+        let Some(buffer) = opened.controller.model().widgets.files.open_buffer(&path) else {
+            panic!("the file's buffer is published");
+        };
+        let good = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+        buffer.insert(&mut buffer.end_iter(), "\npart {{ = (\n");
+        let blocked = |opened: &Opened| opened.controller.model().state.text_blocked;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !blocked(&opened) && std::time::Instant::now() < deadline {
+            settle();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            blocked(&opened),
+            "the new analysis says the text doesn't read"
+        );
+        assert!(
+            press_delete(&opened.root),
+            "the window takes Delete to say why"
+        );
+
+        buffer.set_text(&good);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while blocked(&opened) && std::time::Instant::now() < deadline {
+            settle();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!blocked(&opened), "the text reads again");
+        assert!(!press_delete(&opened.root), "and Delete is passed on again");
+        let folder = opened.folder.clone();
+        opened.finish();
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
