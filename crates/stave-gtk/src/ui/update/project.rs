@@ -88,6 +88,9 @@ pub(in crate::ui) enum ProjectInput {
     /// to close the window: remember its size and the layout, then close
     /// it, asking about unsaved changes first.
     CloseAsked,
+    /// The workbench has saved the layout as the window closes: ask about
+    /// unsaved changes, then close.
+    LayoutSavedForClosing,
     /// The unsaved changes are dealt with: let go of what is left and
     /// close.
     CloseNow,
@@ -303,6 +306,7 @@ pub(in crate::ui) fn workbench_said(output: workbench::WorkbenchOutput) -> Windo
         workbench::WorkbenchOutput::ShowOwnTab { panel, index } => {
             ProjectInput::ShowOwnTab { panel, index }.into()
         }
+        workbench::WorkbenchOutput::SavedForClosing => ProjectInput::LayoutSavedForClosing.into(),
     }
 }
 
@@ -391,6 +395,7 @@ impl Window {
                     .add_toast(adw::Toast::builder().title(text).timeout(seconds).build());
             }
             ProjectInput::CloseAsked => self.close_asked(),
+            ProjectInput::LayoutSavedForClosing => self.ask_about_unsaved(ProjectInput::CloseNow),
             ProjectInput::CloseNow => {
                 self.widgets.files.forget_unsaved();
                 // Not `close`: that asks again (`close-request`), and the
@@ -458,22 +463,24 @@ impl Window {
     }
 
     /// Closing was asked for: tells the application the window's size
-    /// (holding it until that is saved), remembers the layout, and closes
-    /// the window once the unsaved changes are dealt with (asking about
-    /// them if there are any; [`ProjectInput::CloseNow`]). A window
-    /// already closed, or already closing (asked twice before the first
-    /// was answered), is left alone.
+    /// (holding it until that is saved), asks the workbench to remember
+    /// the layout, and once it has
+    /// ([`ProjectInput::LayoutSavedForClosing`]) closes the window when
+    /// the unsaved changes are dealt with (asking about them if there are
+    /// any; [`ProjectInput::CloseNow`]). A window already closed, or
+    /// already closing (asked twice before the first was answered), is
+    /// left alone.
     fn close_asked(&mut self) {
         if !self.widgets.window.is_realized() || self.state.closing {
             return;
         }
         self.state.closing = true;
         self.tell_closing();
-        self.ask_about_unsaved(ProjectInput::CloseNow);
+        self.widgets.workbench.save_for_closing();
     }
 
     /// Tells the application the window is closing (its size, holding it
-    /// until that is saved) and remembers the layout.
+    /// until that is saved).
     fn tell_closing(&mut self) {
         let root = &self.widgets.window;
         if let Some(application) = root.application() {
@@ -484,7 +491,6 @@ impl Window {
                 hold: application.hold(),
             });
         }
-        self.widgets.workbench.save();
     }
 
     /// Runs a check on a worker thread; its outcome comes back as
@@ -701,7 +707,8 @@ impl Window {
             self.dispatch(Command::ShowView(wanted.view));
         }
         if wanted.xray {
-            self.widgets.view_toolbar.xray.set_active(true);
+            self.widgets.view_toolbar.show_xray(true);
+            self.send(super::rendering::RenderingInput::Xray(true));
         }
         if wanted.editor && wanted.file.is_none() {
             self.dispatch(Command::ShowEditor(Editor::Open));
@@ -876,6 +883,8 @@ impl Window {
         // before the main loop stops, without asking about anything.
         close_for_good(&self.widgets.window);
         if self.widgets.window.is_realized() {
+            // No layout to remember: a screenshot's workbench never writes
+            // it (`Remember::Nothing` or `From`).
             self.tell_closing();
             self.widgets.window.destroy();
         }

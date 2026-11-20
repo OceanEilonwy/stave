@@ -538,13 +538,17 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             .css_classes(["stave-crumbs"])
             .build();
 
-        let input = sender.input_sender().clone();
-        let editor = Editor::new(&init.table, move |click| {
-            input.emit(match click {
+        // A lens's clicks come back as the component's own input; the
+        // forwarding ends when the editor, and with it every sender of
+        // the lens's channel, is dropped.
+        let (lens, clicks) = relm4::channel();
+        relm4::spawn_local(
+            clicks.forward(sender.input_sender().clone(), |click| match click {
                 LensClick::Uses(symbol) => FilesInput::ListUses(symbol),
                 LensClick::Show(symbol) => FilesInput::ShowIn3d(symbol),
-            });
-        });
+            }),
+        );
+        let editor = Editor::new(&init.table, lens);
 
         // The uses panel.
         let uses_title = label("", &["stave-uses-title"]);

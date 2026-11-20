@@ -211,8 +211,8 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     }
     // The header's view and scene, the view's toolbars and the floating
     // controls send their outputs as `RenderingInput`s, forwarded when
-    // `build_widgets` launched them.
-    widgets.camera.fit.set_action_name(Some("win.frame"));
+    // `build_widgets` launched them; the camera column's fit button uses
+    // the `frame` action above.
 
     // The style changed: the 3D view's backdrop follows. The style manager
     // outlives the window, so the handler goes in `shutdown`.
@@ -392,7 +392,6 @@ impl Window {
                     .session
                     .drawable()
                     .and_then(|(_, graph)| Some(graph.scenes.get(index)?.name.clone()));
-                self.widgets.header.scene.popdown();
                 if let Some(name) = name {
                     self.dispatch(Command::ShowScene(name));
                 }

@@ -62,6 +62,8 @@ fn play_tooltip(playing: bool) -> String {
 pub struct ViewToolbarComponent {
     /// Pull apart is on.
     on: bool,
+    /// X-ray is on.
+    xray: bool,
     /// The tools are offered (not while a problem is posed).
     offered: bool,
     /// Pulling apart is playing.
@@ -103,6 +105,8 @@ pub enum ViewToolbarInput {
     /// Offer the tools, or take them away while a problem is posed or a
     /// joint is in focus.
     Offer(bool),
+    /// Show X-ray on or off, without telling anyone.
+    SetXray(bool),
     /// People turned X-ray on or off.
     XrayToggled(bool),
     /// People turned Pull apart on or off.
@@ -195,16 +199,19 @@ impl Component for ViewToolbarComponent {
             set_visible: model.offered,
         },
 
+        // Both toggles are set from the model without hearing it back.
         #[local_ref]
         xray -> gtk::ToggleButton {
+            #[watch]
+            #[block_signal(xray_toggled)]
+            set_active: model.xray,
             connect_toggled[sender] => move |button| {
                 sender
                     .input_sender()
                     .emit(ViewToolbarInput::XrayToggled(button.is_active()));
-            },
+            } @xray_toggled,
         },
 
-        // Set from the model without hearing it back.
         #[local_ref]
         pull -> gtk::ToggleButton {
             #[watch]
@@ -242,6 +249,7 @@ impl Component for ViewToolbarComponent {
         let slider_area = &slider.root.clone();
         let model = ViewToolbarComponent {
             on: false,
+            xray: false,
             offered: true,
             playing: false,
             slider,
@@ -270,7 +278,14 @@ impl Component for ViewToolbarComponent {
                 self.offered = offered;
                 None
             }
-            ViewToolbarInput::XrayToggled(on) => Some(ViewToolbarOutput::Xray(on)),
+            ViewToolbarInput::SetXray(on) => {
+                self.xray = on;
+                None
+            }
+            ViewToolbarInput::XrayToggled(on) => {
+                self.xray = on;
+                Some(ViewToolbarOutput::Xray(on))
+            }
             // The view follows people's toggle, so setting it back is a
             // change of nothing.
             ViewToolbarInput::PullToggled(on) => (self.on != on).then(|| {
@@ -293,9 +308,12 @@ impl Component for ViewToolbarComponent {
 /// dropping it shuts the component down. Setters are queued; the window
 /// hears people's presses as [`ViewToolbarOutput`]s.
 pub struct ViewToolbar {
-    /// See through everything but the selection: the window turns it on
-    /// for `--xray`, as if people had pressed it.
-    pub xray: gtk::ToggleButton,
+    /// See through everything but the selection.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    xray: gtk::ToggleButton,
     /// Pull apart, on or off.
     #[cfg_attr(
         not(test),
@@ -389,6 +407,12 @@ impl ViewToolbar {
             amount,
             playing,
         });
+    }
+
+    /// Shows X-ray on or off, without calling back: the window turns it
+    /// on for `--xray` and sets its own X-ray itself.
+    pub fn show_xray(&self, on: bool) {
+        self.send(ViewToolbarInput::SetXray(on));
     }
 
     /// Offers the tools, or takes them away while a problem is posed or
@@ -575,8 +599,6 @@ impl Component for CameraComponent {
 pub struct CameraToolbar {
     /// The column, to float on the view.
     pub root: gtk::Box,
-    /// Frames everything (or the selection).
-    pub fit: gtk::Button,
     /// Looks at the front.
     #[cfg_attr(
         not(test),
@@ -605,6 +627,9 @@ impl CameraToolbar {
             &tr("Fit to view (F)"),
             &["stave-camera-button", "flat"],
         );
+        // Frames everything (or the selection) through the window's
+        // `frame` action, as F does.
+        fit.set_action_name(Some("win.frame"));
         let front = icon_button(
             icons::FRONT,
             &tr("Front view"),
@@ -627,7 +652,6 @@ impl CameraToolbar {
             .forward(owner, message);
         CameraToolbar {
             root: controller.widget().clone(),
-            fit,
             front,
             turn,
             controller,
@@ -1099,6 +1123,29 @@ mod tests {
         settle();
         assert!(!tools.pull.is_active());
         assert!(heard.borrow().is_empty(), "the component never called back");
+    }
+
+    #[test]
+    fn showing_xray_sets_the_toggle_without_calling_back() {
+        on_gtk_thread(showing_xray_never_calls_back);
+    }
+
+    /// `--xray` turns X-ray on through the toolbar's own input: the toggle
+    /// shows it, the model agrees, and nobody hears it back as people's
+    /// press. People's press afterwards is heard as before.
+    fn showing_xray_never_calls_back() {
+        let (owner, heard) = recorder();
+        let tools = ViewToolbar::new(&owner, std::convert::identity);
+        tools.show_xray(true);
+        assert!(!tools.xray.is_active(), "only queued so far");
+        settle();
+        assert!(tools.xray.is_active());
+        assert!(tools.controller.model().xray, "the model agrees");
+        assert!(heard.borrow().is_empty(), "the window's show is not heard");
+        tools.xray.set_active(false);
+        settle();
+        assert_eq!(*heard.borrow(), vec![ViewToolbarOutput::Xray(false)]);
+        assert!(!tools.controller.model().xray);
     }
 
     #[test]

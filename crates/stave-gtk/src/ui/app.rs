@@ -509,6 +509,7 @@ impl Shell {
         if let Some(display) = gdk::Display::default() {
             style::install(&display);
             super::edit_view::changes::install_style(&display);
+            super::edit_view::grip_panel::install_style(&display);
         }
         gtk::Window::set_default_icon_name(APP_ID);
         self.theme.apply();
