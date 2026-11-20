@@ -121,3 +121,33 @@ pub(crate) fn unnamed_buttons(root: &impl gtk::prelude::IsA<gtk::Widget>) -> Vec
     walk(root.as_ref(), &mut unnamed);
     unnamed
 }
+
+/// A sender for a component's outputs (forwarded at launch, as the
+/// window forwards them), and what reached it: each message is kept, in
+/// order, once the main loop has run (`settle()`).
+pub(crate) fn recorder<T: 'static>() -> (relm4::Sender<T>, std::rc::Rc<std::cell::RefCell<Vec<T>>>)
+{
+    let (sender, receiver) = relm4::channel::<T>();
+    let heard = std::rc::Rc::<std::cell::RefCell<Vec<T>>>::default();
+    let log = std::rc::Rc::clone(&heard);
+    relm4::spawn_local(async move {
+        while let Some(message) = receiver.recv().await {
+            log.borrow_mut().push(message);
+        }
+    });
+    (sender, heard)
+}
+
+/// Handles each message `receiver` gets with `handle`, in order, as the
+/// owner of a component would in its update: from the main loop, once
+/// the message's turn comes (`settle()`).
+pub(crate) fn handle_each<T: 'static>(
+    receiver: relm4::Receiver<T>,
+    mut handle: impl FnMut(T) + 'static,
+) {
+    relm4::spawn_local(async move {
+        while let Some(message) = receiver.recv().await {
+            handle(message);
+        }
+    });
+}

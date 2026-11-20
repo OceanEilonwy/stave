@@ -4,8 +4,6 @@
 
 use super::add_action;
 use crate::render::Ticket;
-use crate::ui::floating::FloatsOutput;
-use crate::ui::view_tools::{CameraOutput, ViewToolbarOutput};
 use crate::ui::viewport::Shown;
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
@@ -152,6 +150,49 @@ impl From<RenderingInput> for WindowInput {
     }
 }
 
+/// The header's outputs as the window's messages (forwarded at launch).
+pub(in crate::ui) fn header_said(output: header::HeaderOutput) -> WindowInput {
+    match output {
+        header::HeaderOutput::View(view) => RenderingInput::ShowView(view),
+        header::HeaderOutput::Scene(index) => RenderingInput::SceneChosen(index),
+    }
+    .into()
+}
+
+/// The view tools' outputs as the window's messages.
+pub(in crate::ui) fn view_tools_said(output: view_tools::ViewToolbarOutput) -> WindowInput {
+    match output {
+        view_tools::ViewToolbarOutput::Xray(on) => RenderingInput::Xray(on),
+        view_tools::ViewToolbarOutput::Pull(on) => RenderingInput::PullApart(on),
+        view_tools::ViewToolbarOutput::Play => RenderingInput::PlayExplode,
+        view_tools::ViewToolbarOutput::Apart(value) => RenderingInput::ExplodeSlid(value),
+    }
+    .into()
+}
+
+/// The camera column's outputs as the window's messages.
+pub(in crate::ui) fn camera_said(output: view_tools::CameraOutput) -> WindowInput {
+    match output {
+        view_tools::CameraOutput::Front => RenderingInput::LookFront,
+        view_tools::CameraOutput::Turn => RenderingInput::TurnAround,
+    }
+    .into()
+}
+
+/// The floating controls' outputs as the window's messages: a group laid
+/// out for its spot, a group people docked somewhere new.
+pub(in crate::ui) fn floats_said(output: floating::FloatsOutput) -> WindowInput {
+    match output {
+        floating::FloatsOutput::Orient { group, orientation } => {
+            RenderingInput::ToolOriented { group, orientation }
+        }
+        floating::FloatsOutput::Docked { group, spot } => {
+            RenderingInput::ToolDocked { group, spot }
+        }
+    }
+    .into()
+}
+
 /// The name of the window's key controller for Delete.
 pub(in crate::ui) const DELETE_KEYS: &str = "delete-keys";
 
@@ -168,54 +209,10 @@ pub(in crate::ui) fn wire(window: &mut Window) {
             RenderingInput::ShowView(view)
         });
     }
-    let sender = input.clone();
-    widgets.header.connect(move |output| {
-        sender.emit(
-            match output {
-                header::HeaderOutput::View(view) => RenderingInput::ShowView(view),
-                header::HeaderOutput::Scene(index) => RenderingInput::SceneChosen(index),
-            }
-            .into(),
-        );
-    });
-    let sender = input.clone();
-    widgets.view_toolbar.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                ViewToolbarOutput::Xray(on) => RenderingInput::Xray(on),
-                ViewToolbarOutput::Pull(on) => RenderingInput::PullApart(on),
-                ViewToolbarOutput::Play => RenderingInput::PlayExplode,
-                ViewToolbarOutput::Apart(value) => RenderingInput::ExplodeSlid(value),
-            }
-            .into(),
-        );
-    });
-    // The floating controls: a group laid out for its spot, a group
-    // people docked somewhere new.
-    let sender = input.clone();
-    widgets.floats.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                FloatsOutput::Orient { group, orientation } => {
-                    RenderingInput::ToolOriented { group, orientation }
-                }
-                FloatsOutput::Docked { group, spot } => RenderingInput::ToolDocked { group, spot },
-            }
-            .into(),
-        );
-    });
-    let camera = &widgets.camera;
-    camera.fit.set_action_name(Some("win.frame"));
-    let sender = input.clone();
-    camera.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                CameraOutput::Front => RenderingInput::LookFront,
-                CameraOutput::Turn => RenderingInput::TurnAround,
-            }
-            .into(),
-        );
-    });
+    // The header's view and scene, the view's toolbars and the floating
+    // controls send their outputs as `RenderingInput`s, forwarded when
+    // `build_widgets` launched them.
+    widgets.camera.fit.set_action_name(Some("win.frame"));
 
     // The style changed: the 3D view's backdrop follows. The style manager
     // outlives the window, so the handler goes in `shutdown`.

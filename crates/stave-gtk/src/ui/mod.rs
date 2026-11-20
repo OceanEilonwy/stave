@@ -569,7 +569,7 @@ pub(in crate::ui) struct Widgets {
     edit_holder: gtk::Box,
     /// Over the window's panels: the search over a setting's options.
     sheet: gtk::Overlay,
-    dock: Rc<Dock>,
+    dock: Dock,
     /// The dock and its panels round the 3D view.
     workbench: workbench::Workbench,
     /// The Problems panel.
@@ -602,6 +602,12 @@ pub(in crate::ui) struct Widgets {
     output: output::OutputPanel,
     /// The controls floating on the 3D view, and their docking.
     floats: floating::Floats,
+    /// Where the window's own leaves (header, view tools, dock, floating
+    /// controls, workbench) send their outputs, each forwarded as a
+    /// [`WindowInput`] when the leaf was launched, before the window
+    /// was: taken by [`Window::init`], which passes them on to its own
+    /// input, in order.
+    leaf_outputs: Option<relm4::Receiver<WindowInput>>,
 }
 
 impl Widgets {
@@ -718,10 +724,17 @@ impl Component for Window {
         sender: ComponentSender<Window>,
     ) -> ComponentParts<Window> {
         let WindowInit {
-            widgets,
+            mut widgets,
             folder,
             options,
         } = init;
+        // The leaves were launched before the window, so their outputs
+        // waited in a channel of their own: from now on they go on to the
+        // window's input, in the order they came. The relay ends once
+        // every leaf has gone, or the window has.
+        if let Some(outputs) = widgets.leaf_outputs.take() {
+            relm4::spawn_local(outputs.forward(sender.input_sender().clone(), |message| message));
+        }
         let renderer = Renderer::new()
             .map(|mut renderer| {
                 // A window screenshot is drawn by a software renderer,
@@ -1153,7 +1166,15 @@ pub(in crate::ui) fn build_widgets(
         settle_for_screenshot();
     }
     let folder_name = app::folder_name(folder);
-    let header = Header::new(&folder_name, &main_menu(recent));
+    // The window's own leaves send it their outputs through this channel
+    // (`Window::init` passes them on): each is forwarded at launch.
+    let (to_window, leaf_outputs) = relm4::channel::<WindowInput>();
+    let header = Header::new(
+        &folder_name,
+        &main_menu(recent),
+        &to_window,
+        update::rendering::header_said,
+    );
 
     // The 3D view, its controls floating on it (`view_layout` keeps them
     // apart): the scene menu at the top left; the camera buttons, X-ray
@@ -1165,14 +1186,21 @@ pub(in crate::ui) fn build_widgets(
     // foot, in the middle; focus mode's From above / In 3D switch at the
     // top right.
     let viewport = Viewport::default();
-    let motion = MotionBar::new();
-    let view_toolbar = ViewToolbar::new();
-    let camera = CameraToolbar::new(&view_toolbar);
+    // From above and the motion slider are set by their components with
+    // their handlers blocked, so their outputs are people's alone.
+    let motion = MotionBar::new(&to_window, update::selection::motion_said);
+    let view_toolbar = ViewToolbar::new(&to_window, update::rendering::view_tools_said);
+    let camera = CameraToolbar::new(&view_toolbar, &to_window, update::rendering::camera_said);
     let contact_key = view_tools::contact_key();
-    let plan_switch = PlanSwitch::new();
+    let plan_switch = PlanSwitch::new(&to_window, update::selection::plan_switch_said);
     let step_card = StepCard::new();
     let problem_card = ProblemCard::new();
-    let dock = Dock::new(&header.scene, &motion);
+    let dock = Dock::new(
+        &header.scene,
+        &motion,
+        &to_window,
+        update::selection::dock_said,
+    );
     let hint = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -1269,6 +1297,11 @@ pub(in crate::ui) fn build_widgets(
             None if options.window_screenshot.is_some() => workbench::Remember::Nothing,
             None => workbench::Remember::Yours,
         },
+        // It says when the layout can't be saved, where the view's tool
+        // groups went (the floating controls follow) and which of the
+        // Code panel's tabs people chose.
+        &to_window,
+        update::project::workbench_said,
     )?;
 
     // The view's controls float on it; the tool groups dock where the
@@ -1304,7 +1337,13 @@ pub(in crate::ui) fn build_widgets(
     ];
     // The groups are laid out for their spots, and follow the workbench
     // when it moves them, by the window's messages (`update/rendering.rs`).
-    let floats = floating::Floats::new(&figure, floating, workbench.tool_spots());
+    let floats = floating::Floats::new(
+        &figure,
+        floating,
+        workbench.tool_spots(),
+        &to_window,
+        update::rendering::floats_said,
+    );
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1405,6 +1444,7 @@ pub(in crate::ui) fn build_widgets(
         files,
         output,
         floats,
+        leaf_outputs: Some(leaf_outputs),
     })
 }
 
