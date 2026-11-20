@@ -18,6 +18,7 @@ stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
 stave-schema = { path = "../stave-schema" }
+stave-solve = { path = "../stave-solve" }
 
 [dev-dependencies]
 gltf = "1"

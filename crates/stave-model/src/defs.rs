@@ -781,6 +781,14 @@ pub struct StockDef {
     pub max_width: Option<RExpr>,
     /// `max_length:`
     pub max_length: Option<RExpr>,
+    /// `sold:`: the thickness the boards are bought at (solid only).
+    pub sold: Option<RExpr>,
+    /// `kerf:`, overriding the project's.
+    pub kerf: Option<RExpr>,
+    /// `rough_length:`, overriding the project's (solid only).
+    pub rough_length: Option<RExpr>,
+    /// `rough_width:`, overriding the project's (solid only).
+    pub rough_width: Option<RExpr>,
 }
 
 impl StockDef {
@@ -852,6 +860,9 @@ pub struct PartBodyDef {
     /// `edges:`: its chamfers and roundovers, in the order written
     /// (grammar, "Edge profiles").
     pub edges: Vec<EdgeProfileDef>,
+    /// `banding:`: the edge banding on its edges (grammar, "Edge
+    /// banding").
+    pub banding: Option<BandingDef>,
     /// The `place { }` terms in order.
     pub place: Vec<PlaceTerm>,
     /// The `place { }` block, when written.
@@ -871,6 +882,19 @@ pub struct EdgeProfileDef {
     /// The edges it shapes, each once, in the order written (`around`
     /// written out).
     pub edges: Vec<EdgeDef>,
+    /// The whole call.
+    pub span: Span,
+}
+
+/// A part's `banding: edge_band(1mm, on: [front, back])` (grammar, "Edge
+/// banding").
+#[derive(Debug, Clone, PartialEq)]
+pub struct BandingDef {
+    /// The band's thickness.
+    pub thickness: RExpr,
+    /// The faces it is glued to, as they face once the part is placed,
+    /// each once, in the order written, with where each was named.
+    pub faces: Vec<(Face, Span)>,
     /// The whole call.
     pub span: Span,
 }
@@ -2205,6 +2229,12 @@ pub struct ProjectDef {
     pub methods: Vec<RecipeId>,
     /// `boards:`: how boards are joined in every part that doesn't say.
     pub boards: Option<RExpr>,
+    /// `kerf:` (grammar, "Cut list").
+    pub kerf: Option<RExpr>,
+    /// `rough_length:` (grammar, "Cut list").
+    pub rough_length: Option<RExpr>,
+    /// `rough_width:` (grammar, "Cut list").
+    pub rough_width: Option<RExpr>,
     /// The file it is in.
     pub file: FileId,
     /// The whole item.
