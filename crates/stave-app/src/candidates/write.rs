@@ -231,7 +231,8 @@ impl EditScope<'_> {
                     ast::BaseKind::Slide
                     | ast::BaseKind::Hinge
                     | ast::BaseKind::Pull
-                    | ast::BaseKind::Support => "hardware",
+                    | ast::BaseKind::Support
+                    | ast::BaseKind::Fitting => "hardware",
                     base @ (ast::BaseKind::Fastener | ast::BaseKind::Tool) => {
                         return Err(WriteError::NotPlaceable(
                             kind.decl.name.clone(),

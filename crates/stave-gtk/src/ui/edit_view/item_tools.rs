@@ -28,12 +28,13 @@ use stave_app::i18n::{fill_in, tr, tr_noop};
 
 use crate::ui::update::editing::EditingInput;
 use adw::prelude::*;
+use gtk::{gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender};
 use stave_app::change::ChangeRequest;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::hold::Measured;
+pub(in crate::ui) use stave_app::item_offer::selected_item;
 use stave_app::item_offer::{ItemOffer, MirrorGesture, RepeatFold};
-pub(in crate::ui) use stave_app::item_offer::{piece_count, selected_item};
 use stave_app::naming::RepeatCount;
 use stave_app::session::Selection;
 use stave_lang::placement::Axis;
@@ -605,12 +606,14 @@ impl RepeatFoldShown {
         self.asked
     }
 
-    /// `true` while the count and the direction show.
+    /// `true` while the count and the direction show, for a test.
+    #[cfg(test)]
     pub(in crate::ui) fn is_open(&self) -> bool {
         self.fold == RepeatFold::Open
     }
 
-    /// The count shown.
+    /// The count shown, for a test.
+    #[cfg(test)]
     pub(in crate::ui) fn count(&self) -> usize {
         self.count
     }
@@ -708,10 +711,10 @@ impl Component for ItemToolsComponent {
             head -> gtk::Button {},
             #[local_ref]
             revealer -> gtk::Revealer {
+                // The body, hidden while folded (`sections::section_head`).
+                #[local_ref]
                 #[wrap(Some)]
-                set_child = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    add_css_class: "stave-section-body",
+                set_child = body -> gtk::Box {
 
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
@@ -819,8 +822,15 @@ impl Component for ItemToolsComponent {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let ItemToolsInit { repeat } = init;
-        let (head, revealer, note) = sections::section_head(&tr("Change"), true);
-        let (head, revealer) = (&head, &revealer);
+        let (
+            sections::SectionHead {
+                button,
+                revealer,
+                body,
+            },
+            note,
+        ) = sections::section_head(&tr("Change"), true);
+        let (head, revealer, body) = (&button, &revealer, &body);
         let model = ItemToolsComponent {
             shown: ItemToolsShown::default(),
             refill: false,
@@ -922,11 +932,6 @@ impl ItemTools {
 
     /// What its count stepper shows.
     pub(in crate::ui) fn repeat_row(&self) -> &RepeatFoldShown {
-        &self.repeat_shown
-    }
-
-    /// What its repeat controls show, folded or open.
-    pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldShown {
         &self.repeat_shown
     }
 
@@ -1032,14 +1037,17 @@ impl Window {
             if another_item {
                 self.editing.tools.repeat_shown.forget();
             }
-            // The offer reads the project, so it is worked out once per
-            // item and result.
-            let offer = self.session.item_offer(&item);
+            // The full offer reads the project again, which takes far
+            // longer than a click should wait: it is worked out once per
+            // item and result, on a worker thread. Until it comes, the
+            // card shows what the shown design says at once.
+            let offer = self.session.quick_item_offer(&item);
             self.editing.tools.shown = Some(Shown {
                 item: item.clone(),
                 design: address,
                 offer,
             });
+            self.start_item_offer(&item, address);
         }
         let tools = &mut self.editing.tools;
         let offer = tools.shown.as_ref().and_then(|shown| shown.offer.clone());
@@ -1070,6 +1078,51 @@ impl Window {
             unmeasurable,
         }));
         tools.root.set_visible(true);
+    }
+
+    /// Works out the full offer for `item` in the design at `design` on a
+    /// worker thread; it comes back as [`EditingInput::ItemOfferFound`].
+    fn start_item_offer(&self, item: &str, design: usize) {
+        let job = self.session.item_offer_job(item);
+        let input = self.input();
+        glib::spawn_future_local(async move {
+            let found = gio::spawn_blocking(move || {
+                let offer = job.run();
+                (job.item().to_owned(), offer)
+            })
+            .await;
+            // A job that panicked offers nothing more than the quick
+            // offer shows; the window may have gone, when nobody needs to
+            // know.
+            if let Ok((item, offer)) = found {
+                let _ = input.send(
+                    EditingInput::ItemOfferFound {
+                        item,
+                        design,
+                        offer: offer.map(Box::new),
+                    }
+                    .into(),
+                );
+            }
+        });
+    }
+
+    /// The full offer for `item` came: shown if the card still shows that
+    /// item of that design, dropped otherwise.
+    pub(in crate::ui) fn item_offer_found(
+        &mut self,
+        item: &str,
+        design: usize,
+        offer: Option<ItemOffer>,
+    ) {
+        let Some(shown) = self.editing.tools.shown.as_mut() else {
+            return;
+        };
+        if shown.item != item || shown.design != design || shown.offer == offer {
+            return;
+        }
+        shown.offer = offer;
+        self.update_item_tools();
     }
 
     /// Puts the keyboard in the item's name, ready to retype it.

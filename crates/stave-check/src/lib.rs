@@ -705,6 +705,10 @@ impl<'a> Checker<'a> {
                     self.part_place(part),
                     format!("{}'s edges", self.part_name(part)),
                 ),
+                SourceKey::Shape(part) => (
+                    self.part_place(part),
+                    format!("{}'s shape", self.part_name(part)),
+                ),
             };
             let note = format!(
                 "{owner}: {} is drawn without this cut until it is fixed",
@@ -754,6 +758,10 @@ impl<'a> Checker<'a> {
                 SourceKey::Edges(part) => (
                     self.part_place(part),
                     format!("{}'s edges", self.part_name(part)),
+                ),
+                SourceKey::Shape(part) => (
+                    self.part_place(part),
+                    format!("{}'s shape", self.part_name(part)),
                 ),
             };
             let note = if names.len() == 1 {
@@ -1368,6 +1376,7 @@ enum SourceKey {
     Hardware(HardwareId),
     Boards(PartId),
     Edges(PartId),
+    Shape(PartId),
 }
 
 impl SourceKey {
@@ -1377,6 +1386,7 @@ impl SourceKey {
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
             CutSource::Boards { part, .. } => SourceKey::Boards(part),
             CutSource::Edges { part } => SourceKey::Edges(part),
+            CutSource::Shape { part } => SourceKey::Shape(part),
         }
     }
 }

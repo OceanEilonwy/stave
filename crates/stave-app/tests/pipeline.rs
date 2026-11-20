@@ -72,9 +72,11 @@ fn every_example_and_standard_module_checks_clean() {
             "joint_samples",
             "nightstand",
             "picture_frame",
+            "shelf_unit",
             "side_table",
             "side_table_from_box",
             "stool",
+            "tapered_table",
             "wall_shelf",
         ],
         "every example project solves with no diagnostics"

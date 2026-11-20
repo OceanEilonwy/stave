@@ -273,7 +273,9 @@ impl Explained {
                     let owner = match cut.source {
                         CutSource::Joint { joint, pair } => BodyOwner::Joint { joint, pair },
                         CutSource::Hardware { hardware } => BodyOwner::Hardware { hardware },
-                        CutSource::Boards { .. } | CutSource::Edges { .. } => return None,
+                        CutSource::Boards { .. }
+                        | CutSource::Edges { .. }
+                        | CutSource::Shape { .. } => return None,
                     };
                     Some((owner, part.id))
                 })

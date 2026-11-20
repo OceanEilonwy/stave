@@ -1365,6 +1365,7 @@ fn inspect_hardware(
         HardwareBase::Slide => tr("drawer slide"),
         HardwareBase::Pull => tr("pull"),
         HardwareBase::Support => tr("shelf support"),
+        HardwareBase::Fitting => tr("fitting"),
     };
     let mut rows = vec![
         Field::from(Row {

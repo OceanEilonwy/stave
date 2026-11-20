@@ -2136,20 +2136,20 @@ show bottom true
         let Ok(workbench) = workbench_for(labels(), &owner) else {
             panic!("the dock is built");
         };
-        // Where the tool groups start, told at launch: forwarded once the
-        // main loop runs, then waiting here.
-        settle();
-        assert!(matches!(
-            outputs.recv_sync(),
-            Some(WorkbenchOutput::ToolsChanged(_))
-        ));
         let workbench = Rc::new(workbench);
         // (whether Output showed when the owner heard, and straight after
         // it asked for it)
         let heard: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&workbench);
+        // Where the tool groups start is told at launch: heard (and let
+        // be) before the test starts listening.
+        let listening = Rc::new(std::cell::Cell::new(false));
+        let armed = Rc::clone(&listening);
         handle_each(outputs, move |_| {
+            if !armed.get() {
+                return;
+            }
             let Some(workbench) = weak.upgrade() else {
                 return;
             };
@@ -2158,6 +2158,8 @@ show bottom true
             log.borrow_mut()
                 .push((before, workbench.is_shown(PanelId::Output)));
         });
+        settle();
+        listening.set(true);
         workbench.reset();
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         settle();

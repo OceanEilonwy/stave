@@ -135,11 +135,13 @@ impl EditScope<'_> {
                 BaseKind::Hinge,
                 BaseKind::Pull,
                 BaseKind::Support,
+                BaseKind::Fitting,
             ],
             TypeName::SlideKind => &[BaseKind::Slide],
             TypeName::HingeKind => &[BaseKind::Hinge],
             TypeName::PullKind => &[BaseKind::Pull],
             TypeName::SupportKind => &[BaseKind::Support],
+            TypeName::FittingKind => &[BaseKind::Fitting],
             TypeName::FastenerKind => &[BaseKind::Fastener],
             TypeName::Tool => &[BaseKind::Tool],
             TypeName::Bool => {

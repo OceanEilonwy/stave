@@ -1,0 +1,78 @@
+stave 1
+
+// A knock-down cabinet: the bottom and the top are held between the sides
+// by cam locks, so it can be taken apart and put back together (grammar,
+// "Fittings").
+
+project "Knock-down cabinet" {
+  units: mm
+}
+
+stock board_19 { species: birch, form: plywood, thickness: 19mm, max_width: 1220mm, max_length: 2440mm }
+
+part side_l : board_19 {
+  length: 700mm
+  width:  350mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : board_19 {
+  length: 700mm
+  width:  350mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 500mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part bottom : board_19 {
+  length: between(side_l.right, side_r.left)
+  width:  350mm
+  place {
+    flush(side_l.bottom, inset: 50mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+part top : board_19 {
+  length: between(side_l.right, side_r.left)
+  width:  350mm
+  place {
+    flush(side_l.top)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+// Two cam locks at each end of each panel, 50mm in from its front and
+// back. The bottom's cams are in its top face, the top's in its
+// underside, where they don't show.
+hardware bottom_l[front, back] : cam_lock(bottom, into: side_l) {
+  place {
+    spaced(ends(inset: 50mm), from: bottom.front, to: bottom.back)
+  }
+}
+
+hardware bottom_r[front, back] : cam_lock(bottom, into: side_r) {
+  place {
+    spaced(ends(inset: 50mm), from: bottom.front, to: bottom.back)
+  }
+}
+
+hardware top_l[front, back] : cam_lock(top, into: side_l, face: bottom) {
+  place {
+    spaced(ends(inset: 50mm), from: top.front, to: top.back)
+  }
+}
+
+hardware top_r[front, back] : cam_lock(top, into: side_r, face: bottom) {
+  place {
+    spaced(ends(inset: 50mm), from: top.front, to: top.back)
+  }
+}

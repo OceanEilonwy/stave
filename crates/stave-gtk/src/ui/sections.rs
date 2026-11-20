@@ -129,11 +129,14 @@ pub(super) fn section(title: &str, note: &str, open: bool) -> (gtk::Box, gtk::Bo
 /// A collapsible section whose note is set later: the section, its body
 /// and the note's label (hidden until it has words).
 pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk::Label) {
-    let (button, revealer, note) = section_head(title, open);
-    let body = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["stave-section-body"])
-        .build();
+    let (
+        SectionHead {
+            button,
+            revealer,
+            body,
+        },
+        note,
+    ) = section_head(title, open);
     revealer.set_child(Some(&body));
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -144,14 +147,23 @@ pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk
     (section, body, note)
 }
 
+/// The widgets of a collapsible section, from [`section_head`].
+pub(super) struct SectionHead {
+    /// The head: a button with the arrow, the title and the note.
+    pub(super) button: gtk::Button,
+    /// What the head opens and closes; its child is to be `body`.
+    pub(super) revealer: gtk::Revealer,
+    /// The body (class `stave-section-body`), hidden while folded too:
+    /// the caller sets it as the revealer's child and fills it.
+    pub(super) body: gtk::Box,
+}
+
 /// The parts of a collapsible section, for a component that builds the
-/// section in its own view: the head (a button with the arrow, the
-/// title and the note), the revealer that the head opens and closes
-/// (empty: its child, with the class `stave-section-body`, is the
-/// caller's), and the note's label (hidden until it has words). The
-/// caller puts the head and the revealer, in that order, in a vertical
-/// box with the class `stave-section`.
-pub(super) fn section_head(title: &str, open: bool) -> (gtk::Button, gtk::Revealer, gtk::Label) {
+/// section in its own view, and the note's label (hidden until it has
+/// words). The caller puts the head and the revealer, in that order, in
+/// a vertical box with the class `stave-section`, and the body in the
+/// revealer.
+pub(super) fn section_head(title: &str, open: bool) -> (SectionHead, gtk::Label) {
     let head = gtk::Box::builder().spacing(6).build();
     let arrow = gtk::Image::builder()
         .icon_name(if open {
@@ -184,14 +196,23 @@ pub(super) fn section_head(title: &str, open: bool) -> (gtk::Button, gtk::Reveal
         .build();
     button.update_property(&[gtk::accessible::Property::Label(title)]);
     button.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+    // Hidden while folded as well: a revealer with no transition keeps
+    // its child's height.
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-section-body"])
+        .visible(open)
+        .build();
     let revealer = gtk::Revealer::builder()
         .reveal_child(open)
         .transition_type(gtk::RevealerTransitionType::None)
         .build();
     {
         let revealer = revealer.clone();
+        let body = body.clone();
         button.connect_clicked(move |button| {
             let open = !revealer.reveals_child();
+            body.set_visible(open);
             revealer.set_reveal_child(open);
             arrow.set_icon_name(Some(if open {
                 "pan-down-symbolic"
@@ -201,7 +222,14 @@ pub(super) fn section_head(title: &str, open: bool) -> (gtk::Button, gtk::Reveal
             button.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
         });
     }
-    (button, revealer, note)
+    (
+        SectionHead {
+            button,
+            revealer,
+            body,
+        },
+        note,
+    )
 }
 
 /// A label | value row: the label in the grey column, then `value`.

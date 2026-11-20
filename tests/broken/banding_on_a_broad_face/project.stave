@@ -1,0 +1,20 @@
+// expect: error[type-mismatch] top is a broad face of shelf, not an edge
+stave 1
+
+// A shelf lying flat has its broad faces up and down: banding goes on its
+// edges.
+
+project "Banding on a broad face" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }
+
+part shelf : ply_18 {
+  length:  600mm
+  width:   300mm
+  banding: edge_band(1mm, on: [front, top])
+  place {
+    ground
+  }
+}

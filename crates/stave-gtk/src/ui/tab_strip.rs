@@ -302,13 +302,13 @@ impl TabStripComponent {
         {
             made.show.grab_focus();
         }
-        self.mark_shown(&widgets.menu);
+        self.mark_shown(widgets);
     }
 
     /// Marks the shown page's tab, in place (the tab the keyboard is on
     /// stays where it is), and puts the shown panel's menu at the end. A
     /// panel's own tab is marked only when it is its panel's current one.
-    fn mark_shown(&mut self, menu_button: &gtk::MenuButton) {
+    fn mark_shown(&mut self, widgets: &TabStripComponentWidgets) {
         let shown = self.frame.upgrade().and_then(|frame| frame.visible_child());
         for tab in &mut self.tabs {
             tab.page_shown = tab
@@ -325,10 +325,15 @@ impl TabStripComponent {
                     }
             });
             made.mark(marked);
+            // The strip scrolls when its tabs don't fit: the marked one is
+            // brought into sight, in the component's own viewport.
+            if marked {
+                widgets.viewport.scroll_to(&made.root, None);
+            }
         }
         let menu = shown.as_ref().and_then(|page| page.menu_model());
-        menu_button.set_visible(menu.is_some());
-        menu_button.set_menu_model(menu.as_ref());
+        widgets.menu.set_visible(menu.is_some());
+        widgets.menu.set_menu_model(menu.as_ref());
     }
 }
 
@@ -340,16 +345,31 @@ impl Component for TabStripComponent {
     type CommandOutput = ();
 
     view! {
-        // The tabs, then the shown panel's menu at the end.
+        // The tabs, scrolling sideways, then the shown panel's menu at
+        // the end, which stays put while the tabs scroll.
         gtk::Box {
             set_hexpand: true,
 
-            #[name = "list"]
-            gtk::Box::builder()
-                .accessible_role(gtk::AccessibleRole::TabList)
-                .build() -> gtk::Box {
+            // Holds the tabs, scrolling them sideways when there are more
+            // than fit: a strip as wide as all its tabs would widen its
+            // dock column with every file opened.
+            gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::External,
+                set_vscrollbar_policy: gtk::PolicyType::Never,
+                set_propagate_natural_width: true,
                 set_hexpand: true,
-                add_css_class: "stave-tabs",
+
+                #[name = "viewport"]
+                gtk::Viewport {
+                    #[name = "list"]
+                    #[wrap(Some)]
+                    set_child = &gtk::Box::builder()
+                        .accessible_role(gtk::AccessibleRole::TabList)
+                        .build() -> gtk::Box {
+                        set_hexpand: true,
+                        add_css_class: "stave-tabs",
+                    },
+                },
             },
 
             gtk::Box {
@@ -402,7 +422,7 @@ impl Component for TabStripComponent {
                 }
             }
             TabStripInput::Gather => self.gather(widgets, &sender),
-            TabStripInput::PageChanged => self.mark_shown(&widgets.menu),
+            TabStripInput::PageChanged => self.mark_shown(widgets),
             TabStripInput::Step(step) => {
                 // The frame's page-changed only queues `PageChanged`.
                 if let Some(frame) = self.frame.upgrade() {
@@ -844,17 +864,21 @@ mod tests {
         )])
     }
 
+    /// The strip's list of tabs: in the component's root, the scroller,
+    /// its viewport, then the list.
+    fn tab_list(strip: &TabStrip) -> Option<gtk::Widget> {
+        let tabs = strip.imp().tabs.get()?;
+        tabs.widget()
+            .first_child()
+            .and_downcast::<gtk::ScrolledWindow>()?
+            .child()?
+            .first_child()
+    }
+
     /// The strip's tab boxes, in order.
     fn tab_boxes(strip: &TabStrip) -> Vec<gtk::Widget> {
-        let Some(tabs) = strip.imp().tabs.get() else {
-            return Vec::new();
-        };
         let mut boxes = Vec::new();
-        // The component's root holds the list of tabs, then the menu.
-        let mut child = tabs
-            .widget()
-            .first_child()
-            .and_then(|list| list.first_child());
+        let mut child = tab_list(strip).and_then(|list| list.first_child());
         while let Some(current) = child {
             child = current.next_sibling();
             boxes.push(current);
@@ -1021,6 +1045,121 @@ mod tests {
     }
 
     #[test]
+    fn more_tabs_never_make_the_strip_wider_than_it_must_be() {
+        on_gtk_thread(more_tabs_scroll);
+    }
+
+    /// Selecting things in the 3D view opens their files as the Code
+    /// panel's own tabs. The strip used to be as wide as all its tabs at
+    /// least, so each file opened widened the dock column holding it and
+    /// the 3D view jumped narrower. The tabs now scroll sideways: the
+    /// strip's least width stays what it was with two tabs.
+    fn more_tabs_scroll() {
+        let (owner, _) = recorder::<TabStripOutput>();
+        let (_frame, strip, _model, _code) =
+            frame_with_two_panels_under(TabStrip::new(two_files(), &owner, std::convert::identity));
+        settle();
+        let least = |strip: &TabStrip| strip.measure(gtk::Orientation::Horizontal, -1).0;
+        let before = least(&strip);
+        let many: Vec<PageTab> = (0..12)
+            .map(|index| PageTab {
+                title: format!("a_long_file_name_{index}.stave"),
+                tooltip: String::new(),
+                unsaved: false,
+                mark: None,
+                active: index == 11,
+            })
+            .collect();
+        let mut own = OwnTabs::new();
+        own.insert(PanelId::Code, many);
+        strip.show_own_tabs(own);
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 13, "the Model, then twelve files");
+        assert!(
+            least(&strip) <= before,
+            "the strip asks for {} px with twelve files, {before} px with two",
+            least(&strip)
+        );
+    }
+
+    #[test]
+    fn the_menu_stays_in_sight_while_the_tabs_scroll() {
+        on_gtk_thread(menu_stays_while_tabs_scroll);
+    }
+
+    /// The tabs scroll inside the strip; the panel menu at its end is
+    /// outside the scroller, so however many tabs there are it stays
+    /// shown, whole, inside the strip, and the shown tab is scrolled to.
+    fn menu_stays_while_tabs_scroll() {
+        let (owner, _) = recorder::<TabStripOutput>();
+        let (frame, strip, _model, code) = frame_with_two_panels_under(TabStrip::new(
+            OwnTabs::new(),
+            &owner,
+            std::convert::identity,
+        ));
+        let menu = gtk::gio::Menu::new();
+        menu.append(Some("Move to the Right"), None);
+        code.set_menu_model(Some(&menu));
+        frame.set_visible_child(&code);
+        let window = gtk::Window::builder()
+            .default_width(320)
+            .default_height(240)
+            .child(&frame)
+            .build();
+        window.present();
+        let many: Vec<PageTab> = (0..12)
+            .map(|index| PageTab {
+                title: format!("a_long_file_name_{index}.stave"),
+                tooltip: String::new(),
+                unsaved: false,
+                mark: None,
+                active: index == 11,
+            })
+            .collect();
+        let mut own = OwnTabs::new();
+        own.insert(PanelId::Code, many);
+        strip.show_own_tabs(own);
+        let context = glib::MainContext::default();
+        for _ in 0..20 {
+            context.iteration(false);
+        }
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 13);
+        let Some(tabs) = strip.imp().tabs.get() else {
+            panic!("the strip has its tabs");
+        };
+        let Some(button) = tabs
+            .widget()
+            .last_child()
+            .and_then(|end| end.first_child())
+            .and_then(|button| button.downcast::<gtk::MenuButton>().ok())
+        else {
+            panic!("the strip ends with its menu button");
+        };
+        assert!(button.is_visible() && button.is_mapped(), "the menu shows");
+        let Some(bounds) = button.compute_bounds(&strip) else {
+            panic!("the menu is laid out in the strip");
+        };
+        assert!(
+            bounds.x() >= 0.0 && bounds.x() + bounds.width() <= strip.width() as f32 + 0.5,
+            "the menu is whole inside the strip ({bounds:?}, {} px wide)",
+            strip.width()
+        );
+        let Some(scroller) = tabs
+            .widget()
+            .first_child()
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            panic!("the tabs are in a scroller");
+        };
+        assert!(
+            scroller.hadjustment().upper() > scroller.hadjustment().page_size(),
+            "the tabs overflow and scroll"
+        );
+        window.destroy();
+    }
+
+    #[test]
     fn a_strip_shows_the_own_tabs_it_starts_with_and_drops_them() {
         on_gtk_thread(own_tabs_come_and_go);
     }
@@ -1136,9 +1275,7 @@ mod tests {
             panic!("the strip has its tabs");
         };
         assert_eq!(
-            tabs.widget()
-                .first_child()
-                .map(|list| list.accessible_role()),
+            tab_list(&strip).map(|list| list.accessible_role()),
             Some(gtk::AccessibleRole::TabList)
         );
         let show = |place: usize| show_button(&strip, place);

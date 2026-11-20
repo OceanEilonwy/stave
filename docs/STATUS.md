@@ -340,9 +340,11 @@ the checker's fixes on the card).
   by the setting just changed says
   so first ("It stopped fitting when joinery became chigiri.") with a
   button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
-  side", hold a distance, remove with what depends on it); count and
-  boundary handles; grips on the model (drag, type, stops, sizes that
-  follow, "Let the solver move this"); the finder's verbs.
+  side", hold a distance, remove with what depends on it); the repeat count; the selection's sizes in the Edit panel's Sizes card
+  (each opened in a size editor: slider, steps, typed value, what
+  changes, verdict, Apply; boundaries between pieces; stops; sizes that
+  follow; "Let the solver move this"); nothing is dragged on the model;
+  the finder's verbs.
 - **Command line**: `stave edit <folder> --patch <file> [--commit]` and
   `stave edit <folder> --script <file>` (a whole build as steps, with
   `options <setting>` listing a setting's options and whether each fits,
@@ -420,9 +422,9 @@ open in the editor the change stays unsaved there.
   too close to … another cut"). Its help names the pull's screw hole
   but not the setting to change: `front_screw_inset: 30mm` on the
   drawer, or `pull_kind: bar_pull(centres: 128mm)`, makes it fit.
-- Grip labels overlap each other; the Details panel's "CHANGE …"
-  heading overlaps the row above it. (The cards are in the Edit panel
-  now, so no grip label or grip panel is drawn over one.)
+- The Details panel's "CHANGE …" heading overlaps the row above it.
+  (Grips are no longer drawn on the model, so their labels no longer
+  overlap.)
 - Library place params prompt "Point at the under." (they have `//`
   comments, not `///`); the card shows raw param names.
 - **Only the four edge joints say where they apply.** `chigiri`,

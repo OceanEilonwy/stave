@@ -389,6 +389,26 @@ pub enum BuiltinCall {
         /// The profile turned.
         profile: RExpr,
     },
+    /// `tapered(to:, toward:, on:, square:)` (grammar, "Shaped parts").
+    Tapered {
+        /// The size at the narrow end.
+        to: RExpr,
+        /// The end the taper runs to, as placed.
+        toward: RExpr,
+        /// The face or faces planed, as placed.
+        on: RExpr,
+        /// How far it stays square from the wide end.
+        square: Option<RExpr>,
+    },
+    /// `arched(rise:, on:, ends:)` (grammar, "Shaped parts").
+    Arched {
+        /// How far the arch rises into the part at its middle.
+        rise: RExpr,
+        /// The face it is sawn into, as placed.
+        on: RExpr,
+        /// How much of the face stays straight at each end.
+        ends: Option<RExpr>,
+    },
     /// `joined(by:)`
     Joined {
         /// The joint kind or kinds.
@@ -539,6 +559,8 @@ impl BuiltinCall {
             BuiltinCall::Overlay { .. } => Builtin::Overlay,
             BuiltinCall::Inset { .. } => Builtin::Inset,
             BuiltinCall::Turned { .. } => Builtin::Turned,
+            BuiltinCall::Tapered { .. } => Builtin::Tapered,
+            BuiltinCall::Arched { .. } => Builtin::Arched,
             BuiltinCall::Joined { .. } => Builtin::Joined,
             BuiltinCall::Spliced { .. } => Builtin::Spliced,
             BuiltinCall::Box { .. } => Builtin::Box,
@@ -567,6 +589,8 @@ impl BuiltinCall {
             | BuiltinCall::Overlay { .. }
             | BuiltinCall::Inset { .. }
             | BuiltinCall::Turned { .. }
+            | BuiltinCall::Tapered { .. }
+            | BuiltinCall::Arched { .. }
             | BuiltinCall::Joined { .. }
             | BuiltinCall::Spliced { .. }
             | BuiltinCall::Box { .. }
@@ -635,6 +659,22 @@ impl BuiltinCall {
             | BuiltinCall::Gap { distance: one } => [Some(one), None, None, None, None, None],
             BuiltinCall::Spliced { by, at, from } => {
                 [Some(by), Some(at), Some(from), None, None, None]
+            }
+            BuiltinCall::Tapered {
+                to,
+                toward,
+                on,
+                square,
+            } => [
+                Some(to),
+                Some(toward),
+                Some(on),
+                square.as_ref(),
+                None,
+                None,
+            ],
+            BuiltinCall::Arched { rise, on, ends } => {
+                [Some(rise), Some(on), ends.as_ref(), None, None, None]
             }
             BuiltinCall::Box {
                 length,
@@ -781,6 +821,14 @@ pub struct StockDef {
     pub max_width: Option<RExpr>,
     /// `max_length:`
     pub max_length: Option<RExpr>,
+    /// `sold:`: the thickness the boards are bought at (solid only).
+    pub sold: Option<RExpr>,
+    /// `kerf:`, overriding the project's.
+    pub kerf: Option<RExpr>,
+    /// `rough_length:`, overriding the project's (solid only).
+    pub rough_length: Option<RExpr>,
+    /// `rough_width:`, overriding the project's (solid only).
+    pub rough_width: Option<RExpr>,
 }
 
 impl StockDef {
@@ -852,6 +900,9 @@ pub struct PartBodyDef {
     /// `edges:`: its chamfers and roundovers, in the order written
     /// (grammar, "Edge profiles").
     pub edges: Vec<EdgeProfileDef>,
+    /// `banding:`: the edge banding on its edges (grammar, "Edge
+    /// banding").
+    pub banding: Option<BandingDef>,
     /// The `place { }` terms in order.
     pub place: Vec<PlaceTerm>,
     /// The `place { }` block, when written.
@@ -871,6 +922,19 @@ pub struct EdgeProfileDef {
     /// The edges it shapes, each once, in the order written (`around`
     /// written out).
     pub edges: Vec<EdgeDef>,
+    /// The whole call.
+    pub span: Span,
+}
+
+/// A part's `banding: edge_band(1mm, on: [front, back])` (grammar, "Edge
+/// banding").
+#[derive(Debug, Clone, PartialEq)]
+pub struct BandingDef {
+    /// The band's thickness.
+    pub thickness: RExpr,
+    /// The faces it is glued to, as they face once the part is placed,
+    /// each once, in the order written, with where each was named.
+    pub faces: Vec<(Face, Span)>,
     /// The whole call.
     pub span: Span,
 }
@@ -1169,6 +1233,8 @@ pub enum MountedBase {
     Pull,
     /// A shelf support.
     Support,
+    /// Any other mounted fitting.
+    Fitting,
 }
 
 impl MountedBase {
@@ -1179,6 +1245,7 @@ impl MountedBase {
             BaseKind::Hinge => Some(MountedBase::Hinge),
             BaseKind::Pull => Some(MountedBase::Pull),
             BaseKind::Support => Some(MountedBase::Support),
+            BaseKind::Fitting => Some(MountedBase::Fitting),
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }
@@ -1190,6 +1257,7 @@ impl MountedBase {
             MountedBase::Hinge => BaseKind::Hinge,
             MountedBase::Pull => BaseKind::Pull,
             MountedBase::Support => BaseKind::Support,
+            MountedBase::Fitting => BaseKind::Fitting,
         }
     }
 }
@@ -1553,6 +1621,14 @@ pub enum MountSelector {
         part: RoleIndex,
         /// The direction the end faces.
         toward: Direction,
+    },
+    /// `end(p, nearer: q)`: of the two ends of `p`'s length, the one
+    /// nearer the middle of `q`.
+    EndNearer {
+        /// The part whose end it is.
+        part: RoleIndex,
+        /// The part or region whose middle decides.
+        other: RoleIndex,
     },
     /// `face(p, toward: q)`: of `p`'s two faces across the entry's axis,
     /// the one nearer the middle of `q`.
@@ -2205,6 +2281,12 @@ pub struct ProjectDef {
     pub methods: Vec<RecipeId>,
     /// `boards:`: how boards are joined in every part that doesn't say.
     pub boards: Option<RExpr>,
+    /// `kerf:` (grammar, "Cut list").
+    pub kerf: Option<RExpr>,
+    /// `rough_length:` (grammar, "Cut list").
+    pub rough_length: Option<RExpr>,
+    /// `rough_width:` (grammar, "Cut list").
+    pub rough_width: Option<RExpr>,
     /// The file it is in.
     pub file: FileId,
     /// The whole item.

@@ -1,0 +1,21 @@
+// expect: error[type-mismatch] 'handle' needs a pull kind, found a fitting kind
+stave 1
+
+// A fitting is its own base: a tabletop fastener is not a pull, so it
+// can't be given where a pull kind is asked for.
+
+project "A fitting for a pull" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+param handle : PullKind = tabletop_fastener
+
+part board : pine_19 {
+  length: 400mm
+  width:  200mm
+  place {
+    ground
+  }
+}

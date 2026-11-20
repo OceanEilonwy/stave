@@ -482,6 +482,11 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             let (file, span) = solver.place_of(DefId::Stock(stock));
             let _ = solver.settled(result, file, span);
         }
+        // Its allowances, and `sold:` against its thickness (grammar,
+        // "stock").
+        let result = solver.stock_allowances(stock);
+        let (file, span) = solver.place_of(DefId::Stock(stock));
+        let _ = solver.settled(result, file, span);
     }
 
     // 2. Joints, pass A: pairs, requires, extensions.
@@ -585,6 +590,12 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 5b. Edge profiles: each part's chamfers and roundovers, before the
     // mirrored assemblies copy their parts' cuts and splices hand them out.
     solver.make_edge_profiles(&geoms, &mut cuts);
+    // 5b'. Shaped parts: each part's taper or arch (grammar, "Shaped
+    // parts"), cut from the part like an outline.
+    solver.make_shapes(&geoms, &mut cuts);
+    // 5c. Edge banding (grammar, "Edge banding"): checked here, taken off
+    // only in the cut list.
+    let mut banding = solver.make_banding(&geoms);
 
     // 6. Mirrored assemblies: reflect the source's results.
     solver.mirror_assemblies(
@@ -690,7 +701,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 9. Write everything out. A failure here is settled at the project,
     // so a design withheld is always explained.
     let (file, span) = (solver.project_file, solver.project_span);
-    let parts = solver.write_parts(&geoms, cuts, memberships, made, boards);
+    let parts = solver.write_parts(&geoms, cuts, memberships, made, boards, &mut banding);
     let parts = solver.settled(parts, file, span)?;
     let hardware = solver.write_hardware(placed, &mechanisms);
     let hardware = solver.settled(hardware, file, span)?;
@@ -1356,6 +1367,9 @@ impl Solver<'_> {
                         CutSource::Edges { part } => CutSource::Edges {
                             part: *part_map.get(&part).unwrap_or(&part),
                         },
+                        CutSource::Shape { part } => CutSource::Shape {
+                            part: *part_map.get(&part).unwrap_or(&part),
+                        },
                     };
                     cut.place = match cut.place {
                         CutPlace::End { toward } => CutPlace::End {
@@ -1859,6 +1873,7 @@ impl Solver<'_> {
             },
             max_width: length(self, F::MaxWidth)?,
             max_length: length(self, F::MaxLength)?,
+            allowances: self.stock_allowances(stock)?,
         })
     }
 
@@ -1869,6 +1884,7 @@ impl Solver<'_> {
         memberships: Vec<Vec<JointId>>,
         made: Vec<MadeInfo>,
         mut boards: Vec<Option<solved::Boards>>,
+        banding: &mut [Option<solved::Banding>],
     ) -> Solved<Vec<solved::Part>> {
         let mut parts = Vec::new();
         let mut cuts = cuts.into_iter();
@@ -2039,6 +2055,7 @@ impl Solver<'_> {
                 boards: boards.get_mut(index).and_then(Option::take),
                 loose,
                 pieces: None,
+                banding: banding.get_mut(index).and_then(Option::take),
             });
         }
         Ok(parts)
@@ -2147,6 +2164,7 @@ impl Solver<'_> {
                             | Value::Word(_)
                             | Value::Mount(_)
                             | Value::Turned(_)
+                            | Value::Shaped(_)
                             | Value::Boards(_)
                             | Value::Splices(_)
                             | Value::Envelope(_)
@@ -2283,6 +2301,7 @@ impl Solver<'_> {
             | Value::Word(_)
             | Value::Mount(_)
             | Value::Turned(_)
+            | Value::Shaped(_)
             | Value::Boards(_)
             | Value::Splices(_)
             | Value::Envelope(_)
@@ -2381,6 +2400,7 @@ impl Solver<'_> {
                     | Value::Word(_)
                     | Value::Mount(_)
                     | Value::Turned(_)
+                    | Value::Shaped(_)
                     | Value::Boards(_)
                     | Value::Splices(_)
                     | Value::Envelope(_)
@@ -2530,6 +2550,7 @@ impl Solver<'_> {
                     .map(|decl| decl.name.clone())
             })
             .collect();
+        let allowances = self.project_allowances()?;
         Ok(ProjectInfo {
             title: project.title.clone(),
             goal: project.goal.clone(),
@@ -2538,6 +2559,9 @@ impl Solver<'_> {
             style: project.style.clone(),
             tools,
             methods,
+            kerf: allowances.kerf,
+            rough_length: allowances.rough_length,
+            rough_width: allowances.rough_width,
         })
     }
 }
