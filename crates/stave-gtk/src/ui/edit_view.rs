@@ -56,7 +56,7 @@ use super::edit_menu::{
 use super::edit_panel::EditPanel;
 use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearchOutput};
 use super::update::editing::EditingInput;
-use super::{EDGE, Window, WindowInput};
+use super::{Window, WindowInput};
 use crate::render::{Backdrop, Frame, Ticket};
 use relm4::{Component, ComponentController, Controller};
 
@@ -161,10 +161,7 @@ impl EditView {
         let menu = EditMenuComponent::builder()
             .launch(())
             .forward(input, menu_heard);
-        let root = menu.widget();
-        root.set_halign(gtk::Align::Start);
-        root.set_valign(gtk::Align::Start);
-        root.set_visible(false);
+        menu.widget().set_visible(false);
         let card_slots = CardSlots::new();
         let card = EditCardComponent::builder()
             .launch(card_slots.clone())
@@ -219,6 +216,7 @@ fn menu_heard(output: EditMenuOutput) -> WindowInput {
     match output {
         EditMenuOutput::Chosen(declaration) => EditingInput::MenuChosen(declaration),
         EditMenuOutput::Drawn => EditingInput::MenuDrawn,
+        EditMenuOutput::HoldFromSpace => EditingInput::HoldFromSpace,
     }
     .into()
 }
@@ -438,6 +436,7 @@ pub(super) fn draw_edit(
             let _ = menu.sender().send(EditMenuInput::Show {
                 heading,
                 items: MenuEntry::list(&menu_items(edit)),
+                from_space: matches!(edit.picked(), Picked::Region(_)),
             });
             menu.widget().set_visible(true);
             card.widget().set_visible(false);
@@ -526,7 +525,6 @@ impl Window {
         self.install_edit_writer();
         self.connect_changes();
         self.connect_item_tools();
-        self.connect_hold();
         self.connect_repeats();
 
         // The menu's and the card's outputs were forwarded to the window
@@ -1039,12 +1037,6 @@ impl Window {
         let open = self.draw_change(checking) || open;
         self.update_repeat_row();
         self.update_pending();
-        self.editing
-            .hold
-            .from_space
-            .set_visible(self.session.edit().is_some_and(|edit| {
-                edit.chosen().is_none() && matches!(edit.picked(), Picked::Region(_))
-            }));
         if open {
             self.place_edit_widgets();
         }
@@ -1098,25 +1090,12 @@ impl Window {
             f64::from(self.widgets.design.width()),
             f64::from(self.widgets.design.height()),
         );
-        let (x, y) = self.editing.state.point.unwrap_or((width / 3.0, 80.0));
-        let menu = self.editing.menu.widget();
-        let menu_width = 340.0;
-        let left = (x + 24.0).min(width - menu_width - f64::from(EDGE));
-        // Clear of the dock at the bottom: as high as it must be to show
-        // whole. A widget is measured with its margins, so the width asked
-        // about holds the margins it was last placed with (measured at
-        // 340 alone, a menu placed 593 pixels in "needs at least 913", as
-        // GTK warned on every run that opened a menu).
-        let across = 340_i32
-            .saturating_add(menu.margin_start())
-            .saturating_add(menu.margin_end());
-        let (_, natural, _, _) = menu.measure(gtk::Orientation::Vertical, across);
-        let natural = natural
-            .saturating_sub(menu.margin_top())
-            .saturating_sub(menu.margin_bottom());
-        let top = (y - 60.0).min(height - f64::from(natural) - 96.0);
-        menu.set_margin_start(crate::convert::int_of(left.max(f64::from(EDGE))));
-        menu.set_margin_top(crate::convert::int_of(top.max(f64::from(EDGE))));
+        let point = self.editing.state.point.unwrap_or((width / 3.0, 80.0));
+        // The menu measures itself, after anything it was shown before.
+        let _ = self.editing.menu.sender().send(EditMenuInput::Place {
+            point,
+            view: (width, height),
+        });
     }
 
     /// Works the menu's applicability out a step at a time, drawing what

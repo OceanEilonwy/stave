@@ -33,29 +33,31 @@ use super::icons::{self, PathIcon};
 use super::slider::Slider;
 use super::viewport::{Sizing, Viewport};
 
-/// A round blue play button, 40 px.
-fn play_button(label: &str) -> (gtk::Button, PathIcon) {
+/// A round blue play button, 40 px, its icon and its words drawn from
+/// whether it plays: see [`play_shape`] and [`play_text`].
+fn play_button() -> (gtk::Button, PathIcon) {
     let icon = PathIcon::new(icons::PLAY, 14);
     let button = gtk::Button::builder()
         .child(&icon)
-        .tooltip_text(label)
         .css_classes(["stave-play", "circular"])
         .valign(gtk::Align::Center)
         .build();
-    button.update_property(&[gtk::accessible::Property::Label(label)]);
     (button, icon)
 }
 
-/// Shows play or pause on a play button.
-pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label: &str) {
-    icon.set_shape(if playing { icons::PAUSE } else { icons::PLAY });
-    let text = if playing {
+/// A play button's icon: pause while it plays.
+fn play_shape(playing: bool) -> icons::Shape {
+    if playing { icons::PAUSE } else { icons::PLAY }
+}
+
+/// A play button's tooltip and what screen readers call it: "Pause" while
+/// it plays, else what it plays (`label`).
+fn play_text(playing: bool, label: &str) -> String {
+    if playing {
         tr("Pause")
     } else {
         label.to_owned()
-    };
-    button.set_tooltip_text(Some(&text));
-    button.update_property(&[gtk::accessible::Property::Label(&text)]);
+    }
 }
 
 /// The step line's markup: the lead in bold, the call in monospace.
@@ -80,16 +82,10 @@ pub struct StepCardComponent {
     tooltip: Option<String>,
     /// How far the part is from home.
     status: String,
+    /// It plays: its button shows pause.
+    playing: bool,
     /// Apart (0) to together (1).
     scrub: Slider,
-}
-
-/// What a step player is made with: the play button the window still
-/// shows play or pause on.
-#[derive(Debug)]
-pub struct StepCardInit {
-    /// Plays the joint going together.
-    pub play: gtk::Button,
 }
 
 /// What a step player is told.
@@ -105,6 +101,8 @@ pub enum StepCardInput {
     },
     /// Move the slider, without telling anyone.
     SetProgress(f64),
+    /// Show play, or pause while it plays.
+    ShowPlaying(bool),
     /// People moved the slider.
     Scrubbed(f64),
     /// People pressed play.
@@ -122,12 +120,13 @@ pub enum StepCardOutput {
 
 #[relm4::component(pub)]
 impl Component for StepCardComponent {
-    type Init = StepCardInit;
+    type Init = ();
     type Input = StepCardInput;
     type Output = StepCardOutput;
     type CommandOutput = ();
 
     view! {
+        #[root]
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
             set_spacing: 14,
@@ -141,6 +140,12 @@ impl Component for StepCardComponent {
 
             #[local_ref]
             play -> gtk::Button {
+                #[watch]
+                set_tooltip_text: Some(&play_text(model.playing, &tr("Play the assembly"))),
+                #[watch]
+                update_property: &[gtk::accessible::Property::Label(
+                    &play_text(model.playing, &tr("Play the assembly")),
+                )],
                 connect_clicked[sender] => move |_| {
                     sender.input_sender().emit(StepCardInput::PlayPressed);
                 },
@@ -188,15 +193,22 @@ impl Component for StepCardComponent {
                     },
                 },
             },
-        }
+        },
+
+        #[local_ref]
+        play_icon -> PathIcon {
+            #[watch]
+            set_shape: play_shape(model.playing),
+        },
     }
 
     fn init(
-        init: Self::Init,
+        (): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let play = &init.play;
+        let (play, play_icon) = play_button();
+        let (play, play_icon) = (&play, &play_icon);
         let scrub = Slider::launch(
             &tr("Apart to together"),
             22,
@@ -210,6 +222,7 @@ impl Component for StepCardComponent {
             markup: String::new(),
             tooltip: None,
             status: String::new(),
+            playing: false,
             scrub,
         };
         let widgets = view_output!();
@@ -224,6 +237,7 @@ impl Component for StepCardComponent {
                 self.status = status;
             }
             StepCardInput::SetProgress(value) => self.scrub.set_value(value),
+            StepCardInput::ShowPlaying(playing) => self.playing = playing,
             StepCardInput::Scrubbed(value) => {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(StepCardOutput::Scrubbed(value));
@@ -242,11 +256,6 @@ impl Component for StepCardComponent {
 pub struct StepCard {
     /// The card.
     pub root: gtk::Box,
-    /// Plays the joint going together (the window shows play or pause on
-    /// it).
-    pub play: gtk::Button,
-    /// The play button's icon.
-    pub play_icon: PathIcon,
     controller: Controller<StepCardComponent>,
 }
 
@@ -257,14 +266,9 @@ impl StepCard {
         to: &relm4::Sender<X>,
         map: impl Fn(StepCardOutput) -> X + 'static,
     ) -> StepCard {
-        let (play, play_icon) = play_button(&tr("Play the assembly"));
-        let controller = StepCardComponent::builder()
-            .launch(StepCardInit { play: play.clone() })
-            .forward(to, map);
+        let controller = StepCardComponent::builder().launch(()).forward(to, map);
         StepCard {
             root: controller.widget().clone(),
-            play,
-            play_icon,
             controller,
         }
     }
@@ -277,6 +281,11 @@ impl StepCard {
     /// Moves the slider (apart 0 to together 1), without calling back.
     pub fn set_progress(&self, progress: f64) {
         self.send(StepCardInput::SetProgress(progress));
+    }
+
+    /// Shows play, or pause while the joint plays.
+    pub fn show_playing(&self, playing: bool) {
+        self.send(StepCardInput::ShowPlaying(playing));
     }
 
     /// Shows the step ("Step 1 of 1 · push(rung, along: length)") and the
@@ -295,16 +304,10 @@ pub struct SwingCardComponent {
     name: String,
     /// The reading: "45°", "250 mm".
     value: String,
+    /// It plays: its button shows pause.
+    playing: bool,
     /// Closed (0) to fully open (1).
     scrub: Slider,
-}
-
-/// What a swing card is made with: the play button the window still
-/// shows play or pause on.
-#[derive(Debug)]
-pub struct SwingCardInit {
-    /// Plays the door opening.
-    pub play: gtk::Button,
 }
 
 /// What a swing card is told.
@@ -321,6 +324,8 @@ pub enum SwingCardInput {
     ShowValue(String),
     /// Move the slider, without telling anyone.
     SetProgress(f64),
+    /// Show play, or pause while it plays.
+    ShowPlaying(bool),
     /// People moved the slider.
     Scrubbed(f64),
     /// People pressed play.
@@ -338,12 +343,13 @@ pub enum SwingCardOutput {
 
 #[relm4::component(pub)]
 impl Component for SwingCardComponent {
-    type Init = SwingCardInit;
+    type Init = ();
     type Input = SwingCardInput;
     type Output = SwingCardOutput;
     type CommandOutput = ();
 
     view! {
+        #[root]
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
             set_spacing: 14,
@@ -353,6 +359,12 @@ impl Component for SwingCardComponent {
 
             #[local_ref]
             play -> gtk::Button {
+                #[watch]
+                set_tooltip_text: Some(&play_text(model.playing, &tr("Play the swing"))),
+                #[watch]
+                update_property: &[gtk::accessible::Property::Label(
+                    &play_text(model.playing, &tr("Play the swing")),
+                )],
                 connect_clicked[sender] => move |_| {
                     sender.input_sender().emit(SwingCardInput::PlayPressed);
                 },
@@ -372,15 +384,22 @@ impl Component for SwingCardComponent {
                 #[watch]
                 set_label: &model.value,
             },
-        }
+        },
+
+        #[local_ref]
+        play_icon -> PathIcon {
+            #[watch]
+            set_shape: play_shape(model.playing),
+        },
     }
 
     fn init(
-        init: Self::Init,
+        (): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let play = &init.play;
+        let (play, play_icon) = play_button();
+        let (play, play_icon) = (&play, &play_icon);
         let scrub = Slider::launch(
             &tr("Door angle"),
             22,
@@ -393,6 +412,7 @@ impl Component for SwingCardComponent {
         let model = SwingCardComponent {
             name: String::new(),
             value: String::new(),
+            playing: false,
             scrub,
         };
         let widgets = view_output!();
@@ -408,15 +428,14 @@ impl Component for SwingCardComponent {
                 } else {
                     tr("How far it slides out")
                 };
-                self.scrub
-                    .root
-                    .update_property(&[gtk::accessible::Property::Label(&label)]);
+                self.scrub.set_label(&label);
             }
             SwingCardInput::ShowValue(text) => {
                 self.scrub.set_value_text(&text);
                 self.value = text;
             }
             SwingCardInput::SetProgress(value) => self.scrub.set_value(value),
+            SwingCardInput::ShowPlaying(playing) => self.playing = playing,
             SwingCardInput::Scrubbed(value) => {
                 let _ = sender.output(SwingCardOutput::Scrubbed(value));
             }
@@ -434,10 +453,6 @@ impl Component for SwingCardComponent {
 pub struct SwingCard {
     /// The card.
     pub root: gtk::Box,
-    /// Plays the door opening (the window shows play or pause on it).
-    pub play: gtk::Button,
-    /// The play button's icon.
-    pub play_icon: PathIcon,
     controller: Controller<SwingCardComponent>,
 }
 
@@ -448,14 +463,9 @@ impl SwingCard {
         to: &relm4::Sender<X>,
         map: impl Fn(SwingCardOutput) -> X + 'static,
     ) -> SwingCard {
-        let (play, play_icon) = play_button(&tr("Play the swing"));
-        let controller = SwingCardComponent::builder()
-            .launch(SwingCardInit { play: play.clone() })
-            .forward(to, map);
+        let controller = SwingCardComponent::builder().launch(()).forward(to, map);
         SwingCard {
             root: controller.widget().clone(),
-            play,
-            play_icon,
             controller,
         }
     }
@@ -468,6 +478,11 @@ impl SwingCard {
     /// Moves the slider (closed 0 to fully open 1), without calling back.
     pub fn set_progress(&self, progress: f64) {
         self.send(SwingCardInput::SetProgress(progress));
+    }
+
+    /// Shows play, or pause while the door plays.
+    pub fn show_playing(&self, playing: bool) {
+        self.send(SwingCardInput::ShowPlaying(playing));
     }
 
     /// Names what moves.
@@ -605,8 +620,9 @@ impl Caption {
 pub struct PicturesComponent {
     /// The slots, one a picture, in order, with their captions.
     slots: Vec<(Viewport, String)>,
-    /// The slots' size in device pixels when last reported.
-    size: (u32, u32),
+    /// The size in device pixels to render the pictures at, as last
+    /// told to the owner; `None` before the slots have room.
+    size: Option<(u32, u32)>,
 }
 
 /// What the small views are told.
@@ -634,8 +650,10 @@ pub enum PicturesInput {
 /// What the small views tell their owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PicturesOutput {
-    /// Their size in device pixels changed: they need rendering again.
-    Resized,
+    /// The size in device pixels to render them at changed (`Some`: they
+    /// need rendering again), or they were laid out afresh and have no
+    /// room yet (`None`: nothing to render until they do).
+    Resized(Option<(u32, u32)>),
     /// People chose the picture at this index: go to its pose.
     Chosen(usize),
 }
@@ -646,7 +664,9 @@ impl PicturesComponent {
         while let Some(child) = root.first_child() {
             root.remove(&child);
         }
-        self.size = (0, 0);
+        if self.size.take().is_some() {
+            let _ = sender.output(PicturesOutput::Resized(None));
+        }
         let count = captions.len();
         let mut slots = Vec::with_capacity(count);
         for (index, caption) in captions.into_iter().enumerate() {
@@ -714,7 +734,7 @@ impl Component for PicturesComponent {
     fn init(_: (), _: gtk::Box, _: ComponentSender<Self>) -> ComponentParts<Self> {
         let model = PicturesComponent {
             slots: Vec::new(),
-            size: (0, 0),
+            size: None,
         };
         ComponentParts { model, widgets: () }
     }
@@ -746,10 +766,16 @@ impl Component for PicturesComponent {
                 }
             }
             PicturesInput::SlotResized { width, height } => {
-                // Every slot is the same size: the first to report says it.
-                if self.size != (width, height) {
-                    self.size = (width, height);
-                    let _ = sender.output(PicturesOutput::Resized);
+                // Every slot is the same size: the first to report says
+                // it, once the first slot has been given room.
+                let roomy = self
+                    .slots
+                    .first()
+                    .is_some_and(|(slot, _)| slot.width() > 1 && slot.height() > 1);
+                let size = roomy.then_some((width, height));
+                if self.size != size {
+                    self.size = size;
+                    let _ = sender.output(PicturesOutput::Resized(size));
                 }
             }
             PicturesInput::Pressed(index) => {
@@ -766,14 +792,18 @@ impl Component for PicturesComponent {
 pub struct Pictures {
     /// The row.
     pub root: gtk::Box,
+    /// The owner's copy of the size to render at, as the row last
+    /// published it ([`PicturesOutput::Resized`], handed back with
+    /// [`Pictures::keep_size`]); never read from the row itself.
+    size: Option<(u32, u32)>,
     controller: Controller<PicturesComponent>,
 }
 
 impl Pictures {
     /// A hidden row. When the pictures' size in device pixels changes (the
     /// window resized, or moved to a screen of another scale: they need
-    /// rendering again at [`Pictures::device_size`]) and when people
-    /// choose one, `map` makes it the owner's message, sent to `to`.
+    /// rendering again at the size it carries) and when people choose
+    /// one, `map` makes it the owner's message, sent to `to`.
     pub fn new<X: 'static>(
         to: &relm4::Sender<X>,
         map: impl Fn(PicturesOutput) -> X + 'static,
@@ -781,6 +811,7 @@ impl Pictures {
         let controller = PicturesComponent::builder().launch(()).forward(to, map);
         Pictures {
             root: controller.widget().clone(),
+            size: None,
             controller,
         }
     }
@@ -790,18 +821,16 @@ impl Pictures {
         let _ = self.controller.sender().send(input);
     }
 
-    /// The size, in device pixels, to render the pictures at; `None`
-    /// before they have been given room (or before a queued
-    /// [`Pictures::show`] has laid them out).
-    pub fn device_size(&self) -> Option<(u32, u32)> {
-        // Copied out, so nothing is borrowed while GTK is asked.
-        let slot = self
-            .controller
-            .model()
-            .slots
-            .first()
-            .map(|(slot, _)| slot.clone())?;
-        (slot.width() > 1 && slot.height() > 1).then(|| slot.device_size())
+    /// Keeps the size the row published ([`PicturesOutput::Resized`]),
+    /// the owner's copy to render at.
+    pub fn keep_size(&mut self, size: Option<(u32, u32)>) {
+        self.size = size;
+    }
+
+    /// The size, in device pixels, to render the pictures at, as the row
+    /// last published it; `None` before they have been given room.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        self.size
     }
 
     /// Lays out a picture for each caption, each a button that is heard
@@ -1012,9 +1041,7 @@ impl Component for ProblemCardComponent {
                 self.scrub.set_range(0.0, full.max(0.1));
                 self.scrub.set_blocked(Some((contact, &card.blocked)));
                 self.scrub.set_value(value);
-                self.scrub
-                    .root
-                    .update_property(&[gtk::accessible::Property::Label(&lead)]);
+                self.scrub.set_label(&lead);
                 self.start.clone_from(&card.start);
                 self.blocked.clone_from(&card.blocked);
                 self.end.clone_from(&card.end);
@@ -1257,10 +1284,89 @@ mod tests {
     fn swing_play_is_queued() {
         let (to, heard) = recorder();
         let card = SwingCard::new(&to, |output| output);
-        card.play.emit_clicked();
+        play_of(&card.root).emit_clicked();
         assert!(heard.borrow().is_empty(), "the press is only queued");
         settle();
         assert_eq!(*heard.borrow(), vec![SwingCardOutput::Play]);
+    }
+
+    /// A card's play button: its first child.
+    fn play_of(card: &gtk::Box) -> gtk::Button {
+        let Some(play) = card
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::Button>().ok())
+        else {
+            panic!("a card starts with its play button");
+        };
+        play
+    }
+
+    /// The icon a play button shows.
+    fn shape_of(play: &gtk::Button) -> icons::Shape {
+        let Some(icon) = play
+            .child()
+            .and_then(|child| child.downcast::<PathIcon>().ok())
+        else {
+            panic!("a play button shows an icon");
+        };
+        icon.shape()
+    }
+
+    #[test]
+    fn the_cards_draw_play_or_pause_themselves() {
+        on_gtk_thread(cards_show_playing);
+    }
+
+    /// The window used to set the play buttons' icon and words itself;
+    /// now it tells each card whether it plays and the card draws it.
+    fn cards_show_playing() {
+        let (to, heard) = recorder::<StepCardOutput>();
+        let step = StepCard::new(&to, |output| output);
+        let (swing_to, swing_heard) = recorder::<SwingCardOutput>();
+        let swing = SwingCard::new(&swing_to, |output| output);
+        let (step_play, swing_play) = (play_of(&step.root), play_of(&swing.root));
+        assert_eq!(shape_of(&step_play), icons::PLAY);
+        assert_eq!(
+            step_play.tooltip_text().as_deref(),
+            Some(tr("Play the assembly").as_str())
+        );
+        assert_eq!(
+            swing_play.tooltip_text().as_deref(),
+            Some(tr("Play the swing").as_str())
+        );
+        step.show_playing(true);
+        swing.show_playing(true);
+        assert_eq!(shape_of(&step_play), icons::PLAY, "queued");
+        settle();
+        for play in [&step_play, &swing_play] {
+            assert_eq!(shape_of(play), icons::PAUSE);
+            assert_eq!(play.tooltip_text().as_deref(), Some(tr("Pause").as_str()));
+        }
+        step.show_playing(false);
+        settle();
+        assert_eq!(shape_of(&step_play), icons::PLAY);
+        assert_eq!(
+            step_play.tooltip_text().as_deref(),
+            Some(tr("Play the assembly").as_str())
+        );
+        assert!(heard.borrow().is_empty(), "showing never calls back");
+        assert!(swing_heard.borrow().is_empty(), "showing never calls back");
+    }
+
+    #[test]
+    fn the_swing_card_names_its_slider_by_message() {
+        on_gtk_thread(swing_names_its_slider);
+    }
+
+    fn swing_names_its_slider() {
+        let (to, _heard) = recorder::<SwingCardOutput>();
+        let card = SwingCard::new(&to, |output| output);
+        card.show_name("drawer", false);
+        settle();
+        assert_eq!(
+            card.controller.model().scrub.label(),
+            tr("How far it slides out")
+        );
     }
 
     #[test]
@@ -1321,7 +1427,7 @@ mod tests {
             .map(|button| button.has_css_class("current"))
             .collect();
         assert_eq!(rung, vec![false, true, false]);
-        assert_eq!(pictures.device_size(), None, "no room yet");
+        assert_eq!(pictures.size(), None, "no room yet");
         let Some(button) = buttons
             .get(2)
             .and_then(|button| button.downcast_ref::<gtk::Button>())
@@ -1334,25 +1440,29 @@ mod tests {
         assert_eq!(*chosen.borrow(), vec![2], "the owner hears it");
     }
 
+    /// A size in device pixels, as the pictures publish it.
+    type DeviceSize = (u32, u32);
+
     #[test]
     fn a_resize_heard_from_inside_its_callback_is_queued() {
         on_gtk_thread(pictures_resize);
     }
 
     /// The old pictures' resize handler ran inside the slot's allocation;
-    /// now it is a message, reported once per size, and the window may
-    /// ask the pictures their size from inside its callback.
+    /// now it is a message carrying the size, reported once per size,
+    /// and a size said from inside the owner's callback is queued.
     fn pictures_resize() {
         let shared: Rc<RefCell<Option<std::rc::Weak<Pictures>>>> = Rc::default();
-        let heard = Rc::new(Cell::new(0));
-        let (count, weak) = (Rc::clone(&heard), Rc::clone(&shared));
+        let heard: Rc<RefCell<Vec<Option<DeviceSize>>>> = Rc::default();
+        let (log, weak) = (Rc::clone(&heard), Rc::clone(&shared));
         let to = listener(move |output| {
-            if output != PicturesOutput::Resized {
+            let PicturesOutput::Resized(size) = output else {
                 return;
-            }
-            count.set(count.get() + 1);
-            if let Some(pictures) = weak.borrow().as_ref().and_then(std::rc::Weak::upgrade) {
-                let _ = pictures.device_size();
+            };
+            log.borrow_mut().push(size);
+            if log.borrow().len() == 1
+                && let Some(pictures) = weak.borrow().as_ref().and_then(std::rc::Weak::upgrade)
+            {
                 pictures.send(PicturesInput::SlotResized {
                     width: 640,
                     height: 360,
@@ -1361,16 +1471,49 @@ mod tests {
         });
         let pictures = Rc::new(Pictures::new(&to, |output| output));
         shared.replace(Some(Rc::downgrade(&pictures)));
+        pictures.root.set_visible(true);
         pictures.show(&["closed".to_owned()]);
+        settle();
+        // The slot has had no room yet: nothing to say.
+        pictures.send(PicturesInput::SlotResized {
+            width: 1,
+            height: 1,
+        });
+        settle();
+        assert!(heard.borrow().is_empty(), "no room, no size");
+        // Room, as a parent's layout would give it.
+        let _ = pictures.root.measure(gtk::Orientation::Horizontal, -1);
+        pictures.root.allocate(400, 200, -1, None);
+        assert!(heard.borrow().is_empty(), "queued");
+        settle();
+        {
+            let heard = heard.borrow();
+            assert!(
+                heard.first().is_some_and(Option::is_some),
+                "the room is said: {heard:?}"
+            );
+            assert_eq!(
+                heard.get(1),
+                Some(&Some((640, 360))),
+                "the size said from inside the callback came after"
+            );
+        }
         for _ in 0..3 {
             pictures.send(PicturesInput::SlotResized {
                 width: 640,
                 height: 360,
             });
         }
-        assert_eq!(heard.get(), 0, "queued");
         settle();
-        assert_eq!(heard.get(), 1, "once for a size, however often it is said");
+        assert_eq!(
+            heard.borrow().len(),
+            2,
+            "once for a size, however often it is said"
+        );
+        // New captions lay the slots out afresh: no room until they have it.
+        pictures.show(&["closed".to_owned(), "open".to_owned()]);
+        settle();
+        assert_eq!(heard.borrow().get(2), Some(&None), "laid out afresh");
     }
 
     #[test]

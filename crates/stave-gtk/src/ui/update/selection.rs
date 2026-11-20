@@ -72,8 +72,9 @@ pub(in crate::ui) enum SelectionInput {
     FocusFade(bool),
     /// Focus mode's From above switch.
     FocusPlan(bool),
-    /// Hardware focus's small views changed size.
-    PicturesResized,
+    /// Hardware focus's small views changed size: the size in device
+    /// pixels to render them at, `None` until they have room.
+    PicturesResized(Option<(u32, u32)>),
     /// The small views' size has settled (for the ask with this number).
     PicturesDue(u64),
     /// One of hardware focus's small views was chosen.
@@ -219,7 +220,7 @@ pub(in crate::ui) fn problem_card_said(output: ProblemCardOutput) -> WindowInput
 /// Hardware focus's small views' outputs as the window's messages.
 pub(in crate::ui) fn pictures_said(output: PicturesOutput) -> WindowInput {
     match output {
-        PicturesOutput::Resized => SelectionInput::PicturesResized,
+        PicturesOutput::Resized(size) => SelectionInput::PicturesResized(size),
         PicturesOutput::Chosen(index) => SelectionInput::PictureChosen(index),
     }
     .into()
@@ -306,7 +307,12 @@ impl Window {
                 self.switch_focus(on, |focus| &mut focus.options.fade_others);
             }
             SelectionInput::FocusPlan(on) => self.switch_focus(on, |focus| &mut focus.plan),
-            SelectionInput::PicturesResized => self.schedule_pictures(),
+            SelectionInput::PicturesResized(size) => {
+                self.widgets.pictures.keep_size(size);
+                if size.is_some() {
+                    self.schedule_pictures();
+                }
+            }
             SelectionInput::PicturesDue(asked) => {
                 // Only the last ask renders.
                 if asked == self.state.pictures_asked {
@@ -691,18 +697,8 @@ impl Window {
         let widgets = &self.widgets;
         widgets.step_card.set_progress(progress);
         widgets.swing_card.set_progress(progress);
-        focus_stage::show_playing(
-            &widgets.step_card.play,
-            &widgets.step_card.play_icon,
-            focus.playing,
-            &tr("Play the assembly"),
-        );
-        focus_stage::show_playing(
-            &widgets.swing_card.play,
-            &widgets.swing_card.play_icon,
-            focus.playing,
-            &tr("Play the swing"),
-        );
+        widgets.step_card.show_playing(focus.playing);
+        widgets.swing_card.show_playing(focus.playing);
         if let Some((_, range)) = focus.focus.motion() {
             widgets
                 .swing_card
@@ -856,7 +852,7 @@ impl Window {
         };
         self.widgets.pictures.root.set_visible(!captions.is_empty());
         self.widgets.pictures.show(&captions);
-        let Some((width, height)) = self.widgets.pictures.device_size() else {
+        let Some((width, height)) = self.widgets.pictures.size() else {
             return;
         };
         let backdrop = self.backdrop();

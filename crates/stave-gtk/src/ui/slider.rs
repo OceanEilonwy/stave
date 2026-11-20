@@ -60,6 +60,8 @@ pub struct SliderComponent {
     track: Track,
     /// The value in words for screen readers ("45°"), if given.
     value_text: Option<String>,
+    /// What screen readers call it ("Door angle").
+    label: String,
 }
 
 /// What a slider is made with.
@@ -174,6 +176,8 @@ pub enum SliderInput {
     /// Say the value in words for screen readers ("45°"; "45°, blocked"
     /// once it is in the blocked range).
     SetValueText(String),
+    /// Change what screen readers call it ("How far it slides out").
+    SetLabel(String),
 }
 
 /// What a slider tells its owner.
@@ -244,7 +248,7 @@ impl Component for SliderComponent {
             set_hexpand: true,
             set_focusable: true,
             add_css_class: "stave-slider",
-            update_property: &[gtk::accessible::Property::Label(&label)],
+            update_property: &[gtk::accessible::Property::Label(&model.label)],
 
             // A copy of the model to draw, and what screen readers hear,
             // after every update.
@@ -339,6 +343,7 @@ impl Component for SliderComponent {
                 ring,
             },
             value_text: None,
+            label,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -405,6 +410,11 @@ impl Component for SliderComponent {
             }
             SliderInput::SetValueText(text) => {
                 self.value_text = Some(text);
+                None
+            }
+            SliderInput::SetLabel(label) => {
+                root.update_property(&[gtk::accessible::Property::Label(&label)]);
+                self.label = label;
                 None
             }
         };
@@ -502,10 +512,21 @@ impl Slider {
         self.send(SliderInput::SetValueText(text.to_owned()));
     }
 
+    /// Changes what screen readers call it ("How far it slides out").
+    pub fn set_label(&self, label: &str) {
+        self.send(SliderInput::SetLabel(label.to_owned()));
+    }
+
     /// The model as of the last handled message: for the getters, never
     /// from the slider's own handlers (rule 8).
     fn model(&self) -> Ref<'_, SliderComponent> {
         self.controller.model()
+    }
+
+    /// What screen readers call it, as of the last handled message.
+    #[cfg(test)]
+    pub fn label(&self) -> String {
+        self.model().label.clone()
     }
 
     /// The component's input sender, to watch it close in tests.
@@ -818,9 +839,12 @@ mod tests {
         slider.set_value(3.0);
         slider.set_blocked(Some((1.5, "blocked from 1.5")));
         slider.set_value_text("90°");
+        slider.set_label("How far it slides out");
+        assert_eq!(slider.model().label, "Door angle", "queued");
         settle();
         assert_eq!(slider.value(), 2.0, "clamped to the range");
         assert_eq!(slider.model().track.blocked_from, Some(1.5));
+        assert_eq!(slider.model().label, "How far it slides out");
         assert!(heard.borrow().is_empty(), "setters never call back");
     }
 
