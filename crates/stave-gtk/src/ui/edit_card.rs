@@ -1942,7 +1942,9 @@ button.stave-edit-unavailable .stave-edit-choice-mark { opacity: 0.55; }
 .stave-repeat-short spinbutton > button { min-width: 22px; padding-left: 2px; padding-right: 2px; }
 button.stave-repeat-unfold { padding: 2px 8px; min-height: 24px; font-weight: normal; }
 .stave-repeat-fold > .stave-repeat-row { padding: 2px 0; }
-.stave-edit-empty { padding: 12px; }
+/* Side room only: top and bottom padding would cut the scrolled words off
+   short of the panel's edge (style.rs, statuspage.compact). */
+.stave-edit-empty { padding: 0 12px; }
 .stave-option-search { padding: 0; }
 .stave-option-search-backdrop { background: alpha(black, 0.32); }
 .stave-option-search-head { padding: 10px 8px 0 16px; }

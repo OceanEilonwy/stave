@@ -25,10 +25,13 @@ impl EditPanel {
             .icon_name("document-edit-symbolic")
             .title(tr("Nothing being added"))
             .description(tr(
-                "Click inside a space, or in the gap between two parts, to add something there; or select a part and choose “Add something onto its face” in Details. Select a part or an assembly to change it in Details.",
+                "Click inside a space, or in the gap between two parts, to add something there. To add onto a part, or change it, select it and use Details.",
             ))
             .css_classes(["compact", "stave-edit-empty"])
             .build();
+        // The panel's content is put into the dock after it is docked, so
+        // the workbench doesn't find this page to fit.
+        super::empty_state::fit(&empty);
         let holder = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .vexpand(true)
