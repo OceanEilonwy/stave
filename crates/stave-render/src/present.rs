@@ -44,7 +44,14 @@ fn blit_fragment(in: Blitted) -> @location(0) vec4<f32> {
 pub(crate) struct Presenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    /// The sRGB view of the surface's format, which the blit draws in.
+    blit: Blit,
+}
+
+/// What draws a frame's picture over the whole of a texture: the
+/// full-screen triangle's pipeline and what it reads. It needs no
+/// surface, so it draws into any texture that has its sRGB view.
+pub(crate) struct Blit {
+    /// The sRGB format the blit draws in, and views its output as.
     view_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -94,6 +101,65 @@ impl Presenter {
             },
         };
         surface.configure(device, &config);
+        Ok(Presenter {
+            surface,
+            config,
+            blit: Blit::new(device, queue, view_format),
+        })
+    }
+
+    /// Configures the surface again at `width` by `height` pixels.
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let (width, height) = (width.max(1), height.max(1));
+        if (self.config.width, self.config.height) != (width, height) {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(device, &self.config);
+        }
+    }
+
+    /// The surface's next texture to draw in, configuring it again once
+    /// when it is out of date.
+    pub fn next_texture(&self, device: &wgpu::Device) -> Result<wgpu::SurfaceTexture, RenderError> {
+        let mut configured = false;
+        loop {
+            let trouble = match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(texture)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => return Ok(texture),
+                wgpu::CurrentSurfaceTexture::Outdated if !configured => {
+                    self.surface.configure(device, &self.config);
+                    configured = true;
+                    continue;
+                }
+                wgpu::CurrentSurfaceTexture::Outdated => SurfaceTrouble::Outdated,
+                wgpu::CurrentSurfaceTexture::Timeout => SurfaceTrouble::Timeout,
+                wgpu::CurrentSurfaceTexture::Occluded => SurfaceTrouble::Occluded,
+                wgpu::CurrentSurfaceTexture::Lost => SurfaceTrouble::Lost,
+                wgpu::CurrentSurfaceTexture::Validation => SurfaceTrouble::Validation,
+            };
+            return Err(RenderError::Surface(trouble));
+        }
+    }
+
+    /// Draws `resolved`'s picture over the whole of `output`, one of the
+    /// surface's textures.
+    pub fn blit(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        resolved: &Resolved<'_>,
+        output: &wgpu::Texture,
+    ) {
+        self.blit.draw(encoder, resolved, output);
+    }
+}
+
+impl Blit {
+    /// The blit drawing in `view_format`, an sRGB format.
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view_format: wgpu::TextureFormat,
+    ) -> Blit {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit"),
             source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
@@ -171,9 +237,7 @@ impl Presenter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Ok(Presenter {
-            surface,
-            config,
+        Blit {
             view_format,
             pipeline,
             layout,
@@ -181,44 +245,12 @@ impl Presenter {
             share,
             device: device.clone(),
             queue: queue.clone(),
-        })
-    }
-
-    /// Configures the surface again at `width` by `height` pixels.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let (width, height) = (width.max(1), height.max(1));
-        if (self.config.width, self.config.height) != (width, height) {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(device, &self.config);
         }
     }
 
-    /// The surface's next texture to draw in, configuring it again once
-    /// when it is out of date.
-    pub fn next_texture(&self, device: &wgpu::Device) -> Result<wgpu::SurfaceTexture, RenderError> {
-        let mut configured = false;
-        loop {
-            let trouble = match self.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(texture)
-                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => return Ok(texture),
-                wgpu::CurrentSurfaceTexture::Outdated if !configured => {
-                    self.surface.configure(device, &self.config);
-                    configured = true;
-                    continue;
-                }
-                wgpu::CurrentSurfaceTexture::Outdated => SurfaceTrouble::Outdated,
-                wgpu::CurrentSurfaceTexture::Timeout => SurfaceTrouble::Timeout,
-                wgpu::CurrentSurfaceTexture::Occluded => SurfaceTrouble::Occluded,
-                wgpu::CurrentSurfaceTexture::Lost => SurfaceTrouble::Lost,
-                wgpu::CurrentSurfaceTexture::Validation => SurfaceTrouble::Validation,
-            };
-            return Err(RenderError::Surface(trouble));
-        }
-    }
-
-    /// Draws `resolved`'s picture over the whole of `output`.
-    pub fn blit(
+    /// Draws `resolved`'s picture over the whole of `output`, through its
+    /// view in the blit's sRGB format.
+    pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         resolved: &Resolved<'_>,

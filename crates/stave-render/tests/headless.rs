@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use stave_render::{Backdrop, Frame, Renderer};
+use stave_render::{Backdrop, Frame, RenderError, Renderer};
 use stave_scene::Orbit;
 
 #[test]
@@ -13,10 +13,11 @@ fn renders_box_example_headless() {
     let posed = scene.rest();
     let mut renderer = match pollster::block_on(Renderer::headless()) {
         Ok(renderer) => renderer,
-        Err(error) => {
+        Err(RenderError::NoAdapter(error)) => {
             eprintln!("no GPU adapter: {error}");
             return;
         }
+        Err(error) => panic!("{error}"),
     };
     renderer.upload(&scene);
     let bounds = scene.bounds(&posed).unwrap();

@@ -6,14 +6,15 @@ use std::path::Path;
 use super::*;
 
 /// A renderer, or `None` (and a note) on a machine without a GPU
-/// adapter wgpu can use.
+/// adapter wgpu can use. An adapter that refuses a device fails the test.
 fn renderer() -> Option<Renderer> {
     match pollster::block_on(Renderer::headless()) {
         Ok(renderer) => Some(renderer),
-        Err(error) => {
-            eprintln!("skipped: {error:#}");
+        Err(RenderError::NoAdapter(error)) => {
+            eprintln!("skipped: no GPU adapter: {error}");
             None
         }
+        Err(error) => panic!("{error}"),
     }
 }
 
@@ -434,6 +435,92 @@ fn an_offscreen_renderer_has_no_surface_and_ignores_resizing() {
         renderer.present(&frame(&scene, &posed, 0.0)),
         Err(RenderError::NoSurface)
     ));
+}
+
+#[test]
+fn a_frame_blitted_onto_a_bgra_surface_is_the_still_picture() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let (scene, posed) = stool();
+    renderer.upload(&scene);
+    // 192 by 128 fills three quarters across and half down of its
+    // 256-pixel target, so the blit's share is tested, and each output
+    // pixel samples one texel's centre exactly.
+    let (width, height) = (192, 128);
+    let still = renderer
+        .render(&sized(&scene, &posed, width, height))
+        .unwrap();
+    // A texture as a canvas offers it: `bgra8unorm`, drawn through its
+    // sRGB view.
+    let blit = present::Blit::new(
+        renderer.device(),
+        renderer.queue(),
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+    );
+    let output = renderer.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("test surface"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[wgpu::TextureFormat::Bgra8UnormSrgb],
+    });
+    let layout = Layout::new(width, height);
+    let buffer = renderer.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test readback"),
+        size: layout.bytes(),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let submitted = renderer
+        .draw(
+            &sized(&scene, &posed, width, height),
+            Slot::Live,
+            |encoder, resolved| {
+                assert_eq!(resolved.texture.size().width, 256);
+                assert_eq!(resolved.texture.size().height, 256);
+                blit.draw(encoder, resolved, &output);
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &output,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(layout.padded_row),
+                            rows_per_image: Some(layout.height),
+                        },
+                    },
+                    resolved.extent(),
+                );
+            },
+        )
+        .unwrap();
+    let mut blitted = renderer.read_back(buffer, layout, submitted).unwrap();
+    for pixel in blitted.rgba.chunks_mut(4) {
+        pixel.swap(0, 2);
+    }
+    assert_eq!((blitted.width, blitted.height), (still.width, still.height));
+    // Decoded from sRGB to sample and encoded again to draw: the same
+    // bytes, or one off at most.
+    let worst = blitted
+        .rgba
+        .iter()
+        .zip(&still.rgba)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max();
+    assert!(worst.is_some_and(|worst| worst <= 1), "off by {worst:?}");
 }
 
 #[test]
