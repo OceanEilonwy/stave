@@ -6,12 +6,118 @@
 //! real scrollbar beside them rather than a hidden overlay one, so nothing
 //! is cut off without a way to see it. The icon comes back when the frame
 //! grows tall enough for it again.
+//!
+//! The page's state (its hidden icon) lives in [`PageFit`], a GObject
+//! subclass of `gtk::Adjustment` that the page's scrolled window uses as
+//! its vertical adjustment: the scrolled window owns it, it hears every
+//! change of the frame's or the words' size in its own `changed` method,
+//! and the refit it waits to run after the layout pass holds it weakly.
+//! No Rust state is shared between closures (docs/relm4-migration.md,
+//! "Accepted exceptions").
 
 use std::cell::Cell;
-use std::rc::Rc;
 
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 use gtk::glib;
+
+mod imp {
+    use super::*;
+
+    /// A page's fitting state.
+    #[derive(Default)]
+    pub struct PageFit {
+        /// The page fitted.
+        pub page: glib::WeakRef<adw::StatusPage>,
+        /// The icon's name while it is hidden for want of room.
+        pub hidden_icon: Cell<Option<glib::GString>>,
+        /// The height, in pixels, that showing the icon adds.
+        pub icon_room: Cell<i32>,
+        /// Whether a refit is already waiting for the main loop.
+        pub queued: Cell<bool>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for PageFit {
+        const NAME: &'static str = "StavePageFit";
+        type Type = super::PageFit;
+        type ParentType = gtk::Adjustment;
+    }
+
+    impl ObjectImpl for PageFit {}
+
+    impl AdjustmentImpl for PageFit {
+        /// The frame or the words changed size: refit once the layout
+        /// pass is over (hiding the icon inside it would resize the page
+        /// while it is being laid out).
+        fn changed(&self) {
+            self.parent_changed();
+            if self.queued.replace(true) {
+                return;
+            }
+            let fit = self.obj().downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(fit) = fit.upgrade() {
+                    fit.imp().queued.set(false);
+                    fit.refit();
+                }
+            });
+        }
+    }
+}
+
+glib::wrapper! {
+    /// The vertical adjustment of a fitted status page's scrolled window,
+    /// holding the page's fitting state.
+    pub struct PageFit(ObjectSubclass<imp::PageFit>) @extends gtk::Adjustment;
+}
+
+impl PageFit {
+    /// Hides the icon if the page overflows its frame, or shows it again
+    /// if the frame has room for it.
+    fn refit(&self) {
+        let imp = self.imp();
+        let Some(page) = imp.page.upgrade() else {
+            return;
+        };
+        let Some(scrolled) = scrolled_window(&page) else {
+            return;
+        };
+        let Some(content) = scrolled.child() else {
+            return;
+        };
+        let (room, width) = (scrolled.height(), scrolled.width());
+        if room <= 0 || width <= 0 {
+            return;
+        }
+        let need = || content.measure(gtk::Orientation::Vertical, width).1;
+        match imp.hidden_icon.take() {
+            None => {
+                if need() > room
+                    && let Some(icon) = page.icon_name()
+                {
+                    let with_icon = need();
+                    page.set_icon_name(None);
+                    imp.icon_room.set(with_icon.saturating_sub(need()));
+                    imp.hidden_icon.set(Some(icon));
+                }
+            }
+            Some(icon) => {
+                if need().saturating_add(imp.icon_room.get()) <= room {
+                    page.set_icon_name(Some(&icon));
+                } else {
+                    imp.hidden_icon.set(Some(icon));
+                }
+            }
+        }
+    }
+}
+
+/// libadwaita's page is a scrolled window around its icon and words.
+fn scrolled_window(page: &adw::StatusPage) -> Option<gtk::ScrolledWindow> {
+    page.first_child()
+        .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
+}
 
 /// Makes every status page under `root` (itself included) fit its frame
 /// as the module says. The workbench calls it on each panel's content
@@ -33,90 +139,16 @@ pub fn fit_every(root: &gtk::Widget) {
 /// words overflow, and no icon while there is no room for it. A page
 /// already fitted is left as it is.
 pub fn fit(page: &adw::StatusPage) {
-    if page.has_css_class(FITTED) {
-        return;
-    }
-    page.add_css_class(FITTED);
-    // libadwaita's page is a scrolled window around its icon and words.
-    let Some(scrolled) = page
-        .first_child()
-        .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
-    else {
+    let Some(scrolled) = scrolled_window(page) else {
         return;
     };
-    scrolled.set_overlay_scrolling(false);
-    let fitting = Rc::new(Fitting {
-        page: page.downgrade(),
-        scrolled: scrolled.downgrade(),
-        hidden_icon: Cell::new(None),
-        icon_room: Cell::new(0),
-        queued: Cell::new(false),
-    });
-    // The adjustment changes when the frame or the words change size. The
-    // icon is hidden or shown after the layout pass, not inside it.
-    scrolled.vadjustment().connect_changed(move |_| {
-        if fitting.queued.replace(true) {
-            return;
-        }
-        let fitting = Rc::clone(&fitting);
-        glib::idle_add_local_once(move || {
-            fitting.queued.set(false);
-            fitting.refit();
-        });
-    });
-}
-
-/// Marks a page [`fit`] has already fitted.
-const FITTED: &str = "stave-fitted";
-
-/// One page's fitting state.
-struct Fitting {
-    page: glib::WeakRef<adw::StatusPage>,
-    scrolled: glib::WeakRef<gtk::ScrolledWindow>,
-    /// The icon's name while it is hidden for want of room.
-    hidden_icon: Cell<Option<glib::GString>>,
-    /// The height, in pixels, that showing the icon adds.
-    icon_room: Cell<i32>,
-    /// Whether a refit is already waiting for the main loop.
-    queued: Cell<bool>,
-}
-
-impl Fitting {
-    /// Hides the icon if the page overflows its frame, or shows it again
-    /// if the frame has room for it.
-    fn refit(&self) {
-        let (Some(page), Some(scrolled)) = (self.page.upgrade(), self.scrolled.upgrade()) else {
-            return;
-        };
-        let Some(content) = scrolled.child() else {
-            return;
-        };
-        let (room, width) = (scrolled.height(), scrolled.width());
-        if room <= 0 || width <= 0 {
-            return;
-        }
-        let need = || content.measure(gtk::Orientation::Vertical, width).1;
-        let hidden = self.hidden_icon.take();
-        match hidden {
-            None => {
-                if need() > room
-                    && let Some(icon) = page.icon_name()
-                {
-                    let with_icon = need();
-                    page.set_icon_name(None);
-                    self.icon_room.set(with_icon.saturating_sub(need()));
-                    self.hidden_icon.set(Some(icon));
-                }
-            }
-            Some(icon) => {
-                if need().saturating_add(self.icon_room.get()) <= room {
-                    page.set_icon_name(Some(&icon));
-                } else {
-                    self.hidden_icon.set(Some(icon));
-                }
-            }
-        }
+    if scrolled.vadjustment().is::<PageFit>() {
+        return;
     }
+    scrolled.set_overlay_scrolling(false);
+    let fit: PageFit = glib::Object::new();
+    fit.imp().page.set(Some(page));
+    scrolled.set_vadjustment(Some(&fit));
 }
 
 #[cfg(test)]
