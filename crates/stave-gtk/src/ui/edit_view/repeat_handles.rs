@@ -19,7 +19,7 @@ use stave_app::i18n::tr;
 
 use adw::prelude::*;
 use glam::Vec3;
-use relm4::ComponentController;
+use relm4::{Component, ComponentController, Controller};
 use stave_app::edit::PlaceSlot;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::item_offer::{RepeatFold, candidate_repeat_fold};
@@ -30,7 +30,12 @@ use stave_model::ids::RegionId;
 use stave_scene::Aabb;
 
 use super::super::Window;
-use super::item_tools::{MOST, RepeatFoldRow};
+use super::item_tools::{
+    MOST, RepeatFoldComponent, RepeatFoldInit, RepeatFoldInput, RepeatFoldOutput, RepeatFoldShown,
+    RepeatFoldSlots,
+};
+use crate::ui::WindowInput;
+use crate::ui::edit_card::CardSlots;
 use crate::ui::update::editing::EditingInput;
 
 /// The unit vector of a design axis in the 3D view's frame (across is x,
@@ -248,8 +253,13 @@ struct DragFrom {
 /// The repeat controls: the candidate card's stepper, the count handle and
 /// the boundary handles.
 pub(in crate::ui) struct Repeats {
-    /// On the chosen candidate's card, folded until asked for.
-    pub(in crate::ui) row: RepeatFoldRow,
+    /// On the chosen candidate's card, folded until asked for; its
+    /// outputs come to the window as [`EditingInput::CardRepeatUnfolded`]
+    /// and [`EditingInput::CardRepeatChanged`].
+    row: Controller<RepeatFoldComponent>,
+    /// What the window last showed on it (and people last chose), read at
+    /// once by the count handle and scripts.
+    pub(in crate::ui) shown: RepeatFoldShown,
     count: Handle,
     boundaries: Vec<(Handle, Option<Boundary>)>,
     /// What the count handle is on: the space's box and the axis, while
@@ -265,10 +275,29 @@ pub(in crate::ui) struct Repeats {
 }
 
 impl Repeats {
-    /// Hidden controls.
-    pub(in crate::ui) fn new() -> Repeats {
+    /// Hidden controls; the stepper sits on the candidate's card, above
+    /// its buttons (`slots`), and reports to `input`.
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>, slots: &CardSlots) -> Repeats {
+        let row = RepeatFoldComponent::builder()
+            .launch(RepeatFoldInit {
+                least: 1,
+                apart: Some(RepeatFoldSlots {
+                    button: slots.repeat_button_slot.clone(),
+                    row: slots.repeat_slot.clone(),
+                }),
+            })
+            .forward(input, |output| {
+                match output {
+                    RepeatFoldOutput::Unfold => EditingInput::CardRepeatUnfolded,
+                    RepeatFoldOutput::Changed { count, axis, shows } => {
+                        EditingInput::CardRepeatChanged { count, axis, shows }
+                    }
+                }
+                .into()
+            });
         Repeats {
-            row: RepeatFoldRow::new(1),
+            row,
+            shown: RepeatFoldShown::new(1),
             count: Handle::new(&tr(
                 "Drag toward the start of the space for more pieces, back for fewer",
             )),
@@ -278,6 +307,15 @@ impl Repeats {
             dragged_count: None,
             dragged_boundary: None,
         }
+    }
+}
+
+impl Repeats {
+    /// Sends the stepper a message, as [`RepeatFoldShown`]'s setters
+    /// return them.
+    fn send(&self, message: RepeatFoldInput) {
+        // After shutdown there is nothing to show.
+        let _ = self.row.sender().send(message);
     }
 }
 
@@ -362,23 +400,10 @@ impl Window {
         nudge
     }
 
-    /// Puts the repeat controls on the card and over the 3D view.
+    /// Puts the count handle over the 3D view (the stepper went on the
+    /// card when it was launched, its outputs forwarded).
     pub(in crate::ui) fn connect_repeats(&self) {
         let repeats = &self.editing.repeats;
-        // The repeat controls sit on the candidate's card, above its
-        // buttons, folded until asked for.
-        repeats.row.place_apart(
-            &self.editing.card_slots.repeat_button_slot,
-            &self.editing.card_slots.repeat_slot,
-        );
-        let input = self.input();
-        repeats
-            .row
-            .connect_unfold(move || input.emit(EditingInput::CardRepeatUnfolded.into()));
-        let input = self.input();
-        repeats.row.row.connect_changed(move |count, axis| {
-            input.emit(EditingInput::RepeatChanged { count, axis }.into());
-        });
         self.widgets.design.add_overlay(&repeats.count.root);
         let drag = gtk::GestureDrag::new();
         let input = self.input();
@@ -399,26 +424,52 @@ impl Window {
     /// space; folded behind "Repeat…" until asked for or already more than
     /// one; else the count and the direction, with the repeat the session
     /// holds.
-    pub(in crate::ui) fn update_repeat_row(&self) {
-        let row = &self.editing.repeats.row;
+    pub(in crate::ui) fn update_repeat_row(&mut self) {
+        let asked = self.editing.repeats.shown.asked();
         let shown = {
             let session = &self.session;
             session.edit().and_then(|edit| edit.chosen()).map(|chosen| {
                 let repeat = chosen.repeat();
                 (
-                    candidate_repeat_fold(chosen.candidate(), repeat, row.asked()),
+                    candidate_repeat_fold(chosen.candidate(), repeat, asked),
                     repeat.map_or((1, None), |repeat| (repeat.count.get(), Some(repeat.axis))),
                 )
             })
         };
+        let repeats = &mut self.editing.repeats;
         match shown {
             Some((fold, (count, axis))) => {
-                row.row
-                    .show(count, axis.unwrap_or_else(|| row.row.axis()), true);
-                row.show(fold);
+                let axis = axis.unwrap_or_else(|| repeats.shown.axis());
+                let message = repeats.shown.show_count(count, axis, true);
+                repeats.send(message);
+                let message = repeats.shown.show(fold);
+                repeats.send(message);
             }
-            None => row.show(RepeatFold::Hidden),
+            None => {
+                let message = repeats.shown.show(RepeatFold::Hidden);
+                repeats.send(message);
+            }
         }
+    }
+
+    /// "Repeat…" on the candidate's card was pressed: the count and the
+    /// direction show.
+    pub(in crate::ui) fn card_repeat_unfolded(&mut self) {
+        self.editing.repeats.shown.unfolded();
+        self.update_repeat_row();
+        self.request_render();
+    }
+
+    /// People changed the count or the direction on the candidate's card.
+    pub(in crate::ui) fn card_repeat_changed(&mut self, count: usize, axis: Axis, shows: u64) {
+        self.editing.repeats.shown.take_change(count, axis, shows);
+        self.repeat_selected(count, Some(axis));
+    }
+
+    /// Forgets that "Repeat…" was pressed on the candidate's card
+    /// (another candidate, or another edit).
+    pub(in crate::ui) fn forget_card_repeat(&mut self) {
+        self.editing.repeats.shown.forget();
     }
 
     /// The space the count handle stands on, the axis and the count: the
@@ -433,7 +484,7 @@ impl Window {
             if let Some(chosen) = session.edit().and_then(|edit| edit.chosen()) {
                 // Only while the repeat controls are open: folded, they
                 // take no room on the model either.
-                if !self.editing.repeats.row.is_open() {
+                if !self.editing.repeats.shown.is_open() {
                     return None;
                 }
                 let region =
@@ -452,8 +503,8 @@ impl Window {
                 let repeats = &self.editing.repeats;
                 let count = repeats
                     .dragged_count
-                    .unwrap_or_else(|| repeats.row.row.count());
-                return Some((volume, repeats.row.row.axis(), count));
+                    .unwrap_or_else(|| repeats.shown.count());
+                return Some((volume, repeats.shown.axis(), count));
             }
             if session.edit().is_some() || session.change().is_some() {
                 return None;
@@ -582,7 +633,9 @@ impl Window {
     /// Presses "Repeat…" on the candidate's card, or else on the selected
     /// item's, when it is folded; `true` when one was pressed.
     pub(in crate::ui) fn unfold_repeat(&mut self) -> bool {
-        if self.editing.repeats.row.press() {
+        if self.editing.repeats.shown.press() {
+            // What a click on it does, once this step is done.
+            self.send(EditingInput::CardRepeatUnfolded);
             return true;
         }
         self.editing.tools.repeat_fold().press()

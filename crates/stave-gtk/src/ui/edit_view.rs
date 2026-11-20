@@ -184,6 +184,7 @@ impl EditView {
             changes.card.root.upcast_ref(),
             hold.card.root.upcast_ref(),
         ]);
+        let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
             card,
@@ -202,7 +203,7 @@ impl EditView {
             changes,
             tools: item_tools::ItemTools::new(),
             hold,
-            repeats: repeat_handles::Repeats::new(),
+            repeats,
             pending: editor_link::PendingPanel::new(),
             pending_marked: None,
             verbs: Vec::new(),
@@ -912,7 +913,7 @@ impl Window {
         match event {
             EditEvent::Started => {
                 self.stop_options_check();
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 let generation = {
                     let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
@@ -929,7 +930,7 @@ impl Window {
             EditEvent::MenuChanged => self.refresh_edit(),
             EditEvent::Chosen => {
                 // Another candidate: "Repeat…" is asked for again.
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 self.update_ghost();
                 self.refresh_edit();
                 self.start_options_check();

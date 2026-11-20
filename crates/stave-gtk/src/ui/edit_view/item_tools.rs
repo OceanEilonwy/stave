@@ -358,6 +358,10 @@ impl RepeatRow {
     /// and accessible label), so the row fits the Edit panel's width in
     /// the default layout, where the docked area would otherwise widen to
     /// hold it.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the shim goes once ItemTools moves")
+    )]
     pub(in crate::ui) fn shorten(&self) {
         self.bridge.send(RepeatRowInput::Shorten);
     }
@@ -377,6 +381,10 @@ impl RepeatRow {
     /// The count shown: what [`RepeatRow::show`] last set (clamped as the
     /// stepper clamps it) or people last chose, at once, though the stepper
     /// itself follows when the main loop next runs.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the shim goes once ItemTools moves")
+    )]
     pub(in crate::ui) fn count(&self) -> usize {
         self.shown.value.get().0
     }
@@ -485,6 +493,10 @@ impl RepeatFoldRow {
     /// Puts "Repeat…" in one place and the count and direction in another
     /// (the candidate's card: "Repeat…" on the line of its buttons, the
     /// count above them, so folded it takes no line of its own).
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the shim goes once ItemTools moves")
+    )]
     pub(in crate::ui) fn place_apart(&self, button_slot: &gtk::Box, row_slot: &gtk::Box) {
         self.root.remove(&self.unfold);
         self.root.remove(&self.row.root);

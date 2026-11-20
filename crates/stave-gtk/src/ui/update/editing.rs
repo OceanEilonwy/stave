@@ -82,6 +82,16 @@ pub(in crate::ui) enum EditingInput {
     ItemRepeatUnfolded,
     /// The card's repeat row was unfolded.
     CardRepeatUnfolded,
+    /// People changed the count or direction on the candidate's card.
+    CardRepeatChanged {
+        /// How many.
+        count: usize,
+        /// Along which axis.
+        axis: Axis,
+        /// How many counts the window had shown the stepper when people
+        /// changed it (a later one replaces the change).
+        shows: u64,
+    },
     /// A repeat count or direction changed.
     RepeatChanged {
         /// How many.
@@ -241,9 +251,9 @@ impl Window {
             EditingInput::HoldCard(output) => self.hold_card_asked(output),
             EditingInput::ItemTools(output) => self.item_tools_asked(output),
             EditingInput::ItemRepeatUnfolded => self.update_item_tools(),
-            EditingInput::CardRepeatUnfolded => {
-                self.update_repeat_row();
-                self.request_render();
+            EditingInput::CardRepeatUnfolded => self.card_repeat_unfolded(),
+            EditingInput::CardRepeatChanged { count, axis, shows } => {
+                self.card_repeat_changed(count, axis, shows);
             }
             EditingInput::RepeatChanged { count, axis } => {
                 self.repeat_selected(count, Some(axis));
