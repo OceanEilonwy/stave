@@ -129,6 +129,29 @@ pub(super) fn section(title: &str, note: &str, open: bool) -> (gtk::Box, gtk::Bo
 /// A collapsible section whose note is set later: the section, its body
 /// and the note's label (hidden until it has words).
 pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk::Label) {
+    let (button, revealer, note) = section_head(title, open);
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-section-body"])
+        .build();
+    revealer.set_child(Some(&body));
+    let section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-section"])
+        .build();
+    section.append(&button);
+    section.append(&revealer);
+    (section, body, note)
+}
+
+/// The parts of a collapsible section, for a component that builds the
+/// section in its own view: the head (a button with the arrow, the
+/// title and the note), the revealer that the head opens and closes
+/// (empty: its child, with the class `stave-section-body`, is the
+/// caller's), and the note's label (hidden until it has words). The
+/// caller puts the head and the revealer, in that order, in a vertical
+/// box with the class `stave-section`.
+pub(super) fn section_head(title: &str, open: bool) -> (gtk::Button, gtk::Revealer, gtk::Label) {
     let head = gtk::Box::builder().spacing(6).build();
     let arrow = gtk::Image::builder()
         .icon_name(if open {
@@ -161,12 +184,7 @@ pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk
         .build();
     button.update_property(&[gtk::accessible::Property::Label(title)]);
     button.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
-    let body = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["stave-section-body"])
-        .build();
     let revealer = gtk::Revealer::builder()
-        .child(&body)
         .reveal_child(open)
         .transition_type(gtk::RevealerTransitionType::None)
         .build();
@@ -183,13 +201,7 @@ pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk
             button.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
         });
     }
-    let section = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["stave-section"])
-        .build();
-    section.append(&button);
-    section.append(&revealer);
-    (section, body, note)
+    (button, revealer, note)
 }
 
 /// A label | value row: the label in the grey column, then `value`.
