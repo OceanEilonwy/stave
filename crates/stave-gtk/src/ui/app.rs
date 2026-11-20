@@ -911,9 +911,11 @@ pub(super) fn shortcut_controller(scope: KeyScope) -> gtk::ShortcutController {
 /// in a text field, which keeps its plain letters and Escape.
 fn window_action(name: &'static str) -> gtk::CallbackAction {
     gtk::CallbackAction::new(move |widget, _| {
+        // The controller is the window's own (`update/rendering.rs`), so
+        // `widget` is the window: it is asked its own focus widget.
         let typing = widget
-            .root()
-            .and_then(|root| gtk::prelude::RootExt::focus(&root))
+            .downcast_ref::<gtk::Window>()
+            .and_then(gtk::prelude::GtkWindowExt::focus)
             .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
         if typing || widget.activate_action(name, None).is_err() {
             return glib::Propagation::Proceed;
@@ -1012,7 +1014,8 @@ pub(super) fn folder_drop(dropped: impl Fn(PathBuf) + 'static) -> gtk::DropTarge
     target
 }
 
-/// The menu's style section, shared by every window.
+/// The menu's style section: a new menu each call, so every menu that
+/// shows it has its own and none is shared between windows.
 pub(super) fn style_section() -> gio::Menu {
     let style = gio::Menu::new();
     style.append(Some(&tr("Follow System Style")), Some("app.style::system"));

@@ -1114,6 +1114,26 @@ fn steady_scrollbar(scrolled: &gtk::ScrolledWindow) {
     scrolled.vscrollbar().set_sensitive(false);
 }
 
+/// Whether the keyboard is in `widget`: it, or a widget inside it, is its
+/// window's focus widget. A component asks this of its own widgets, never
+/// of the window it is in. The `FOCUS_WITHIN` state answers at once in
+/// the active window; GTK clears it (and `has-focus`) while the window is
+/// not active, but the window keeps its focus widget, which `is_focus`
+/// still names, so the walk gives the same answer then.
+pub(in crate::ui) fn keyboard_in(widget: &impl IsA<gtk::Widget>) -> bool {
+    let widget = widget.as_ref();
+    widget.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN)
+        || widget.is_focus()
+        || keyboard_inside(widget)
+}
+
+/// Whether the keyboard is in a widget inside `widget` (not in `widget`
+/// itself): see [`keyboard_in`].
+pub(in crate::ui) fn keyboard_inside(widget: &gtk::Widget) -> bool {
+    std::iter::successors(widget.first_child(), gtk::Widget::next_sibling)
+        .any(|child| child.is_focus() || keyboard_inside(&child))
+}
+
 /// Renders the window's drawing into a PNG.
 fn save_node(
     window: &adw::ApplicationWindow,
@@ -1307,7 +1327,11 @@ pub(in crate::ui) fn build_widgets(
         .hexpand(true)
         .vexpand(true)
         .build();
-    let files = Files::new(&to_window, update::project::files_said);
+    let files = Files::new(
+        &to_window,
+        Some(window.upcast_ref()),
+        update::project::files_said,
+    );
     let file_list = panels::FilesList::new(&to_window, update::selection::file_list_said);
     let problems = panels::ProblemsPanel::new(&to_window, update::selection::problems_said);
     let output = output::OutputPanel::new();
@@ -1491,6 +1515,50 @@ mod tests {
             view_description(None, "No problems"),
             "Nothing selected. No problems."
         );
+    }
+
+    #[test]
+    fn where_the_keyboard_is_is_asked_of_a_components_own_widgets() {
+        on_gtk_thread(keyboard_is_found_in_own_widgets);
+    }
+
+    /// `keyboard_in` counts the widget itself and what it holds,
+    /// `keyboard_inside` only what it holds, and neither counts a
+    /// widget beside it.
+    fn keyboard_is_found_in_own_widgets() {
+        let card = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .focusable(true)
+            .build();
+        let field = gtk::Entry::new();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.append(&field);
+        card.append(&row);
+        let beside = gtk::Button::with_label("beside");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&card);
+        content.append(&beside);
+        let window = gtk::Window::builder().child(&content).build();
+        window.present();
+        beside.grab_focus();
+        settle();
+        assert!(!keyboard_in(&card) && !keyboard_inside(card.upcast_ref()));
+        field.grab_focus();
+        settle();
+        assert!(keyboard_in(&card), "the field in the card has it");
+        assert!(keyboard_inside(card.upcast_ref()));
+        assert!(keyboard_in(&row) && !keyboard_in(&beside));
+        card.grab_focus();
+        settle();
+        assert!(keyboard_in(&card), "the card itself has it");
+        assert!(
+            !keyboard_inside(card.upcast_ref()),
+            "nothing inside the card has it"
+        );
+        beside.grab_focus();
+        settle();
+        assert!(!keyboard_in(&card) && keyboard_in(&beside));
+        window.destroy();
     }
 
     /// The relative luminance of `colour` laid over `under` (WCAG 2).

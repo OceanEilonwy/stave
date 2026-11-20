@@ -190,7 +190,7 @@ mod tests {
             let (inspector_to, _) = crate::ui::gtk_test::recorder::<()>();
             let inspector = crate::ui::inspector::Inspector::new(&inspector_to, |_| (), |_| ());
             let (code_to, _) = crate::ui::gtk_test::recorder();
-            let code = crate::ui::files::FilesPage::<()>::new(&code_to, |_| ());
+            let code = crate::ui::files::FilesPage::<()>::new(&code_to, None, |_| ());
             let edit = EditPanel::new(&[]);
             for root in [
                 problems.root.clone().upcast::<gtk::Widget>(),

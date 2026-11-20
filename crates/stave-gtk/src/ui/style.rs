@@ -582,9 +582,13 @@ pub fn install(display: &gdk::Display) {
     high_contrast.load_from_string(HIGH_CONTRAST);
     let manager = adw::StyleManager::for_display(display);
     show_high_contrast(display, &high_contrast, manager.is_high_contrast());
-    let shown = display.clone();
+    // The display holds its style manager, which holds this handler, so
+    // the handler holds the display weakly: no cycle.
+    let shown = gtk::glib::prelude::ObjectExt::downgrade(display);
     manager.connect_high_contrast_notify(move |manager| {
-        show_high_contrast(&shown, &high_contrast, manager.is_high_contrast());
+        if let Some(display) = shown.upgrade() {
+            show_high_contrast(&display, &high_contrast, manager.is_high_contrast());
+        }
     });
     // A selectable label (a problem's `stave check` text, focus mode's
     // insert line) would otherwise select all its text whenever it takes

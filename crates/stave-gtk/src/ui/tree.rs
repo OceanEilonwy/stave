@@ -1034,10 +1034,9 @@ fn key_step(
     };
     // The row holding the widget with the keyboard (the row itself, or a
     // partner link in it).
-    let focused = list.root().and_then(|root| root.focus())?;
-    let row = std::iter::successors(Some(focused), gtk::Widget::parent)
-        .take_while(|widget| widget != list.upcast_ref::<gtk::Widget>())
-        .filter(|widget| widget.parent().as_ref() == Some(list.upcast_ref()))
+    // Asked of the list's own rows, never of the window.
+    let row = std::iter::successors(list.first_child(), gtk::Widget::next_sibling)
+        .filter(super::keyboard_in)
         .find_map(|widget| widget.downcast::<gtk::ListBoxRow>().ok())?;
     step_means_something(&row, step).then_some((row, step))
 }

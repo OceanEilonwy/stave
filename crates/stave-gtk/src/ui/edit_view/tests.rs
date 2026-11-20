@@ -451,11 +451,14 @@ fn menu_and_card_on_the_session() {
 
     // The New Project dialog reads its fields as a project that writes.
     let (nobody, _) = relm4::channel::<crate::ui::new_project::NewProjectOutput>();
-    let dialog = NewProjectDialog::new(&nobody, |output| output);
+    let window = gtk::Window::new();
+    let dialog = NewProjectDialog::new(&nobody, &window, |output| output);
     let project = dialog.answers().project().unwrap();
     assert_eq!(project.title, "Hall table");
     assert_eq!(project.imports, ["std:casework", "std:frames"]);
     assert!(project.tools.is_empty(), "none ticked: every tool");
+    drop(dialog);
+    window.destroy();
 }
 
 /// A session with the folder checked, as the window has once the first
