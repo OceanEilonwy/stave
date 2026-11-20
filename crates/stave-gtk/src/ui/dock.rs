@@ -11,19 +11,17 @@
 //! The chips are a relm4 component, [`DockComponent`]: whether the
 //! controls are offered, whether there are chips and which way they lie
 //! are its model, only its update changes that, and a chip only sends a
-//! [`DockInput`] message. [`Dock`] keeps the older API in front of it
-//! until the window moves to relm4 too.
-
-use std::rc::Rc;
+//! [`DockInput`] message. [`Dock`] owns its controller and keeps the
+//! setters as plain methods; a chip chosen goes to the owner as the
+//! message it chose when it made the dock.
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 use stave_app::problems::Mark;
 use stave_model::solved::AssemblyId;
 
 use super::chrome::MotionBar;
-use super::relm4_shim::Bridge;
 
 /// One moving assembly's chip.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,8 +216,7 @@ impl Component for DockComponent {
 
 /// The floating controls: it owns the [`DockComponent`] (dropping it
 /// shuts the component down), passes its setters on as [`DockInput`]
-/// messages and its [`DockOutput`] to the callback connected with
-/// [`Dock::connect_outputs`].
+/// messages, and its [`DockOutput`] goes to the owner's input.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
@@ -228,46 +225,53 @@ pub struct Dock {
     pub scene: gtk::Box,
     /// The moving assemblies' chips (bottom left).
     pub moves: gtk::Box,
-    bridge: Bridge<DockComponent>,
+    controller: Controller<DockComponent>,
 }
 
 impl Dock {
     /// The controls round the scene menu; the motion bar floats on its
-    /// own (bottom right).
-    pub fn new(scene: &gtk::MenuButton, motion: &MotionBar) -> Rc<Dock> {
+    /// own (bottom right). A chip chosen goes to `owner` as
+    /// `message(output)`.
+    pub fn new<M: 'static>(
+        scene: &gtk::MenuButton,
+        motion: &MotionBar,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(DockOutput) -> M + 'static,
+    ) -> Dock {
         let scene_box = gtk::Box::builder()
             .css_classes(["stave-toolbar", "stave-scene-float"])
             .name("scene-menu")
             .build();
         scene_box.append(scene);
         motion.root.set_margin_bottom(0);
-        let bridge = Bridge::<DockComponent>::launch(DockInit {
-            scene: scene_box.clone(),
-        });
-        Rc::new(Dock {
+        let controller = DockComponent::builder()
+            .launch(DockInit {
+                scene: scene_box.clone(),
+            })
+            .forward(owner, message);
+        Dock {
             scene: scene_box,
-            moves: bridge.widget().clone(),
-            bridge,
-        })
+            moves: controller.widget().clone(),
+            controller,
+        }
+    }
+
+    /// Queues `input`; once the dock has shut down there is nobody to
+    /// tell.
+    fn send(&self, input: DockInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Lays the chips out in a row (docked in a corner) or a column
     /// (docked on the right edge), one chip per line.
     pub fn set_moves_orientation(&self, orientation: gtk::Orientation) {
-        self.bridge
-            .send(DockInput::SetMovesOrientation(orientation));
-    }
-
-    /// Calls `callback` with each chip people choose from now on, instead
-    /// of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(DockOutput) + 'static) {
-        self.bridge.connect(callback);
+        self.send(DockInput::SetMovesOrientation(orientation));
     }
 
     /// Offers the controls, or takes them away while a problem is posed
     /// or a joint is in focus.
     pub fn offer(&self, offered: bool) {
-        self.bridge.send(DockInput::Offer(offered));
+        self.send(DockInput::Offer(offered));
     }
 
     /// The moving assemblies' chips: each one's name and problem mark, the
@@ -285,20 +289,35 @@ impl Dock {
                 mark: *mark,
             })
             .collect();
-        self.bridge.send(DockInput::ShowMoves { chips, current });
+        self.send(DockInput::ShowMoves { chips, current });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
 
-    /// A dock round a bare menu button and a fresh motion bar.
-    fn dock() -> Rc<Dock> {
-        Dock::new(&gtk::MenuButton::new(), &MotionBar::new())
+    /// A dock round a bare menu button and a fresh motion bar, its
+    /// outputs going to `owner`.
+    fn dock_for(owner: &relm4::Sender<DockOutput>) -> Dock {
+        let (motion_owner, _) = recorder();
+        let motion = MotionBar::new(&motion_owner, std::convert::identity);
+        Dock::new(
+            &gtk::MenuButton::new(),
+            &motion,
+            owner,
+            std::convert::identity,
+        )
+    }
+
+    /// A dock whose outputs nobody hears.
+    fn dock() -> Dock {
+        let (owner, _) = recorder();
+        dock_for(&owner)
     }
 
     /// The chips' buttons, in order.
@@ -332,13 +351,17 @@ mod tests {
     }
 
     /// Dropping the dock shuts its component down when the main loop next
-    /// runs: the chips' box, the model and the callback are all freed.
+    /// runs: the chips' box, the model and the message maker are all
+    /// freed.
     fn dock_is_freed() {
-        let dock = dock();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        dock.connect_outputs(move |_| {
+        let (owner, _) = recorder::<DockOutput>();
+        let (motion_owner, _) = recorder();
+        let motion = MotionBar::new(&motion_owner, std::convert::identity);
+        let dock = Dock::new(&gtk::MenuButton::new(), &motion, &owner, move |output| {
             let _ = &held;
+            output
         });
         let callback = Rc::downgrade(&token);
         drop(token);
@@ -346,7 +369,7 @@ mod tests {
         settle();
         let moves = dock.moves.downgrade();
         let scene = dock.scene.downgrade();
-        let input = dock.bridge.sender().clone();
+        let input = dock.controller.sender().clone();
         assert!(moves.upgrade().is_some(), "the chips live while held");
         drop(dock);
         settle();
@@ -356,7 +379,7 @@ mod tests {
             input.send(DockInput::Offer(true)).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the message maker is freed");
     }
 
     #[test]
@@ -365,10 +388,8 @@ mod tests {
     }
 
     fn setters_do_not_call_back() {
-        let dock = dock();
-        let calls = Rc::new(RefCell::new(0));
-        let counted = Rc::clone(&calls);
-        dock.connect_outputs(move |_| *counted.borrow_mut() += 1);
+        let (owner, heard) = recorder();
+        let dock = dock_for(&owner);
         dock.show_moves(&moving(), Some(AssemblyId::from_usize(1)));
         settle();
         let shown = chips(&dock);
@@ -386,7 +407,7 @@ mod tests {
         settle();
         assert!(!dock.moves.is_visible(), "no chips, no box");
         assert!(dock.scene.is_visible());
-        assert_eq!(*calls.borrow(), 0, "setters never call back");
+        assert!(heard.borrow().is_empty(), "setters never call back");
     }
 
     #[test]
@@ -397,15 +418,16 @@ mod tests {
     /// The old dock called its callback from inside the chip's own
     /// `clicked`, and the window answered by rebuilding the chips: the
     /// chip being clicked was taken away while GTK was still in its
-    /// handler. Now a click only queues a message; the callback runs after
-    /// the update has returned, and the chips it asks for, and a click
-    /// fired from inside it, are queued too.
+    /// handler. Now a click only queues a message; the owner handles it
+    /// after the update has returned, and the chips it asks for, and a
+    /// click fired while it handles it, are queued too.
     fn clicks_are_queued() {
-        let dock = dock();
+        let (owner, outputs) = relm4::channel();
+        let dock = Rc::new(dock_for(&owner));
         let heard: Rc<RefCell<Vec<(AssemblyId, usize)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&dock);
-        dock.connect_outputs(move |DockOutput::Move(assembly)| {
+        handle_each(outputs, move |DockOutput::Move(assembly)| {
             let Some(dock) = weak.upgrade() else {
                 return;
             };

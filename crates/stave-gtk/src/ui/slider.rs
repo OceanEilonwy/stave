@@ -8,11 +8,12 @@
 //! It is a relm4 component, [`SliderComponent`], and the worked example in
 //! docs/relm4-migration.md: its model is the only state, only
 //! [`SliderComponent::update`] changes it, and its widget's handlers only
-//! send [`SliderInput`] messages. [`Slider`] keeps the older callback API
-//! in front of it until its callers move to relm4 too.
+//! send [`SliderInput`] messages. [`Slider`] owns its controller and
+//! keeps the setters as plain methods; its owner hears it by message, the
+//! output forwarded to the owner's input when the slider is made.
 //!
-//! Only what people do sends [`SliderOutput::Changed`] (and so calls the
-//! change callback); [`Slider::set_value`] never does, so the window can
+//! Only what people do sends [`SliderOutput::Changed`] (and so the
+//! owner's message); [`Slider::set_value`] never does, so the owner can
 //! move it without hearing back.
 //!
 //! It mirrors for right-to-left text (drawing, pointer and arrow keys),
@@ -23,7 +24,7 @@ use std::cell::Ref;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 
 use super::relm4_shim::Bridge;
@@ -420,22 +421,62 @@ impl Component for SliderComponent {
     }
 }
 
-/// A slider, behind the callback API the window still uses: it owns the
-/// component (dropping it shuts the component down), passes its setters
-/// on as [`SliderInput`] messages and its [`SliderOutput`] to the
-/// callback.
+/// A slider: it owns the component (dropping it shuts the component
+/// down) and passes its setters on as [`SliderInput`] messages; people's
+/// moves go to the owner as the message it chose when it made the slider.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
 pub struct Slider {
     /// The widget.
     pub root: gtk::DrawingArea,
-    bridge: Bridge<SliderComponent>,
+    launched: Launched,
+}
+
+/// How a slider's component was launched.
+enum Launched {
+    /// Its outputs forwarded to the owner's input ([`Slider::launch`]).
+    Forwarded(Controller<SliderComponent>),
+    /// Its outputs going to a callback ([`Slider::new`] and
+    /// [`Slider::connect_changed`]): only for focus mode's cards
+    /// (`focus_stage.rs`) until they launch theirs with [`Slider::launch`].
+    Bridged(Bridge<SliderComponent>),
 }
 
 impl Slider {
     /// A slider from 0 to 1, `height` pixels tall (at least 24), with a
-    /// handle `handle` pixels across and a ring `ring` pixels wide.
+    /// handle `handle` pixels across and a ring `ring` pixels wide. Each
+    /// of people's moves sends `changed(value)` to `owner`.
+    pub fn launch<M: 'static>(
+        label: &str,
+        height: i32,
+        handle: f64,
+        ring: f64,
+        owner: &relm4::Sender<M>,
+        changed: impl Fn(f64) -> M + 'static,
+    ) -> Slider {
+        let controller = SliderComponent::builder()
+            .launch(SliderInit {
+                label: label.to_owned(),
+                height,
+                handle,
+                ring,
+            })
+            .forward(owner, move |output| match output {
+                SliderOutput::Changed(value) => changed(value),
+            });
+        Slider {
+            root: controller.widget().clone(),
+            launched: Launched::Forwarded(controller),
+        }
+    }
+
+    /// A slider as [`Slider::launch`] makes one, whose moves go to the
+    /// callback [`Slider::connect_changed`] connects.
+    ///
+    /// Only focus mode's cards (`focus_stage.rs`, another lane's) still
+    /// use this; once each launches its slider with [`Slider::launch`]
+    /// (a one-line change per card), this and `connect_changed` go.
     pub fn new(label: &str, height: i32, handle: f64, ring: f64) -> Slider {
         let bridge = Bridge::<SliderComponent>::launch(SliderInit {
             label: label.to_owned(),
@@ -445,15 +486,19 @@ impl Slider {
         });
         Slider {
             root: bridge.widget().clone(),
-            bridge,
+            launched: Launched::Bridged(bridge),
         }
     }
 
-    /// Calls `callback` with the value whenever people move it.
+    /// Calls `callback` with the value whenever people move a slider made
+    /// with [`Slider::new`] (one made with [`Slider::launch`] already
+    /// sends its owner a message, and ignores this).
     pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
-        self.bridge.connect(move |output| match output {
-            SliderOutput::Changed(value) => callback(value),
-        });
+        if let Launched::Bridged(bridge) = &self.launched {
+            bridge.connect(move |output| match output {
+                SliderOutput::Changed(value) => callback(value),
+            });
+        }
     }
 
     /// The value, as of the last message the slider handled.
@@ -468,21 +513,32 @@ impl Slider {
         self.model().track.value
     }
 
+    /// Queues `input`; once the slider has shut down there is nobody to
+    /// tell.
+    fn send(&self, input: SliderInput) {
+        match &self.launched {
+            Launched::Forwarded(controller) => {
+                let _ = controller.sender().send(input);
+            }
+            Launched::Bridged(bridge) => bridge.send(input),
+        }
+    }
+
     /// Moves it, without calling back.
     pub fn set_value(&self, value: f64) {
-        self.bridge.send(SliderInput::SetValue(value));
+        self.send(SliderInput::SetValue(value));
     }
 
     /// Sets its range, without calling back.
     pub fn set_range(&self, lower: f64, upper: f64) {
-        self.bridge.send(SliderInput::SetRange { lower, upper });
+        self.send(SliderInput::SetRange { lower, upper });
     }
 
     /// Hatches the track red from `from` to the end, and gives `words`
     /// ("blocked from 0.6°") as its description for screen readers
     /// (`None`: nothing blocked).
     pub fn set_blocked(&self, blocked: Option<(f64, &str)>) {
-        self.bridge.send(SliderInput::SetBlocked(
+        self.send(SliderInput::SetBlocked(
             blocked.map(|(from, words)| (from, words.to_owned())),
         ));
     }
@@ -490,11 +546,25 @@ impl Slider {
     /// Says the value in words for screen readers ("45°"; "45°, blocked"
     /// once it is in the blocked range).
     pub fn set_value_text(&self, text: &str) {
-        self.bridge.send(SliderInput::SetValueText(text.to_owned()));
+        self.send(SliderInput::SetValueText(text.to_owned()));
     }
 
+    /// The model as of the last handled message: for the getters, never
+    /// from the slider's own handlers (rule 8).
     fn model(&self) -> Ref<'_, SliderComponent> {
-        self.bridge.model()
+        match &self.launched {
+            Launched::Forwarded(controller) => controller.model(),
+            Launched::Bridged(bridge) => bridge.model(),
+        }
+    }
+
+    /// The component's input sender, to watch it close in tests.
+    #[cfg(test)]
+    fn sender(&self) -> &relm4::Sender<SliderInput> {
+        match &self.launched {
+            Launched::Forwarded(controller) => controller.sender(),
+            Launched::Bridged(bridge) => bridge.sender(),
+        }
     }
 }
 
@@ -642,7 +712,13 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
+
+    /// A slider whose moves nobody hears.
+    fn unheard(label: &str, height: i32, handle: f64, ring: f64) -> Slider {
+        let (owner, _) = recorder::<f64>();
+        Slider::launch(label, height, handle, ring, &owner, |value| value)
+    }
 
     /// The slider's press-and-drag controller, to fire its signals as GTK
     /// would.
@@ -693,7 +769,7 @@ mod tests {
     /// and when the value is past that. Presses and turns of the wheel go
     /// through the slider's own controllers, which read its direction.
     fn heard_mirrored_scrolled_and_blocked() {
-        let slider = Slider::new("Swing it", 18, 22.0, 2.0);
+        let slider = unheard("Swing it", 18, 22.0, 2.0);
         assert_eq!(slider.root.content_height(), MINIMUM_HEIGHT);
         let (Some(drag), Some(scroll)) = (drag_of(&slider), scroll_of(&slider)) else {
             panic!("the slider has drag and scroll controllers");
@@ -758,19 +834,19 @@ mod tests {
 
     /// Dropping the slider drops its controller, which shuts the
     /// component down when the main loop next runs: the widget, the
-    /// model (and the input channel the runtime held) and the callback
-    /// are all freed.
+    /// model (and the input channel the runtime held) and the message
+    /// it was to send are all freed.
     fn slider_is_freed() {
-        let slider = Slider::new("Together … apart", 24, 12.0, 1.0);
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        slider.connect_changed(move |_| {
+        let (owner, _) = recorder::<()>();
+        let slider = Slider::launch("Together … apart", 24, 12.0, 1.0, &owner, move |_| {
             let _ = &held;
         });
         let callback = Rc::downgrade(&token);
         drop(token);
         let root = slider.root.downgrade();
-        let input = slider.bridge.sender().clone();
+        let input = slider.sender().clone();
         settle();
         assert!(root.upgrade().is_some(), "the widget lives while held");
         drop(slider);
@@ -780,7 +856,7 @@ mod tests {
             input.send(SliderInput::SetValue(0.5)).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "its message maker is freed");
     }
 
     #[test]
@@ -789,10 +865,8 @@ mod tests {
     }
 
     fn setters_do_not_call_back() {
-        let slider = Slider::new("Door angle", 22, 22.0, 2.0);
-        let calls = Rc::new(RefCell::new(0));
-        let counted = Rc::clone(&calls);
-        slider.connect_changed(move |_| *counted.borrow_mut() += 1);
+        let (owner, heard) = recorder::<f64>();
+        let slider = Slider::launch("Door angle", 22, 22.0, 2.0, &owner, |value| value);
         slider.set_range(0.0, 2.0);
         slider.set_value(3.0);
         slider.set_blocked(Some((1.5, "blocked from 1.5")));
@@ -800,7 +874,7 @@ mod tests {
         settle();
         assert_eq!(slider.value(), 2.0, "clamped to the range");
         assert_eq!(slider.model().track.blocked_from, Some(1.5));
-        assert_eq!(*calls.borrow(), 0, "setters never call back");
+        assert!(heard.borrow().is_empty(), "setters never call back");
     }
 
     #[test]
@@ -811,34 +885,46 @@ mod tests {
     /// The old slider called its callback from inside its own change,
     /// with GTK's signal still on the stack, and a callback that moved
     /// the slider re-entered it. Now a press only queues a message; the
-    /// update runs later, and its output reaches the callback after the
-    /// update has returned (reading the model there would panic if it
-    /// had not). A signal fired from inside the callback is queued too.
+    /// update runs later, and its output reaches the owner's queue after
+    /// the update has returned (reading the model there would panic if
+    /// it had not). A signal fired while the owner handles that message
+    /// is queued too.
     fn signals_are_queued() {
-        let slider = Rc::new(Slider::new("Door angle", 22, 22.0, 2.0));
+        let (owner, messages) = relm4::channel::<f64>();
+        let slider = Rc::new(Slider::launch(
+            "Door angle",
+            22,
+            22.0,
+            2.0,
+            &owner,
+            |value| value,
+        ));
         let Some(drag) = drag_of(&slider) else {
             panic!("the slider has a drag controller");
         };
-        // (what the callback heard, the value it read, the value it read
+        // (what the owner heard, the value it read, the value it read
         // after firing a press from inside)
         let heard: Rc<RefCell<Vec<(f64, f64, f64)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&slider);
         let inner = drag.clone();
-        slider.connect_changed(move |value| {
-            let Some(slider) = weak.upgrade() else {
-                return;
-            };
-            let read = slider.value();
-            let first = log.borrow().is_empty();
-            if first {
-                // Moving it from here is queued, and never calls back.
-                slider.set_value(0.25);
-                // GTK firing the slider's own signal from in here only
-                // queues a message: the value doesn't change under us.
-                press(&inner, 0.0);
+        // The owner: handles each message in turn, as a component would.
+        relm4::spawn_local(async move {
+            while let Some(value) = messages.recv().await {
+                let Some(slider) = weak.upgrade() else {
+                    return;
+                };
+                let read = slider.value();
+                let first = log.borrow().is_empty();
+                if first {
+                    // Moving it from here is queued, and never calls back.
+                    slider.set_value(0.25);
+                    // GTK firing the slider's own signal from in here only
+                    // queues a message: the value doesn't change under us.
+                    press(&inner, 0.0);
+                }
+                log.borrow_mut().push((value, read, slider.value()));
             }
-            log.borrow_mut().push((value, read, slider.value()));
         });
 
         // An unrealised slider is 0 px wide: any press past the handle is
