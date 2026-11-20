@@ -296,8 +296,22 @@ async fn suggest_then_apply_moves_main() {
     let versions = history.versions(1).unwrap();
     assert_eq!(versions[0].actor.kind, ActorKind::Agent);
     assert_eq!(versions[0].message, "Add a shoe shelf");
-    // Only main moved: the window brings the folder up to date.
-    assert_eq!(project_files_on_disk(&folder), on_disk);
+    // No window is running, so the server brings the folder up to date:
+    // the files on disk hold the shelf, and describe sees it.
+    assert_ne!(project_files_on_disk(&folder), on_disk);
+    let carcass = std::fs::read_to_string(folder.join("carcass.stave")).unwrap();
+    assert!(carcass.contains("shoe_shelf"), "{carcass}");
+    assert!(
+        text(&applied).contains("The project's files are up to date."),
+        "{}",
+        text(&applied)
+    );
+    let described = connection.call("describe", json!({})).await;
+    assert!(
+        text(&described).contains("shoe_shelf"),
+        "{}",
+        text(&described)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -470,13 +484,17 @@ async fn apply_reports_clashes_when_the_patch_no_longer_fits() {
 async fn undo_reverts_own_apply() {
     let (folder, connection) = opened_with_versions("undo_reverts_own_apply").await;
     let before = History::open(&folder).unwrap().main().unwrap();
+    let on_disk = project_files_on_disk(&folder);
     let id = suggest_shoe_shelf(&connection).await;
     let applied = connection
         .call("apply_suggestion", json!({ "id": id }))
         .await;
     assert!(!is_error(&applied), "{}", text(&applied));
+    assert_ne!(project_files_on_disk(&folder), on_disk, "applied on disk");
     let undone = connection.call("undo", json!({})).await;
     assert!(!is_error(&undone), "{}", text(&undone));
+    // No window is running, so undo takes the shelf out of the folder too.
+    assert_eq!(project_files_on_disk(&folder), on_disk, "undone on disk");
     assert!(
         text(&undone).contains("Add a shoe shelf"),
         "{}",

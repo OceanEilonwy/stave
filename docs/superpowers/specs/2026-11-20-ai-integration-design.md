@@ -141,7 +141,9 @@ Changes to existing crates:
 - `stave-gtk`: uses `stave-render` (keeps `dmabuf.rs` and `readback.rs` as
   its way to the screen); shows suggestions, revisions and conflicts;
   answers "show in Stave" over D-Bus; catches up with main when someone
-  else merges.
+  else merges. When the window isn't running, `stave-mcp` catches the
+  folder up itself after `apply_suggestion` and `undo` (no unsaved edits
+  can be lost then); `stave-link` says whether the window is running.
 - `stave-cli`: `stave mcp` (runs the server over stdio) and
   `stave mcp install`.
 - `CLAUDE.md`: the dependency order gains the four crates; "Only

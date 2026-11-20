@@ -87,6 +87,9 @@ pub fn options(test: &str) -> ServerOptions {
         config_dir: home.join("config"),
         cache_dir: home.join("cache"),
         recent_projects: home.join("data/recently-used.xbel"),
+        // A name nobody owns, so a Stave running on this machine is never
+        // taken for the test's window.
+        window_bus_name: "io.github.OceanEilonwy.StaveTest.NobodyOwnsThis".to_owned(),
     }
 }
 
