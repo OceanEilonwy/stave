@@ -1,100 +1,75 @@
-//! Grips in the 3D view (`docs/gui.md`, "Grips"; `docs/editing.md`,
+//! Sizes in the Edit panel (`docs/gui.md`, "Sizes"; `docs/editing.md`,
 //! "Grips"): the sizes of a selected assembly, of the envelope or of a
-//! split's boundaries drawn on the model as dimensions with handles, a
-//! drag that moves the value live with its ghost and verdict, a value
-//! typed in place, the sizes to pick from when a size follows several,
-//! and the switch that lets the solver move a param. The view shows only
-//! the gizmo (small round handles with an arrow the way a drag makes the
-//! size larger) and, while a drag is open, a one-line readout at its top
-//! (`overall_width 940 → 1040 mm`); what the drag changes, the sizes to
-//! pick from, the stop and the verdict are in the Edit panel's change
-//! card (`grip_panel.rs`), whose Apply writes it.
+//! split's boundaries, one row each in the Edit panel's Sizes card
+//! (`sizes.rs`), each a number field dragged sideways to change it or
+//! clicked to type a value; a drag moves the value live with its ghost
+//! and verdict; the sizes to pick from when a size follows several, and
+//! the switch that lets the solver move a param. Nothing is drawn on the
+//! model: what the drag changes, the sizes to pick from, the stop and the
+//! verdict are in the change card's Size section (`grip_panel.rs`),
+//! whose Apply writes it.
 //!
 //! ```text
-//! selection / a click in a space ──ListGrips──▶ GripsChanged ──▶ handles and labels on the model
-//!                                               StopsJob on a worker ──▶ GripStopsFound ──▶ the range's hard ends
-//! press a handle ──BeginDrag(i)──▶ move ──DragTo(value)──▶ DragMoved / VerdictChanged ──▶ readout, Edit panel, ghost
+//! selection / a click in a space ──ListGrips──▶ GripsChanged ──▶ the Sizes card's rows
+//!                                               StopsJob on a worker ──▶ GripStopsFound ──▶ each field's range
+//! drag a field ──BeginDrag(i)──▶ move ──DragTo(value)──▶ DragMoved / VerdictChanged ──▶ the field, the Size section, the ghost
 //! let go ──▶ Add when it fits          Escape or Cancel ──▶ nothing written
-//! click the number ──▶ entry ──Enter──▶ TypeGripValue ──▶ Add when it fits, else why, still editable
+//! click a field ──▶ entry ──Enter──▶ TypeGripValue ──▶ Add when it fits, else why, still editable
 //! the switch (⋮) ──▶ MakeSolved / MakePlain ──▶ Edit panel ──Apply──▶ Add
 //! ```
 //!
 //! The session decides everything: what a grip moves, where it snaps, what
-//! stops it, the verdict and the text written. Here a pointer's travel
-//! along the handle's direction on screen becomes a value to send, and
-//! what the session holds is drawn.
+//! stops it, the verdict and the text written; how far a pixel of a drag
+//! moves a value is `stave_app::grip_values::scrubbed`. Here a field's
+//! travel becomes a value to send, and what the session holds is shown.
 
-use relm4::{Component, ComponentController, Controller};
 use stave_app::i18n::{fill_in, tr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use adw::prelude::*;
-use glam::Vec3;
-use gtk::{gdk, gio, glib};
+use gtk::{gio, glib};
 use stave_app::change::{Change, ChangeRequest};
 use stave_app::edit::{Picked, Verdict};
 use stave_app::editing::{EditCommand, EditEvent, Progress, parse_value};
 use stave_app::gripping::{FoundStops, GripList, ListedGrip};
-use stave_app::grips::{FollowKind, GripAction, GripSelection, GripSize, PlaceInput};
-use stave_app::session::{Command, Event, Selection, View};
+use stave_app::grips::{FollowKind, GripAction, GripSelection};
+use stave_app::session::{Command, Event, Selection};
 use stave_lang::ast::Ident;
-use stave_lang::placement::{Axis, Face};
-use stave_lang::units::Length;
-use stave_model::ids::{AssemblyId, ParamId};
-use stave_model::solved::Point;
+use stave_model::ids::{AssemblyId, ParamId, PartId};
 use stave_model::trace::Amount;
-use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
+use stave_scene::Item;
 
-use super::grip_layer::GripLayer;
 use super::grip_panel::{
-    GripOptions, GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput,
-    SwitchAsk, SwitchMenu, switch_menu,
+    GripOptions, GripPanelOutput, GripSection, PanelAction, SwitchAsk, SwitchMenu,
 };
 use super::grip_text::{
-    GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
-    grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
-    typed_check, typed_refusal,
+    GripLook, Held, amount_like, amount_words, grip_look, grip_value, held_words, panel_model,
+    solver_switches, typed_check, typed_refusal,
 };
+use super::sizes::SizesCard;
 use crate::ui::update::editing::EditingInput;
-use crate::ui::{EDGE, Window, WindowInput};
+use crate::ui::{Window, WindowInput};
 
-/// The handle's size, in pixels (8 inside a 2 px ring).
-const HANDLE: f64 = 12.0;
-/// How far a dimension's label stands off its line, in pixels.
-const LABEL_OFFSET: f64 = 18.0;
-/// The design's red (#e01b24) and its pale stripe (#f6b8bb), as on the
-/// door's swing slider.
-const BLOCKED: (f64, f64, f64) = (0.878, 0.106, 0.141);
-const BLOCKED_PALE: (f64, f64, f64) = (0.965, 0.722, 0.733);
-
-/// The grips' widgets over the 3D view, and what only they need.
+/// The sizes' card and section, and what only they need.
 pub(in crate::ui) struct GripView {
-    /// The dimension lines and ranges, drawn under the handles.
-    area: gtk::DrawingArea,
-    /// The handles and labels, under the window's floating cards.
-    layer: GripLayer,
     /// The size a drag moves, as a section of the change's card; its
     /// actions come to the window as [`EditingInput::GripPanel`].
     panel: GripSection,
-    /// The one line at the top of the view while a drag is open.
-    readout: Controller<ReadoutComponent>,
+    /// The Sizes card of the Edit panel: a row per size.
+    pub(super) sizes: SizesCard,
     state: GripState,
 }
 
 /// What the grips keep between events.
 #[derive(Default)]
 struct GripState {
-    /// What the grips shown are of.
+    /// What the sizes shown are of.
     shown_for: Option<GripSelection>,
-    /// Where each grip with a place sits, at rest.
-    places: Vec<Placed>,
-    /// The widgets on the model, one set per placed grip.
-    marks: Vec<Marks>,
     /// Stops the running stops search.
     cancel: Option<Arc<AtomicBool>>,
-    /// The pointer holds a handle.
+    /// The pointer holds a field.
     gesture: Option<Gesture>,
     /// The value to send next, while one is being tried.
     pending: Option<Amount>,
@@ -107,26 +82,23 @@ struct GripState {
     open: Option<usize>,
     /// The drag was held at an end of its range.
     held: Option<Held>,
-    /// The grip whose number is being typed.
+    /// The grip whose value is being typed.
     typing: Option<usize>,
     /// A listing from the new design is on its way.
     relist_queued: bool,
 }
 
-/// A grip mark's options menu (⋮), what it asks sent to the window.
-fn mark_switch_menu(
-    input: &relm4::Sender<WindowInput>,
+/// The pointer holding a field.
+#[derive(Debug, Clone, Copy)]
+struct Gesture {
+    /// The grip.
     index: usize,
-    switches: &[SolverSwitch],
-) -> gtk::MenuButton {
-    let input = input.clone();
-    switch_menu(switches, move |ask, menu| {
-        input.emit(switch_asked(index, ask, SwitchMenu::Mark(menu)).into());
-    })
+    /// Its value when it was pressed.
+    from: Amount,
 }
 
 /// What a grip's options menu asked, as the window's message.
-fn switch_asked(index: usize, ask: SwitchAsk, menu: SwitchMenu) -> EditingInput {
+pub(super) fn switch_asked(index: usize, ask: SwitchAsk, menu: SwitchMenu) -> EditingInput {
     match ask {
         SwitchAsk::MakePlain(param) => EditingInput::GripMakePlain { index, param },
         SwitchAsk::MakeSolved { param, low, high } => EditingInput::GripMakeSolved {
@@ -139,106 +111,17 @@ fn switch_asked(index: usize, ask: SwitchAsk, menu: SwitchMenu) -> EditingInput 
     }
 }
 
-/// Where a grip sits, at rest, in the render frame (millimetres).
-#[derive(Debug, Clone, Copy)]
-struct Placed {
-    /// Its index in the listing.
-    index: usize,
-    /// The handle.
-    handle: Vec3,
-    /// The other end of its dimension.
-    start: Vec3,
-    /// Dragging along it makes the value larger.
-    direction: Vec3,
-    /// Its value now, in millimetres.
-    value: f64,
-    /// How it is drawn.
-    look: GripLook,
-}
-
-impl Placed {
-    /// Where the handle is for a value (millimetres).
-    fn at(&self, value: f64) -> Vec3 {
-        self.handle + self.direction * crate::convert::f32_of(value - self.value)
-    }
-}
-
-/// The pointer holding a handle.
-#[derive(Debug, Clone, Copy)]
-struct Gesture {
-    /// The grip.
-    index: usize,
-    /// Its value when it was pressed, in millimetres.
-    from: f64,
-    /// Which way on screen makes it larger, a unit vector.
-    unit: (f64, f64),
-    /// Pixels on screen per millimetre along it.
-    scale: f64,
-}
-
-/// One grip's widgets on the model.
-struct Marks {
-    /// Its index in the listing.
-    index: usize,
-    /// The handle, or the padlock of one that can't move.
-    handle: gtk::Widget,
-    /// The label: its value, or what it follows.
-    label: gtk::Box,
-    /// The number and the entry it turns into.
-    stack: Option<gtk::Stack>,
-    /// The entry.
-    entry: Option<gtk::Entry>,
-    /// Why a typed value was refused.
-    error: gtk::Label,
-    /// The menu with the solver's switch.
-    switches: Option<gtk::MenuButton>,
-}
-
-/// One dimension as drawn, in the view's pixels.
-#[derive(Debug, Clone, Copy)]
-struct Drawn {
-    look: GripLook,
-    start: (f64, f64),
-    end: (f64, f64),
-    active: bool,
-    range: Option<DrawnRange>,
-}
-
-/// A range along a dimension, in the view's pixels.
-#[derive(Debug, Clone, Copy)]
-struct DrawnRange {
-    low: (f64, f64),
-    high: (f64, f64),
-    low_end: RangeEnd,
-    high_end: RangeEnd,
-}
-
 impl GripView {
-    /// The widgets, hidden until grips are listed; the size section's
-    /// actions go to `input`. The area's draw function is given a copy of
-    /// what it draws each time the grips are placed.
+    /// The card and the section, hidden until sizes are listed; their
+    /// actions go to `input`.
     pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> GripView {
-        let area = gtk::DrawingArea::builder()
-            .can_target(false)
-            .css_classes(["stave-grip-lines"])
-            .visible(false)
-            .build();
         GripView {
-            area,
-            layer: GripLayer::new(),
             panel: GripSection::new(input, |output| match output {
                 GripPanelOutput::Action(action) => EditingInput::GripPanel(action).into(),
             }),
-            readout: ReadoutComponent::builder().launch(()).detach(),
+            sizes: SizesCard::new(input),
             state: GripState::default(),
         }
-    }
-
-    /// Shows `line` in the readout, or hides it for `None`, when the main
-    /// loop next runs.
-    fn show_readout(&self, line: Option<(String, String)>) {
-        // After shutdown there is nothing to show.
-        let _ = self.readout.sender().send(ReadoutInput::Show(line));
     }
 }
 
@@ -255,401 +138,7 @@ fn top_level(design: &stave_model::solved::SolvedDesign, id: AssemblyId) -> Opti
     None
 }
 
-/// The high face along an axis.
-fn high_face(axis: Axis) -> Face {
-    match axis {
-        Axis::Across => Face::Right,
-        Axis::Up => Face::Top,
-        Axis::Deep => Face::Back,
-    }
-}
-
-/// Where a grip sits, from what its listing carries: the scene's
-/// `grip_place`, or, for a length the scene can't tell from another of
-/// the same value, the two faces its placement term names; a part's
-/// length or width across the part. `handles` holds the handles placed
-/// before this one: a size drawn along a box's edge takes the nearest
-/// edge whose handle is not on one of them, so no two handles share a
-/// corner (the envelope's width and height would both end at the corner
-/// nearest the eye) and each can be grabbed.
-fn place_of(
-    graph: &SceneGraph,
-    listed: &ListedGrip,
-    index: usize,
-    eye: Option<Vec3>,
-    handles: &mut Vec<Vec3>,
-) -> Option<Placed> {
-    let placed = place_apart(graph, listed, index, eye, handles)?;
-    handles.push(placed.handle);
-    Some(placed)
-}
-
-fn place_apart(
-    graph: &SceneGraph,
-    listed: &ListedGrip,
-    index: usize,
-    eye: Option<Vec3>,
-    handles: &[Vec3],
-) -> Option<Placed> {
-    let value = length_mm(grip_value(listed))?;
-    let look = grip_look(listed);
-    let placed = |handle: Vec3, start: Vec3, direction: Vec3| Placed {
-        index,
-        handle,
-        start,
-        direction,
-        value,
-        look,
-    };
-    let behind = |point: Vec3, direction: Vec3| point - direction * crate::convert::f32_of(value);
-    let Some(place) = listed.grip.place.as_ref() else {
-        // A part's length or width: along the edge of its drawn box
-        // nearest the eye.
-        let (GripSize::PartSize { part, .. }, Some(axis)) = (&listed.grip.size, listed.grip.axis)
-        else {
-            return None;
-        };
-        let bounds = graph.drawn_box(graph.node_of(Item::Part(*part))?)?;
-        let (start, handle, up) = edge_dimension(&bounds, axis, eye, handles)?;
-        return Some(placed(handle, start, up));
-    };
-    match place {
-        PlaceInput::Length {
-            assembly,
-            axis,
-            param,
-            lengths,
-            between,
-        } => {
-            let lengths: Vec<(&str, Length)> = lengths
-                .iter()
-                .map(|(name, length)| (name.as_str(), *length))
-                .collect();
-            let found = graph.grip_place(GripOf::Length {
-                assembly: *assembly,
-                axis: *axis,
-                param,
-                lengths: &lengths,
-                nudged: None,
-            });
-            match found {
-                Some(GripPlace::Length { start, handle, .. }) => {
-                    Some(placed(handle.point, start, handle.direction))
-                }
-                Some(GripPlace::Envelope { .. } | GripPlace::Share { .. }) | None => {
-                    let (from, to) = between.as_ref()?;
-                    between_place(graph, *axis, from, to)
-                        .map(|(start, handle, direction)| placed(handle, start, direction))
-                }
-            }
-        }
-        // An envelope size along the box's edge nearest the eye, its
-        // handle on the face that moves.
-        PlaceInput::Envelope { region, face } => {
-            let bounds = graph.region(*region)?.bounds;
-            let (start, handle, up) = edge_dimension(&bounds, face.axis(), eye, handles)?;
-            Some(placed(handle, start, up))
-        }
-        PlaceInput::Share { low, high, axis } => match graph.grip_place(GripOf::Share {
-            low: *low,
-            high: *high,
-            axis: *axis,
-        })? {
-            GripPlace::Share { handle, .. } => Some(placed(
-                handle.point,
-                behind(handle.point, handle.direction),
-                handle.direction,
-            )),
-            GripPlace::Length { .. } | GripPlace::Envelope { .. } => None,
-        },
-    }
-}
-
-/// A box's size along `axis` as a dimension on the edge nearest the eye
-/// whose high end is not one of `handles` (the nearest edge when every
-/// one is): its low end, its high end (the handle) and the way up the
-/// axis.
-fn edge_dimension(
-    bounds: &stave_model::solved::WorldBox,
-    axis: Axis,
-    eye: Option<Vec3>,
-    handles: &[Vec3],
-) -> Option<(Vec3, Vec3, Vec3)> {
-    let [first, second] = axis.others();
-    let (low, high) = (bounds.min().get(axis), bounds.max().get(axis));
-    let at = |along: Length, (a, b): (Length, Length)| {
-        stave_geom::render::point(
-            Point::default()
-                .with(axis, along)
-                .with(first, a)
-                .with(second, b),
-        )
-    };
-    let mut edges = Vec::new();
-    for a in [bounds.min().get(first), bounds.max().get(first)] {
-        for b in [bounds.min().get(second), bounds.max().get(second)] {
-            edges.push((a, b));
-        }
-    }
-    let distance = |edge| {
-        eye.map_or(0.0, |eye| {
-            ((at(low, edge) + at(high, edge)) * 0.5 - eye).length()
-        })
-    };
-    edges.sort_by(|x, y| distance(*x).total_cmp(&distance(*y)));
-    let free = |edge: &(Length, Length)| {
-        let handle = at(high, *edge);
-        !handles.iter().any(|other| (*other - handle).length() < 1.0)
-    };
-    let edge = edges
-        .iter()
-        .copied()
-        .find(free)
-        .or_else(|| edges.first().copied())?;
-    let up = stave_geom::render::direction(high_face(axis).direction());
-    Some((at(low, edge), at(high, edge), up))
-}
-
-/// A length's dimension from the two faces its term names: from `from`
-/// to `to` through the middle of the box `to` belongs to.
-fn between_place(
-    graph: &SceneGraph,
-    axis: Axis,
-    from: &GripFace,
-    to: &GripFace,
-) -> Option<(Vec3, Vec3, Vec3)> {
-    let bounds = match to.of {
-        FaceOf::Part(part) => graph.drawn_box(graph.node_of(Item::Part(part))?)?,
-        FaceOf::Region(region) => graph.region(region)?.bounds,
-    };
-    let [first, second] = axis.others();
-    let middle = |other: Axis| {
-        let (low, high) = (bounds.min().get(other).nm(), bounds.max().get(other).nm());
-        Length::from_nm(low.saturating_add(high.saturating_sub(low) / 2))
-    };
-    let point = |at: Length| {
-        stave_geom::render::point(
-            Point::default()
-                .with(axis, at)
-                .with(first, middle(first))
-                .with(second, middle(second)),
-        )
-    };
-    let up = stave_geom::render::direction(high_face(axis).direction());
-    let direction = if to.at >= from.at { up } else { -up };
-    Some((point(from.at), point(to.at), direction))
-}
-
-/// Draws the dimensions and ranges.
-fn draw(area: &gtk::DrawingArea, context: &gtk::cairo::Context, drawing: &[Drawn]) {
-    let accent = area.color();
-    let accent = (
-        f64::from(accent.red()),
-        f64::from(accent.green()),
-        f64::from(accent.blue()),
-    );
-    let dark = adw::StyleManager::default().is_dark();
-    let (halo, ink) = if dark {
-        ((0.0, 0.0, 0.0), (0.92, 0.92, 0.92))
-    } else {
-        ((1.0, 1.0, 1.0), (0.2, 0.2, 0.24))
-    };
-    context.set_line_cap(gtk::cairo::LineCap::Round);
-    for drawn in drawing {
-        let (sx, sy) = drawn.start;
-        let (ex, ey) = drawn.end;
-        let length = (ex - sx).hypot(ey - sy);
-        if length < 1.0 {
-            continue;
-        }
-        let along = ((ex - sx) / length, (ey - sy) / length);
-        let across = (-along.1, along.0);
-        if let Some(range) = drawn.range {
-            // Beside the dimension, on the side away from its label (the
-            // label stands above the line).
-            let side = if across.1 > 0.0 {
-                across
-            } else {
-                (-across.0, -across.1)
-            };
-            let shift = |(x, y): (f64, f64)| (x + side.0 * 16.0, y + side.1 * 16.0);
-            let range = DrawnRange {
-                low: shift(range.low),
-                high: shift(range.high),
-                ..range
-            };
-            draw_range(context, range, across, accent, ink);
-        }
-        let width = if drawn.active { 2.5 } else { 1.75 };
-        let colour = match drawn.look {
-            GripLook::Moves | GripLook::Follows => accent,
-            GripLook::Locked => ink,
-        };
-        let line = |context: &gtk::cairo::Context| {
-            context.move_to(sx, sy);
-            context.line_to(ex, ey);
-            for (x, y) in [(sx, sy), (ex, ey)] {
-                context.move_to(x - across.0 * 7.0, y - across.1 * 7.0);
-                context.line_to(x + across.0 * 7.0, y + across.1 * 7.0);
-            }
-        };
-        // A halo first, so the line reads over wood and background alike.
-        context.set_dash(&[], 0.0);
-        line(context);
-        context.set_source_rgba(halo.0, halo.1, halo.2, 0.8);
-        context.set_line_width(width + 3.0);
-        let _ = context.stroke();
-        match drawn.look {
-            GripLook::Moves => context.set_dash(&[], 0.0),
-            GripLook::Follows => context.set_dash(&[7.0, 4.0], 0.0),
-            GripLook::Locked => context.set_dash(&[0.5, 4.0], 0.0),
-        }
-        line(context);
-        context.set_source_rgb(colour.0, colour.1, colour.2);
-        context.set_line_width(width);
-        let _ = context.stroke();
-        context.set_dash(&[], 0.0);
-        // Arrowheads at the start for what can be dragged.
-        if drawn.look != GripLook::Locked && length > 24.0 {
-            context.move_to(sx, sy);
-            context.line_to(
-                sx + along.0 * 8.0 + across.0 * 4.0,
-                sy + along.1 * 8.0 + across.1 * 4.0,
-            );
-            context.line_to(
-                sx + along.0 * 8.0 - across.0 * 4.0,
-                sy + along.1 * 8.0 - across.1 * 4.0,
-            );
-            context.close_path();
-            let _ = context.fill();
-        }
-        // A short arrow out past the handle: the way a drag makes it
-        // larger.
-        if drawn.look != GripLook::Locked {
-            let base = (ex + along.0 * 9.0, ey + along.1 * 9.0);
-            let tip = (ex + along.0 * 19.0, ey + along.1 * 19.0);
-            let arrow = |context: &gtk::cairo::Context| {
-                context.move_to(base.0, base.1);
-                context.line_to(tip.0 - along.0 * 4.0, tip.1 - along.1 * 4.0);
-            };
-            arrow(context);
-            context.set_source_rgba(halo.0, halo.1, halo.2, 0.8);
-            context.set_line_width(4.5);
-            let _ = context.stroke();
-            arrow(context);
-            context.set_source_rgb(accent.0, accent.1, accent.2);
-            context.set_line_width(1.75);
-            let _ = context.stroke();
-            context.move_to(tip.0, tip.1);
-            context.line_to(
-                tip.0 - along.0 * 6.0 + across.0 * 3.5,
-                tip.1 - along.1 * 6.0 + across.1 * 3.5,
-            );
-            context.line_to(
-                tip.0 - along.0 * 6.0 - across.0 * 3.5,
-                tip.1 - along.1 * 6.0 - across.1 * 3.5,
-            );
-            context.close_path();
-            let _ = context.fill();
-        }
-    }
-}
-
-/// A range along a dimension: a pale track between its ends; a rule's
-/// stop is a hard red end hatched beyond, as the door's swing slider
-/// draws where the door first hits; a `within`'s end a hard grey end.
-fn draw_range(
-    context: &gtk::cairo::Context,
-    range: DrawnRange,
-    across: (f64, f64),
-    accent: (f64, f64, f64),
-    ink: (f64, f64, f64),
-) {
-    let (lx, ly) = range.low;
-    let (hx, hy) = range.high;
-    let length = (hx - lx).hypot(hy - ly);
-    if length < 1.0 {
-        return;
-    }
-    let along = ((hx - lx) / length, (hy - ly) / length);
-    context.move_to(lx, ly);
-    context.line_to(hx, hy);
-    context.set_source_rgba(accent.0, accent.1, accent.2, 0.45);
-    context.set_line_width(6.0);
-    let _ = context.stroke();
-    for ((x, y), end, outward) in [
-        ((lx, ly), range.low_end, (-along.0, -along.1)),
-        ((hx, hy), range.high_end, along),
-    ] {
-        match end {
-            RangeEnd::Stop => {
-                // Hatched red beyond the stop, then the hard end.
-                let _ = context.save();
-                context.move_to(x, y);
-                context.line_to(x + outward.0 * 28.0, y + outward.1 * 28.0);
-                context.set_line_width(10.0);
-                context.set_line_cap(gtk::cairo::LineCap::Butt);
-                context.set_source_rgb(BLOCKED_PALE.0, BLOCKED_PALE.1, BLOCKED_PALE.2);
-                let _ = context.stroke();
-                context.set_source_rgb(BLOCKED.0, BLOCKED.1, BLOCKED.2);
-                for step in 0..5 {
-                    let at = 3.0 + f64::from(step) * 5.5;
-                    let (cx, cy) = (x + outward.0 * at, y + outward.1 * at);
-                    context.move_to(
-                        cx - across.0 * 4.5 - outward.0 * 2.0,
-                        cy - across.1 * 4.5 - outward.1 * 2.0,
-                    );
-                    context.line_to(
-                        cx + across.0 * 4.5 + outward.0 * 2.0,
-                        cy + across.1 * 4.5 + outward.1 * 2.0,
-                    );
-                }
-                context.set_line_width(1.8);
-                let _ = context.stroke();
-                context.move_to(x - across.0 * 12.0, y - across.1 * 12.0);
-                context.line_to(x + across.0 * 12.0, y + across.1 * 12.0);
-                context.set_line_width(4.0);
-                let _ = context.stroke();
-                let _ = context.restore();
-            }
-            RangeEnd::Domain => {
-                context.move_to(x - across.0 * 8.0, y - across.1 * 8.0);
-                context.line_to(x + across.0 * 8.0, y + across.1 * 8.0);
-                context.set_source_rgb(ink.0, ink.1, ink.2);
-                context.set_line_width(3.0);
-                let _ = context.stroke();
-            }
-            RangeEnd::Open => {}
-        }
-    }
-}
-
 impl Window {
-    /// Puts the grips' lines and readout over the 3D view (the size
-    /// section's actions were forwarded when it was launched).
-    pub(in crate::ui) fn connect_grips(&mut self) {
-        let grips = &self.editing.grips;
-        let design = &self.widgets.design;
-        design.add_overlay(&grips.area);
-        design.add_overlay(&grips.layer);
-        design.add_overlay(grips.readout.widget());
-        // The window's floating cards stay above the grips: put back on
-        // top in the order they were laid (nothing has the keyboard yet).
-        let widgets = &self.widgets;
-        let editing = &self.editing;
-        for floating in [
-            widgets.hint_box.upcast_ref::<gtk::Widget>(),
-            widgets.edge_pin.upcast_ref(),
-            editing.menu.widget().upcast_ref(),
-            editing.card.widget().upcast_ref(),
-        ] {
-            if floating.parent().as_ref() == Some(design.upcast_ref()) {
-                design.remove_overlay(floating);
-                design.add_overlay(floating);
-            }
-        }
-    }
-
     /// The grips' panel asked for something.
     pub(in crate::ui) fn grip_panel_asked(&mut self, action: PanelAction) {
         match action {
@@ -817,11 +306,9 @@ impl Window {
                         self.start_stops_search();
                     }
                     // A commit drops the listing: list again from the new
-                    // design.
-                    (None, Some(_)) => {
-                        self.clear_grip_marks();
-                        self.relist_grips_soon();
-                    }
+                    // design. The rows stay until then (they do nothing
+                    // without a listing), so the panel doesn't flicker.
+                    (None, Some(_)) => self.relist_grips_soon(),
                     (Some(_), _) | (None, None) => {}
                 }
             }
@@ -833,7 +320,6 @@ impl Window {
                 if !busy {
                     self.build_grip_marks();
                 }
-                self.request_render();
             }
             EditEvent::Started => self.grips_for_edit_start(),
             EditEvent::Committed => {
@@ -853,7 +339,8 @@ impl Window {
                     )
                 });
                 let (was_open, region) = {
-                    let state = &mut self.editing.grips.state;
+                    let grips = &mut self.editing.grips;
+                    let state = &mut grips.state;
                     let was_open = state.open.is_some();
                     if !still_open {
                         state.open = None;
@@ -861,12 +348,9 @@ impl Window {
                         state.held = None;
                         state.pending = None;
                         state.last_sent = None;
-                        if let Some(index) = state.typing.take()
-                            && let Some(marks) = state.marks.iter().find(|m| m.index == index)
-                        {
-                            close_entry(marks);
-                        }
+                        state.typing = None;
                     }
+                    grips.sizes.close_entries();
                     (
                         was_open,
                         matches!(
@@ -896,6 +380,7 @@ impl Window {
             | EditEvent::OptionsChanged
             | EditEvent::Rejected(_) => {}
         }
+        self.refresh_sizes();
         self.request_render();
     }
 
@@ -979,231 +464,81 @@ impl Window {
 
     // ---- the widgets on the model ----
 
+    // ---- the rows ----
+
     fn clear_grip_marks(&mut self) {
-        let marks = std::mem::take(&mut self.editing.grips.state.marks);
-        for marks in marks {
-            self.editing.grips.layer.remove(&marks.handle);
-            self.editing.grips.layer.remove(&marks.label);
-        }
-        let state = &mut self.editing.grips.state;
-        state.places.clear();
-        state.typing = None;
+        self.editing.grips.sizes.clear();
+        self.editing.grips.state.typing = None;
+        self.update_edit_panel();
     }
 
-    /// Makes a handle and a label for every listed grip the scene can
-    /// place.
+    /// Makes a row for every listed grip, in the Sizes card.
     fn build_grip_marks(&mut self) {
-        self.clear_grip_marks();
-        let eye = self.state.orbit.map(|orbit| orbit.eye());
-        let (places, listed): (Vec<Placed>, Vec<ListedGrip>) = {
+        let (title, listed, part) = {
             let session = &self.session;
-            let (Some(grips), Some((_, graph))) = (session.grips(), session.drawable()) else {
+            let Some(grips) = session.grips() else {
                 return;
             };
-            let mut handles = Vec::new();
-            let places: Vec<Placed> = grips
-                .grips()
-                .iter()
-                .enumerate()
-                .filter_map(|(index, listed)| place_of(graph, listed, index, eye, &mut handles))
-                .collect();
-            let listed = places
-                .iter()
-                .filter_map(|place| grips.grips().get(place.index).cloned())
-                .collect();
-            (places, listed)
+            let title = match grips.selection() {
+                GripSelection::Assembly(id) => session
+                    .drawable()
+                    .and_then(|(design, _)| design.assembly(id))
+                    .map(|assembly| assembly.name.clone())
+                    .unwrap_or_default(),
+                GripSelection::Envelope => tr("the space"),
+                GripSelection::Split(region) => session
+                    .drawable()
+                    .and_then(|(_, graph)| graph.region(region))
+                    .map(|region| region.name.clone())
+                    .unwrap_or_default(),
+            };
+            let listed: Vec<(usize, ListedGrip)> =
+                grips.grips().iter().cloned().enumerate().collect();
+            let part: Option<PartId> = match session.selection() {
+                Some(Selection::Part(part)) => Some(*part),
+                _ => None,
+            };
+            (title, listed, part)
         };
-        let mut marks = Vec::new();
-        for (place, listed) in places.iter().zip(&listed) {
-            let built = self.grip_marks(place, listed);
-            self.editing.grips.layer.put(&built.handle, 0.0, 0.0);
-            self.editing.grips.layer.put(&built.label, 0.0, 0.0);
-            marks.push(built);
-        }
-        {
-            let state = &mut self.editing.grips.state;
-            state.places = places;
-            state.marks = marks;
-        }
-        self.show_card();
+        self.editing.grips.sizes.show(&title, &listed, part);
+        self.editing.grips.state.typing = None;
+        self.update_edit_panel();
+        self.refresh_sizes();
     }
 
-    /// One grip's handle (or padlock) and label.
-    fn grip_marks(&mut self, place: &Placed, listed: &ListedGrip) -> Marks {
-        let index = place.index;
-        let words = label_words(listed);
-        let handle: gtk::Widget = match place.look {
-            GripLook::Locked => {
-                let lock = gtk::Image::builder()
-                    .icon_name("changes-prevent-symbolic")
-                    .css_classes(["stave-grip-lock"])
-                    .tooltip_text(fill_in(
-                        &tr("{grip} can't be dragged: {why}"),
-                        &[("grip", &listed.grip.label), ("why", &words)],
-                    ))
-                    .build();
-                lock.upcast()
-            }
-            GripLook::Moves | GripLook::Follows => {
-                let handle = gtk::Box::builder()
-                    .css_classes(["stave-grip-handle"])
-                    .focusable(true)
-                    .accessible_role(gtk::AccessibleRole::Slider)
-                    .tooltip_text(fill_in(
-                        &tr("Drag {grip}: {value}. Hold Ctrl for round numbers."),
-                        &[("grip", &listed.grip.label), ("value", &words)],
-                    ))
-                    .build();
-                handle.set_cursor_from_name(Some("grab"));
-                handle.update_property(&[gtk::accessible::Property::Label(&fill_in(
-                    &tr("Drag {grip}"),
-                    &[("grip", &listed.grip.label)],
-                ))]);
-                self.connect_handle(&handle, index);
-                handle.upcast()
-            }
-        };
-        handle.set_halign(gtk::Align::Start);
-        handle.set_valign(gtk::Align::Start);
-        handle.set_visible(false);
-
-        let label = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-grip-label"])
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .visible(false)
-            .build();
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        label.append(&row);
-        let error = gtk::Label::builder()
-            .css_classes(["stave-grip-error"])
-            .xalign(0.0)
-            .wrap(true)
-            .max_width_chars(32)
-            .visible(false)
-            .build();
-        let (stack, entry) = match place.look {
-            GripLook::Locked => {
-                label.add_css_class("locked");
-                row.set_spacing(6);
-                row.append(&gtk::Image::from_icon_name("changes-prevent-symbolic"));
-                row.append(&gtk::Label::new(Some(&amount_words(grip_value(listed)))));
-                label.set_tooltip_text(Some(&words));
-                (None, None)
-            }
-            GripLook::Moves | GripLook::Follows => {
-                let number = gtk::Button::builder()
-                    .label(amount_words(grip_value(listed)))
-                    .css_classes(["flat", "stave-grip-number"])
-                    .tooltip_text(fill_in(
-                        &tr("{value}. Click to type a value"),
-                        &[("value", &words)],
-                    ))
-                    .build();
-                let entry = gtk::Entry::builder()
-                    .text(amount_words(grip_value(listed)))
-                    .width_chars(9)
-                    .build();
-                entry.update_property(&[gtk::accessible::Property::Label(&fill_in(
-                    &tr("Value of {grip}"),
-                    &[("grip", &listed.grip.label)],
-                ))]);
-                let stack = gtk::Stack::builder()
-                    .hhomogeneous(false)
-                    .vhomogeneous(false)
-                    .build();
-                stack.add_named(&number, Some("number"));
-                stack.add_named(&entry, Some("entry"));
-                stack.set_visible_child_name("number");
-                row.append(&stack);
-                let input = self.input();
-                number.connect_clicked(move |_| {
-                    input.emit(EditingInput::OpenGripEntry(index).into())
-                });
-                // Applied once the entry's own signal is done: the message
-                // is queued.
-                let input = self.input();
-                entry.connect_activate(move |entry| {
-                    let text = entry.text().to_string();
-                    input.emit(EditingInput::GripTyped { index, text }.into());
-                });
-                let keys = gtk::EventControllerKey::new();
-                let input = self.input();
-                keys.connect_key_pressed(move |_, key, _, _| {
-                    if key != gdk::Key::Escape {
-                        return glib::Propagation::Proceed;
+    /// Shows each field's value (the dragged one's where it was moved),
+    /// and the change card's Size section.
+    pub(in crate::ui) fn refresh_sizes(&mut self) {
+        {
+            let session = &self.session;
+            let grips = &self.editing.grips;
+            let state = &grips.state;
+            let open = session.change().and_then(drag_index).or(state.open);
+            if let Some(list) = session.grips() {
+                for (index, listed) in list.grips().iter().enumerate() {
+                    if state.typing == Some(index) {
+                        continue;
                     }
-                    input.emit(EditingInput::CloseGripTyping(index).into());
-                    glib::Propagation::Stop
-                });
-                entry.add_controller(keys);
-                (Some(stack), Some(entry))
+                    let moved = (open == Some(index))
+                        .then(|| {
+                            session
+                                .change()
+                                .and_then(|change| drag_target(change, index))
+                                .or(state.pending)
+                        })
+                        .flatten();
+                    let value = moved.unwrap_or_else(|| grip_value(listed));
+                    grips.sizes.set_value(index, &amount_words(value));
+                }
             }
-        };
-        let switches = solver_switches(listed);
-        let switches = (!switches.is_empty() && place.look != GripLook::Locked)
-            .then(|| mark_switch_menu(&self.input(), index, &switches));
-        if let Some(menu) = &switches {
-            row.append(menu);
+            grips
+                .sizes
+                .set_scrubbing(state.gesture.map(|gesture| gesture.index));
         }
-        label.append(&error);
-        Marks {
-            index,
-            handle,
-            label,
-            stack,
-            entry,
-            error,
-            switches,
-        }
+        self.show_grip_section();
     }
 
     // ---- dragging ----
-
-    fn connect_handle(&self, handle: &gtk::Box, index: usize) {
-        let drag = gtk::GestureDrag::new();
-        let input = self.input();
-        drag.connect_drag_begin(move |gesture, _, _| {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            input.emit(EditingInput::GripPressed(index).into());
-        });
-        let input = self.input();
-        drag.connect_drag_update(move |gesture, dx, dy| {
-            let round = gesture
-                .current_event_state()
-                .contains(gdk::ModifierType::CONTROL_MASK);
-            input.emit(EditingInput::GripMoved { dx, dy, round }.into());
-        });
-        let input = self.input();
-        drag.connect_drag_end(move |_, _, _| input.emit(EditingInput::GripReleased.into()));
-        handle.add_controller(drag);
-        // Arrow keys move it a step at a time; Enter writes it.
-        let keys = gtk::EventControllerKey::new();
-        let input = self.input();
-        keys.connect_key_pressed(move |_, key, _, modifiers| {
-            let round = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
-            let steps = match key {
-                gdk::Key::Right | gdk::Key::Up => 1,
-                gdk::Key::Left | gdk::Key::Down => -1,
-                gdk::Key::Return | gdk::Key::KP_Enter => {
-                    input.emit(EditingInput::SendEditLater(EditCommand::Add).into());
-                    return glib::Propagation::Stop;
-                }
-                _ => return glib::Propagation::Proceed,
-            };
-            input.emit(
-                EditingInput::GripStepped {
-                    index,
-                    steps,
-                    round,
-                }
-                .into(),
-            );
-            glib::Propagation::Stop
-        });
-        handle.add_controller(keys);
-    }
 
     /// The listed grip at `index`.
     fn listed_grip(&self, index: usize) -> Option<ListedGrip> {
@@ -1264,60 +599,30 @@ impl Window {
         }
     }
 
-    /// The pointer pressed a handle.
+    /// The pointer began to drag a field.
     pub(in crate::ui) fn grip_pressed(&mut self, index: usize) {
         self.begin_grip_drag(index);
-        let from = self
-            .grip_target(index)
-            .and_then(length_mm)
-            .unwrap_or_default();
-        let (unit, scale) = self
-            .screen_direction(index, from)
-            .unwrap_or(((0.0, -1.0), 1.0));
-        self.editing.grips.state.gesture = Some(Gesture {
-            index,
-            from,
-            unit,
-            scale,
-        });
-        self.set_dragging_look(index, true);
+        let Some(from) = self.grip_target(index) else {
+            return;
+        };
+        self.editing.grips.state.gesture = Some(Gesture { index, from });
+        self.refresh_sizes();
         self.request_render();
     }
 
-    /// Which way on screen makes a grip larger, and how many pixels a
-    /// millimetre is that way, at the value `at`.
-    fn screen_direction(&self, index: usize, at: f64) -> Option<((f64, f64), f64)> {
-        let place = self
-            .editing
-            .grips
-            .state
-            .places
-            .iter()
-            .find(|place| place.index == index)
-            .copied()?;
-        let state = &self.state;
-        let here = place.at(at);
-        let (x0, y0) = self.project(state, here)?;
-        let (x1, y1) = self.project(state, here + place.direction * 100.0)?;
-        let (dx, dy) = (f64::from(x1 - x0), f64::from(y1 - y0));
-        let length = dx.hypot(dy);
-        // Along the line of sight a drag can't be read off the screen.
-        (length > 4.0).then(|| ((dx / length, dy / length), length / 100.0))
-    }
-
-    /// The pointer moved by `(dx, dy)` since it pressed the handle.
-    pub(in crate::ui) fn grip_moved(&mut self, dx: f64, dy: f64, round: bool) {
+    /// The pointer moved `dx` pixels sideways since it began to drag.
+    pub(in crate::ui) fn grip_moved(&mut self, dx: f64, fine: bool, round: bool) {
         let Some(gesture) = self.editing.grips.state.gesture else {
             return;
         };
-        let travel = (dx * gesture.unit.0 + dy * gesture.unit.1) / gesture.scale;
-        let Some(wanted) = mm_amount(gesture.from + travel) else {
+        let pixels = crate::convert::int_of(dx);
+        let Some(wanted) = stave_app::grip_values::scrubbed(gesture.from, pixels, fine) else {
             return;
         };
         self.grip_wanted(gesture.index, wanted, round);
     }
 
-    /// Arrow keys on a handle: a step of its resolution each way.
+    /// Arrow keys on a field: a step of its resolution each way.
     pub(in crate::ui) fn grip_stepped(&mut self, index: usize, steps: i32, round: bool) {
         let Some(listed) = self.listed_grip(index) else {
             return;
@@ -1355,6 +660,7 @@ impl Window {
             // Once the events in hand are handled.
             self.send(EditingInput::FlushDrag);
         }
+        self.refresh_sizes();
         self.request_render();
     }
 
@@ -1374,14 +680,11 @@ impl Window {
         }
     }
 
-    /// The pointer let the handle go: writes the drag when it fits;
-    /// otherwise the panel says why and offers Cancel.
+    /// The pointer let the field go: writes the drag when it fits;
+    /// otherwise the Size section says why and offers Cancel.
     pub(in crate::ui) fn grip_released(&mut self) {
         self.flush_drag();
-        let index = self.editing.grips.state.gesture.take().map(|g| g.index);
-        if let Some(index) = index {
-            self.set_dragging_look(index, false);
-        }
+        self.editing.grips.state.gesture = None;
         let fits = self
             .session
             .change()
@@ -1389,18 +692,8 @@ impl Window {
         if fits {
             self.send_edit_later(EditCommand::Add);
         }
+        self.refresh_sizes();
         self.request_render();
-    }
-
-    fn set_dragging_look(&self, index: usize, dragging: bool) {
-        let state = &self.editing.grips.state;
-        if let Some(marks) = state.marks.iter().find(|marks| marks.index == index) {
-            if dragging {
-                marks.handle.add_css_class("dragging");
-            } else {
-                marks.handle.remove_css_class("dragging");
-            }
-        }
     }
 
     /// A pick from the sizes a follows grip could change, sent once the
@@ -1428,7 +721,7 @@ impl Window {
         match (parse_value(low), parse_value(high)) {
             (Ok(low), Ok(high)) => {
                 match menu {
-                    SwitchMenu::Mark(menu) => menu.popdown(),
+                    SwitchMenu::Row(menu) => menu.popdown(),
                     SwitchMenu::Panel => self.editing.grips.panel.close_options(),
                 }
                 self.editing.grips.state.open = Some(index);
@@ -1445,39 +738,27 @@ impl Window {
 
     // ---- typing ----
 
-    /// The number turns into an entry holding the value.
+    // ---- typing ----
+
+    /// The field turns into an entry holding the value.
     pub(in crate::ui) fn open_entry(&mut self, index: usize) {
-        let state = &mut self.editing.grips.state;
-        if let Some(previous) = state.typing.replace(index)
-            && previous != index
-            && let Some(marks) = state.marks.iter().find(|m| m.index == previous)
-        {
-            close_entry(marks);
-        }
-        let Some(marks) = state.marks.iter().find(|m| m.index == index) else {
-            return;
-        };
-        if let (Some(stack), Some(entry)) = (&marks.stack, &marks.entry) {
-            stack.set_visible_child_name("entry");
-            entry.grab_focus();
-            entry.select_region(0, -1);
-        }
+        self.editing.grips.state.typing = Some(index);
+        self.editing.grips.sizes.open_entry(index);
     }
 
     /// Escape in the entry: back to the number; a value typed and tried is
     /// dropped.
     pub(in crate::ui) fn close_typing(&mut self, index: usize) {
         let typed = {
-            let state = &mut self.editing.grips.state;
-            if let Some(marks) = state.marks.iter().find(|m| m.index == index) {
-                close_entry(marks);
-            }
-            state.typing = None;
-            state.open == Some(index)
+            let grips = &mut self.editing.grips;
+            grips.sizes.close_entry(index);
+            grips.state.typing = None;
+            grips.state.open == Some(index)
         };
         if typed {
             self.send_edit_later(EditCommand::Cancel);
         }
+        self.refresh_sizes();
     }
 
     /// Enter in the entry: the value is tried through the same check as a
@@ -1550,241 +831,23 @@ impl Window {
     /// Shows what became of a typed value: written (Add), or why not,
     /// under the entry, which stays open holding the text typed.
     fn show_typed_result(&mut self, index: usize, text: &str, refusal: Option<String>) {
-        let refused = {
-            let state = &mut self.editing.grips.state;
-            let Some(marks) = state.marks.iter().find(|m| m.index == index) else {
-                return;
-            };
-            match refusal {
-                Some(words) => {
-                    // A cancel may have closed the entry: open it again.
-                    if let (Some(stack), Some(entry)) = (&marks.stack, &marks.entry) {
-                        stack.set_visible_child_name("entry");
-                        if entry.text() != text {
-                            entry.set_text(text);
-                        }
-                        entry.add_css_class("error");
-                        entry.grab_focus();
-                    }
-                    marks.error.set_label(&words);
-                    marks.error.set_visible(true);
-                    state.typing = Some(index);
-                    true
-                }
-                None => {
-                    marks.error.set_visible(false);
-                    false
-                }
+        match refusal {
+            Some(words) => {
+                self.editing.grips.state.typing = Some(index);
+                self.editing.grips.sizes.show_refusal(index, text, &words);
             }
-        };
-        if refused {
-            // The label grew: placed again, clear of the handles.
-            self.request_render();
-        } else {
-            self.dispatch(Command::Edit(EditCommand::Add));
-        }
-    }
-
-    // ---- placing ----
-
-    /// Puts the handles, labels and panel where the grips show, after a
-    /// frame of the 3D view is drawn; hides them where grips don't belong
-    /// (focus mode, pulled apart, another view, a menu entry chosen, the
-    /// removal's dialog asking over the view).
-    pub(in crate::ui) fn place_grips(&mut self) {
-        let hidden = {
-            let session = &self.session;
-            self.state.focus.is_some()
-                || session.explode().get() > 0.0
-                || session.view() != View::Design
-                || session.showing_older()
-                || session.edit().is_some_and(|edit| edit.chosen().is_some())
-                || session.grips().is_none()
-                || self.editing.changes.dialog.root.is_visible()
-        };
-        let grips = &self.editing.grips;
-        if hidden {
-            grips.area.set_visible(false);
-            grips.show_readout(None);
-            // Hidden with nothing borrowed: hiding a handle mid-drag ends
-            // its drag, and the drag's end borrows the grips' state.
-            let marks: Vec<(gtk::Widget, gtk::Box)> = grips
-                .state
-                .marks
-                .iter()
-                .map(|marks| (marks.handle.clone(), marks.label.clone()))
-                .collect();
-            for (handle, label) in marks {
-                handle.set_visible(false);
-                label.set_visible(false);
+            None => {
+                self.editing.grips.state.typing = None;
+                self.editing.grips.sizes.close_entry(index);
+                self.dispatch(Command::Edit(EditCommand::Add));
             }
-            return;
         }
-        let session = &self.session;
-        let view = &self.state;
-        let state = &grips.state;
-        let open = session.change().and_then(drag_index).or(state.open);
-        let mut drawing = Vec::new();
-        let mut labels = Vec::new();
-        // Handles to hide once the borrows are let go (see above).
-        let mut to_hide: Vec<gtk::Widget> = Vec::new();
-        let (view_width, view_height) = (
-            f64::from(self.widgets.design.width()),
-            f64::from(self.widgets.design.height()),
-        );
-        let edge = f64::from(EDGE);
-        let rail = f64::from(self.right_column());
-        for (place, marks) in state.places.iter().zip(&state.marks) {
-            let listed = session
-                .grips()
-                .and_then(|grips| grips.grips().get(place.index));
-            let active = open == Some(place.index);
-            let shown = open.is_none_or(|open| open == place.index) && listed.is_some();
-            let target = if active {
-                session
-                    .change()
-                    .and_then(|change| drag_target(change, place.index))
-                    .or(state.pending)
-                    .and_then(length_mm)
-            } else {
-                None
-            };
-            let value = target.unwrap_or(place.value);
-            let start = self.project(view, place.start);
-            let end = self.project(view, place.at(value));
-            let (Some(start), Some(end), true) = (start, end, shown) else {
-                to_hide.push(marks.handle.clone());
-                marks.label.set_visible(false);
-                continue;
-            };
-            let start = (f64::from(start.0), f64::from(start.1));
-            let end = (f64::from(end.0), f64::from(end.1));
-            let range = if active || state.typing == Some(place.index) {
-                listed
-                    .and_then(grip_range)
-                    .and_then(|((low, low_end), (high, high_end))| {
-                        let low = self.project(view, place.at(length_mm(low)?))?;
-                        let high = self.project(view, place.at(length_mm(high)?))?;
-                        Some(DrawnRange {
-                            low: (f64::from(low.0), f64::from(low.1)),
-                            high: (f64::from(high.0), f64::from(high.1)),
-                            low_end,
-                            high_end,
-                        })
-                    })
-            } else {
-                None
-            };
-            drawing.push(Drawn {
-                look: place.look,
-                start,
-                end,
-                active,
-                range,
-            });
-            // The handle on the moving end; the label beside the middle.
-            grips
-                .layer
-                .move_(&marks.handle, end.0 - HANDLE / 2.0, end.1 - HANDLE / 2.0);
-            marks.handle.set_visible(true);
-            if let Some(listed) = listed
-                && let Some(stack) = &marks.stack
-                && stack.visible_child_name().as_deref() == Some("number")
-                && let Some(number) = stack.child_by_name("number").and_downcast::<gtk::Button>()
-            {
-                number.set_label(&amount_words(grip_value(listed)));
-            }
-            // While a drag is open its value is in the readout and the
-            // Edit panel, not beside the handle (unless it is being typed).
-            if active && state.typing != Some(place.index) {
-                marks.label.set_visible(false);
-                continue;
-            }
-            // Measured once shown: a hidden widget measures nothing.
-            marks.label.set_visible(true);
-            labels.push((&marks.label, start, end, measured(&marks.label)));
-        }
-        // Each label beside its line, where it covers no handle, no label
-        // placed before it and no card floating over the view (the menu
-        // of a space, the edit's card: a number under one could not be
-        // clicked), inside the view and clear of the rail.
-        let handles: Vec<(f64, f64)> = drawing.iter().map(|drawn| drawn.end).collect();
-        let cards: Vec<Rect> = [
-            self.editing.menu.widget().upcast_ref::<gtk::Widget>(),
-            self.editing.card.widget().upcast_ref(),
-        ]
-        .into_iter()
-        .filter(|card| card.is_visible())
-        .filter_map(|card| card.compute_bounds(&self.widgets.design))
-        .map(|bounds| Rect {
-            x: f64::from(bounds.x()),
-            y: f64::from(bounds.y()),
-            width: f64::from(bounds.width()),
-            height: f64::from(bounds.height()),
-        })
-        .collect();
-        let mut taken: Vec<Rect> = Vec::new();
-        for (label, start, end, (width, height)) in labels {
-            let right = (view_width - rail - width - edge).max(edge);
-            let bottom = (view_height - height - edge).max(edge);
-            let spot = |(along, side): (f64, f64)| {
-                let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-                let length = dx.hypot(dy).max(1.0);
-                let mut across = (-dy / length, dx / length);
-                if across.1 > 0.0 {
-                    across = (-across.0, -across.1);
-                }
-                across = (across.0 * side, across.1 * side);
-                let at = (start.0 + dx * along, start.1 + dy * along);
-                Rect {
-                    x: (at.0 + across.0 * LABEL_OFFSET - width / 2.0).clamp(edge, right),
-                    y: (at.1 + across.1 * LABEL_OFFSET - height / 2.0).clamp(edge, bottom),
-                    width,
-                    height,
-                }
-            };
-            let off_cards = |rect: &Rect| !cards.iter().any(|card| rect.overlaps(card));
-            let clear = |rect: &Rect| {
-                off_cards(rect)
-                    && !handles
-                        .iter()
-                        .any(|point| rect.near(*point, HANDLE / 2.0 + 4.0))
-                    && !taken.iter().any(|other| rect.overlaps(other))
-            };
-            // Above the line first, then below it; then on past the
-            // handle, where a line that runs behind a card still shows.
-            let length = (end.0 - start.0).hypot(end.1 - start.1).max(1.0);
-            let past = 1.0 + (HANDLE + width.max(height)) / length;
-            let spots: Vec<Rect> = [1.0, -1.0]
-                .into_iter()
-                .flat_map(|side| [0.5, 0.3, 0.7, 0.2, 0.8].map(|along| (along, side)))
-                .chain([(past, 0.0), (past, 1.0), (past, -1.0)])
-                .map(spot)
-                .collect();
-            let rect = spots
-                .iter()
-                .find(|rect| clear(rect))
-                .or_else(|| spots.iter().find(|rect| off_cards(rect)))
-                .copied()
-                .unwrap_or_else(|| spot((0.5, 1.0)));
-            grips.layer.move_(label, rect.x, rect.y);
-            taken.push(rect);
-        }
-        grips.area.set_visible(true);
-        // The draw function gets its own copy of what to draw.
-        grips.area.set_draw_func(move |area, context, _, _| {
-            draw(area, context, &drawing);
-        });
-        grips.area.queue_draw();
-        for handle in to_hide {
-            handle.set_visible(false);
-        }
-        self.show_grip_section();
+        self.refresh_sizes();
     }
 
     /// Draws the size section of the change's card for a change the grips
     /// started (a drag, or a param made solved or plain), with the grip's
-    /// options, and the readout at the top of the view.
+    /// options.
     fn show_grip_section(&mut self) {
         let session = &self.session;
         let grips = &self.editing.grips;
@@ -1807,7 +870,6 @@ impl Window {
         });
         let Some(model) = model else {
             grips.panel.root.set_visible(false);
-            grips.show_readout(None);
             return;
         };
         let slot = &self.editing.changes.card.grip_slot;
@@ -1827,10 +889,9 @@ impl Window {
         });
         grips.panel.show(&model, options);
         grips.panel.root.set_visible(true);
-        grips.show_readout(model.readout.clone());
     }
 
-    // ---- driving it without a pointer (screenshots) ----
+    // ---- driving it without a pointer (scripts) ----
 
     /// A drag on grip `index` to `value`, as the pointer would make it,
     /// still held.
@@ -1840,13 +901,10 @@ impl Window {
         self.flush_drag();
     }
 
-    /// Lets the held handle go.
+    /// Lets the held field go.
     pub(in crate::ui) fn release_grip(&mut self) {
         self.flush_drag();
-        let index = self.editing.grips.state.gesture.take().map(|g| g.index);
-        if let Some(index) = index {
-            self.set_dragging_look(index, false);
-        }
+        self.editing.grips.state.gesture = None;
         let fits = self
             .session
             .change()
@@ -1854,38 +912,19 @@ impl Window {
         if fits {
             self.dispatch(Command::Edit(EditCommand::Add));
         }
+        self.refresh_sizes();
     }
 
-    /// Types a value into grip `index`'s entry and presses Enter.
+    /// Types a value into grip `index`'s field and presses Enter.
     pub(in crate::ui) fn type_grip(&mut self, index: usize, text: &str) {
         self.open_entry(index);
-        {
-            let state = &self.editing.grips.state;
-            if let Some(entry) = state
-                .marks
-                .iter()
-                .find(|m| m.index == index)
-                .and_then(|m| m.entry.as_ref())
-            {
-                entry.set_text(text);
-            }
-        }
+        self.editing.grips.sizes.type_text(index, text);
         self.apply_typed(index, text);
     }
 
     /// Opens grip `index`'s menu with the solver's switch.
     pub(in crate::ui) fn open_grip_menu(&self, index: usize) -> bool {
-        let state = &self.editing.grips.state;
-        let Some(menu) = state
-            .marks
-            .iter()
-            .find(|m| m.index == index)
-            .and_then(|m| m.switches.as_ref())
-        else {
-            return false;
-        };
-        menu.popup();
-        true
+        self.editing.grips.sizes.open_menu(index)
     }
 
     /// Marks a change of a param's kind as started from grip `index`.
@@ -1899,18 +938,6 @@ impl Window {
     }
 }
 
-/// The entry goes back to the number.
-fn close_entry(marks: &Marks) {
-    if let Some(stack) = &marks.stack {
-        stack.set_visible_child_name("number");
-    }
-    if let Some(entry) = &marks.entry {
-        entry.remove_css_class("error");
-    }
-    marks.error.set_visible(false);
-}
-
-/// The grip a change drags, when it is a drag.
 fn drag_index(change: &Change) -> Option<usize> {
     match change.request() {
         ChangeRequest::Grip { index } => Some(*index),
@@ -1956,48 +983,15 @@ fn fits(progress: &Progress) -> bool {
     matches!(progress, Progress::Tried(Verdict::Fits(_)))
 }
 
-/// A label's place on the view, to keep labels off each other and off
-/// the handles.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Rect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-impl Rect {
-    /// `true` when the two cover some of the same pixels.
-    fn overlaps(&self, other: &Rect) -> bool {
-        self.x < other.x + other.width
-            && other.x < self.x + self.width
-            && self.y < other.y + other.height
-            && other.y < self.y + self.height
-    }
-
-    /// `true` when `point` is inside it or within `margin` of it.
-    fn near(&self, (x, y): (f64, f64), margin: f64) -> bool {
-        x > self.x - margin
-            && x < self.x + self.width + margin
-            && y > self.y - margin
-            && y < self.y + self.height + margin
-    }
-}
-
-/// A widget's natural size.
-fn measured(widget: &impl IsA<gtk::Widget>) -> (f64, f64) {
-    let (_, width, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
-    let (_, height, _, _) = widget.measure(gtk::Orientation::Vertical, width);
-    (f64::from(width), f64::from(height))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::ui::edit_view::grip_panel::{panel_radios, panel_words, readout_words};
-    use crate::ui::edit_view::grip_text::{PanelChoice, PanelModel};
+    use crate::ui::edit_view::grip_panel::{panel_radios, panel_words};
+    use crate::ui::edit_view::grip_text::{
+        PanelChoice, PanelModel, SolverSwitch, label_words, mm_amount,
+    };
     use crate::ui::gtk_test::on_gtk_thread;
     use stave_app::session::Session;
 
@@ -2029,58 +1023,8 @@ mod tests {
         .expect("the grips' panel shows it")
     }
 
-    #[test]
-    fn the_envelopes_three_handles_sit_on_three_corners() {
-        let mm = |n| Length::from_mm(n);
-        let bounds = stave_model::solved::WorldBox::new(
-            Point::default(),
-            Point::default()
-                .with(Axis::Across, mm(900))
-                .with(Axis::Up, mm(1800))
-                .with(Axis::Deep, mm(600)),
-        );
-        // Front, right and above, as the camera usually stands.
-        let corner = stave_geom::render::point(
-            Point::default()
-                .with(Axis::Across, mm(900))
-                .with(Axis::Up, mm(1800))
-                .with(Axis::Deep, mm(0)),
-        );
-        let eye = corner + (corner - stave_geom::render::point(bounds.min())) * 2.0;
-        let mut handles: Vec<Vec3> = Vec::new();
-        for axis in [Axis::Across, Axis::Up, Axis::Deep] {
-            let (start, handle, _) = edge_dimension(&bounds, axis, Some(eye), &handles).unwrap();
-            assert!((handle - start).length() > 500.0);
-            handles.push(handle);
-        }
-        for (i, a) in handles.iter().enumerate() {
-            for b in &handles[i + 1..] {
-                assert!((*a - *b).length() > 500.0, "two handles share a corner");
-            }
-        }
-    }
-
-    #[test]
-    fn labels_keep_off_each_other_and_the_handles() {
-        let label = Rect {
-            x: 10.0,
-            y: 10.0,
-            width: 80.0,
-            height: 24.0,
-        };
-        let beside = Rect { x: 95.0, ..label };
-        let over = Rect { x: 60.0, ..label };
-        assert!(!label.overlaps(&beside));
-        assert!(label.overlaps(&over));
-        assert!(label.near((95.0, 20.0), 11.0), "a handle just off its edge");
-        assert!(!label.near((120.0, 20.0), 11.0));
-    }
-
-    #[test]
-    fn the_panel_says_what_a_drag_changes_and_lists_the_sizes_to_pick() {
-        let folder = table("panel");
-        let mut session = Session::new(folder.clone());
-        let opened = stave_app::open(&folder).unwrap();
+    fn apron_grips(folder: &Path, session: &mut Session) {
+        let opened = stave_app::open(folder).unwrap();
         let model = opened.model.as_ref().unwrap();
         let apron = model
             .assemblies
@@ -2089,9 +1033,16 @@ mod tests {
             .unwrap()
             .id;
         send(
-            &mut session,
+            session,
             EditCommand::ListGrips(GripSelection::Assembly(apron)),
         );
+    }
+
+    #[test]
+    fn the_panel_says_what_a_drag_changes_and_lists_the_sizes_to_pick() {
+        let folder = table("panel");
+        let mut session = Session::new(folder.clone());
+        apron_grips(&folder, &mut session);
         let grips = session.grips().unwrap();
         // The setback moves; the apron's length follows two plain params.
         assert_eq!(grip_look(&grips.grips()[1]), GripLook::Moves);
@@ -2104,7 +1055,7 @@ mod tests {
         // A movable grip: the value it is moved to, what it was, the verdict.
         send(&mut session, EditCommand::BeginDrag(1));
         let waiting = panel(&session);
-        assert_eq!(waiting.verdict.words, "Drag the handle, or type a value");
+        assert_eq!(waiting.verdict.words, "Drag the number, or type a value");
         assert!(!waiting.can_apply);
         send(&mut session, EditCommand::DragTo(mm_amount(6.0).unwrap()));
         let moved = panel(&session);
@@ -2113,11 +1064,6 @@ mod tests {
         assert_eq!(moved.was.as_deref(), Some("5mm"));
         assert_eq!(moved.verdict.words, "✓ It fits");
         assert!(moved.can_apply);
-        // The readout at the top of the view says it in one line.
-        assert_eq!(
-            moved.readout.as_ref().map(|(_, value)| value.as_str()),
-            Some("5 → 6 mm")
-        );
 
         // A size that follows two plain params: both, each with its value,
         // to pick from before anything is tried.
@@ -2145,10 +1091,55 @@ mod tests {
         assert!(picked.choices[0].picked);
         assert_eq!(picked.changes, ["Changes overall_width 500mm to 520mm"]);
         assert!(picked.can_apply);
-        assert_eq!(
-            picked.readout,
-            Some(("overall_width".to_owned(), "500 → 520 mm".to_owned()))
-        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_scrub_of_forty_pixels_moves_a_size_forty_millimetres() {
+        let folder = table("scrub");
+        let mut session = Session::new(folder.clone());
+        apron_grips(&folder, &mut session);
+        let listed = session.grips().unwrap().grips()[1].clone();
+        // The setback, 5mm: forty pixels right asks for 45mm, which the
+        // session snaps and holds in its range.
+        let wanted = stave_app::grip_values::scrubbed(grip_value(&listed), 40, false).unwrap();
+        assert_eq!(amount_words(wanted), "45mm");
+        let (target, _) = stave_app::grip_values::drag_target(&listed, wanted, false);
+        send(&mut session, EditCommand::BeginDrag(1));
+        send(&mut session, EditCommand::DragTo(target));
+        let at = drag_target(session.change().unwrap(), 1).unwrap();
+        assert_eq!(at.raw(), target.raw());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_sizes_card_shows_the_selections_own_sizes_and_folds_the_parts() {
+        let folder = table("card");
+        let mut session = Session::new(folder.clone());
+        apron_grips(&folder, &mut session);
+        let listed: Vec<(usize, ListedGrip)> = session
+            .grips()
+            .unwrap()
+            .grips()
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect();
+        let count = listed.len();
+        on_gtk_thread(move || {
+            let (input, _receiver) = relm4::channel::<WindowInput>();
+            let mut card = SizesCard::new(&input);
+            card.show("apron_front", &listed, None);
+            assert!(card.root.is_visible());
+            // Every listed size has a row, by its index in the listing.
+            assert_eq!(card.indices(), (0..count).collect::<Vec<_>>());
+            assert_eq!(card.value_of(1).as_deref(), Some("5mm"));
+            card.set_value(1, "6mm");
+            assert_eq!(card.value_of(1).as_deref(), Some("6mm"));
+            card.clear();
+            assert!(!card.root.is_visible());
+            assert!(card.indices().is_empty());
+        });
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -2204,13 +1195,12 @@ mod tests {
     }
 
     #[test]
-    fn the_size_section_lists_the_sizes_as_radios_and_the_readout_is_one_line() {
+    fn the_size_section_lists_the_sizes_as_radios() {
         on_gtk_thread(|| {
             let (sender, _receiver) = relm4::channel::<PanelAction>();
             let section = GripSection::new(&sender, |output| match output {
                 GripPanelOutput::Action(action) => action,
             });
-            let readout = ReadoutComponent::builder().launch(()).detach();
             let choice = |name: &str, value: &str, picked: bool| PanelChoice {
                 param: ParamId::from_index(usize::from(picked)).unwrap(),
                 words: format!("{name} {value}"),
@@ -2238,7 +1228,6 @@ mod tests {
                     words: "✓ It fits".to_owned(),
                 },
                 can_apply: true,
-                readout: Some(("overall_width".to_owned(), "940 → 1040 mm".to_owned())),
             };
             section.show(&model, None);
             assert_eq!(
@@ -2258,29 +1247,22 @@ mod tests {
                     ("case.overhang".to_owned(), false)
                 ]
             );
-            let _ = readout
-                .sender()
-                .send(ReadoutInput::Show(model.readout.clone()));
-            assert_eq!(
-                readout_words(&readout).as_deref(),
-                Some("overall_width 940 → 1040 mm")
-            );
-            let _ = readout.sender().send(ReadoutInput::Show(None));
-            assert_eq!(readout_words(&readout), None);
         });
     }
 
     #[test]
-    fn a_grips_options_menu_is_freed_once_it_is_let_go() {
+    fn a_rows_options_menu_is_freed_once_it_is_let_go() {
         on_gtk_thread(|| {
             let width = Ident::new("width", stave_lang::ast::Span::default()).unwrap();
             let switches = [SolverSwitch {
                 param: width,
-                value: super::super::grip_text::mm_amount(100.0).unwrap(),
+                value: mm_amount(100.0).unwrap(),
                 solved: false,
             }];
             let (input, _receiver) = relm4::channel::<WindowInput>();
-            let menu = mark_switch_menu(&input, 0, &switches);
+            let menu = super::super::grip_panel::switch_menu(&switches, move |ask, menu| {
+                input.emit(switch_asked(0, ask, SwitchMenu::Row(menu)).into());
+            });
             let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             holder.append(&menu);
             let weak = menu.downgrade();

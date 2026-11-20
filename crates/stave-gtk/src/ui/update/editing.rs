@@ -143,7 +143,7 @@ pub(in crate::ui) enum EditingInput {
     RelistGrips,
     /// A grip's stops were found on the worker thread.
     GripStopsFound(Box<FoundStops>),
-    /// A grip's number was clicked: it turns into an entry.
+    /// A size's field was clicked: it turns into an entry.
     OpenGripEntry(usize),
     /// A value was typed into a grip's entry.
     GripTyped {
@@ -174,20 +174,20 @@ pub(in crate::ui) enum EditingInput {
         /// The menu that asked, closed once the range is read.
         menu: SwitchMenu,
     },
-    /// A grip's handle was pressed.
+    /// A size's field began to be dragged.
     GripPressed(usize),
-    /// A grip's handle moved this far.
+    /// A size's field was dragged this far sideways.
     GripMoved {
-        /// Across.
+        /// Pixels from where it was pressed, right is larger.
         dx: f64,
-        /// Down.
-        dy: f64,
+        /// Shift is held: finer.
+        fine: bool,
         /// Ctrl is held: round the value.
         round: bool,
     },
-    /// A grip's handle was let go.
+    /// A size's field was let go.
     GripReleased,
-    /// An arrow key moved a grip.
+    /// An arrow key stepped a size's field.
     GripStepped {
         /// The grip.
         index: usize,
@@ -284,7 +284,7 @@ impl Window {
                 menu,
             } => self.grip_make_solved(index, param, (&low, &high), &menu),
             EditingInput::GripPressed(index) => self.grip_pressed(index),
-            EditingInput::GripMoved { dx, dy, round } => self.grip_moved(dx, dy, round),
+            EditingInput::GripMoved { dx, fine, round } => self.grip_moved(dx, fine, round),
             EditingInput::GripReleased => self.grip_released(),
             EditingInput::GripStepped {
                 index,

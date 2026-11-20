@@ -171,7 +171,7 @@ forwards what people do.
 | `stave-gtk` | `ui/edit_panel.rs`, `option_search.rs` | The Edit panel's content (the card in progress, or how to start one) and the search over a setting's options (below). |
 | `stave-gtk` | `ui/edit_menu.rs`, `edit_card.rs`, `edit_demo.rs` | The editing menu for a selection and the card for a chosen candidate (below), drawn from `stave_app::edit`'s contract values; `edit_demo` shows them from the contract's fixture (`--edit-fixture`). |
 | `stave-gtk` | `ui/edit_view.rs`, `edit_writer.rs`, `edit_script.rs` | Editing on the real session: what the pointer lights and a click starts, the menu and the card drawn from `Session::edit` after each `EditEvent` and what is done on them sent as `EditCommand`s, the ghost; Add's writer through the editor's buffers; `--edit-script`. |
-| `stave-gtk` | `ui/edit_view/` | Beside `edit_view.rs`: `changes.rs` (a change's card and the removal's dialog), `item_tools.rs` (a selected item's changes, in the Details panel), `repeat_handles.rs` (the count stepper on a candidate's card, the count handle and the boundary handles), `hold.rs` (Hold this), `verbs.rs` (the finder's verbs), `editor_link.rs` (the card's Pending section and the old lines marked in the editor; editing off while the text doesn't read), `change_steps.rs` (their edit-script steps), `pointing.rs` (what a click binds), `links.rs` (what a link in the Inspector or the Edit panel selects and lights), `grips.rs`, `grip_panel.rs`, `grip_text.rs` (grips on the model, the size section of the change card and the readout line, their words). |
+| `stave-gtk` | `ui/edit_view/` | Beside `edit_view.rs`: `changes.rs` (a change's card and the removal's dialog), `item_tools.rs` (a selected item's changes, in the Details panel), `repeat_handles.rs` (the count stepper on a candidate's card, the count handle and the boundary handles), `hold.rs` (Hold this), `verbs.rs` (the finder's verbs), `editor_link.rs` (the card's Pending section and the old lines marked in the editor; editing off while the text doesn't read), `change_steps.rs` (their edit-script steps), `pointing.rs` (what a click binds), `links.rs` (what a link in the Inspector or the Edit panel selects and lights), `grips.rs`, `sizes.rs`, `scrub_field.rs`, `grip_panel.rs`, `grip_text.rs` (the sizes of the selection: their listing and drags, the Edit panel's Sizes card, its drag-to-change number fields, the size section of the change card, their words). |
 | `stave-gtk` | `ui/new_project.rs` | The New Project dialog, writing with `stave_app::change::new_project_file`. |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
@@ -337,8 +337,9 @@ Every part of the window is a panel, docked with libpanel (`Workbench`):
 the 3D view (its tab reads "Model"), Parts, Files, Details, Edit, Code,
 Problems and Output.
 Nothing but the problem pins, the editing menu at a click and the small
-labels that belong on the model (the ghost's verdict, grips and their
-values, the repeat handles) sits over the model. Each panel is a
+labels that belong on the model (the ghost's verdict, the repeat
+handles) sits over the model; the sizes a selection can change are in
+the Edit panel. Each panel is a
 `panel::Widget` in a `panel::Frame` (tabs along the top,
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
@@ -941,169 +942,158 @@ the session's.
 
 Grips and the changes of the design below are in the window too.
 
-### Grips
+### Sizes
 
-[Grips](editing.md#grips) are drawn on the model by
-`ui/edit_view/grips.rs` from what the session lists
-(`EditCommand::ListGrips`, `Session::grips`) and moved with the
-session's drag commands (`BeginDrag`, `DragTo`, `PickParam`,
-`TypeGripValue`, `MakeSolved`, `MakePlain`, `Add`, `Cancel`). The window
-decides nothing: what a grip moves, what stops it, the verdict and the
-text written are the session's, and where a drag snaps, how far it goes
-and whether a typed value is written as typed are
-`stave_app::grip_values`. It turns the pointer's
-travel along the handle on screen into a value to send, and draws what
-the session holds.
+[Grips](editing.md#grips), the sizes a selection can change, are rows
+of the Edit panel's **Sizes** card (`ui/edit_view/sizes.rs`), drawn
+from what the session lists (`EditCommand::ListGrips`,
+`Session::grips`) and moved with the session's drag commands
+(`BeginDrag`, `DragTo`, `PickParam`, `TypeGripValue`, `MakeSolved`,
+`MakePlain`, `Add`, `Cancel`) by `ui/edit_view/grips.rs`. Nothing is
+drawn on the model for them: no handles, no dimension lines, no labels.
+The window decides nothing: what a size moves, what stops it, the
+verdict and the text written are the session's; how far a pixel of a
+drag moves a value (`grip_values::scrubbed`), where it snaps, how far it
+goes and whether a typed value is written as typed are
+`stave_app::grip_values`.
 
-As in Godot and Unity, the view shows only the gizmo; the numbers are
-in the Edit panel and one small line of text:
+Each value is a number field after Blender's and Figma's
+(`ui/edit_view/scrub_field.rs`): dragged left or right to change it,
+clicked to type.
 
 ```text
-                 ┌ overall_width 940 → 1040 mm ┐        (the readout, top of the view)
-     ●──▸  (a 12 px round handle, white with a blue ring, and its arrow)
+Edit panel:
+  ▾ Sizes                                   divider     what they are of
+    height                    [‹  500mm  ›] ⋮             a plain number
+    depth                     [🔒   9mm    ]               nothing it follows can move
+    apron.length              [‹  360mm  ›]
+      follows overall_width, legs.inset                   what it follows, under its name
+  ▸ Part sizes                                    6       the other parts' sizes, folded
+    Drag a number left or right to change it, or click it to type a value.
 
-Edit panel (the change card):
-  [Set overall_width to 1040mm        ]               a size
-  ▾ Size
-    Grip           case.base.length
-    Value          [1000mm   ] was 900mm  ⋮
-    Follows        overall_width, case.overhang
-    Which size changes?
-    (•) overall_width                     940 → 1040 mm
-    ( ) case.overhang                       20 → -30 mm
+  [Set divider.height to 700mm        ]               while a size is dragged:
+  ▾ Size                                              the change card, below
+    Grip           divider.height
+    Value          [700mm    ] was 500mm  ⋮
+    Which size changes? …
   ▾ Verdict
     ✓ It fits
   ▾ Pending
-    @ line 22  − param overall_width = 940mm  + … = 1040mm
+    @ line 53  − height: 500mm  + height: 700mm
                                [Cancel  Esc] [Apply  Enter]
 ```
 
-- **What has grips.** Selecting an assembly (in the tree, by its chip
+- **What has sizes.** Selecting an assembly (in the tree, by its chip
   in the dock, with the finder, or by clicking one of its parts on the
-  model) shows the grips of its top-level assembly. A click in the
-  envelope shows the envelope's three sizes beside the menu "In this
-  space"; a click in one piece of a split (`drawer_bay[bottom]`) shows
+  model) lists the sizes of its top-level assembly. A click in the
+  envelope lists the envelope's three sizes beside the menu "In this
+  space"; a click in one piece of a split (`drawer_bay[bottom]`) lists
   the boundaries between its pieces. Selecting something else, or
-  letting the space's menu go, takes them away. The selection's account
-  and its changes stay in the Details panel, beside the view, so
-  nothing covers the grips.
-- **How a grip is drawn** (`grip_text::grip_look`), never by colour
-  alone: each kind has its own line and words.
-  - A plain number that moves: a small round handle (12 px, white with a
-    blue ring) on the face that moves, with a short arrow out past it the
-    way a drag makes it larger; a solid dimension line with an arrow from
-    the face it is measured from; its value on the line ("500mm"). That
-    it is solved is said in its tooltip and in the Edit panel ("solved").
-  - A size that follows params: the same round handle and arrow, a
-    dashed line, its value; what it follows is said in words, in the
-    label's tooltip and as the Edit panel's "Follows" row ("overall_width,
-    case.overhang"), each param that stops the chain named with its kind
-    ("oak_19.thickness (a size of the stock)"). There are no square
-    handles.
-  - A size nothing can move (it follows only locked params, stock or
-    hardware sizes, or its stops are both at its value): a padlock in
-    place of the handle, a dotted line, and its value; why is its tooltip
-    ("locked: follows oak_45_sq.width (a size of the stock)").
-
-  Where the dimension sits comes from the scene's `grip_place`: a
-  component's length between the two faces it is measured between (or,
-  when another length of the assembly has the same value, the faces its
-  placement term names); a part's length or width and the envelope's
-  sizes along the box's edge nearest the eye whose end no other handle
-  already holds (so the envelope's width, height and depth end on three
-  different corners and each handle can be grabbed); a split's boundary
-  at the boundary. A grip with no direction in space (a count, an angle,
-  a length that is no gap) has no place on the model. Labels are moved
-  along their line, to either side of it or on past the handle, so they
-  cover no handle, no other label and not the space's menu, and are kept
-  inside the view.
-- **Stops.** Once listed, every movable grip's stops are searched on a
-  worker thread (`Session::grip_stops_job`, cancelled when the grips
+  letting the space's menu go, takes them away. When the card appears
+  the Edit panel comes forward (opening where it last was), as for any
+  card, unless it shares a frame with the 3D view.
+- **Which rows.** Every size the session lists has a row, numbered by
+  its place in the listing (as `stave edit` and the edit scripts
+  number them): an assembly's params, the envelope's sizes, a split's
+  boundaries, and the selected part's length and width first. The other
+  parts' lengths and widths, which mostly follow those params, stay in
+  the list when there are four or fewer (a one-part assembly's) and are
+  folded under **Part sizes** when there are more (a drawer's sides,
+  front, back and bottom). A name the card's head already says is
+  shortened (`apron_front.setback` under `apron_front` reads `setback`);
+  the full name and its value are the name's tooltip. Sizes with no
+  direction in space (a count, an angle) have rows like any other.
+- **How a row says what it is** (`grip_text::grip_look`, never by
+  colour alone). A plain number: its field. A size that follows
+  params: its field, and "follows overall_width, legs.inset" under its
+  name, each param that stops the chain named with its kind
+  ("oak_19.thickness (a size of the stock)"); "solved" for a solved
+  param. A size nothing can move (it follows only locked params, stock
+  or hardware sizes, or its stops are both at its value): a padlock in
+  its field, which takes no pointer, and why under its name ("locked:
+  follows oak_45_sq.width (a size of the stock)").
+- **Stops.** Once listed, every movable size's stops are searched on a
+  worker thread (`Session::grip_stops_job`, cancelled when the sizes
   change), each answer handed to `Session::grip_stops_found` as it
-  comes; a grip's range narrows to its two last good values.
-- **A drag.** Pressing a handle starts a drag (`BeginDrag`); a drag
-  already open on that grip goes on from where it is. Moving it sends
-  `DragTo` with the value under the pointer: snapped to the grip's steps
-  (the project's `resolution:`, or a `within` list's values), or to
-  round numbers (10mm, 5°) while **Ctrl** is held, and held inside its
-  range. Only the latest value waits to be sent while one is tried. The
-  handle follows the value, the other grips step aside (their labels
-  stay; the moved grip's own label gives way to the readout), the ghost
-  shows the design as it would be, tinted by the verdict (green fits, red
-  doesn't; no pill on the model says it), and beside the dimension its
-  range is drawn: a pale track between the two last good values, a
-  rule's stop as a hard red end hatched beyond it (as the door's swing
-  slider draws where the door first hits), the end of a `within` as a
-  hard grey end. A **readout** at the top of the view says the size that
-  changes in one line (`overall_width 940 → 1040 mm`, the name in light
-  blue; `grip_panel::Readout`). Nothing floats beside the handle: the
-  Edit panel's change card holds a **Size** section (`GripPanel`): the
-  grip, the value it is moved to in a field (typed over and Enter, it
-  sends `TypeGripValue` as the label's entry does) with what it was
-  ("was 500mm"), what it follows, what else changes, and, held at a
-  stop, the rule that stops it ("stops at 180mm, because at 179.5mm
-  'drawer[bottom].box_is_useful' fails: the drawer box is too shallow;
-  make the opening taller"). The card's Verdict section says the verdict
-  in words; its footer's Apply (Enter, enabled only on a fit) writes it
-  and Cancel (Esc) drops it. Letting go writes it (`Add`) when it fits.
-  **Escape** cancels. With the keyboard, a focused handle moves a step
-  with the arrow keys (Ctrl: round numbers) and Enter writes it.
-- **A typed value.** Clicking the number turns it into an entry. Enter
-  tries the value through the same check (`TypeGripValue`) and writes it
-  when it fits. What is written is always the number typed, never
-  another: a value outside the grip's range (its stops once found;
-  before, its `within`, or how far a grip reaches, 1000mm either way),
-  or off the project's resolution, is refused before it is tried ("Can't
-  be 2900mm: this grip moves it between 780mm and 2780mm", "Can't be
-  912.3mm: it goes in steps of 0.5mm; the nearest is 912.5mm"), and a
-  try the session would write as another number is refused and dropped.
-  A value the check refuses is not written either. Each time the entry
-  stays open, marked, holding what was typed, with why under it ("Can't
-  be 120mm: it stops at 180mm, because …"). Escape puts the number back
-  and drops what was tried.
-- **A size that follows params.** Dragging its handle changes what it
+  comes; a size's range narrows to its two last good values.
+- **A drag.** Pressing a field and moving the pointer more than three
+  pixels starts a drag (`BeginDrag`); a drag already open on that size
+  goes on from where it is. The field doesn't move, so the pointer's
+  travel from where it was pressed is the whole drag: a millimetre a
+  pixel for a length, half a degree for an angle, a piece every eight
+  pixels for a count, a fifth as fast with **Shift**; then snapped to the
+  size's steps (the project's `resolution:`, or a `within` list's
+  values), or to round numbers (10mm, 5°) with **Ctrl**, and held
+  inside its range. Each move sends `DragTo`; only the latest value
+  waits while one is tried. The field shows the value as it goes,
+  tinted while it is held; the ghost shows the design as it would be,
+  tinted by the verdict (green fits, red doesn't). The change card
+  appears below the Sizes card with a **Size** section (`GripPanel`):
+  the size, the value in a field (typed over and Enter, it sends
+  `TypeGripValue`) with what it was ("was 500mm"), what it follows, what
+  else changes, and, held at a stop, the rule that stops it ("stops at
+  180mm, because at 179.5mm 'drawer[bottom].box_is_useful' fails: the
+  drawer box is too shallow; make the opening taller"). Its Verdict
+  section says the verdict in words; its footer's Apply (Enter, enabled
+  only on a fit) writes it and Cancel (Esc) drops it. Letting go writes
+  it (`Add`) when it fits. **Escape** cancels. With the keyboard, a
+  focused field moves a step with the arrow keys (Ctrl: round numbers)
+  and Enter writes it.
+- **A typed value.** Clicking a field without moving turns it into an
+  entry. Enter tries the value through the same check (`TypeGripValue`)
+  and writes it when it fits. What is written is always the number
+  typed, never another: a value outside the size's range (its stops once
+  found; before, its `within`, or how far a size reaches, 1000mm either
+  way), or off the project's resolution, is refused before it is tried
+  ("Can't be 2900mm: this grip moves it between 780mm and 2780mm",
+  "Can't be 912.3mm: it goes in steps of 0.5mm; the nearest is
+  912.5mm"), and a try the session would write as another number is
+  refused and dropped. A value the check refuses is not written either.
+  Each time the entry stays open, marked, holding what was typed, with
+  why under it ("Can't be 120mm: it stops at 180mm, because …"). Escape
+  puts the number back and drops what was tried.
+- **A size that follows params.** Dragging its field changes what it
   follows. With one plain param the Size section says which and to what
   before the drag ends ("Changes overall_width 500mm to 560mm") and the
-  ghost moves everything that follows it. With several, pressing the
-  handle lists them at once as a radio list, "Which size changes?", one
-  row each: the radio, the name in light blue, and on the right the
-  value it would take as the drag goes ("overall_width … 500 → 520 mm",
-  "legs.inset … 25 → 15 mm"); nothing is tried until one is picked
-  (`PickParam`), then the drag goes on with that one. When solved params are involved
-  the solver chooses ("The solver changes overall_height 600mm to
-  579mm"), and a value it can't reach is refused naming the rule that
-  blocks it.
-- **Letting the solver move it.** The ⋮ button beside a number (at
+  ghost moves everything that follows it. With several, the drag lists
+  them at once as a radio list, "Which size changes?", one row each:
+  the radio, the name in light blue, and on the right the value it would
+  take ("overall_width … 500 → 520 mm", "legs.inset … 25 → 15 mm");
+  nothing is tried until one is picked (`PickParam`), then the drag goes
+  on with that one. When solved params are involved the solver chooses
+  ("The solver changes overall_height 600mm to 579mm"), and a value it
+  can't reach is refused naming the rule that blocks it.
+- **Letting the solver move it.** The ⋮ button beside a row's field (at
   rest) or beside the Size section's value field (while a drag is open)
-  opens "Let the solver move this", for a param of the project (the grip's
-  own, or each one a size follows; a component's param can't change
-  kind). Turning it on asks for the range the solver keeps it within
-  (a fifth either side of the value, to retype) and **Make it solved**
-  sends `MakeSolved`; turning it off on a solved param sends
+  opens "Let the solver move this", for a param of the project (the
+  size's own, or each one a size follows; a component's param can't
+  change kind). Turning it on asks for the range the solver keeps it
+  within (a fifth either side of the value, to retype) and **Make it
+  solved** sends `MakeSolved`; turning it off on a solved param sends
   `MakePlain`. The change card shows the change's verdict, and Apply
-  writes it. After any commit the grips are listed again from the new
-  design.
+  writes it. After any commit the sizes are listed again from the new
+  design; the rows stay until the new listing replaces them.
 
-The edit script steps for grips (`ui/edit_view/grip_script.rs`) do the
-same things without a pointer, grips numbered from 1 as `stave edit`
+The edit script steps for sizes (`ui/edit_view/grip_script.rs`) do the
+same things without a pointer, sizes numbered from 1 as `stave edit`
 numbers them:
 
 | Step | What it stands for |
 |---|---|
-| `grips assembly <name>` | the assembly selected: its grips on the model |
-| `grips envelope`, `grips split <piece>` | the envelope's grips, or a split's boundaries (as a click in the space shows them) |
-| `stops` | every grip's stops found now |
-| `drag <grip> <value>` | the handle dragged to a value, still held |
-| `release` | the handle let go: written when it fits |
-| `type <grip> <value>` | the number clicked, the value typed, Enter pressed |
+| `grips assembly <name>` | the assembly selected: its sizes in the Sizes card |
+| `grips envelope`, `grips split <piece>` | the envelope's sizes, or a split's boundaries (as a click in the space lists them) |
+| `stops` | every size's stops found now |
+| `drag <grip> <value>` | the size's field dragged to a value, still held |
+| `release` | the field let go: written when it fits |
+| `type <grip> <value>` | the field clicked, the value typed, Enter pressed |
 | `pick <param>` | a size from the radio list a follows grip offers in the Edit panel |
-| `menu <grip>` | the grip's ⋮ menu opened (a popover: not in a screenshot) |
+| `menu <grip>` | the row's ⋮ menu opened (a popover: not in a screenshot) |
 | `solver <grip> <low> <high>`, `plain <grip>` | the solver's switch turned on with that range, or off |
 
 Two words are shared with the changes' steps (`edit_view/change_steps.rs`):
-`pick` is a grip's while a follows grip's list waits for a pick, and
+`pick` is a size's while a follows grip's list waits for a pick, and
 otherwise selects an item by name; `drag count …` and `drag boundary …`
-are the repeat handles', any other `drag` a grip's.
+are the repeat handles', any other `drag` a size's.
 
 Pictures (`docs/screenshots/window/`), each from an edit script in
 `tools/window-edits/` on a copy of `examples/clothing_cabinet_from_box`
@@ -1111,13 +1101,13 @@ or `examples/side_table_from_box`, recorded by `tools/gui-screenshots`:
 
 | Picture | Script | Shows |
 |---|---|---|
-| `grip_divider.png` | `grip_divider.edit` (`--select divider`) | the divider's grips: its height and its panel's length and width, round handles with their arrows, the values on the lines |
-| `grip_drag.png` | `grip_drag.edit` (`--select divider`) | the height dragged to 700mm and held: the green ghost, the readout, the range with its red stop at 180mm, the Size section in the Edit panel |
+| `grip_divider.png` | `grip_divider.edit` (`--select divider`) | the divider's Sizes card: its height, its depth locked, its panel's sizes |
+| `grip_drag.png` | `grip_drag.edit` (`--select divider`) | the height dragged to 700mm and held: its field, the green ghost, the Size section and verdict below |
 | `grip_stop.png` | `grip_stop.edit` (`--select divider`) | dragged down past its stop: held at 180mm, the Size section naming the rule |
-| `grip_typed_refused.png` | `grip_typed_refused.edit` (`--select divider`) | 120mm typed: the entry stays open with why |
+| `grip_typed_refused.png` | `grip_typed_refused.edit` (`--select divider`) | 120mm typed: the entry stays open with why under it |
 | `grip_follows.png` | `grip_follows.edit` (`--select top`) | the table top's length dragged: "Changes overall_width 500mm to 560mm", everything that follows it in the ghost |
 | `grip_follows_pick.png` | `grip_follows_pick.edit` (`--select apron_front`) | the apron's length, which follows two plain params: the radio list to pick from in the Edit panel |
-| `grip_envelope.png` | `grip_envelope.edit` | a click in the envelope: the menu and the three sizes along the box's edges, each handle on its own corner, each label clear of the menu |
+| `grip_envelope.png` | `grip_envelope.edit` | a click in the envelope: the menu, and the three sizes in the Sizes card |
 | `grip_solver.png` | `grip_solver.edit` | the height made solved within 1500mm..2000mm, waiting for Apply |
 
 ```
@@ -1127,15 +1117,11 @@ tools/window-shot grip_drag.png <copy of examples/clothing_cabinet_from_box> --s
 
 `release` and `type` write when the value fits: point them at a copy.
 
-**Not in the window yet.** A grip with no direction in space (a count,
-an angle, a length that is no gap, `divider.depth`) is listed by the
-session but not drawn, so it can't be dragged or typed in the window;
-the command line can (`grip <n> = <value>`). Grips of a nested assembly
-on their own (only the top-level assembly's are listed), and of a whole
-group of parts, are not offered. While pulled apart, in focus mode, on
-another view, or while a menu entry's card is open, grips are hidden. The
-⋮ menu is a popover, which the screenshot tool can't draw. The solver's
-switch is offered for the project's own params only.
+**Not in the window yet.** Sizes of a nested assembly on their own
+(only the top-level assembly's are listed), and of a whole group of
+parts, are not offered. The ⋮ menu is a popover, which the screenshot
+tool can't draw. The solver's switch is offered for the project's own
+params only.
 
 ### Changing what is there
 
@@ -1151,7 +1137,7 @@ in a monospace field, the kind of change on the right), then sections —
 **Change** (what it does, "Remove back", and what it found: the mirror's
 names, the rule a hold writes and its reason, what a removal takes, the
 files a rename rewrites), the grip's **Size** for a drag (see
-[Grips](#grips)), **Verdict** (an icon and words, "It fits" or "It
+[Sizes](#sizes)), **Verdict** (an icon and words, "It fits" or "It
 doesn't fit: 1 problem" with the checker's problems and a button per
 fix — never colour alone) and **Pending** (the lines Apply would write,
 see [The text while editing in 3D](#the-text-while-editing-in-3d)) —
@@ -1539,7 +1525,8 @@ colours) are a stylesheet in `edit_card.rs`, installed once per display.
 
 ## Slots for the next lanes
 
-- **Grips**: built; see "Grips" under "Editing in the 3D view".
+- **Grips**: built, as the Edit panel's Sizes card; see "Sizes" under
+  "Editing in the 3D view".
 
 - **The editor**: built; see "The editor" below. "Show in text" in a
   problem's details and the joint kind's link in focus mode send

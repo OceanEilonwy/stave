@@ -98,7 +98,7 @@ pub(super) struct EditView {
     search_open: Option<String>,
     /// On the part's card: add onto the face that was clicked.
     face_button: gtk::Button,
-    /// The grips of the selection, on the model.
+    /// The sizes of the selection, in the Edit panel.
     grips: grips::GripView,
     state: EditState,
     // The changes of the design (lane W2b): their card, the item's tools,
@@ -181,6 +181,8 @@ impl EditView {
             changes.card.root.upcast_ref(),
             hold.card.widget().upcast_ref(),
         ]);
+        let grips = grips::GripView::new(input);
+        panel.set_sizes(grips.sizes.root.upcast_ref());
         let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
@@ -195,7 +197,7 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            grips: grips::GripView::new(input),
+            grips,
             state: EditState::default(),
             changes,
             tools: item_tools::ItemTools::new(input),
@@ -543,7 +545,6 @@ impl Window {
         let input = self.input();
         motion.connect_leave(move |_| input.emit(EditingInput::PointerAt(None).into()));
         self.widgets.viewport.add_controller(motion);
-        self.connect_grips();
     }
 
     /// Add writes through the editor's buffers as they are now, opening a
@@ -1561,7 +1562,6 @@ pub(in crate::ui) mod changes;
 mod changes_tests;
 mod editor_link;
 pub(in crate::ui) use editor_link::block_line;
-mod grip_layer;
 pub(in crate::ui) mod grip_panel;
 mod grip_script;
 mod grip_text;
@@ -1573,6 +1573,8 @@ pub(super) use links::Hovered;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;
+mod scrub_field;
+mod sizes;
 #[cfg(test)]
 mod tests;
 mod verbs;

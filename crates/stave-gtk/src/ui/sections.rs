@@ -161,9 +161,12 @@ pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk
         .build();
     button.update_property(&[gtk::accessible::Property::Label(title)]);
     button.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+    // Hidden while folded as well: a revealer with no transition keeps
+    // its child's height.
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["stave-section-body"])
+        .visible(open)
         .build();
     let revealer = gtk::Revealer::builder()
         .child(&body)
@@ -172,8 +175,10 @@ pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk
         .build();
     {
         let revealer = revealer.clone();
+        let body = body.clone();
         button.connect_clicked(move |button| {
             let open = !revealer.reveals_child();
+            body.set_visible(open);
             revealer.set_reveal_child(open);
             arrow.set_icon_name(Some(if open {
                 "pan-down-symbolic"

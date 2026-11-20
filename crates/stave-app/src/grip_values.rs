@@ -5,7 +5,7 @@
 //! arithmetic, exact, is here.
 //!
 //! ```text
-//! pointer ──window──▶ wanted ──drag_target──▶ (target, held)   ──DragTo(target)──▶ session
+//! pointer ──scrubbed──▶ wanted ──drag_target──▶ (target, held)   ──DragTo(target)──▶ session
 //! arrow key ──stepped──▶ wanted ──drag_target──▶ ...
 //! typed ──typed_check──▶ Ok, or why the session would write something else
 //! ```
@@ -141,6 +141,33 @@ pub fn stepped(listed: &ListedGrip, now: Amount, steps: i32, round: bool) -> Opt
         .checked_mul(Rational::from_int(i128::from(steps)))
         .and_then(|by| now.raw().checked_add(by))?;
     Some(now.with_raw(raw))
+}
+
+/// How far one pixel of a scrub moves a value of `like`'s kind: a
+/// millimetre, half a degree, an eighth of a count (eight pixels a
+/// piece) or a two-hundredth; a fifth of that when `fine`.
+fn scrub_rate(like: Amount, fine: bool) -> Option<Rational> {
+    let rate = match like {
+        Amount::Length(_) => Rational::from_int(1_000_000),
+        Amount::Angle(_) => Rational::from_int(500_000),
+        Amount::Count(_) => Rational::new(1, 8)?,
+        Amount::Ratio(_) => Rational::new(1, 200)?,
+    };
+    if fine {
+        rate.checked_div(Rational::from_int(5))
+    } else {
+        Some(rate)
+    }
+}
+
+/// The value a number field dragged sideways by `pixels` (right is
+/// larger) from `from` asks for, before [`drag_target`] snaps it and
+/// holds it in range: a millimetre a pixel for a length, half a degree
+/// for an angle, a piece every eight pixels for a count, a fifth as fast
+/// when `fine`. `None` when it can't be worked out.
+pub fn scrubbed(from: Amount, pixels: i32, fine: bool) -> Option<Amount> {
+    let by = scrub_rate(from, fine)?.checked_mul(Rational::from_int(i128::from(pixels)))?;
+    Some(from.with_raw(from.raw().checked_add(by)?))
 }
 
 /// Why a value typed for a movable grip would not be written as typed.
@@ -298,6 +325,19 @@ mod tests {
         let grip = movable(900, GripStops::NotSearched);
         assert_eq!(stepped(&grip, mm(900), 2, false), Some(mm(901)));
         assert_eq!(stepped(&grip, mm(900), -1, true), Some(mm(890)));
+    }
+
+    #[test]
+    fn a_scrub_moves_a_millimetre_a_pixel_then_snaps() {
+        let grip = movable(900, GripStops::NotSearched);
+        assert_eq!(scrubbed(mm(900), 37, false), Some(mm(937)));
+        assert_eq!(scrubbed(mm(900), -3, true), Some(tenths(8994)));
+        let wanted = scrubbed(mm(900), 3, true).unwrap();
+        assert_eq!(drag_target(&grip, wanted, false), (tenths(9005), None));
+        assert_eq!(
+            scrubbed(Amount::Count(Rational::from_int(3)), 16, false),
+            Some(Amount::Count(Rational::from_int(5)))
+        );
     }
 
     #[test]

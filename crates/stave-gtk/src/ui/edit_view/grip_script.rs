@@ -1,15 +1,15 @@
 //! The grip steps of an edit script (`--edit-script FILE`, for
 //! `tools/window-shot`), each doing what the pointer or the keyboard
-//! would on the grips, through the same functions:
+//! would on the Edit panel's Sizes card, through the same functions:
 //!
 //! ```text
-//! grips assembly <name>          the assembly selected: its grips on the model
-//! grips envelope                 the envelope's grips (as a click in the envelope shows them)
+//! grips assembly <name>          the assembly selected: its sizes in the Sizes card
+//! grips envelope                 the envelope's sizes (as a click in the envelope lists them)
 //! grips split <piece>            the boundaries of a split (as a click in a piece shows them)
 //! stops                          every grip's stops found now (the window finds them on a worker)
-//! drag <grip> <value>            the handle dragged to a value and still held
-//! release                        the handle let go: written when it fits
-//! type <grip> <value>            the number clicked, the value typed and Enter pressed
+//! drag <grip> <value>            the size's field dragged to a value and still held
+//! release                        the field let go: written when it fits
+//! type <grip> <value>            the field clicked, the value typed and Enter pressed
 //! pick <param>                   a size from the list a follows grip offers
 //! menu <grip>                    the grip's menu with "Let the solver move this" opened
 //! solver <grip> <low> <high>     the switch turned on with that range: the param made solved
