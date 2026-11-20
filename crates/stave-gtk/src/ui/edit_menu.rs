@@ -490,6 +490,17 @@ pub enum EditMenuInput {
         /// The view's width and height.
         view: (f64, f64),
     },
+    /// Stand at these fixed margins from the view's top left, keeping
+    /// `bottom` clear below it (the `--edit-fixture` showcase, which has
+    /// no point and no view size to place it by).
+    PlaceAt {
+        /// From the view's left edge.
+        start: i32,
+        /// From the view's top edge.
+        top: i32,
+        /// Kept clear below it.
+        bottom: i32,
+    },
     /// People pressed an entry that can be chosen.
     Chose(Declaration),
     /// People pressed "Hold a distance from this space…".
@@ -577,6 +588,11 @@ impl Component for EditMenuComponent {
                 let _ = sender.output(EditMenuOutput::Chosen(declaration));
             }
             EditMenuInput::Place { point, view } => place(root, point, view),
+            EditMenuInput::PlaceAt { start, top, bottom } => {
+                root.set_margin_start(start);
+                root.set_margin_top(top);
+                root.set_margin_bottom(bottom);
+            }
             EditMenuInput::FromSpacePressed => {
                 let _ = sender.output(EditMenuOutput::HoldFromSpace);
             }
@@ -885,6 +901,19 @@ pub(super) mod tests {
         });
         settle();
         assert_eq!(menu.widget().margin_start(), 1000 - MENU_WIDTH - EDGE);
+        // The showcase's fixed place, by message too.
+        menu.send(EditMenuInput::PlaceAt {
+            start: 470,
+            top: 16,
+            bottom: 90,
+        });
+        assert_eq!(menu.widget().margin_top(), 140, "only queued");
+        settle();
+        let root = menu.widget();
+        assert_eq!(
+            (root.margin_start(), root.margin_top(), root.margin_bottom()),
+            (470, 16, 90)
+        );
     }
 
     #[test]
