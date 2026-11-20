@@ -75,7 +75,9 @@ impl Launched {
             EditMenuComponent::builder().launch(()).connect_receiver(
                 move |_, output| match output {
                     EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
-                    EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace => {}
+                    EditMenuOutput::Drawn
+                    | EditMenuOutput::Placed(_)
+                    | EditMenuOutput::HoldFromSpace => {}
                 },
             )
         };

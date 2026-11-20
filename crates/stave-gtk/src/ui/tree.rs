@@ -49,8 +49,9 @@
 //! [`TreeInput`] messages. The rows themselves are plain widgets the update
 //! builds, not components of their own. Selecting a row is no choice
 //! (only activating one is), so the update selects rows itself with
-//! nothing to block. [`TreeSidebar`] keeps the older callback API in front
-//! of it until the window moves to relm4 too.
+//! nothing to block. [`TreeSidebar`] is the window's handle: the one
+//! owner of the component's `Controller`, launched with its outputs
+//! forwarded to the window, its setters sending [`TreeInput`]s.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;

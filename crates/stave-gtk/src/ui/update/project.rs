@@ -436,6 +436,9 @@ impl Window {
             ProjectInput::Analysed(analysis) => {
                 self.state.text_blocked = edit_view::block_line(&analysis).is_some();
                 self.widgets.files.set_analysis(analysis);
+                // The line saying why editing in 3D is off comes and goes
+                // with the text reading.
+                self.show_parse_block_line();
             }
             ProjectInput::FilesSaved { ok, then } => {
                 if ok {
