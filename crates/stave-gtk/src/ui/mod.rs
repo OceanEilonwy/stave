@@ -843,6 +843,8 @@ impl Component for Window {
                 &window.widgets.design,
                 &window.widgets.edit_holder,
                 showcase,
+                &window.input(),
+                |output| update::editing::EditingInput::Showcase(output).into(),
             );
             if shown.as_ref().is_some_and(edit_demo::Shown::in_panel) {
                 window.widgets.workbench.present(workbench::PanelId::Edit);

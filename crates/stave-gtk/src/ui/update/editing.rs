@@ -35,6 +35,9 @@ pub(in crate::ui) enum EditingInput {
     CardAction(CardAction),
     /// The setting whose short list is open on the card changed.
     CardOptionsOpen(Option<String>),
+    /// The `--edit-fixture` showcase's menu or card said something: it is
+    /// only printed.
+    Showcase(crate::ui::edit_demo::ShowcaseOutput),
     /// "Add onto" the face last clicked.
     EditFace,
     /// The pointer is over the 3D view at this point (none: it left).
@@ -221,6 +224,7 @@ impl Window {
             EditingInput::MenuDrawn => self.menu_drawn(),
             EditingInput::CardAction(action) => self.card_action(action),
             EditingInput::CardOptionsOpen(setting) => self.card_options_open(setting),
+            EditingInput::Showcase(output) => crate::ui::edit_demo::heard(&output),
             EditingInput::EditFace => self.edit_face(),
             EditingInput::PointerAt(point) => self.edit_hover(point),
             EditingInput::SendEdit(command) => self.send_edit(command),

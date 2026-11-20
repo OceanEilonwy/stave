@@ -568,6 +568,10 @@ impl Component for HeaderComponent {
         root: &Self::Root,
     ) {
         let refill = matches!(message, HeaderInput::ShowScenes(_));
+        if matches!(message, HeaderInput::SceneChosen(_)) {
+            // The menu closes on a choice, before the owner hears it.
+            widgets.parts.scene.popdown();
+        }
         self.update(message, sender.clone(), root);
         if refill && let Some(scenes) = &self.scenes {
             fill_scenes(&widgets.parts.scenes, scenes);
@@ -872,6 +876,63 @@ mod tests {
             header.switcher.active_name().as_deref(),
             Some(View::CutList.word())
         );
+    }
+
+    #[test]
+    fn choosing_a_scene_closes_the_menu_then_tells_the_owner() {
+        on_gtk_thread(a_scene_chosen_closes_the_menu);
+    }
+
+    /// The header closes its own scene menu when people choose a scene,
+    /// and only then says which: the owner never reaches into it.
+    fn a_scene_chosen_closes_the_menu() {
+        let (owner, outputs) = relm4::channel();
+        let header = Rc::new(header_for(&owner));
+        let window = gtk::Window::new();
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&header.bar);
+        column.append(&header.scene);
+        window.set_child(Some(&column));
+        window.present();
+        header.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 0);
+        settle();
+        header.scene.popup();
+        settle();
+        let shown = header
+            .scene
+            .popover()
+            .is_some_and(|popover| popover.is_visible());
+        let heard: Rc<RefCell<Vec<(HeaderOutput, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&header);
+        handle_each(outputs, move |output| {
+            let Some(header) = weak.upgrade() else {
+                return;
+            };
+            let open = header
+                .scene
+                .popover()
+                .is_some_and(|popover| popover.is_visible());
+            log.borrow_mut().push((output, open));
+        });
+        assert!(shown, "the scene menu is open");
+        let row = header.scenes.row_at_index(1).expect("a second scene");
+        row.emit_activate();
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(HeaderOutput::Scene(1), false)],
+            "the owner hears the choice with the menu already closed"
+        );
+        assert!(
+            !header
+                .scene
+                .popover()
+                .is_some_and(|popover| popover.is_visible()),
+            "and stays closed"
+        );
+        window.destroy();
+        settle();
     }
 
     #[test]

@@ -27,8 +27,6 @@
 //! panel's content is its owner's: the owner shows and hides it at once,
 //! while what it says is drawn when the main loop next runs.
 
-use std::cell::RefCell;
-
 use adw::prelude::*;
 use gtk::gdk;
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
@@ -533,25 +531,17 @@ entry.stave-grip-value { font-family: var(--monospace-font-family, monospace); }
 .stave-grip-switches .stave-grip-note { font-size: 0.818rem; opacity: 0.75; }
 "#;
 
-/// Puts the grips' stylesheet on the display, once.
-pub(super) fn install_style(display: &gdk::Display) {
-    thread_local! {
-        static INSTALLED: RefCell<Vec<gdk::Display>> = const { RefCell::new(Vec::new()) };
-    }
-    INSTALLED.with(|installed| {
-        let mut installed = installed.borrow_mut();
-        if installed.contains(display) {
-            return;
-        }
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(STYLE);
-        gtk::style_context_add_provider_for_display(
-            display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-        installed.push(display.clone());
-    });
+/// Puts the grips' stylesheet on the display. The application calls it
+/// once, at startup, beside the window's own style (`style::install`);
+/// tests do it once for the GTK test thread (`gtk_test::on_gtk_thread`).
+pub(in crate::ui) fn install_style(display: &gdk::Display) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(STYLE);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+    );
 }
 
 #[cfg(test)]

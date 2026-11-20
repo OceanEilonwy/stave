@@ -970,14 +970,13 @@ pub enum WorkbenchInput {
     ShowProblemCount(usize),
     /// Remember the layout for next time (not while taking screenshots).
     Save,
-    /// The layout was just saved, by the shim as the window closes: keep
-    /// it as the last one, and tell of the failure, once.
-    Saved {
-        /// The layout saved.
-        layout: Layout,
-        /// Why it couldn't be written, if it couldn't.
-        failure: Option<String>,
-    },
+    /// The window is closing: remember the layout as [`Save`] does, after
+    /// everything the workbench was told before, then say so
+    /// ([`WorkbenchOutput::SavedForClosing`]) so the window goes on
+    /// closing.
+    ///
+    /// [`Save`]: WorkbenchInput::Save
+    SaveForClosing,
     /// The first launch's panels again, the tool groups back in their
     /// spots.
     Reset,
@@ -1026,6 +1025,9 @@ pub enum WorkbenchOutput {
     ToolsChanged(Spots),
     /// The layout couldn't be saved: a line saying why (told once).
     SaveFailed(String),
+    /// The layout is saved (or its failure told), as
+    /// [`WorkbenchInput::SaveForClosing`] asked: the window may close.
+    SavedForClosing,
     /// People chose one of a panel's own tabs: show the panel on it.
     ShowOwnTab {
         /// The panel.
@@ -1268,7 +1270,11 @@ impl Component for WorkbenchComponent {
                 }
             }
             WorkbenchInput::Save => self.save(yard, &sender),
-            WorkbenchInput::Saved { layout, failure } => self.saved(layout, failure, &sender),
+            WorkbenchInput::SaveForClosing => {
+                self.save(yard, &sender);
+                // Nobody listening is not a mistake.
+                let _ = sender.output(WorkbenchOutput::SavedForClosing);
+            }
             WorkbenchInput::Reset => {
                 self.apply(yard, Layout::default(), &sender);
                 self.save(yard, &sender);
@@ -1328,9 +1334,9 @@ fn folds_at(width: f64) -> Vec<Side> {
 /// owner's input.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
-/// after whatever called them has returned. The queries (`layout`,
-/// `is_open`, `is_shown`, `share_a_frame`, `panel`) read the dock's
-/// widgets as they are now.
+/// after whatever called them has returned. The queries (`is_open`,
+/// `is_shown`, `share_a_frame`; `layout` and `panel` for tests) read the
+/// dock's widgets as they are now.
 pub struct Workbench {
     /// The dock above the status bar, for the window's content.
     pub root: gtk::Box,
@@ -1338,8 +1344,6 @@ pub struct Workbench {
     pub status: gtk::Label,
     /// The dock's widgets, for the queries.
     yard: Dockyard,
-    /// Whether the layout is written to the user's file.
-    remembers: bool,
     controller: Controller<WorkbenchComponent>,
 }
 
@@ -1381,7 +1385,6 @@ impl Workbench {
             root: controller.widget().clone(),
             status,
             yard,
-            remembers,
             controller,
         })
     }
@@ -1466,7 +1469,9 @@ impl Workbench {
     }
 
     /// Where the panels are now (an edge a narrow window folded away as
-    /// it was before folding).
+    /// it was before folding), for tests; the window never asks: the
+    /// workbench saves the layout itself, by message.
+    #[cfg(test)]
     pub fn layout(&self) -> Layout {
         // Copied out: no borrow is held across the dock's widget calls.
         let (tools, folded) = {
@@ -1476,19 +1481,12 @@ impl Workbench {
         self.yard.layout(&tools, &folded)
     }
 
-    /// Remembers the layout for next time (not while taking screenshots).
-    ///
-    /// Written at once, not queued: the window saves as it closes, and
-    /// the main loop may not run again after that. The component hears
-    /// what was saved by message.
-    pub fn save(&self) {
-        let layout = self.layout();
-        let failure = if self.remembers {
-            write_layout(&layout).err()
-        } else {
-            None
-        };
-        self.send(WorkbenchInput::Saved { layout, failure });
+    /// Remembers the layout for next time (not while taking screenshots),
+    /// after everything the workbench was told before, then answers
+    /// [`WorkbenchOutput::SavedForClosing`]: the window closes on that
+    /// answer.
+    pub fn save_for_closing(&self) {
+        self.send(WorkbenchInput::SaveForClosing);
     }
 
     /// The first launch's panels again, the tool groups back in their
@@ -1902,6 +1900,39 @@ show bottom true
             "the component's runtime, and with it the model, is gone"
         );
         assert!(callback.upgrade().is_none(), "the message maker is freed");
+    }
+
+    #[test]
+    fn saving_for_closing_answers_after_what_was_told_before() {
+        on_gtk_thread(saved_for_closing_comes_last);
+    }
+
+    /// Closing asks the workbench to save by message: it saves the layout
+    /// as it is after everything queued before (a tool group docked just
+    /// before closing is in it) and only then answers, so the window
+    /// closes on the answer.
+    fn saved_for_closing_comes_last() {
+        let (owner, heard) = recorder();
+        let Ok(workbench) = workbench_for(labels(), &owner) else {
+            panic!("the dock is built");
+        };
+        settle();
+        heard.borrow_mut().clear();
+        let mut docked = Spots::default();
+        docked.dock(Group::Motion, Spot::TopLeft);
+        workbench.dock_tool(Group::Motion, Spot::TopLeft);
+        workbench.save_for_closing();
+        assert!(heard.borrow().is_empty(), "only queued so far");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                WorkbenchOutput::ToolsChanged(docked.clone()),
+                WorkbenchOutput::SavedForClosing,
+            ],
+            "the answer comes after the docking it saved"
+        );
+        assert_eq!(workbench.controller.model().last.tools, docked);
     }
 
     #[test]
