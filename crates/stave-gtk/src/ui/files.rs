@@ -30,12 +30,18 @@
 //!   [`FilesOutput::UnsavedCounted`], [`FilesInput::SaveAll`] /
 //!   [`FilesOutput::Saved`]);
 //! - what the window reads synchronously (the unsaved text for a check or
-//!   an edit, a file's buffer, the latest analysis) comes from immutable,
-//!   reference-counted GObjects and values the component publishes
-//!   ([`FilesOutput::Documents`], [`FilesOutput::Analysed`]), which the
-//!   window keeps in [`FilesPage`]. A buffer's own `modified` flag, kept
-//!   equal to "has unsaved changes" by the component, lets the window
-//!   build the overlay from the live text without asking.
+//!   an edit, a file's buffer, the latest analysis) comes from its own
+//!   copies in [`FilesPage`]: the latest analysis the component published
+//!   ([`FilesOutput::Analysed`]) and the open documents' live buffers.
+//!   The window makes every buffer and hands it over
+//!   ([`FilesInput::Adopt`]), so its copies never miss a tab; the
+//!   component's publications ([`FilesOutput::Documents`]) say how many of
+//!   the window's requests they include ([`Asked`]), so a late one never
+//!   undoes a newer change. A buffer's own `modified` flag, kept equal to
+//!   "has unsaved changes" by the component, lets the window build the
+//!   overlay from the live text without asking. The buffers are shared
+//!   with the window on purpose: an accepted exception in the migration
+//!   document.
 
 use stave_app::i18n::{fill_in, ntr, tr, trc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -118,9 +124,45 @@ pub(super) struct Written {
     pub(super) document: Document,
     /// The buffer the writer made for it, when it had no tab: the
     /// component adopts it as the file's tab.
-    pub(super) created: Option<gtk::TextBuffer>,
+    pub(super) created: Option<Made>,
     /// The editor is open: it shows the file the change went into.
     pub(super) show: bool,
+}
+
+/// A buffer the owner made for a document (it has no tab yet), with the
+/// text it was made from, so the component can tell what was written into
+/// it since.
+#[derive(Debug)]
+pub struct Made {
+    /// The buffer.
+    pub buffer: gtk::TextBuffer,
+    /// The text it held when it was made (the file's text).
+    pub base: String,
+}
+
+/// Counts what the owner has asked the component that changes which
+/// documents are open ([`FilesInput::SetFolder`] and [`FilesInput::Adopt`]),
+/// so a publication of the open documents says how much of it the
+/// component had done ([`Documents::seen`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Asked(u64);
+
+impl Asked {
+    /// The next one.
+    fn next(self) -> Asked {
+        Asked(self.0.saturating_add(1))
+    }
+}
+
+/// The open documents and their buffers, as the component has them.
+#[derive(Debug)]
+pub struct Documents {
+    /// The last of the owner's [`FilesInput::SetFolder`] and
+    /// [`FilesInput::Adopt`] the component had handled when it published
+    /// this: what the owner asked after it isn't in it yet.
+    pub seen: Asked,
+    /// Each open document and its buffer.
+    pub open: Vec<(Document, gtk::TextBuffer)>,
 }
 
 /// What the files component is told.
@@ -131,7 +173,12 @@ pub enum FilesInput<Then> {
     FocusText,
     /// Opens a project folder: closes every tab (the window has asked
     /// about unsaved changes first) and works the new folder's names out.
-    SetFolder(PathBuf),
+    SetFolder {
+        /// The folder.
+        folder: PathBuf,
+        /// Which of the owner's requests this is.
+        asked: Asked,
+    },
     /// Saves the document showing (Ctrl+S).
     Save,
     /// Lays the document showing out with `stave fmt`.
@@ -170,19 +217,27 @@ pub enum FilesInput<Then> {
         /// Dark or light.
         dark: bool,
     },
-    /// Opens a document in a tab (or shows its tab) at its top.
+    /// Shows a document's tab at its top. The owner makes the buffer of a
+    /// document with no tab and hands it over first
+    /// ([`FilesInput::Adopt`]): the component never makes one itself, so
+    /// the owner knows every open buffer before it shows.
     OpenDocument(Document),
     /// The tab strip's tab at this place among the open files was chosen.
     ShowTab(usize),
-    /// The owner made a buffer for a file with no tab (an edit's commit
-    /// wrote through it, or the owner reads or marks it at once): the
-    /// buffer becomes the file's tab.
+    /// The owner made a buffer for a file with no tab (to show it, or an
+    /// edit's commit wrote through it): the buffer becomes the file's tab.
     Adopt {
         /// The file.
         document: Document,
-        /// Its buffer, holding the commit's text.
-        buffer: gtk::TextBuffer,
+        /// Its buffer, holding the file's text and anything the owner has
+        /// written into it since (the text it was made from with it).
+        made: Made,
+        /// Which of the owner's requests this is.
+        asked: Asked,
     },
+    /// The owner couldn't read a file it was asked to show: why, for the
+    /// window to say.
+    Unreadable(String),
     /// Strike these lines of a document's text through while an edit's
     /// change to them is pending: each `(first, end)` from its first line
     /// to the line after its last, counted from 0 (`end` past the text
@@ -321,10 +376,11 @@ pub enum FilesOutput<Then> {
         /// What waited on it.
         then: Then,
     },
-    /// The open documents and their buffers, sent whenever a tab opens or
-    /// they all close. The window keeps its own clones (GObjects are
-    /// reference-counted), to read their text without asking.
-    Documents(Vec<(Document, gtk::TextBuffer)>),
+    /// The open documents and their buffers, sent after each
+    /// [`FilesInput::Adopt`] and [`FilesInput::SetFolder`]. The window
+    /// keeps its own clones (GObjects are reference-counted), to read
+    /// their text without asking.
+    Documents(Documents),
     /// A new analysis of the project arrived.
     Analysed(Rc<Analysis>),
     /// The files with unsaved changes, sent when they change.
@@ -348,6 +404,8 @@ struct Tab {
     /// The buffer's cursor handler, blocked while the page moves the
     /// cursor itself.
     cursor_handler: glib::SignalHandlerId,
+    /// The buffer's change handler.
+    changed_handler: glib::SignalHandlerId,
 }
 
 /// Whether the analysis was built from a document's text, worked out once
@@ -442,6 +500,82 @@ fn buffer_text(buffer: &gtk::TextBuffer) -> glib::GString {
     buffer.text(&buffer.start_iter(), &buffer.end_iter(), true)
 }
 
+/// Text to put in place of some of a buffer's, counted in characters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Splice {
+    /// The first character replaced.
+    start: usize,
+    /// The character after the last one replaced.
+    end: usize,
+    /// What goes there.
+    text: String,
+}
+
+/// How a tab's text and a buffer the owner made for the same file come
+/// together ([`merge`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Merge {
+    /// The owner's buffer already holds everything.
+    Keep,
+    /// This splice puts the tab's changes into the owner's buffer.
+    Splice(Splice),
+    /// Both changed the same stretch of text.
+    Conflict,
+}
+
+/// The stretch of `before` that `after` changed: (first character, the
+/// character after the last one in `before`, what `after` has there),
+/// found from the text both start and end with.
+fn changed_stretch(before: &[char], after: &[char]) -> (usize, usize, String) {
+    let prefix = before.iter().zip(after).take_while(|(a, b)| a == b).count();
+    let room = before.len().min(after.len()).saturating_sub(prefix);
+    let suffix = before
+        .iter()
+        .rev()
+        .zip(after.iter().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let end = before.len().saturating_sub(suffix);
+    let text = after
+        .get(prefix..after.len().saturating_sub(suffix))
+        .unwrap_or_default()
+        .iter()
+        .collect();
+    (prefix, end, text)
+}
+
+/// Merges a tab's text (`live`, people's typing) into the owner's buffer
+/// (`theirs`, what the owner wrote), both started from `base`: the splice
+/// to make in `theirs` so it holds both changes, each exactly once. Two
+/// changes to the same or touching stretches conflict.
+fn merge(base: &str, live: &str, theirs: &str) -> Merge {
+    if live == base || live == theirs {
+        return Merge::Keep;
+    }
+    let base: Vec<char> = base.chars().collect();
+    let live: Vec<char> = live.chars().collect();
+    let theirs: Vec<char> = theirs.chars().collect();
+    let (start, end, text) = changed_stretch(&base, &live);
+    if theirs == base {
+        return Merge::Splice(Splice { start, end, text });
+    }
+    let (their_start, their_end, _) = changed_stretch(&base, &theirs);
+    if end < their_start {
+        // People's change comes first: its place in `theirs` is the same.
+        Merge::Splice(Splice { start, end, text })
+    } else if their_end < start {
+        // It comes after the owner's: moved by what the owner's changed.
+        let shift = |at: usize| at.checked_add(theirs.len())?.checked_sub(base.len());
+        match (shift(start), shift(end)) {
+            (Some(start), Some(end)) => Merge::Splice(Splice { start, end, text }),
+            _ => Merge::Conflict,
+        }
+    } else {
+        Merge::Conflict
+    }
+}
+
 /// A tab's tooltip: where the file is, and whether it is saved.
 fn tab_tooltip(place: String, dirty: bool) -> String {
     if dirty {
@@ -520,6 +654,9 @@ pub struct FilesComponent<Then: fmt::Debug + 'static> {
     relink: bool,
     /// The files with unsaved changes, as last told to the window.
     unsaved: BTreeSet<PathBuf>,
+    /// The last of the owner's [`FilesInput::SetFolder`] and
+    /// [`FilesInput::Adopt`] handled, told with the open documents.
+    seen: Asked,
     _then: std::marker::PhantomData<fn() -> Then>,
 }
 
@@ -693,6 +830,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             listed: None,
             relink: false,
             unsaved: BTreeSet::new(),
+            seen: Asked::default(),
             _then: std::marker::PhantomData,
         };
         ComponentParts { model, widgets: () }
@@ -703,7 +841,10 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             FilesInput::FocusText => {
                 self.editor.view.grab_focus();
             }
-            FilesInput::SetFolder(folder) => self.set_folder(folder),
+            FilesInput::SetFolder { folder, asked } => {
+                self.seen = asked;
+                self.set_folder(folder);
+            }
             FilesInput::Save => self.save(),
             FilesInput::Format => self.format(),
             FilesInput::SaveAll { then } => {
@@ -756,7 +897,15 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                     self.tell(FilesOutput::Open);
                 }
             }
-            FilesInput::Adopt { document, buffer } => self.adopt(document, buffer),
+            FilesInput::Adopt {
+                document,
+                made,
+                asked,
+            } => {
+                self.seen = asked;
+                self.adopt(document, made);
+            }
+            FilesInput::Unreadable(text) => self.notice(text),
             FilesInput::MarkPending { document, lines } => self.mark_pending(&document, &lines),
             FilesInput::ClearPending(document) => self.clear_pending(&document),
             FilesInput::EditorSearch(event) => self.editor.search_event(event),
@@ -1252,39 +1401,38 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         Some((analysis, file))
     }
 
-    /// Opens a document in a tab (or shows its tab) at its top.
+    /// Shows a document's tab at its top. A document with no tab has none
+    /// to show: the owner hands its buffer over first.
     fn open_document(&mut self, document: &Document) {
-        if let Some(index) = self.ensure_tab(document) {
+        if let Some(index) = self.tab_index(document) {
             self.activate(index);
         }
     }
 
-    fn ensure_tab(&mut self, document: &Document) -> Option<usize> {
-        if let Some(index) = self.tabs.iter().position(|tab| tab.document == *document) {
-            return Some(index);
-        }
-        let text = match self.buffers.open(document) {
-            Ok(text) => text.to_owned(),
-            Err(error) => {
-                self.notice(error.to_string());
-                return None;
-            }
-        };
-        let buffer = self.editor.new_buffer(&text);
-        let index = self.add_tab(document, buffer, &text);
-        self.publish_documents();
-        Some(index)
+    /// Where a document's tab is among the open files.
+    fn tab_index(&self, document: &Document) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.document == *document)
     }
 
-    /// Adds a tab for an open document whose buffer holds `text`, with the
-    /// buffer's handlers, which only send messages.
-    fn add_tab(&mut self, document: &Document, buffer: gtk::TextBuffer, text: &str) -> usize {
+    /// Connects a tab's buffer: its handlers only send messages.
+    fn connect_buffer(
+        &self,
+        document: &Document,
+        buffer: &gtk::TextBuffer,
+    ) -> (glib::SignalHandlerId, glib::SignalHandlerId) {
         let input = self.sender.input_sender().clone();
         let key = document.clone();
-        buffer.connect_changed(move |_| input.emit(FilesInput::TextChanged(key.clone())));
+        let changed_handler =
+            buffer.connect_changed(move |_| input.emit(FilesInput::TextChanged(key.clone())));
         let input = self.sender.input_sender().clone();
         let cursor_handler =
             buffer.connect_cursor_position_notify(move |_| input.emit(FilesInput::CursorMoved));
+        (changed_handler, cursor_handler)
+    }
+
+    /// Adds a tab for an open document whose buffer holds `text`.
+    fn add_tab(&mut self, document: &Document, buffer: gtk::TextBuffer, text: &str) -> usize {
+        let (changed_handler, cursor_handler) = self.connect_buffer(document, &buffer);
         buffer.set_modified(self.buffers.is_dirty(document));
         self.edits = self.edits.wrapping_add(1);
         self.tabs.push(Tab {
@@ -1293,41 +1441,106 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
             revision: self.edits,
             buffer,
             cursor_handler,
+            changed_handler,
         });
         self.tabs.len().saturating_sub(1)
     }
 
-    /// The owner made a buffer for a file with no tab (an edit's commit
-    /// wrote through it, or it is read or marked at once): the buffer
-    /// becomes the file's tab, unsaved if its text differs from the file.
-    /// Should the file have gained a tab meanwhile (the owner had not yet
-    /// heard), a different text goes into that tab's buffer as one step
-    /// that Undo takes back, and the owner hears the buffers again.
-    fn adopt(&mut self, document: Document, buffer: gtk::TextBuffer) {
-        let text = buffer_text(&buffer).to_string();
-        if let Some(existing) = self.buffer_of(&document) {
-            if buffer_text(&existing) != text {
-                existing.begin_user_action();
-                let (mut start, mut end) = existing.bounds();
-                existing.delete(&mut start, &mut end);
-                existing.insert(&mut start, &text);
-                existing.end_user_action();
-            }
-            self.publish_documents();
-            return;
-        }
-        if let Err(error) = self.buffers.open(&document) {
+    /// The owner made a buffer for a file with no tab (to show it, or an
+    /// edit's commit wrote through it): the buffer becomes the file's tab,
+    /// unsaved if its text differs from the file. The owner hears the open
+    /// documents again whatever happens, so it lets go of a buffer that
+    /// couldn't be adopted.
+    fn adopt(&mut self, document: Document, made: Made) {
+        if let Some(index) = self.tab_index(&document) {
+            self.take_over(index, made);
+        } else if let Err(error) = self.buffers.open(&document) {
             self.notice(error.to_string());
-            return;
+        } else {
+            let text = buffer_text(&made.buffer).to_string();
+            // Not read-only: the owner writes only the project's own files.
+            let _ = self.buffers.edit(&document, &text);
+            self.add_tab(&document, made.buffer, &text);
+            self.refresh_markers();
+            if self.buffers.is_dirty(&document) {
+                self.schedule_analysis();
+            }
         }
-        // Not read-only: the writer writes only the project's own files.
-        let _ = self.buffers.edit(&document, &text);
-        self.add_tab(&document, buffer, &text);
         self.publish_documents();
-        self.refresh_markers();
-        if self.buffers.is_dirty(&document) {
-            self.schedule_analysis();
+    }
+
+    /// The owner made a buffer for a file that has a tab already. The
+    /// owner only makes a buffer for a document it knows no buffer of,
+    /// and it hears of every tab before it shows, so this happens only
+    /// for a tab of a folder being closed; it is still made safe. The
+    /// owner's buffer becomes the tab's (the owner writes into it until it
+    /// hears the documents again, so those writes land on the live text),
+    /// holding the tab's text with the owner's changes merged in: the
+    /// tab's own unsaved changes are never overwritten. When both changed
+    /// the same lines, the tab's text is kept and the window says so.
+    fn take_over(&mut self, index: usize, made: Made) {
+        let Some(document) = self.tabs.get(index).map(|tab| tab.document.clone()) else {
+            return;
+        };
+        let buffer = made.buffer;
+        let theirs = buffer_text(&buffer).to_string();
+        let (changed_handler, cursor_handler) = self.connect_buffer(&document, &buffer);
+        let _ = self.buffers.edit(&document, &theirs);
+        buffer.set_modified(self.buffers.is_dirty(&document));
+        self.edits = self.edits.wrapping_add(1);
+        let revision = self.edits;
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return;
+        };
+        let old = std::mem::replace(&mut tab.buffer, buffer.clone());
+        let old_changed = std::mem::replace(&mut tab.changed_handler, changed_handler);
+        let old_cursor = std::mem::replace(&mut tab.cursor_handler, cursor_handler);
+        tab.lines = Rc::new(LineStarts::new(&theirs));
+        tab.revision = revision;
+        old.disconnect(old_changed);
+        old.disconnect(old_cursor);
+        let live = buffer_text(&old).to_string();
+        let cursor = old.cursor_position();
+        // The tab's own changes go into the owner's buffer as one step
+        // that Undo takes back; its change handler queues the rest.
+        let splice = match merge(&made.base, &live, &theirs) {
+            Merge::Keep => None,
+            Merge::Splice(splice) => Some(splice),
+            Merge::Conflict => {
+                self.notice(fill_in(
+                    &tr("{file} was being typed in as a change was written to it: your typing is kept and the change isn't, so make it again"),
+                    &[("file", &document.file_name())],
+                ));
+                Some(Splice {
+                    start: 0,
+                    end: theirs.chars().count(),
+                    text: live,
+                })
+            }
+        };
+        let quiet = self.tabs.get(index).map(|tab| &tab.cursor_handler);
+        if let Some(handler) = quiet {
+            buffer.block_signal(handler);
         }
+        if let Some(splice) = splice {
+            let start = i32::try_from(splice.start).unwrap_or(i32::MAX);
+            let end = i32::try_from(splice.end).unwrap_or(i32::MAX);
+            buffer.begin_user_action();
+            let mut from = buffer.iter_at_offset(start);
+            let mut to = buffer.iter_at_offset(end);
+            buffer.delete(&mut from, &mut to);
+            buffer.insert(&mut from, &splice.text);
+            buffer.end_user_action();
+        }
+        buffer.place_cursor(&buffer.iter_at_offset(cursor));
+        if let Some(handler) = quiet {
+            buffer.unblock_signal(handler);
+        }
+        if self.active == Some(index) {
+            self.active = None;
+            self.activate(index);
+        }
+        self.refresh_markers();
     }
 
     /// Strikes the pending old lines of a document's text through
@@ -1371,12 +1584,15 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
 
     /// Tells the window the open documents and their buffers.
     fn publish_documents(&self) {
-        let documents = self
+        let open = self
             .tabs
             .iter()
             .map(|tab| (tab.document.clone(), tab.buffer.clone()))
             .collect();
-        self.tell(FilesOutput::Documents(documents));
+        self.tell(FilesOutput::Documents(Documents {
+            seen: self.seen,
+            open,
+        }));
     }
 
     /// Shows the open file's text, or the placeholder when none is open.
@@ -1406,7 +1622,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
 
     fn show_place(&mut self, location: &SourceLocation, report: bool) {
         let document = Document::from_source_path(&location.path);
-        let Some(index) = self.ensure_tab(&document) else {
+        let Some(index) = self.tab_index(&document) else {
             return;
         };
         self.activate(index);
@@ -2260,9 +2476,20 @@ pub struct FilesPage<Then: fmt::Debug + 'static> {
     /// The panel's content.
     pub root: gtk::Box,
     controller: Controller<FilesComponent<Then>>,
-    /// The open documents' buffers, as last published, plus any an edit's
-    /// commit made since (taken by [`FilesPage::take_written`]).
+    /// The open documents' buffers, as last published, plus the ones made
+    /// here that the component hadn't adopted when it published them.
+    /// Every buffer the component shows is made here and kept here first
+    /// (the component never makes one), so this never misses an open tab.
     buffers: BTreeMap<Document, gtk::TextBuffer>,
+    /// The buffers made here (to show a file, or by an edit's commit) and
+    /// handed over with [`FilesInput::Adopt`], with the request that
+    /// handed each over, until a publication says it was handled.
+    handed: BTreeMap<Document, (Asked, gtk::TextBuffer)>,
+    /// The latest [`FilesInput::SetFolder`] or [`FilesInput::Adopt`] sent.
+    asked: Asked,
+    /// The latest [`FilesInput::SetFolder`] sent: what was published
+    /// before the component handled it is about the folder closed.
+    folder_asked: Asked,
     /// The latest analysis, as last published.
     analysis: Option<Rc<Analysis>>,
     /// The tag table every buffer shares.
@@ -2288,6 +2515,9 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
             root: controller.widget().clone(),
             controller,
             buffers: BTreeMap::new(),
+            handed: BTreeMap::new(),
+            asked: Asked::default(),
+            folder_asked: Asked::default(),
             analysis: None,
             table,
             written: mpsc::channel(),
@@ -2306,8 +2536,19 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     }
 
     /// Takes a [`FilesOutput::Documents`]: the open documents' buffers.
-    pub fn set_documents(&mut self, documents: Vec<(Document, gtk::TextBuffer)>) {
-        self.buffers = documents.into_iter().collect();
+    /// One published before the component opened the current folder is
+    /// ignored; the buffers handed over after the component published it
+    /// are kept, since it hadn't adopted them yet.
+    pub fn set_documents(&mut self, documents: Documents) {
+        if documents.seen < self.folder_asked {
+            return;
+        }
+        self.handed.retain(|_, (asked, _)| *asked > documents.seen);
+        let mut buffers: BTreeMap<Document, gtk::TextBuffer> = documents.open.into_iter().collect();
+        for (document, (_, buffer)) in &self.handed {
+            buffers.insert(document.clone(), buffer.clone());
+        }
+        self.buffers = buffers;
     }
 
     /// The latest analysis of the project.
@@ -2344,26 +2585,40 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
             .cloned()
     }
 
-    /// The buffer of a document, made here (from its text on disk, or
-    /// Stave's for a standard file) and handed to the component as its tab
-    /// when it has none, so it can be read and marked at once, as when the
-    /// page opened tabs synchronously. `None` when it can't be read: the
-    /// component says so when it is shown.
-    fn ensure_buffer(&mut self, document: &Document) -> Option<gtk::TextBuffer> {
-        if let Some(buffer) = self.buffers.get(document) {
-            return Some(buffer.clone());
+    /// Makes sure a document has a buffer: one made here (from its text
+    /// on disk, or Stave's for a standard file) when it has none, kept
+    /// here at once and handed to the component as its tab, so it can be
+    /// read, written and marked at once. One that can't be read is said
+    /// so by the component.
+    fn ensure_buffer(&mut self, document: &Document) {
+        if self.buffers.contains_key(document) {
+            return;
         }
         let mut reader = Buffers::new();
-        let text = reader.open(document).ok()?;
-        let buffer = super::editor::new_buffer(&self.table, text);
-        // The file's own text: nothing unsaved.
-        buffer.set_modified(false);
-        self.buffers.insert(document.clone(), buffer.clone());
+        match reader.open(document) {
+            Ok(text) => {
+                let base = text.to_owned();
+                let buffer = super::editor::new_buffer(&self.table, &base);
+                // The file's own text: nothing unsaved.
+                buffer.set_modified(false);
+                self.hand_over(document, Made { buffer, base });
+            }
+            Err(error) => self.send(FilesInput::Unreadable(error.to_string())),
+        }
+    }
+
+    /// Keeps a buffer made here and hands it to the component as the
+    /// document's tab.
+    fn hand_over(&mut self, document: &Document, made: Made) {
+        self.asked = self.asked.next();
+        self.buffers.insert(document.clone(), made.buffer.clone());
+        self.handed
+            .insert(document.clone(), (self.asked, made.buffer.clone()));
         self.send(FilesInput::Adopt {
             document: document.clone(),
-            buffer: buffer.clone(),
+            made,
+            asked: self.asked,
         });
-        Some(buffer)
     }
 
     /// A writer for an edit's commit: through these buffers (opening a
@@ -2383,18 +2638,19 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     /// written while the editor is open is shown.
     pub fn take_written(&mut self) {
         while let Ok(written) = self.written.1.try_recv() {
-            if let Some(buffer) = written.created {
-                self.buffers
-                    .insert(written.document.clone(), buffer.clone());
-                self.send(FilesInput::Adopt {
-                    document: written.document.clone(),
-                    buffer,
-                });
+            if let Some(made) = written.created {
+                self.hand_over(&written.document, made);
             }
             if written.show {
                 self.send(FilesInput::OpenDocument(written.document));
             }
         }
+    }
+
+    /// Places the lenses and the peek on the text as it is laid out now
+    /// (they follow the text's layout for a while after each change).
+    pub fn place_overlays(&self) {
+        self.send(FilesInput::Settle);
     }
 
     /// Puts the keyboard in the text.
@@ -2406,7 +2662,13 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     /// first).
     pub fn set_folder(&mut self, folder: &Path) {
         self.buffers.clear();
-        self.send(FilesInput::SetFolder(folder.to_path_buf()));
+        self.handed.clear();
+        self.asked = self.asked.next();
+        self.folder_asked = self.asked;
+        self.send(FilesInput::SetFolder {
+            folder: folder.to_path_buf(),
+            asked: self.asked,
+        });
     }
 
     /// Saves the document showing.
@@ -2477,9 +2739,11 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
         self.send(FilesInput::Restyle { dark });
     }
 
-    /// Opens a document in a tab (or shows its tab) at its top.
+    /// Opens a document in a tab (or shows its tab) at its top: its buffer
+    /// is made here first when it has none, as for a place shown.
     #[cfg_attr(not(test), allow(dead_code, reason = "tests open files"))]
-    pub fn open_document(&self, document: &Document) {
+    pub fn open_document(&mut self, document: &Document) {
+        self.ensure_buffer(document);
         self.send(FilesInput::OpenDocument(document.clone()));
     }
 
@@ -2601,7 +2865,9 @@ mod tests {
                 _ => None,
             })
             .next_back();
-        page.set_documents(documents.unwrap_or_default());
+        if let Some(documents) = documents {
+            page.set_documents(documents);
+        }
         let Some(buffer) = page.open_buffer(&path) else {
             panic!("the file's buffer is published");
         };
@@ -2678,7 +2944,9 @@ mod tests {
                 _ => None,
             })
             .next_back();
-        page.set_documents(documents.unwrap_or_default());
+        if let Some(documents) = documents {
+            page.set_documents(documents);
+        }
         let Some(buffer) = page.open_buffer(&path) else {
             panic!("the file's buffer is published");
         };
@@ -2722,7 +2990,10 @@ mod tests {
         buffer.insert(&mut buffer.end_iter(), "\n");
         let _ = page.written.0.send(Written {
             document: Document::File(path.clone()),
-            created: Some(buffer.clone()),
+            created: Some(Made {
+                buffer: buffer.clone(),
+                base: text,
+            }),
             show: true,
         });
         page.take_written();
@@ -2742,6 +3013,309 @@ mod tests {
             "shown as the active tab"
         );
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The latest publication of the open documents heard, taken out of
+    /// what was heard (as the owner would take it, later).
+    fn last_documents(heard: &RefCell<Vec<FilesOutput<&'static str>>>) -> Option<Documents> {
+        let mut heard = heard.borrow_mut();
+        let mut last = None;
+        let mut kept = Vec::new();
+        for output in heard.drain(..) {
+            match output {
+                FilesOutput::Documents(documents) => last = Some(documents),
+                other => kept.push(other),
+            }
+        }
+        *heard = kept;
+        last
+    }
+
+    /// The buffer of a document's tab, as the component has it.
+    fn tab_buffer(page: &Page, path: &Path) -> Option<gtk::TextBuffer> {
+        page.model().buffer_of(&Document::File(path.to_path_buf()))
+    }
+
+    #[test]
+    fn a_file_opened_is_read_at_once() {
+        on_gtk_thread(file_opened_is_read_at_once);
+    }
+
+    /// Opening a file makes its buffer in the owner's copies at once
+    /// (the component shows that very buffer once it runs), so text typed
+    /// into its tab is in the overlay a check or an edit reads before any
+    /// publication arrives. The component never makes a buffer itself: a
+    /// document not handed over has no tab to show.
+    fn file_opened_is_read_at_once() {
+        let folder = scratch_copy("wall_shelf", "opened-at-once");
+        let path = folder.join("shelf.stave");
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        settle();
+        page.open_document(&Document::File(path.clone()));
+        let Some(buffer) = page.open_buffer(&path) else {
+            panic!("the owner has the buffer before the component runs");
+        };
+        settle();
+        assert_eq!(
+            tab_buffer(&page, &path).as_ref(),
+            Some(&buffer),
+            "the tab shows the owner's buffer"
+        );
+        buffer.insert(&mut buffer.end_iter(), "\n// typed\n");
+        use stave_modules::FileSource;
+        assert!(
+            page.edit_files()
+                .read(&path)
+                .is_ok_and(|text| text.ends_with("// typed\n")),
+            "the typing is read with no publication applied"
+        );
+        let other = folder.join("unopened.stave");
+        std::fs::write(&other, "").unwrap();
+        page.send(FilesInput::OpenDocument(Document::File(other.clone())));
+        settle();
+        assert!(
+            tab_buffer(&page, &other).is_none(),
+            "the component makes no buffer of its own"
+        );
+        drop(heard);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_publication_from_before_the_folder_changed_is_ignored() {
+        on_gtk_thread(publication_before_folder_is_ignored);
+    }
+
+    /// A publication of the open documents still on its way when the
+    /// owner opens another folder lists the closed folder's buffers: it
+    /// is ignored, so they don't come back.
+    fn publication_before_folder_is_ignored() {
+        let folder = scratch_copy("wall_shelf", "stale-folder");
+        let path = folder.join("shelf.stave");
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        page.open_document(&Document::File(path.clone()));
+        settle();
+        let Some(late) = last_documents(&heard) else {
+            panic!("opening a file publishes the documents");
+        };
+        assert_eq!(late.open.len(), 1);
+        page.set_folder(&folder);
+        assert!(page.open_buffer(&path).is_none(), "the folder closed");
+        page.set_documents(late);
+        assert!(
+            page.open_buffer(&path).is_none(),
+            "the late publication brings no closed buffer back"
+        );
+        settle();
+        if let Some(documents) = last_documents(&heard) {
+            page.set_documents(documents);
+        }
+        assert!(page.open_buffer(&path).is_none());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_publication_keeps_the_buffers_handed_over_after_it() {
+        on_gtk_thread(publication_keeps_later_buffers);
+    }
+
+    /// A publication made before the component adopted a buffer the owner
+    /// handed over since doesn't list it: the owner keeps it (and reads
+    /// the typing in it), and the component then adopts that very buffer.
+    fn publication_keeps_later_buffers() {
+        let folder = scratch_copy("wall_shelf", "later-buffer");
+        let first = folder.join("shelf.stave");
+        let second = folder.join("bracket.stave");
+        std::fs::write(&second, "// a second file\n").unwrap();
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        page.open_document(&Document::File(first.clone()));
+        settle();
+        let Some(early) = last_documents(&heard) else {
+            panic!("opening a file publishes the documents");
+        };
+        page.open_document(&Document::File(second.clone()));
+        let Some(made) = page.open_buffer(&second) else {
+            panic!("the owner made the second file's buffer");
+        };
+        page.set_documents(early);
+        assert_eq!(
+            page.open_buffer(&second).as_ref(),
+            Some(&made),
+            "the earlier publication doesn't drop it"
+        );
+        assert!(page.open_buffer(&first).is_some(), "nor the first");
+        made.insert(&mut made.end_iter(), "// typed\n");
+        use stave_modules::FileSource;
+        assert!(
+            page.edit_files()
+                .read(&second)
+                .is_ok_and(|text| text.ends_with("// typed\n")),
+            "its typing is read"
+        );
+        settle();
+        if let Some(documents) = last_documents(&heard) {
+            page.set_documents(documents);
+        }
+        assert_eq!(page.open_buffer(&second).as_ref(), Some(&made));
+        assert_eq!(
+            tab_buffer(&page, &second).as_ref(),
+            Some(&made),
+            "the component adopted the owner's buffer"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn typing_in_a_tab_is_never_overwritten_by_a_second_buffer() {
+        on_gtk_thread(typing_is_never_overwritten);
+    }
+
+    /// The race the counted publications close: an early publication
+    /// arriving after a buffer was handed over used to drop it, so
+    /// showing the file again made a second buffer from the disk whose
+    /// adoption wrote the file's text over what was typed in the tab.
+    /// Now the owner keeps the first buffer, shows the file through it
+    /// and the typing stays.
+    fn typing_is_never_overwritten() {
+        let folder = scratch_copy("wall_shelf", "second-buffer");
+        let first = folder.join("shelf.stave");
+        let second = folder.join("bracket.stave");
+        std::fs::write(&second, "// a second file\n").unwrap();
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        page.open_document(&Document::File(first.clone()));
+        settle();
+        let Some(early) = last_documents(&heard) else {
+            panic!("opening a file publishes the documents");
+        };
+        page.open_document(&Document::File(second.clone()));
+        page.set_documents(early);
+        settle();
+        // The publication listing the second file is still on its way.
+        let Some(tab) = tab_buffer(&page, &second) else {
+            panic!("the second file has a tab");
+        };
+        tab.insert(&mut tab.end_iter(), "// typed\n");
+        page.reveal(&SourceLocation {
+            path: second.to_string_lossy().into_owned(),
+            line: stave_app::session::LineNumber::from_usize(1).unwrap(),
+        });
+        assert_eq!(
+            page.open_buffer(&second).as_ref(),
+            Some(&tab),
+            "no second buffer is made"
+        );
+        settle();
+        let Some(shown) = tab_buffer(&page, &second) else {
+            panic!("the second file still has a tab");
+        };
+        assert_eq!(
+            buffer_text(&shown).as_str(),
+            "// a second file\n// typed\n",
+            "the typing stays"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_buffer_handed_over_for_an_open_tab_merges_without_losing_typing() {
+        on_gtk_thread(handed_buffer_merges);
+    }
+
+    /// Should the owner ever hand over a buffer for a file that has a
+    /// tab, the tab's unsaved typing is never overwritten: the owner's
+    /// buffer becomes the tab's (so what the owner writes into it later
+    /// lands on the live text) holding both the owner's change and the
+    /// typing, each exactly once.
+    fn handed_buffer_merges() {
+        let folder = scratch_copy("wall_shelf", "merge");
+        let path = folder.join("shelf.stave");
+        let document = Document::File(path.clone());
+        let (mut page, _heard) = recorded_page();
+        page.set_folder(&folder);
+        page.open_document(&document);
+        settle();
+        let Some(tab) = tab_buffer(&page, &path) else {
+            panic!("the file has a tab");
+        };
+        tab.insert(&mut tab.end_iter(), "// typed\n");
+        settle();
+        let base = std::fs::read_to_string(&path).unwrap();
+        let buffer = super::super::editor::new_buffer(&page.table, &base);
+        buffer.insert(&mut buffer.start_iter(), "// written\n");
+        page.hand_over(
+            &document,
+            Made {
+                buffer: buffer.clone(),
+                base: base.clone(),
+            },
+        );
+        settle();
+        assert_eq!(
+            tab_buffer(&page, &path).as_ref(),
+            Some(&buffer),
+            "the owner's buffer is the tab's"
+        );
+        assert_eq!(
+            buffer_text(&buffer).as_str(),
+            format!("// written\n{base}// typed\n"),
+            "both changes, each once"
+        );
+        buffer.insert(&mut buffer.end_iter(), "// later\n");
+        settle();
+        assert_eq!(page.model().unsaved_count(), 1);
+        assert!(
+            page.model()
+                .buffers
+                .text(&document)
+                .is_some_and(|text| text.ends_with("// typed\n// later\n")),
+            "a later write lands on the live text"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn merging_keeps_each_change_once_or_says_they_clash() {
+        let base = "one\ntwo\nthree\n";
+        assert_eq!(merge(base, base, "one\n2\nthree\n"), Merge::Keep);
+        assert_eq!(
+            merge(base, "one\n2\nthree\n", "one\n2\nthree\n"),
+            Merge::Keep
+        );
+        // Only people typed: their change goes in whole.
+        assert_eq!(
+            merge(base, "one\ntwo\nthree\nfour\n", base),
+            Merge::Splice(Splice {
+                start: 14,
+                end: 14,
+                text: "four\n".to_owned(),
+            })
+        );
+        // Typing after the owner's change moves by what it changed.
+        assert_eq!(
+            merge(base, "one\ntwo\nthree!\n", "ONE·\ntwo\nthree\n"),
+            Merge::Splice(Splice {
+                start: 14,
+                end: 14,
+                text: "!".to_owned(),
+            })
+        );
+        // Typing before it keeps its place.
+        assert_eq!(
+            merge(base, "on\ntwo\nthree\n", "one\ntwo\nTHREE\n"),
+            Merge::Splice(Splice {
+                start: 2,
+                end: 3,
+                text: String::new(),
+            })
+        );
+        assert_eq!(
+            merge(base, "one\ntwo!\nthree\n", "one\ntwo?\nthree\n"),
+            Merge::Conflict
+        );
     }
 
     #[test]
