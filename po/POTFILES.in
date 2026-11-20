@@ -4,6 +4,7 @@ crates/stave-app/src/candidates/new_project.rs
 crates/stave-app/src/candidates/write.rs
 crates/stave-app/src/change.rs
 crates/stave-app/src/choices.rs
+crates/stave-app/src/conflicts.rs
 crates/stave-app/src/edit.rs
 crates/stave-app/src/editing.rs
 crates/stave-app/src/empty.rs
