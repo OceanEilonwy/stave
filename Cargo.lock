@@ -4348,6 +4348,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "serde_json",
+ "stave-check",
  "stave-geom",
  "stave-lang",
  "stave-model",
@@ -4381,6 +4382,28 @@ dependencies = [
  "stave-modules",
  "stave-schema",
  "thiserror",
+]
+
+[[package]]
+name = "stave-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "js-sys",
+ "serde_json",
+ "stave-app",
+ "stave-check",
+ "stave-lang",
+ "stave-model",
+ "stave-modules",
+ "stave-render",
+ "stave-scene",
+ "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
 ]
 
 [[package]]

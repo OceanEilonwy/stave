@@ -19,6 +19,10 @@
 //! working on from the camera, to draw see-through; and where a grip
 //! sits ([`SceneGraph::grip_place`]).
 //!
+//! The whole pipeline, from a project's files to the scene a viewer
+//! draws, is [`pipeline`]: the window (through `stave-app`) and the
+//! browser viewer open projects through it.
+//!
 //! Not done yet: a scene's `section` is carried ([`SceneEntry::section`])
 //! but not applied.
 
@@ -34,6 +38,7 @@ mod ghost;
 mod graph;
 mod grip;
 mod pick;
+pub mod pipeline;
 mod space;
 
 pub use cache::{CacheUse, MeshCache};
@@ -43,7 +48,7 @@ pub use focus::{
     Anchor, GapMark, Label, LineKind, Look, MotionPlay, Note, Overlay, OverlayLine, Plan, Play,
     PlayFrame, StepPlay,
 };
-pub use ghost::{Ghost, GhostChange, GhostVerdict, Ghosts};
+pub use ghost::{Ghost, GhostChange, GhostOverlay, GhostVerdict, Ghosts};
 pub use graph::{
     BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
     RegionNode, SceneEntry, SceneGraph, Section, Wood,
