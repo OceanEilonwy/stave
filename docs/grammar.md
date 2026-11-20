@@ -604,7 +604,7 @@ without an import or a prefix:
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
+| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
 | `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
@@ -1925,6 +1925,61 @@ each joint's member once, grouped over its pairs, with how many copies
 the joint places in all (`dowel_pin × 8`), as the hardware list
 counts them.
 
+#### Slanted members
+
+A member whose shape is a [slanted cylinder](#shapes) goes into the wood
+at an angle: a pocket screw, driven at a shallow slant from the face of a
+rail, out through its end and into the edge of a stile. std's
+`pocket_screw` is written this way:
+
+```
+  member screw : wood_screw(diameter: diameter, length: length) {
+    on:    contact(piece, into)
+    count: count
+    shape: cylinder(diameter: pilot, depth: -(length - bite)..bite, tilt: tilt, toward: across)
+  }
+  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite) }
+```
+
+- **The hole follows the slant.** A `drill` on `crossing(role, member)`
+  of a slanted shape is centred where the shape's axis meets the face,
+  and runs along the axis: its `depth` and `from_depth` are measured
+  along the slant, so the holes a screw makes in two parts line up by
+  construction, as a straight member's do. The face must be one the
+  cylinder runs into end first (the face across the frame direction it
+  runs along before its tilt); a slanted shape that enters the part
+  through a side is `error[type-mismatch]` at the joint's call
+  (`j: its screw goes into rail from the side, so its hole can't follow
+  the slant`), with the help `slant the shape less, or lay it out so it
+  goes into rail end first`. Only a `drill` can follow a slant: any
+  other operation on a slanted member is `error[type-mismatch]` at the
+  joint's call (`j: a notch can't follow the slant of its screw`, help
+  `cut round a slanted member with drill`).
+- **`through` on a slant** runs until the hole leaves the part, wherever
+  that is. A slanted `through` hole opens onto every face it runs out of
+  (a pocket comes out of the face of the rail as a long oval) and onto
+  the face it is cut from unless it starts below it (`from_depth`); a
+  slanted hole with a depth opens only onto the face it is cut from, and
+  must stay inside the part (see [Walls](#walls)).
+- **Checks.** A slanted shape is checked along its slant, in the
+  overlap check at rest, against wood and against the holes drilled for
+  it: a screw in a slanted hole on its own axis, at least as wide as the
+  screw, is held there, and a screw that runs past the bottom of its
+  hole, or through wood no hole is drilled in, is `error[overlap]` as
+  any member is. Against other members, against round wood (a round
+  tenon), against cuts that are not holes, and in the checks of moving
+  parts (a door on its hinges, a
+  pair's `insert:` steps), a slanted shape counts as the box around it,
+  which only ever finds more wood than there is.
+- **Assembly.** A slanted member can't come home by sliding its part
+  straight in, so a kind with one usually has no `insert:`: the parts are
+  clamped where they belong and the screws driven, which is what its
+  `note:` says.
+- **Drawing.** A viewer draws the shape along its slant and each hole
+  along the slant it was drilled at.
+
 #### Faces to cut
 
 A cut is measured on one face of one role's part, from that face's own edges.
@@ -2052,7 +2107,7 @@ than 0mm`).
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
+| `drill(diameter:, depth:, from_depth:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape, and along its axis when the shape is [slanted](#slanted-members). With `from_depth` (default `0mm`) the hole starts that far below the face instead of at it: the wider part of a stepped hole, a counterbore for a screw head that stops short of the face. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
@@ -2439,9 +2494,27 @@ at most once.
 | Shape | Meaning |
 |---|---|
 | `box(along:, across:, depth:)` | a box; each argument is a range or one length |
-| `cylinder(diameter:, depth:, at:)` | a cylinder whose axis runs along `depth`, through `at` (a `point(...)`, default the origin); `depth` is a range or one length. `axis: along` or `axis: across` lays it down, and its range is then written under that word (`along:` or `across:`) instead of `depth:` |
+| `cylinder(diameter:, depth:, at:, tilt:, toward:)` | a cylinder whose axis runs along `depth`, through `at` (a `point(...)`, default the origin); `depth` is a range or one length. `axis: along` or `axis: across` lays it down, and its range is then written under that word (`along:` or `across:`) instead of `depth:`. `tilt: 15deg, toward: across` slants it (see below) |
 | `prism(points: [...], along:)` | a convex outline of `point(across:, depth:)`s, in order around it, extruded along `along` (a range or one length) |
 | `bar(from:, to:, thickness:, along:)` | a straight bar between two `point(...)`s, `thickness` wide in the across/depth plane and reaching half its thickness past each point, `along` long: a prism, written the way a link is made |
+
+**A slanted cylinder.** `tilt:` (an `Angle`) turns a cylinder's axis
+away from the frame direction it runs along, about the point `at`,
+toward the frame direction `toward:` names (`along`, `across` or
+`depth`, not the one it runs along). Its range is then measured along
+the turned axis, from `at`. `tilt: 15deg, toward: across` leans the far
+(positive) end of the range toward `across`; a negative tilt leans it the
+other way. The tilt is more than `-90deg` and less than `90deg`, and
+`0deg` is a straight cylinder; anything else is `error[type-mismatch]`
+at the tilt (`a cylinder can lean less than 90deg either way, found
+90deg`, help `write a tilt between -90deg and 90deg, such as 15deg`).
+`tilt:` without `toward:`, or `toward:` without `tilt:`, is
+`error[missing-field]` (`a slanted cylinder needs both 'tilt' and
+'toward'`), and `toward:` naming the direction the cylinder runs along
+is `error[type-mismatch]` (`a cylinder along depth can't lean toward
+depth`, help `lean it toward along or across`). A slanted cylinder is
+drawn, checked and cut for along its slant: see [Slanted
+members](#slanted-members).
 
 Outside a member, `box(length:, width:, thickness:)` and
 `cylinder(diameter:, length:)` stay envelopes (see
@@ -2899,7 +2972,7 @@ Inside a hardware kind's `member` and `mechanism` only, written in the
 | `point(along:, across:, depth:)` | a point in the kind's frame; each a `Length`, default `0mm` |
 | `bar(from:, to:, thickness:, along:)` | a member's shape: a straight bar between two points (see [Shapes](#shapes)) |
 | `prism(points: [...], along:)` | a member's shape: a convex outline extruded along `along` |
-| `box(along:, across:, depth:)`, `cylinder(diameter:, depth:, at:)` | a member's shape; each argument a range `lo..hi` or one length |
+| `box(along:, across:, depth:)`, `cylinder(diameter:, depth:, at:, tilt:, toward:)` | a member's shape; each range argument a range `lo..hi` or one length |
 
 Words that look like functions but are fixed by position, not built-in
 functions: placement terms, face selectors, a hardware `mount`'s terms and
@@ -3137,10 +3210,16 @@ kind socket : joint {
   into the side of a leg is measured from its bottom to the round surface
   (its mouth breaks the surface by design), a hole into the end from its
   side.
+- **Slanted holes** (see [Slanted members](#slanted-members)) are
+  measured along their slant: to a flat face, from the nearest point of
+  the hole's end discs; to another cut, as the distance from the hole's
+  axis to it less the hole's radius. A slanted `through` hole opens onto
+  every face it runs out of, so those faces are not walls; the wall to
+  any other face is measured as for a closed cut.
 - **Exact where the shapes allow it.** Between boxes, from a shape to a
   flat face, and between parallel holes in line, the wall is a difference
-  of exact lengths. On a slant (a hole past the corner of a pocket) it is a
-  square root, and between two holes square to each other (two rungs into
+  of exact lengths. On a slant (a hole past the corner of a pocket, or a
+  slanted hole) it is a square root or a sine, and between two holes square to each other (two rungs into
   a leg from adjacent faces) it is found by projecting from one hole to the
   other until the distance stops shrinking; both are rounded down to the
   nanometre.
@@ -3190,10 +3269,13 @@ part's `lengths:`:
   slot in front is 12mm deep, but front is only 12mm thick there`, with
   the help `a cut with a depth stops inside the part and leaves wood behind
   it; make the slot less than 12mm deep, or write depth: through if it
-  should go right through`.
+  should go right through`. A [slanted hole](#slanted-members) is not
+  measured here: one that runs out of the part breaks out of a face,
+  which the next backstop reports.
 - **Closed cuts keep a wall** (`error[wall]`). Every `drill` and `pocket`
   leaves wood (a wall of more than `0mm`, see [Walls](#walls)) between it
-  and every face it isn't aimed at, and every closed cut of another joint
+  and every face it isn't aimed at (a slanted `through` hole is aimed at
+  every face it runs out of), and every closed cut of another joint
   pair or piece of hardware: `side_pegs: its peg hole in base breaks out
   of the left end of base` (help: `the peg hole runs 5.5mm past the left
   end of base; move the parts so the peg hole sits inside base with wood

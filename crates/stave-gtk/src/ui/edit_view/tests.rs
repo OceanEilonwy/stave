@@ -782,7 +782,7 @@ fn a_settings_short_list_and_its_search_choose_and_a_blamed_setting_can_be_put_b
 }
 
 /// The Case's joinery: its short list (the default, then "Search all
-/// 18…"), the search dialog finding chigiri by its description (refused:
+/// 19…"), the search dialog finding chigiri by its description (refused:
 /// it can't be chosen) and dowel by its name (chosen with Enter), then
 /// chigiri typed, blamed, and put back from the card.
 fn short_list_search_and_blame_on_the_card() {
@@ -841,7 +841,7 @@ fn short_list_search_and_blame_on_the_card() {
     let texts: Vec<&str> = rows.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(texts, ["dowel(count: 4)", ""], "the default, then Search…");
     assert!(words_in(rows[0].1.upcast_ref()).contains("default"));
-    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 18…"));
+    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 19…"));
     rows[0].1.emit_clicked();
     rows[1].1.emit_clicked();
     settle();
@@ -914,7 +914,7 @@ fn short_list_search_and_blame_on_the_card() {
     settle();
     assert!(search.widget().is_visible());
     let all = search.model().rows();
-    assert_eq!(all.len(), 18, "every option, with nothing typed");
+    assert_eq!(all.len(), 19, "every option, with nothing typed");
     // The arrow keys move through them.
     let first = selected().unwrap();
     ask(OptionSearchInput::Step(1));
@@ -926,7 +926,7 @@ fn short_list_search_and_blame_on_the_card() {
     other.name = parse_name("mount").unwrap();
     other.options.clear();
     ask(OptionSearchInput::Update(Box::new(other)));
-    assert_eq!(search.model().rows().len(), 18);
+    assert_eq!(search.model().rows().len(), 19);
 
     // "key": chigiri, by its description, refused; Enter chooses nothing.
     type_query("key");
@@ -1054,20 +1054,32 @@ fn case_card_fits() {
     assert!(!panel.update());
     assert!(panel.is_empty(), "nothing in progress: how to start");
     // The repeat controls as the window puts them: folded.
-    let fold = item_tools::RepeatFoldRow::new(1);
-    fold.place_apart(
-        &editing.slots.repeat_button_slot,
-        &editing.slots.repeat_slot,
-    );
+    let fold = item_tools::RepeatFoldComponent::builder()
+        .launch(item_tools::RepeatFoldInit {
+            least: 1,
+            apart: Some(item_tools::RepeatFoldSlots {
+                button: editing.slots.repeat_button_slot.clone(),
+                row: editing.slots.repeat_slot.clone(),
+            }),
+        })
+        .detach();
+    let mut shown = item_tools::RepeatFoldShown::new(1);
     {
         let chosen = session.edit().unwrap().chosen().unwrap();
-        fold.show(stave_app::item_offer::candidate_repeat_fold(
-            chosen.candidate(),
-            chosen.repeat(),
-            fold.asked(),
-        ));
+        let _ = fold
+            .sender()
+            .send(shown.show(stave_app::item_offer::candidate_repeat_fold(
+                chosen.candidate(),
+                chosen.repeat(),
+                shown.asked(),
+            )));
     }
+    // Drawing settles the main loop, so the fold has shown too.
     editing.draw(&session, false);
+    assert!(
+        fold.widgets().unfold_button().is_visible(),
+        "folded: Repeat… sits beside the buttons"
+    );
     assert!(panel.update());
     assert!(!panel.is_empty());
     let window = shown_in_window(panel.root.upcast_ref(), PANEL_ROOM.0, PANEL_ROOM.1);
@@ -1104,8 +1116,12 @@ fn case_card_fits() {
     assert!(add.is_mapped() && cancel.is_mapped());
     // "Repeat…" pressed: the count and the direction open above the
     // buttons, still within the panel's width.
-    assert!(fold.press());
-    fold.show(stave_app::item_offer::RepeatFold::Open);
+    assert!(shown.press());
+    let _ = fold
+        .sender()
+        .send(shown.show(stave_app::item_offer::RepeatFold::Open));
+    settle();
+    assert!(fold.widgets().row().is_visible());
     let (least, _, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
     assert!(
         least <= PANEL_ROOM.0,
@@ -1121,24 +1137,45 @@ fn repeat_is_folded_until_asked_for() {
 
 fn repeat_fold_row() {
     use stave_app::item_offer::RepeatFold;
-    let fold = item_tools::RepeatFoldRow::new(1);
     let unfolded = Rc::new(std::cell::Cell::new(0));
-    {
-        let unfolded = unfolded.clone();
-        fold.connect_unfold(move || unfolded.set(unfolded.get() + 1));
-    }
-    fold.show(RepeatFold::Hidden);
-    assert!(!fold.root.is_visible());
-    assert!(!fold.press(), "hidden: nothing to press");
-    fold.show(RepeatFold::Folded);
-    assert!(fold.unfold_button().is_visible() && !fold.row.root.is_visible());
-    assert!(!fold.asked());
-    assert!(fold.press());
-    assert!(fold.asked());
+    let heard = Rc::clone(&unfolded);
+    let fold = item_tools::RepeatFoldComponent::builder()
+        .launch(item_tools::RepeatFoldInit {
+            least: 1,
+            apart: None,
+        })
+        .connect_receiver(move |_, output| {
+            if output == item_tools::RepeatFoldOutput::Unfold {
+                heard.set(heard.get() + 1);
+            }
+        });
+    let mut shown = item_tools::RepeatFoldShown::new(1);
+    let show = |shown: &mut item_tools::RepeatFoldShown, rule| {
+        let _ = fold.sender().send(shown.show(rule));
+        settle();
+    };
+    let unfold = fold.widgets().unfold_button().clone();
+    let row = fold.widgets().row().clone();
+    show(&mut shown, RepeatFold::Hidden);
+    assert!(!fold.widget().is_visible());
+    assert!(!shown.press(), "hidden: nothing to press");
+    show(&mut shown, RepeatFold::Folded);
+    assert!(unfold.is_visible() && !row.is_visible());
+    assert!(!shown.asked());
+    // People press it: the owner hears it and marks it asked.
+    unfold.emit_clicked();
+    settle();
     assert_eq!(unfolded.get(), 1);
-    fold.show(RepeatFold::Open);
-    assert!(!fold.unfold_button().is_visible() && fold.row.root.is_visible());
-    assert!(fold.is_open());
-    fold.forget();
-    assert!(!fold.asked());
+    shown.unfolded();
+    assert!(shown.asked());
+    // A script presses it: marked at once (the owner then does what it
+    // does for a click).
+    shown.forget();
+    assert!(shown.press());
+    assert!(shown.asked());
+    show(&mut shown, RepeatFold::Open);
+    assert!(!unfold.is_visible() && row.is_visible());
+    assert!(shown.is_open());
+    shown.forget();
+    assert!(!shown.asked());
 }

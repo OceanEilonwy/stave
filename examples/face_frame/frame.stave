@@ -1,0 +1,65 @@
+stave 1
+
+// A face frame: two stiles and two rails, joined with pocket screws. The
+// frame lies face down on the bench, as it is built: the pockets are
+// drilled in the back of each rail, slanting down through its end and into
+// the edge of the stile beside it.
+//
+// Try it:
+//   stave check examples/face_frame      look for mistakes
+//   stave view  examples/face_frame      see the screws inside the joints
+
+project "Face frame" {
+  goal:  "A pine face frame for a small cabinet, joined with pocket screws"
+  units: mm
+}
+
+param frame_width  = 500mm within 350mm..800mm
+param frame_height = 700mm within 450mm..1000mm
+
+stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 50mm, max_length: 2400mm }
+
+// The stiles run the full height, left and right.
+part stile_l : pine_strip {
+  length: frame_height
+  place {
+    ground
+    orient(length: back, width: right)
+  }
+}
+
+part stile_r : pine_strip {
+  length: frame_height
+  place {
+    orient(length: back, width: right)
+    flush(stile_l.bottom)
+    flush(stile_l.front)
+    flush(stile_l.left, inset: frame_width - 50mm)
+  }
+}
+
+// The rails fit between the stiles, at the back and the front of the
+// frame as it lies on the bench (the top and the bottom once it stands).
+part rail_top : pine_strip {
+  length: fit
+  place {
+    orient(length: right, width: back)
+    center(from: stile_l.right, to: stile_r.left)
+    flush(stile_l.bottom)
+    flush(stile_l.back)
+  }
+}
+
+part rail_bottom : pine_strip {
+  length: fit
+  place {
+    orient(length: right, width: back)
+    center(from: stile_l.right, to: stile_r.left)
+    flush(stile_l.bottom)
+    flush(stile_l.front)
+  }
+}
+
+// Two pocket screws through each end of each rail into the stile beside
+// it: four joints' worth of screws from one line.
+joint corners : pocket_screw([rail_top, rail_bottom], into: [stile_l, stile_r])

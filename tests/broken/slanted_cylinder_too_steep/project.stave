@@ -1,0 +1,41 @@
+// expect: error[type-mismatch] a cylinder can lean less than 90deg either way, found 90deg
+stave 1
+
+// A cylinder turned all the way over: it would lie along the joint line.
+
+project "Slanted cylinder too steep" {
+  units: mm
+}
+
+kind slanted : joint {
+  member screw : wood_screw(diameter: 4mm, length: 32mm) {
+    on:    contact(piece, into)
+    count: 2
+    shape: cylinder(diameter: 3mm, depth: -20mm..12mm, tilt: 90deg, toward: across)
+  }
+  cut pocket: crossing(piece, screw) { drill(diameter: 9.5mm, depth: through, from_depth: 20mm) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: 4.5mm, depth: 20mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: 3mm, depth: 12mm) }
+}
+
+stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 50mm, max_length: 2400mm }
+
+part stile : pine_strip {
+  length: 600mm
+  place {
+    ground
+    orient(length: back, width: right)
+  }
+}
+
+part rail : pine_strip {
+  length: 300mm
+  place {
+    orient(length: right, width: back)
+    against(stile.right)
+    flush(stile.bottom)
+    flush(stile.back)
+  }
+}
+
+joint corner : slanted(rail, into: stile)

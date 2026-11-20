@@ -28,6 +28,7 @@ mod edit_script;
 mod edit_view;
 mod edit_writer;
 mod editor;
+mod empty_state;
 mod files;
 mod finder;
 mod floating;
@@ -44,6 +45,7 @@ mod new_project;
 mod option_search;
 mod output;
 mod panels;
+#[cfg(test)]
 mod relm4_shim;
 mod remember;
 mod sections;

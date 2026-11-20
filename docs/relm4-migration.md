@@ -141,6 +141,11 @@ The callback slot is a `Cell<Option<Rc<dyn Fn(Output)>>>`, cloned out
 before each call, so a callback can call `connect`, `send` or `model` on
 its own bridge. Nothing is borrowed across a callback or a GTK call.
 
+Every owner now holds its components' `Controller`s itself, outputs
+forwarded at launch, so `relm4_shim.rs` is compiled for tests only:
+some tests still launch a component through a `Bridge` to hear its
+outputs.
+
 ## The rules
 
 1. **No `RefCell` borrow is held across any widget call or signal
@@ -319,16 +324,16 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `view_tools.rs` | `PlanSwitch` | `PlanSwitchOutput::FromAbove(bool)`, forwarded at launch (`PlanSwitch::new(owner, message)`) → `SelectionInput::FocusPlan` | `show(bool)` → `Show { plan }` | **Done**. `block_signal` on the toggle. |
 | `view_tools.rs` | `EmptyView` | — (its `open` button uses the `win.open` action) | `show(&str, &str, bool)` → `EmptyViewInput::Show { title, description, offers_open }` | **Done**. |
 | `workbench.rs` | `Workbench` | `WorkbenchOutput::ToolsChanged(Spots)`, `SaveFailed(String)`, `ShowOwnTab { panel, index }`, forwarded at launch (`Workbench::new(.., owner, message)`) → `RenderingInput::ToolsMoved`, `ProjectInput::Notice`, `ProjectInput::ShowOwnTab` | `apply(Layout)` → `Apply(Layout)`; `narrow_edges(&adw::Breakpoint, f64)` → `NarrowEdges { breakpoint, width }` (its apply/unapply send `Fold`/`Unfold`); `dock_tool(Group, Spot)` → `DockTool { group, spot }`; `show_problem_count(usize)` → `ShowProblemCount(usize)`; `show_own_tabs(PanelId, Vec<PageTab>)` → `ShowOwnTabs { panel, tabs }`; `save()` → `Saved { layout, failure }`; `reset()` → `Reset`; `present(PanelId)` → `Present(PanelId)`; `bring_forward_beside_view(PanelId)` → `BringForwardBesideView(PanelId)`; `move_to(PanelId, Side)` → `MoveTo { panel, side }`; a strip's chosen own tab → `OwnTabChosen { panel, index }` | **Done**. libpanel dock. The one keeper of the tool groups' spots and of the panels' own tabs (see `floating.rs`, `tab_strip.rs`). *queries* `layout()`, `is_open`, `is_shown`, `share_a_frame`, `tool_spots()` (a copy, read once by `build_widgets`). |
-| `edit_view/grip_panel.rs` | `GripPanel` | `connect_action(PanelAction)` → `GripPanelOutput::Action(PanelAction)`; (`grips.rs`) `panel.value.connect_activate` → folds into `Action` | `show(&PanelModel)` → `Show(PanelModel)` | Test getters `words()`, `radios()`. |
-| `edit_view/grip_panel.rs` | `Readout` | — | `show(Option<&(String, String)>)` → `ReadoutInput::Show(Option<(String, String)>)` | Test getter `words()`. |
-| `edit_view/changes.rs` | `ChangeCard` | `connect_action(ChangeAction)` → `ChangeCardOutput::Action(ChangeAction)` | `show(&ChangeWords)` → `Show(ChangeWords)` | |
-| `edit_view/changes.rs` | `DependantsDialog` | `include.connect_clicked` → `DependantsOutput::Include`; `cancel.connect_clicked` → `Cancel` | `show(&str, &[String])` → `Show { item, dependants }` | |
-| `edit_view/item_tools.rs` | `RepeatRow` | `connect_changed(usize, Axis)` → `RepeatRowOutput::Changed { count, axis }` | `show(usize, Axis, bool)` → `Show { count, axis, axis_shown }` | `#[block_signal]` on the count spin button and axis drop-down in `Show`. |
-| `edit_view/item_tools.rs` | `RepeatFoldRow` | `connect_unfold()` → `RepeatFoldOutput::Unfold`; its inner `row` (a `RepeatRow`) `Changed` → `RepeatFoldOutput::Changed { count, axis }` | `show(RepeatFold)` → `Show(RepeatFold)`; `place_apart(&gtk::Box, &gtk::Box)` → launch-time `Init` (where its button and row go) | |
-| `edit_view/item_tools.rs` | `ItemTools` | (`connect_item_tools`) `name.connect_editing_notify` (when editing ends) → `ItemToolsOutput::Rename(String)`; `mirror.connect_active_notify` (when switched on) → `Mirror`; `hold.connect_clicked` → `Hold`; `remove.connect_clicked` → `Remove`; `repeat` `Unfold` → `Unfold`; `repeat.row` `Changed` → `Repeat { count, axis }` | what `Window::update_item_tools` fills in → `Show(ItemToolsShown)` | Its `filling: Rc<Cell<bool>>` guard goes: `#[block_signal]` on the name and Mirror while filling. |
-| `edit_view/hold.rs` | `HoldCard` | (`connect_hold`) `try_it.connect_clicked` and `reason.connect_activate` → `HoldCardOutput::TryIt`; `cancel.connect_clicked` → `Cancel` | `show(&Measured, &Measured, &Result<Length, String>)` → `Show { first, second, now }` | *query*: the reason entry's text, read by `try_hold`: carry it in `TryIt { reason: String }`. |
-| `edit_view/hold.rs` | `Hold` | (`connect_hold`) `from_space.connect_clicked` → `HoldOutput::FromSpace` | — | Owns the `HoldCard`; `from_space` sits in the edit menu's root. |
-| `edit_view/repeat_handles.rs` | `Repeats`, `Handle` | (`connect_repeats`) `row.connect_unfold` → `RepeatsOutput::Unfold`; `row.row.connect_changed` → `Changed { count, axis }`; the count overlay's drag and the boundary drags (`connect_boundary_drag`) → `Dragged { index, to }` | handle placement (from `shown_boundaries`) → `Show(Vec<Boundary>)` | Mostly `impl Window` today: split the widget part out first. Its `row` is a `RepeatFoldRow`. |
+| `edit_view/grip_panel.rs` | `GripPanelComponent` (in `GripSection`) | `connect_action(PanelAction)` → `GripPanelOutput::Action(PanelAction)`; (`grips.rs`) `panel.value.connect_activate` → folds into `Action` | `show(&PanelModel)` → `Show(Box<PanelModel>)` | **Done**: the shim is gone. The window's `GripView` owns a `GripSection` (the section around the content, the options box and the `Controller`), launched in `EditView::new` with its output forwarded to `EditingInput::GripPanel`. Test helpers `panel_words`, `panel_radios` read the controller's widgets. |
+| `edit_view/grip_panel.rs` | `ReadoutComponent` | — | `show(Option<&(String, String)>)` → `ReadoutInput::Show(Option<(String, String)>)` | **Done**: the shim is gone; `GripView` owns the `Controller` (no outputs, so launched with `detach()`). Test helper `readout_words`. |
+| `edit_view/changes.rs` | `ChangeCardComponent` | `connect_action(ChangeAction)` → `ChangeCardOutput::Action(ChangeAction)` | `show(&ChangeWords)` → `Show(Box<ChangeWords>)`; people's Enter → `Enter`, presses → `Pressed(ChangeAction)` | **Done**: the shim is gone; the window owns the `Controller` (`ChangeCard` in `EditView::changes`, with the `grip_slot` and `pending_slot` it fills), forwarded at launch to `EditingInput::ChangeAction`. |
+| `edit_view/changes.rs` | `DependantsComponent` | `include.connect_clicked` → `DependantsOutput::Include`; `cancel.connect_clicked` → `Cancel` | `show(&str, &[String])` → `Show { item, dependants }`; buttons and Escape → `Answer(bool)` | **Done**: the window owns the `Controller` (`DependantsDialog` in `EditView::changes`), forwarded at launch to `EditingInput::DependantsAnswered`; it shows and hides the backdrop itself. |
+| `edit_view/item_tools.rs` | `RepeatRowComponent` | `connect_changed(usize, Axis)` → `RepeatRowOutput::Changed { count, axis, shows }` | `show(usize, Axis, bool)` → `Show { count, axis, axis_shown }`; `shorten()` → `Shorten` | **Done**: the `RepeatRow` shim is gone; each `RepeatFoldComponent` owns its row's `Controller`, forwarded to its own input. `#[block_signal]` on the count spin button and axis drop-down in `Show`. |
+| `edit_view/item_tools.rs` | `RepeatFoldComponent` | `connect_unfold()` → `RepeatFoldOutput::Unfold`; its row's `Changed` → `RepeatFoldOutput::Changed { count, axis, shows }` | `show(RepeatFold)` → `Show(RepeatFold)`; the row's `show` → `ShowCount { count, axis, axis_shown }`; `place_apart(&gtk::Box, &gtk::Box)` → `RepeatFoldInit::apart` (`RepeatFoldSlots`) | **Done**: the `RepeatFoldRow` shim is gone. *queries* `asked()`, `is_open()`, `press()`, the row's `count()` and `axis()` are the owner's `RepeatFoldShown`, a plain copy kept beside the controller (its setters return the message to send; `take_change` takes people's change unless a later `ShowCount` replaced it). Owned by the item's tools (`ItemTools`) and the candidate card's repeat controls (`Repeats`). |
+| `edit_view/item_tools.rs` | `ItemToolsComponent` | (`connect_item_tools`) `name.connect_editing_notify` (when editing ends) → `ItemToolsOutput::Rename(String)`; `mirror.connect_active_notify` (when switched on) → `Mirror`; `hold.connect_clicked` → `Hold`; `remove.connect_clicked` → `Remove`; its repeat controls' outputs → `EditingInput::ItemRepeat(RepeatFoldOutput)` | what `Window::update_item_tools` fills in → `Show(ItemToolsShown)`; `focus_item_name` → `StartEditing` | **Done**: the window owns both `Controller`s (`ItemTools` in `EditView::tools`: the tools' and their `RepeatFoldComponent`'s, forwarded at launch to `EditingInput::ItemTools` / `ItemRepeat`) and the `RepeatFoldShown` copy; a script's "Repeat…" is `Window::press_item_repeat`. `#[block_signal]` on the name and Mirror while filling. |
+| `edit_view/hold.rs` | `HoldCardComponent` | (`connect_hold`) `try_it.connect_clicked` and `reason.connect_activate` → `HoldCardOutput::TryIt(HoldFields)`; `cancel.connect_clicked` → `Cancel` | `show(&Measured, &Measured, &Result<Length, String>)` → `Show { title, now }` (`HoldCardInput::show`); a script's fields → `Fill(HoldFields)` | **Done**: the shim is gone; the window owns the `Controller` (`Hold::card`), forwarded at launch to `EditingInput::HoldCard`. `TryIt` carries what the fields hold. |
+| `edit_view/hold.rs` | `Hold` | (`connect_hold`) `from_space.connect_clicked` → `EditingInput::HoldFromSpace` | — | **Done**: not a component but the window's state for a hold (`step`, the card's `Controller`); `from_space` is a plain button in the edit menu's root whose click sends the window's input, as the face button's does. |
+| `edit_view/repeat_handles.rs` | `Repeats`, `Handle` | the card's stepper (a `RepeatFoldComponent` the window owns, forwarded at launch): `Unfold` → `EditingInput::CardRepeatUnfolded`, `Changed { count, axis, shows }` → `CardRepeatChanged { count, axis, shows }`; the count overlay's drag and the boundary drags → `CountDragBegun`/`CountDragged`/`CountDragEnded` and `BoundaryDragBegun`/`BoundaryDragged`/`BoundaryDragEnded` | `RepeatFoldShown::show`/`show_count` return the `RepeatFoldInput` the window sends | **Done**: plain model state of the window, not a component. The stepper's controller and its `RepeatFoldShown` copy (read at once by the count handle and scripts) are fields of `Repeats`; the drag (`drag`, `dragged_count`, `dragged_boundary`, `count_on`) and each handle's `nudge` are plain fields, written only by the window's handlers of the gesture messages. A script's `Repeat…` marks the copy asked and queues `CardRepeatUnfolded`, as a click does. |
 | `edit_view/grip_layer.rs` | `GripLayer` | — | — | A GObject subclass (layout manager): stays a widget. |
 
 ## Phase 2: the application and the window
@@ -380,7 +385,7 @@ file (for editing, in the `edit_view` files).
 |---|---|---|---|---|
 | Selection and focus | `update/selection.rs` | `SelectionInput` | `select_and_frame`, `selection_changed`, `show_card`, `show_hint`, `show_moves`, focus mode (`focus_changed`, `open_focus`, `leave_focus`, `update_focus`, `toggle_play_focus`, `focus_tick`, the progress, caption and pictures), posed problems and openings (`pose_problem`, `update_opening`, `motion_moved`, `problem_moved`), `finder_search`, `finder_hit` | actions `back`, `forward`, `next-problem`, `previous-problem`, `find`, `escape`, `show-problem`; `ProblemsPanel` choose/source; `FilesList` open; `TreeSidebar` select/source/focus/hover; `Dock` move; `Inspector` focus/source; `Finder` search request and hit; `FocusPanel` done/source/X-ray/tint/fade; the step and swing cards' scrubs and play; `ProblemCard`'s scrub; `Pictures` resized and chosen; `PlanSwitch`; `MotionBar`'s scale |
 | Project | `update/project.rs` | `ProjectInput` | `run_check` (and `Checked`), `show_folder`, `show_title`, `result_changed`, `apply_wanted`, `editor_changed`, `sync_files`, `text_linked`, `capture_if_asked`, `check_status_changed`, `build_changed`, `choose_folder`, `go_to_folder`, `ask_about_unsaved`, `open_folder`, `watch`, closing | actions `new-project`, `check`, `search`, `editor`, `show-panel`, `move-panel`, `reset-layout`, `model`, `save`, `format`, `open`, `open-recent`; the folder drop; `FilesPage` link/go/check/show-in-3D/open/notice and its tabs; `Workbench` save failed; `Inspector` unsaved; the root's `close-request` |
-| Editing | `update/editing.rs` | `EditingInput` | in `edit_view.rs` and `edit_view/*.rs`: the menu, the card, the option search, links, grips, changes, holds, item tools, repeats, verbs | `EditMenuComponent` chosen and drawn, `EditCardComponent` action, open short list and links (forwarded at launch, `EditView::new`); the face button; the pointer over the view; `OptionSearchComponent` chosen/closed (forwarded at launch); `Inspector`'s links; `DependantsDialog`; `ChangeCard`; `Hold`/`HoldCard`; `ItemTools`; `RepeatFoldRow`s; the repeat count and boundary drags; `Finder` actions request and action; `GripPanel`; the grips' handles, entries and range menus; the edit menu's, options' and stops' timers and worker threads; the Delete key |
+| Editing | `update/editing.rs` | `EditingInput` | in `edit_view.rs` and `edit_view/*.rs`: the menu, the card, the option search, links, grips, changes, holds, item tools, repeats, verbs | `EditMenuComponent` chosen and drawn, `EditCardComponent` action, open short list and links (forwarded at launch, `EditView::new`); the face button; the pointer over the view; `OptionSearchComponent` chosen/closed (forwarded at launch); `Inspector`'s links; `DependantsComponent`, `ChangeCardComponent`, `HoldCardComponent`, `ItemToolsComponent` and the `RepeatFoldComponent`s (forwarded at launch); the space menu's Hold button; the repeat count and boundary drags; `Finder` actions request and action; `GripPanel`; the grips' handles, entries and range menus; the edit menu's, options' and stops' timers and worker threads; the Delete key |
 | Rendering | `update/rendering.rs` | `RenderingInput` | `view_changed`, framing and the camera (`frame`, `frame_selection`, `look_from`, `update_orbit`, `pick`, `resized`), drawing (`request_render`, `render_now`, `poll_frame`, `looks`), pins, `pull_apart`, `toggle_play_explode`, `explode_tick`, `export_view`, `scene_changed`, `explode_changed`, `repose`, the backdrop | actions `frame`, `export-view`, `view-*`; `Header` outputs (view, scene); `ViewToolbar` X-ray, Pull apart, play and slider; `CameraToolbar` front and turn; the style manager's dark (disconnected in `shutdown`); `Viewport` resized; the view's drags, scroll and keys; the mouse's back and forward buttons |
 
 `dispatch`, `handle` and `toast` stay in `mod.rs`: every group uses
@@ -664,6 +669,46 @@ these (rule 8), and never put a `RefCell` round the shared answer.
 - The start page's Open and New Project are done by the page itself
   rather than by the application's callback; the application hears
   only which folder to open.
+- The selected item's "Repeat…" counts as asked for when the window
+  handles its `RepeatFoldOutput::Unfold`, not inside the button's click;
+  the window redraws the tools from that same message, as before. A
+  script's press (`Window::press_item_repeat`) marks it at once and
+  queues the same message.
+
+### The grips, the readout and the repeat handles
+
+- `GripView` owns the size section's `Controller<GripPanelComponent>`
+  (inside a `GripSection`, launched in `EditView::new` with its output
+  forwarded to `EditingInput::GripPanel`) and the readout's
+  `Controller<ReadoutComponent>`; the `GripPanel` and `Readout` shims and
+  their `connect_action` are gone.
+- The grips' lines are drawn from a copy: each time the grips are placed,
+  the window hands the drawing area a new draw function owning that
+  frame's `Vec<Drawn>` (the old `Rc<RefCell<Vec<Drawn>>>` is gone).
+- `Repeats` holds the card's `RepeatFoldComponent` and its
+  `RepeatFoldShown`; its drag and the handles' nudges are plain fields.
+- `connect_editor_link` (empty) is gone; `connect_grips` and
+  `connect_repeats` only put their overlays and gestures over the 3D
+  view, with no output callbacks.
+
+### The change card, the hold card and the item's tools
+
+- `EditView` owns their controllers, launched in `EditView::new` with
+  `.forward(window_input, ..)`: `Changes` holds the change card's
+  (`ChangeCard`, beside the `grip_slot` and `pending_slot` the window
+  fills) and the removal dialog's (`DependantsDialog`, beside its root);
+  `Hold::card` is the hold card's; `ItemTools` holds the tools' and their
+  `RepeatFoldComponent`'s, with the window's `RepeatFoldShown` copy. Their
+  `Bridge` shims and `connect_action`, `connect_answered`, `connect`,
+  `connect_unfold` and `connect_changed` are gone; setters are messages
+  the window sends to the controllers, and it shows and hides the roots
+  itself, at once.
+- The space menu's "Hold a distance from this space…" stays a plain
+  button whose click sends `EditingInput::HoldFromSpace`, as the face
+  button's does.
+- The changes' stylesheet is put on the display once, by the
+  application at startup (`Shell::startup`, beside `style::install`),
+  so it needs no thread-local guard.
 
 ### Done by the group lanes and the integration
 
@@ -729,11 +774,26 @@ rules can't remove:
   `glib::WeakRef`s (GObject widgets, not Rust structs): the frame owns
   the strip, which owns the component, so a strong reference would be a
   cycle.
+- `ui/edit_view/grip_panel.rs`, `install_style`: a thread-local list of
+  the displays the grips' stylesheet is already on. GTK has no way to
+  ask whether a provider is on a display, and the stylesheet must go on
+  once per display however many windows open (a provider per window
+  would pile up, one more for every window ever opened). It is borrowed
+  only inside that function, holds no closures and no component's
+  state. (`edit_card.rs`, `sections.rs` and `tree.rs` put theirs on the
+  default display once a process with a `std::sync::Once` instead,
+  since Stave uses only the default display; `editor.rs` loads its
+  style schemes the same way.)
+
+- `editor.rs`, `Editor::lens` (an `Rc<dyn Fn(LensClick)>` given to
+  `Editor::new`): the editor is not a component but the view of
+  `FilesComponent`, which gives it, once, the function its lens rows'
+  links call; that function only sends the component its own message
+  (`FilesInput::ListUses` / `ShowIn3d`). It is immutable, never
+  replaced and holds no state; a sender and a `fn`, as `LinkHandlers`
+  takes, would need the editor to be generic over the component's
+  `Then`.
 
 ### Still to do
 
-- The editing leaves `ChangeCard`, `GripPanel`, `RepeatRow`, `ItemTools`
-  and `HoldCard` still take per-output callbacks.
-- `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an
-  `Rc<RefCell<..>>` shared with their draw function: give the draw
-  function a copy, as the slider does.
+Nothing.

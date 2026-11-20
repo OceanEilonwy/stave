@@ -338,6 +338,19 @@ impl Direction {
         }
     }
 
+    /// The direction along `axis` toward its positive end (`true`) or its
+    /// negative end.
+    pub fn along(axis: Axis, positive: bool) -> Direction {
+        match (axis, positive) {
+            (Axis::Up, true) => Direction::Up,
+            (Axis::Up, false) => Direction::Down,
+            (Axis::Across, true) => Direction::Right,
+            (Axis::Across, false) => Direction::Left,
+            (Axis::Deep, true) => Direction::Back,
+            (Axis::Deep, false) => Direction::Front,
+        }
+    }
+
     /// The direction pointing the other way.
     pub fn opposite(self) -> Direction {
         match self {

@@ -1,6 +1,8 @@
-//! The bridge between a relm4 component and the window's older
-//! callback-style code, while the window moves to relm4 one part at a
-//! time (docs/relm4-migration.md, "The shim pattern").
+//! The bridge between a relm4 component and callback-style code, used
+//! the way the window used it while it moved to relm4 one part at a time
+//! (docs/relm4-migration.md, "The shim pattern"). Every owner now holds
+//! its components' controllers itself, so only tests use it, to launch a
+//! component and hear its outputs.
 //!
 //! A [`Bridge`] owns its component's [`Controller`]: dropping the bridge
 //! shuts the component down the next time the main loop runs, which
@@ -92,10 +94,6 @@ impl<C: Component> Bridge<C> {
     /// not be called from a handler of the component's own widgets (a
     /// signal GTK emits synchronously during `update`). From an output
     /// callback, a timeout or another component's handler it is safe.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "only tests read a bridged component's model now")
-    )]
     pub(crate) fn model(&self) -> Ref<'_, C> {
         self.controller.model()
     }

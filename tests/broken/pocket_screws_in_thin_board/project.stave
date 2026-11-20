@@ -1,0 +1,31 @@
+// expect: error[require] 'thick_enough' fails: the part is too thin for pocket screws
+stave 1
+
+// Pocket screws in 9mm strips: too thin for the pocket to leave wood under the
+// screw head.
+
+project "Pocket screws in thin board" {
+  units: mm
+}
+
+stock pine_strip { species: pine, form: solid, thickness: 9mm, width: 50mm, max_length: 2400mm }
+
+part stile : pine_strip {
+  length: 600mm
+  place {
+    ground
+    orient(length: back, width: right)
+  }
+}
+
+part rail : pine_strip {
+  length: 300mm
+  place {
+    orient(length: right, width: back)
+    against(stile.right)
+    flush(stile.bottom)
+    flush(stile.back)
+  }
+}
+
+joint corner : pocket_screw(rail, into: stile)

@@ -508,6 +508,7 @@ impl Shell {
     fn startup(&mut self) {
         if let Some(display) = gdk::Display::default() {
             style::install(&display);
+            super::edit_view::changes::install_style(&display);
         }
         gtk::Window::set_default_icon_name(APP_ID);
         self.theme.apply();
