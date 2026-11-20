@@ -498,10 +498,12 @@ fn lookup(name: &str) -> Result<CallToolResult, McpError> {
         let Some(found) = declaration(text, name) else {
             continue;
         };
-        let words = format!(
-            "From std:{module} ({file}). The modules joinery, hardware and tools are seen \
-             everywhere; import any other with `import std:{module}`.\n\n{found}\n"
-        );
+        let how = if stave_modules::PRELUDE_MODULES.contains(&module) {
+            "every project sees it, so use it as written without an import".to_owned()
+        } else {
+            format!("import it first with `import \"std:{module}\"`")
+        };
+        let words = format!("From std:{module} ({file}); {how}.\n\n{found}\n");
         return Ok(answer(
             words,
             json!({ "name": name, "module": module, "file": file, "text": found }),

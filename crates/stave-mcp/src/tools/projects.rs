@@ -135,7 +135,7 @@ impl StaveServer {
         let folder = new_folder(&arguments.folder)?;
         let steps = parse_script(&arguments.steps)?;
         let (summary, transcript) = blocking(move || {
-            let created = !folder.exists();
+            let made = first_missing(&folder);
             std::fs::create_dir_all(&folder).map_err(|source| McpError::Io {
                 path: folder.clone(),
                 source,
@@ -146,20 +146,32 @@ impl StaveServer {
             match fine {
                 Ok(true) => {}
                 Ok(false) => {
-                    empty_again(&folder, created);
+                    empty_again(&folder, made.as_deref());
                     return Err(McpError::StepFailed(transcript));
                 }
                 Err(error) => {
-                    empty_again(&folder, created);
+                    empty_again(&folder, made.as_deref());
                     return Err(error.into());
                 }
             }
-            let folder = folder.canonicalize().map_err(|source| McpError::Io {
-                path: folder.clone(),
-                source,
-            })?;
-            let opened = open(&folder)?;
-            Ok((Summary::of(&folder, &opened), transcript))
+            let opened = folder
+                .canonicalize()
+                .map_err(|source| McpError::Io {
+                    path: folder.clone(),
+                    source,
+                })
+                .and_then(|real| open(&real).map(|opened| (real, opened)));
+            match opened {
+                Ok((real, opened)) => Ok((Summary::of(&real, &opened), transcript)),
+                Err(McpError::NotAProject(_)) => {
+                    empty_again(&folder, made.as_deref());
+                    Err(McpError::NeverCreated)
+                }
+                Err(error) => {
+                    empty_again(&folder, made.as_deref());
+                    Err(error)
+                }
+            }
         })
         .await?;
         self.set_open_project(OpenProject {
@@ -337,12 +349,25 @@ fn new_folder(given: &str) -> Result<PathBuf, McpError> {
     Ok(path.to_path_buf())
 }
 
+/// The outermost folder on the way to `folder` (`folder` itself
+/// included) that doesn't exist yet, so a failed `new_project` can remove
+/// every folder it made. `None` when `folder` already exists.
+fn first_missing(folder: &Path) -> Option<PathBuf> {
+    folder
+        .ancestors()
+        .take_while(|ancestor| std::fs::symlink_metadata(ancestor).is_err())
+        .last()
+        .map(Path::to_path_buf)
+}
+
 /// Puts a folder that was empty (or not there) before a failed
-/// `new_project` back as it was. Best effort: what can't be removed
-/// stays.
-fn empty_again(folder: &Path, created: bool) {
-    if created {
-        let _ = std::fs::remove_dir_all(folder);
+/// `new_project` back as it was: `made` is the outermost folder
+/// `new_project` made (see [`first_missing`]) and is removed whole;
+/// without it `folder` already existed and is emptied. Best effort: what
+/// can't be removed stays.
+fn empty_again(folder: &Path, made: Option<&Path>) {
+    if let Some(made) = made {
+        let _ = std::fs::remove_dir_all(made);
         return;
     }
     let Ok(entries) = std::fs::read_dir(folder) else {

@@ -61,6 +61,10 @@ pub enum McpError {
     /// transcript up to and including the failure.
     #[error("A step failed, so no project was made. What Stave did:\n{0}")]
     StepFailed(String),
+    /// The steps of `new_project` ran but never reached `create`, so no
+    /// `.stave` file was written; nothing was kept.
+    #[error("The steps never reached 'create', so no project was made.")]
+    NeverCreated,
     /// A patch couldn't be tried: the scratch copy didn't load.
     #[error("Stave can't try the patch: {0}")]
     Try(#[from] stave_app::scratch::TryError),

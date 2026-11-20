@@ -356,6 +356,101 @@ async fn new_project_reports_a_failed_step() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn new_project_without_create_leaves_nothing() {
+    let root = common::scratch_folder("new_project_without_create_leaves_nothing")
+        .canonicalize()
+        .unwrap();
+    // Two folders that don't exist yet: both are made, and both go.
+    let folder = root.join("projects").join("box");
+    let connection = connect(options("new_project_without_create_leaves_nothing")).await;
+    let result = connection
+        .call(
+            "new_project",
+            json!({ "folder": path_text(&folder), "steps": "new \"Box\" 300mm 200mm 200mm\n" }),
+        )
+        .await;
+    assert!(is_error(&result));
+    assert!(
+        text(&result).contains("never reached 'create'"),
+        "{}",
+        text(&result)
+    );
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        0,
+        "no folder is left behind"
+    );
+    // An empty folder that was already there stays, empty.
+    let existing = root.join("existing");
+    std::fs::create_dir(&existing).unwrap();
+    let again = connection
+        .call(
+            "new_project",
+            json!({ "folder": path_text(&existing), "steps": "new \"Box\" 300mm 200mm 200mm\n" }),
+        )
+        .await;
+    assert!(is_error(&again));
+    assert_eq!(std::fs::read_dir(&existing).unwrap().count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn new_project_failing_removes_the_folders_it_made() {
+    let root = common::scratch_folder("new_project_failing_removes_the_folders_it_made")
+        .canonicalize()
+        .unwrap();
+    let folder = root.join("a").join("b").join("chest");
+    let connection = connect(options("new_project_failing_removes_the_folders_it_made")).await;
+    let result = connection
+        .call(
+            "new_project",
+            json!({ "folder": path_text(&folder), "steps": "create\n" }),
+        )
+        .await;
+    assert!(is_error(&result));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn try_patch_refuses_paths_outside_the_project() {
+    let folder = example_copy(
+        "clothing_cabinet",
+        "try_patch_refuses_paths_outside_the_project",
+    );
+    // The copy's own scratch folder: `..` from the project lands here.
+    let root = folder.parent().unwrap().to_path_buf();
+    let outside = std::env::temp_dir().join(format!(
+        "stave-mcp-test-{}-outside.stave",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&outside);
+    let before = common::snapshot(&root);
+    let connection = connect(options("try_patch_refuses_paths_outside_the_project")).await;
+    connection
+        .call("open_project", json!({ "path": path_text(&folder) }))
+        .await;
+    for target in ["../outside.stave".to_owned(), path_text(&outside)] {
+        let patch = SHOE_SHELF.replace("in \"carcass.stave\"", &format!("in \"{target}\""));
+        let result = connection
+            .call("try_patch", json!({ "patch": patch }))
+            .await;
+        assert!(!is_error(&result), "{}", text(&result));
+        let tried = &structured(&result)["patches"][0];
+        assert_eq!(tried["verdict"], json!("refused"), "{}", text(&result));
+        assert_eq!(structured(&result)["fits"], json!(false));
+        let words = text(&result);
+        assert!(
+            words.contains(&format!(
+                "'{target}' is not a file name in the project's folder"
+            )),
+            "{words}"
+        );
+    }
+    assert_eq!(common::snapshot(&root), before, "nothing was written");
+    assert!(!root.join("outside.stave").exists());
+    assert!(!outside.exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn grammar_returns_section() {
     let connection = connect(options("grammar_returns_section")).await;
     let result = connection
@@ -377,35 +472,41 @@ async fn grammar_returns_section() {
     );
 }
 
-/// The name of the first kind declared in `std/joinery`, read at test time
-/// so the test names none itself.
-fn first_std_kind() -> String {
-    let folder = common::workspace().join("std/joinery");
+/// The name of the first declaration starting with `word` (`kind`,
+/// `profile`) in `std/<module>`, read at test time so the test names none
+/// itself.
+fn first_std_declaration(module: &str, word: &str) -> String {
+    let folder = common::workspace().join("std").join(module);
     let mut files: Vec<_> = std::fs::read_dir(folder)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
     files.sort();
+    let prefix = format!("{word} ");
     for file in files {
         let text = std::fs::read_to_string(file).unwrap();
         for line in text.lines() {
-            if let Some(rest) = line.strip_prefix("kind ") {
-                return rest.split([' ', ':']).next().unwrap().to_owned();
+            let line = line.strip_prefix("pub ").unwrap_or(line);
+            if let Some(rest) = line.strip_prefix(&prefix) {
+                return rest.split([' ', ':', '{']).next().unwrap().to_owned();
             }
         }
     }
-    panic!("std/joinery declares no kind");
+    panic!("std/{module} declares no {word}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn std_lookup_finds_kind() {
-    let kind = first_std_kind();
+    let kind = first_std_declaration("joinery", "kind");
     let connection = connect(options("std_lookup_finds_kind")).await;
     let result = connection.call("std_lookup", json!({ "kind": kind })).await;
     assert!(!is_error(&result), "{}", text(&result));
     let words = text(&result);
     assert!(words.contains(&format!("kind {kind} :")), "{words}");
     assert!(words.contains("std:joinery"), "{words}");
+    // joinery is in the prelude: no import is suggested.
+    assert!(words.contains("without an import"), "{words}");
+    assert!(!words.contains("import \""), "{words}");
     assert!(
         words.trim_end().ends_with('}'),
         "the whole declaration: {words}"
@@ -415,6 +516,23 @@ async fn std_lookup_finds_kind() {
         .call("std_lookup", json!({ "kind": "no_such_kind_at_all" }))
         .await;
     assert!(is_error(&missing));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn std_lookup_tells_the_import_for_a_module_outside_the_prelude() {
+    let profile = first_std_declaration("casework", "profile");
+    let connection = connect(options(
+        "std_lookup_tells_the_import_for_a_module_outside_the_prelude",
+    ))
+    .await;
+    let result = connection
+        .call("std_lookup", json!({ "kind": profile }))
+        .await;
+    assert!(!is_error(&result), "{}", text(&result));
+    let words = text(&result);
+    // The import as the grammar writes it: `import STRING`.
+    assert!(words.contains("`import \"std:casework\"`"), "{words}");
+    assert_eq!(structured(&result)["module"], json!("casework"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
