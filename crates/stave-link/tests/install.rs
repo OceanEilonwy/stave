@@ -6,21 +6,35 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use stave_link::{Host, Places, found_hosts_in, install_in, uninstall_in};
+
+/// Held by each test's `Home` for the whole test. If one test writes its
+/// fake `claude` while another test's thread starts a program, that
+/// program's fork holds the file open for writing, and running the fake
+/// `claude` then fails with "Text file busy" (ETXTBSY). One test at a time,
+/// it can't.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// A temporary home with no AI app in it, and an empty `PATH`.
 struct Home {
     directory: tempfile::TempDir,
     bin: PathBuf,
+    _turn: MutexGuard<'static, ()>,
 }
 
 impl Home {
     fn new() -> Home {
+        let turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        Home { directory, bin }
+        Home {
+            directory,
+            bin,
+            _turn: turn,
+        }
     }
 
     fn path(&self) -> &Path {

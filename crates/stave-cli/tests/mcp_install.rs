@@ -95,12 +95,13 @@ fn mcp_help_lists_install_and_uninstall() {
 }
 
 /// Bare `stave mcp` is what every app is set up to start: it parses (no
-/// usage error, exit code 2), and runs the server's place.
+/// usage error) and runs the server, which here finds standard input
+/// closed, with no AI app on the other end, and says so.
 #[test]
 fn bare_mcp_parses() {
     let home = tempfile::tempdir().unwrap();
     let output = stave(home.path(), &["mcp"]);
     let said = text(&output.stderr);
-    assert_ne!(output.status.code(), Some(2), "{said}");
     assert!(!said.contains("Usage:"), "{said}");
+    assert!(said.contains("talking to the AI app"), "{said}");
 }
