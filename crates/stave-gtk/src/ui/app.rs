@@ -696,8 +696,7 @@ impl Shell {
                 },
             );
         } else if let Some(page) = &self.start {
-            page.toasts
-                .add_toast(adw::Toast::builder().title(text).timeout(5).build());
+            page.notice(text);
         }
     }
 
