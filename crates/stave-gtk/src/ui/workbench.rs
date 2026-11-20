@@ -1228,6 +1228,10 @@ impl Component for WorkbenchComponent {
             output_button,
         };
         widgets.show_status_tabs();
+        // Where the tool groups start, published as every later move is:
+        // the owner hears it once it forwards the outputs, and the
+        // floating controls take their spots from it.
+        let _ = sender.output(WorkbenchOutput::ToolsChanged(model.tools.clone()));
         ComponentParts { model, widgets }
     }
 
@@ -1463,8 +1467,9 @@ impl Workbench {
     }
 
     /// Where the 3D view's tool groups are docked, as of the last message
-    /// the workbench handled: where the view's floating controls start.
-    /// Later moves are told as [`WorkbenchOutput::ToolsChanged`].
+    /// the workbench handled (tests: the window hears every change,
+    /// the first at launch, as [`WorkbenchOutput::ToolsChanged`]).
+    #[cfg(test)]
     pub fn tool_spots(&self) -> Spots {
         self.controller.model().tools.clone()
     }
@@ -1998,7 +2003,7 @@ show bottom true
 
     /// Presenting, moving and counting change the dock and the model but
     /// tell nobody; only the tool groups moving (a group docked, a layout
-    /// applied) is told.
+    /// applied) is told, besides where they start, told once at launch.
     fn setters_do_not_call_back() {
         let (owner, outputs) = relm4::channel();
         let Ok(workbench) = workbench_for(labels(), &owner) else {
@@ -2036,7 +2041,12 @@ show bottom true
             Some(Side::End),
             "a move is saved as the last layout"
         );
-        assert!(heard.borrow().is_empty(), "setters never call back");
+        assert_eq!(
+            *heard.borrow(),
+            vec![Spots::default()],
+            "where the groups start is told at launch; setters never call back"
+        );
+        heard.borrow_mut().clear();
         let mut docked = Spots::default();
         docked.dock(Group::Camera, Spot::BottomLeft);
         workbench.dock_tool(Group::Camera, Spot::BottomLeft);
@@ -2132,7 +2142,14 @@ show bottom true
         let heard: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&workbench);
+        // Where the tool groups start is told at launch: heard (and let
+        // be) before the test starts listening.
+        let listening = Rc::new(std::cell::Cell::new(false));
+        let armed = Rc::clone(&listening);
         handle_each(outputs, move |_| {
+            if !armed.get() {
+                return;
+            }
             let Some(workbench) = weak.upgrade() else {
                 return;
             };
@@ -2141,6 +2158,8 @@ show bottom true
             log.borrow_mut()
                 .push((before, workbench.is_shown(PanelId::Output)));
         });
+        settle();
+        listening.set(true);
         workbench.reset();
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         settle();

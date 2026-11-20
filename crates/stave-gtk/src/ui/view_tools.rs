@@ -342,25 +342,16 @@ impl Component for ViewToolbarComponent {
 /// hears people's presses as [`ViewToolbarOutput`]s.
 pub struct ViewToolbar {
     /// See through everything but the selection.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     xray: gtk::ToggleButton,
     /// Pull apart, on or off.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     pull: gtk::ToggleButton,
     /// The play button and the slider, floating beside Pull apart while
     /// it is on: a root for the owner to place.
     pub popout: gtk::Box,
     /// Plays the pulling apart from together to apart.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     play: gtk::Button,
     /// X-ray and Pull apart with the line above them: a root of the
     /// tools' own, for the camera column to place at its foot.
@@ -418,9 +409,12 @@ impl ViewToolbar {
             })
             .forward(owner, message);
         ViewToolbar {
+            #[cfg(test)]
             xray,
+            #[cfg(test)]
             pull,
             popout: controller.widget().clone(),
+            #[cfg(test)]
             play,
             section,
             #[cfg(test)]
@@ -613,16 +607,10 @@ pub struct CameraToolbar {
     /// The column, to float on the view.
     pub root: gtk::Box,
     /// Looks at the front.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     front: gtk::Button,
     /// Turns the view half way round.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     turn: gtk::Button,
     controller: Controller<CameraComponent>,
 }
@@ -663,7 +651,9 @@ impl CameraToolbar {
             .forward(owner, message);
         CameraToolbar {
             root: controller.widget().clone(),
+            #[cfg(test)]
             front,
+            #[cfg(test)]
             turn,
             controller,
         }
@@ -829,16 +819,10 @@ pub struct PlanSwitch {
     /// The switch, to overlay on the view.
     pub root: gtk::Box,
     /// From above (plan).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     from_above: gtk::ToggleButton,
     /// In 3D.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "tests press it; the window hears its output")
-    )]
+    #[cfg(test)]
     in_3d: gtk::ToggleButton,
     controller: Controller<PlanSwitchComponent>,
 }
@@ -870,7 +854,9 @@ impl PlanSwitch {
             .forward(owner, message);
         PlanSwitch {
             root: controller.widget().clone(),
+            #[cfg(test)]
             from_above,
+            #[cfg(test)]
             in_3d,
             controller,
         }
@@ -1009,10 +995,7 @@ pub struct EmptyView {
     /// The page, on the stage colour.
     pub root: gtk::Box,
     /// Opens another project folder (`win.open`).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "kept for the page's API; only tests read it now")
-    )]
+    #[cfg(test)]
     pub open: gtk::Button,
     controller: Controller<EmptyViewComponent>,
 }
@@ -1030,6 +1013,7 @@ impl EmptyView {
         let controller = EmptyViewComponent::builder().launch(open.clone()).detach();
         EmptyView {
             root: controller.widget().clone(),
+            #[cfg(test)]
             open,
             controller,
         }

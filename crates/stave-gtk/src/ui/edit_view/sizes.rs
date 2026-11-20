@@ -459,25 +459,7 @@ impl SizeEditor {
             .build();
         root.append(&refusal);
         // The slider and its ends.
-        let slider = {
-            let input = input.clone();
-            SizeSlider::new(&tr("Value"), move |event| {
-                let message = match event {
-                    SliderEvent::Moved(position) => EditingInput::SizeSlid {
-                        position,
-                        released: false,
-                    },
-                    SliderEvent::Released(position) => EditingInput::SizeSlid {
-                        position,
-                        released: true,
-                    },
-                    SliderEvent::Nudged(units) => EditingInput::SizeNudged(units),
-                    SliderEvent::Enter => EditingInput::SizeApply,
-                    SliderEvent::Escape => EditingInput::CloseSize,
-                };
-                input.emit(message.into());
-            })
-        };
+        let slider = SizeSlider::new(&tr("Value"), input, slider_said);
         let slider_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
@@ -758,6 +740,24 @@ impl SizeEditor {
         }
         self.choices.set_visible(true);
     }
+}
+
+/// What people did on the size editor's slider, as the window's message.
+fn slider_said(event: SliderEvent) -> WindowInput {
+    match event {
+        SliderEvent::Moved(position) => EditingInput::SizeSlid {
+            position,
+            released: false,
+        },
+        SliderEvent::Released(position) => EditingInput::SizeSlid {
+            position,
+            released: true,
+        },
+        SliderEvent::Nudged(units) => EditingInput::SizeNudged(units),
+        SliderEvent::Enter => EditingInput::SizeApply,
+        SliderEvent::Escape => EditingInput::CloseSize,
+    }
+    .into()
 }
 
 /// `label` without the selection's name in front: `apron_front.setback`

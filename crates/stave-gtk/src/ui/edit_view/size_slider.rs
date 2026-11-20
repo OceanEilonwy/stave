@@ -14,9 +14,6 @@
 //! Positions are steps of `grip_values::SLIDER_STEPS` along it; what a
 //! position is worth is the session's (`grip_values::along`).
 
-use std::cell::Cell;
-use std::rc::Rc;
-
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use stave_app::grip_values::SLIDER_STEPS;
@@ -89,17 +86,23 @@ pub(super) enum SliderEvent {
     Escape,
 }
 
-/// The slider's widget and what it draws.
+/// The slider's widget. It shares no state: its draw function is given a
+/// copy of what it draws at each [`SizeSlider::show`] (as `slider.rs`'s
+/// is), and its gesture and key handlers only send the owner's message.
 #[derive(Debug, Clone)]
 pub(super) struct SizeSlider {
     /// The track, drawn.
     pub(super) area: gtk::DrawingArea,
-    look: Rc<Cell<SliderLook>>,
 }
 
 impl SizeSlider {
-    /// A slider named `name` for screen readers, reporting to `heard`.
-    pub(super) fn new(name: &str, heard: impl Fn(SliderEvent) + Clone + 'static) -> SizeSlider {
+    /// A slider named `name` for screen readers; what people do on it goes
+    /// to `input` as `message(event)`.
+    pub(super) fn new<M: 'static>(
+        name: &str,
+        input: &relm4::Sender<M>,
+        message: fn(SliderEvent) -> M,
+    ) -> SizeSlider {
         let area = gtk::DrawingArea::builder()
             .content_height(30)
             .hexpand(true)
@@ -109,22 +112,18 @@ impl SizeSlider {
             .build();
         area.set_cursor_from_name(Some("pointer"));
         area.update_property(&[gtk::accessible::Property::Label(name)]);
-        let look = Rc::new(Cell::new(SliderLook::default()));
-        {
-            let look = look.clone();
-            area.set_draw_func(move |_, context, width, height| {
-                draw(context, f64::from(width), f64::from(height), look.get());
-            });
-        }
-        connect_pointer(&area, heard.clone());
-        connect_keys(&area, heard);
-        SizeSlider { area, look }
+        let slider = SizeSlider { area };
+        slider.show(SliderLook::default());
+        connect_pointer(&slider.area, input, message);
+        connect_keys(&slider.area, input, message);
+        slider
     }
 
-    /// Draws `look`.
+    /// Draws `look`: the draw function owns this copy until the next.
     pub(super) fn show(&self, look: SliderLook) {
-        self.look.set(look);
-        self.area.queue_draw();
+        self.area.set_draw_func(move |_, context, width, height| {
+            draw(context, f64::from(width), f64::from(height), look);
+        });
     }
 }
 
@@ -140,36 +139,60 @@ fn x_at(width: f64, position: i32) -> f64 {
     THUMB + f64::from(position) / f64::from(SLIDER_STEPS) * (width - 2.0 * THUMB).max(1.0)
 }
 
-fn connect_pointer(area: &gtk::DrawingArea, heard: impl Fn(SliderEvent) + Clone + 'static) {
+/// Where a drag is now: its start (the gesture's own) plus `dx`, as a
+/// position along the gesture's widget. `None` without a widget.
+fn dragged_to(gesture: &gtk::GestureDrag, dx: f64) -> Option<i32> {
+    let area = gesture.widget().and_downcast::<gtk::DrawingArea>()?;
+    let (x, _) = gesture.start_point()?;
+    Some(position_at(&area, x + dx))
+}
+
+/// Pressing and dragging: each reads only the gesture and sends.
+fn connect_pointer<M: 'static>(
+    area: &gtk::DrawingArea,
+    input: &relm4::Sender<M>,
+    message: fn(SliderEvent) -> M,
+) {
     let drag = gtk::GestureDrag::builder()
         .button(gdk::BUTTON_PRIMARY)
         .build();
-    let start = Rc::new(Cell::new(0.0));
     {
-        let (start, heard, area) = (start.clone(), heard.clone(), area.clone());
-        drag.connect_drag_begin(move |gesture, x, _| {
+        let input = input.clone();
+        drag.connect_drag_begin(move |gesture, _, _| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            area.grab_focus();
-            start.set(x);
-            heard(SliderEvent::Moved(position_at(&area, x)));
+            if let Some(area) = gesture.widget() {
+                area.grab_focus();
+            }
+            if let Some(position) = dragged_to(gesture, 0.0) {
+                input.emit(message(SliderEvent::Moved(position)));
+            }
         });
     }
     {
-        let (start, heard, area) = (start.clone(), heard.clone(), area.clone());
-        drag.connect_drag_update(move |_, dx, _| {
-            heard(SliderEvent::Moved(position_at(&area, start.get() + dx)));
+        let input = input.clone();
+        drag.connect_drag_update(move |gesture, dx, _| {
+            if let Some(position) = dragged_to(gesture, dx) {
+                input.emit(message(SliderEvent::Moved(position)));
+            }
         });
     }
     {
-        let area = area.clone();
-        drag.connect_drag_end(move |_, dx, _| {
-            heard(SliderEvent::Released(position_at(&area, start.get() + dx)));
+        let input = input.clone();
+        drag.connect_drag_end(move |gesture, dx, _| {
+            if let Some(position) = dragged_to(gesture, dx) {
+                input.emit(message(SliderEvent::Released(position)));
+            }
         });
     }
     area.add_controller(drag);
 }
 
-fn connect_keys(area: &gtk::DrawingArea, heard: impl Fn(SliderEvent) + 'static) {
+fn connect_keys<M: 'static>(
+    area: &gtk::DrawingArea,
+    input: &relm4::Sender<M>,
+    message: fn(SliderEvent) -> M,
+) {
+    let input = input.clone();
     let keys = gtk::EventControllerKey::new();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         let by = if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
@@ -184,7 +207,7 @@ fn connect_keys(area: &gtk::DrawingArea, heard: impl Fn(SliderEvent) + 'static) 
             gdk::Key::Escape => SliderEvent::Escape,
             _ => return glib::Propagation::Proceed,
         };
-        heard(event);
+        input.emit(message(event));
         glib::Propagation::Stop
     });
     area.add_controller(keys);

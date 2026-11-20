@@ -638,7 +638,8 @@ pub(in crate::ui) struct ItemToolsShown {
 }
 
 /// The changes a selected item's card offers, as a relm4 component: its
-/// model is what it shows ([`ItemToolsShown`]); its name field, Mirror
+/// root is the whole section, "Change" with the item's name as its note;
+/// its model is what it shows ([`ItemToolsShown`]); its name field, Mirror
 /// switch and buttons only send [`ItemToolsInput`] messages. Showing it
 /// fills in the name and turns Mirror off with their handlers blocked, so
 /// only people's renames and switches are reported. The repeat controls on
@@ -649,15 +650,14 @@ pub(in crate::ui) struct ItemToolsComponent {
     /// Set for the update a [`ItemToolsInput::Show`] makes: the name and
     /// Mirror are filled in again.
     refill: bool,
-    /// The section's note, where the item's name shows (outside the rows).
-    title: gtk::Label,
+    /// Its section's note, where the item's name shows (in the head, outside
+    /// the rows): one of its own widgets.
+    note: gtk::Label,
 }
 
 /// What a selected item's tools are made with.
 #[derive(Debug)]
 pub(in crate::ui) struct ItemToolsInit {
-    /// The section's note, for the item's name.
-    pub(in crate::ui) title: gtk::Label,
     /// The repeat controls' row, put after the name.
     pub(in crate::ui) repeat: gtk::Box,
 }
@@ -700,6 +700,22 @@ impl Component for ItemToolsComponent {
     type CommandOutput = ();
 
     view! {
+        // A section of the Inspector, "Change" with the item as its note
+        // (`sections::section_noted`, built here so the note is the
+        // component's own).
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_css_classes: &["stave-section", "stave-item-tools", "stave-edit-card"],
+
+            #[local_ref]
+            head -> gtk::Button {},
+            #[local_ref]
+            revealer -> gtk::Revealer {
+                // The body, hidden while folded (`sections::section_head`).
+                #[local_ref]
+                #[wrap(Some)]
+                set_child = body -> gtk::Box {
+
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             add_css_class: "stave-card",
@@ -795,6 +811,9 @@ impl Component for ItemToolsComponent {
                 },
             },
         }
+                },
+            },
+        }
     }
 
     fn init(
@@ -802,11 +821,20 @@ impl Component for ItemToolsComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let ItemToolsInit { title, repeat } = init;
+        let ItemToolsInit { repeat } = init;
+        let (
+            sections::SectionHead {
+                button,
+                revealer,
+                body,
+            },
+            note,
+        ) = sections::section_head(&tr("Change"), true);
+        let (head, revealer, body) = (&button, &revealer, &body);
         let model = ItemToolsComponent {
             shown: ItemToolsShown::default(),
             refill: false,
-            title,
+            note,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -822,8 +850,8 @@ impl Component for ItemToolsComponent {
         self.refill = false;
         let output = match message {
             ItemToolsInput::Show(shown) => {
-                self.title.set_label(&shown.item);
-                self.title.set_visible(true);
+                self.note.set_label(&shown.item);
+                self.note.set_visible(true);
                 self.shown = shown;
                 self.refill = true;
                 None
@@ -877,11 +905,6 @@ pub(in crate::ui) struct ItemTools {
 impl ItemTools {
     /// The panel, hidden; what people ask for on it goes to `input`.
     pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> ItemTools {
-        // A section of the Inspector, "Change" with the item as its note.
-        let (root, body, title) = sections::section_noted(&tr("Change"), true);
-        root.add_css_class("stave-item-tools");
-        root.add_css_class("stave-edit-card");
-        root.set_visible(false);
         let repeat = RepeatFoldComponent::builder()
             .launch(RepeatFoldInit {
                 least: 1,
@@ -891,11 +914,13 @@ impl ItemTools {
             .forward(input, |output| EditingInput::ItemRepeat(output).into());
         let controller = ItemToolsComponent::builder()
             .launch(ItemToolsInit {
-                title,
                 repeat: repeat.widget().clone(),
             })
             .forward(input, |output| EditingInput::ItemTools(output).into());
-        body.append(controller.widget());
+        // The component's root is the whole section; hidden until an
+        // item is selected.
+        let root = controller.widget().clone();
+        root.set_visible(false);
         ItemTools {
             root,
             controller,
@@ -1725,7 +1750,6 @@ mod tests {
         let held = Rc::clone(&token);
         let tools = ItemToolsComponent::builder()
             .launch(ItemToolsInit {
-                title: gtk::Label::new(None),
                 repeat: gtk::Box::new(gtk::Orientation::Vertical, 0),
             })
             .connect_receiver(move |_, _| {
@@ -1841,7 +1865,6 @@ mod tests {
         let again = shown.clone();
         let tools = ItemToolsComponent::builder()
             .launch(ItemToolsInit {
-                title: gtk::Label::new(None),
                 repeat: gtk::Box::new(gtk::Orientation::Vertical, 0),
             })
             .connect_receiver(move |input, output| {
