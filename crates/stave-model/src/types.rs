@@ -173,6 +173,8 @@ impl Ty {
             // `spliced(at:)` one length or a list of them.
             (Ty::Kind(_), Ty::List(inner)) if matches!(**inner, Ty::Kind(_)) => self.fits(inner),
             (Ty::Length, Ty::List(inner)) if **inner == Ty::Length => true,
+            // `tapered(on:)` one face or a list of them.
+            (Ty::Word(found), Ty::List(inner)) if **inner == Ty::Word(*found) => true,
             (Ty::Word(found), Ty::Word(wanted)) => {
                 found == wanted || (*found == WordSet::Grain && *wanted == WordSet::PartAxis)
             }

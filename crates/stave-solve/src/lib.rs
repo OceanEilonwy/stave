@@ -50,6 +50,7 @@ mod models;
 mod pieces;
 mod place;
 mod rules;
+mod shapes;
 mod signature;
 pub mod trace;
 mod walls;

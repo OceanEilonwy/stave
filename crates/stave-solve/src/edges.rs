@@ -28,7 +28,7 @@ pub(crate) fn local_face(orientation: &Orientation, face: Face) -> LocalFace {
 }
 
 /// How a size along a part's own axis is said.
-fn measure_word(axis: PartAxis) -> &'static str {
+pub(crate) fn measure_word(axis: PartAxis) -> &'static str {
     match axis {
         PartAxis::Length => "long",
         PartAxis::Width => "wide",

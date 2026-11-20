@@ -277,6 +277,8 @@ pub const BUILTIN_FUNCTIONS: &[&str] = &[
     "overlay",
     "inset",
     "turned",
+    "tapered",
+    "arched",
     "joined",
     "spliced",
     "box",

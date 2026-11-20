@@ -590,6 +590,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 5b. Edge profiles: each part's chamfers and roundovers, before the
     // mirrored assemblies copy their parts' cuts and splices hand them out.
     solver.make_edge_profiles(&geoms, &mut cuts);
+    // 5b'. Shaped parts: each part's taper or arch (grammar, "Shaped
+    // parts"), cut from the part like an outline.
+    solver.make_shapes(&geoms, &mut cuts);
     // 5c. Edge banding (grammar, "Edge banding"): checked here, taken off
     // only in the cut list.
     let mut banding = solver.make_banding(&geoms);
@@ -1362,6 +1365,9 @@ impl Solver<'_> {
                             seam,
                         },
                         CutSource::Edges { part } => CutSource::Edges {
+                            part: *part_map.get(&part).unwrap_or(&part),
+                        },
+                        CutSource::Shape { part } => CutSource::Shape {
                             part: *part_map.get(&part).unwrap_or(&part),
                         },
                     };
@@ -2158,6 +2164,7 @@ impl Solver<'_> {
                             | Value::Word(_)
                             | Value::Mount(_)
                             | Value::Turned(_)
+                            | Value::Shaped(_)
                             | Value::Boards(_)
                             | Value::Splices(_)
                             | Value::Envelope(_)
@@ -2294,6 +2301,7 @@ impl Solver<'_> {
             | Value::Word(_)
             | Value::Mount(_)
             | Value::Turned(_)
+            | Value::Shaped(_)
             | Value::Boards(_)
             | Value::Splices(_)
             | Value::Envelope(_)
@@ -2392,6 +2400,7 @@ impl Solver<'_> {
                     | Value::Word(_)
                     | Value::Mount(_)
                     | Value::Turned(_)
+                    | Value::Shaped(_)
                     | Value::Boards(_)
                     | Value::Splices(_)
                     | Value::Envelope(_)

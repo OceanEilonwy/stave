@@ -825,7 +825,7 @@ missing both is warned about its length only.
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
 | `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's. A sheet (`plywood`, `mdf`) can't be planed: a part cut from one that writes any other thickness is `error[type-mismatch]` (`panel: its thickness is 10mm, but plywood can't be planed; ply_18 is 18mm thick`) |
 | `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
-| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
+| `shape` | `Shape` | no | no | `tapered(to:, toward:, on:, square:)` or `arched(rise:, on:, ends:)` for a square part, see [Shaped parts](#shaped-parts); or `turned(profile)`: the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
@@ -1576,6 +1576,104 @@ part shelf : pine_19 {
   together are wider than the face are not an error: each is made, and
   the face between them is planed away. Walls (see [Walls](#walls)) do not
   measure an edge profile, as they don't measure an `outline`.
+
+### Shaped parts
+
+A square part may be **tapered** (a table leg planed thinner toward its
+foot) or **arched** (an apron or a bracket with a curve sawn along one
+edge). Each is a `shape:` of the part, said the way a woodworker marks it
+out, never as points:
+
+```
+part leg[4] : oak_45_sq {
+  length: 710mm
+  shape:  tapered(to: 25mm, toward: bottom, on: [right, back], square: 120mm)
+  ...
+}
+part apron : oak_19 {
+  length: 800mm
+  width:  110mm
+  shape:  arched(rise: 30mm, on: bottom, ends: 60mm)
+  ...
+}
+```
+
+- **`tapered(to:, toward:, on:, square:)`.** `on:` names the face or faces
+  that are planed, as they face once the part is placed (one face or a
+  list, the way `edges:` names them): the inside faces of a leg. `toward:`
+  names the end the taper runs to, the narrow end, also as placed
+  (`bottom` for a standing leg's foot). `to:` is how big the part is at
+  that end, measured square to each tapered face, from the face opposite
+  it: a 45mm leg tapered `to: 25mm` on its right face is 25mm wide at the
+  foot. `square:` (default `0mm`) is how far the part stays square from
+  its other end before the taper starts, where the aprons join. Each face
+  is planed in one straight line from the start of the taper to the end.
+  Naming both faces on one axis (`on: [left, right]`) shares the taper
+  equally between them, so the part stays centred: a 45mm leg tapered
+  `to: 25mm` on both loses 10mm from each.
+- **`arched(rise:, on:, ends:)`.** `on:` names the edge face the arch is
+  sawn into, as placed (`bottom` for an apron's lower edge). The arch is
+  one part of a circle, its ends on that face and its middle `rise` into
+  the part, sawn straight through. `ends:` (default `0mm`) is how much of
+  the face stays straight at each end, where the legs join; the arch is
+  centred along the part's length.
+- **Relationships within the part** (principle 3), like a profile's
+  stations: a taper stays on the faces it names wherever the part is
+  placed and whatever its size. A mirror image of a part has its source's
+  shape on the mirrored faces (a taper on the right face of the source is
+  on the left face of its mirror about `across`), as for
+  [Edge profiles](#edge-profiles).
+- **What is shaped.** The shape is measured on the part's **drawn** box
+  and runs along its length; what joints add past the drawn box is left
+  as it is. It is made as `outline` cuts of the part itself, sawn straight
+  through (a taper on two faces is two): drawn in the 3D view, made before
+  the fit and contact checks, listed on the work card with an `outline`
+  recipe, and taken into account by the overlap check. The cut list sizes
+  the square blank the part is cut from, as for a turned part. An arch is
+  drawn and checked as 24 straight cuts whose corners lie on its circle,
+  which leaves a little more wood than the true curve, never less.
+- **Checks.**
+  - A face along the part's length in `toward:` is `error[type-mismatch]`
+    at the argument: `leg runs up and down, so its taper runs toward its
+    top or its bottom, not right`, with the help `name the end the taper
+    runs to, as toward: top or bottom`. An end in `on:` is
+    `error[type-mismatch]` at that face: `leg's top is an end, so it can't
+    be tapered`, with the help `name faces along leg's length: left,
+    right, front or back` (`arched` alike: `apron's left is an end, so it
+    can't be arched`, `name a face along apron's length: ...`). A word
+    that isn't a face is `error[type-mismatch]` too.
+  - A face named twice in `on:` is `error[duplicate-name]` at the second:
+    `right is tapered twice`, with the help `name each face once`.
+  - `to:` of 0mm or less is `error[out-of-range]` (`leg can't be tapered
+    to 0mm`, with the help `taper it to more than 0mm`), and so is one as
+    big as the part is across a tapered face: `leg can't be tapered to
+    50mm: it is only 45mm wide`, with the help `taper it to less than
+    45mm`. `rise:` alike: more than 0mm (`an arch must rise more than 0mm,
+    found 0mm`) and less than the part is across its face (`a 120mm arch
+    is too big for apron: it is only 110mm wide`, with the help `make the
+    rise less than 110mm, so some of apron is left over the arch`).
+  - `square:` or `ends:` less than 0mm is `error[out-of-range]`
+    (`'square' must be 0mm or more, found -5mm`), and so is one that
+    leaves nothing to shape: `leg stays square for 710mm, which is all of
+    its 710mm length, so nothing is tapered`, with the help `make square:
+    less than 710mm`; `apron's straight ends take 800mm of its 800mm
+    length, so nothing is arched`, with the help `make ends: less than
+    400mm`.
+  - Round stock has no flat faces: `tapered` or `arched` on a part cut
+    from `dowel` stock is `error[type-mismatch]` at `shape:` (`rod is
+    round, so it can't be tapered`), with the help `cut it from square
+    stock, or turn it to a profile with shape: turned(profile)`.
+  - An edge profile on an edge of a shaped face would no longer follow
+    the edge: it is `error[type-mismatch]` at the profile (`leg's right
+    face is tapered, so the chamfer can't follow its edges`), with the
+    help `take the profile off right's edges, or the face out of the
+    shape`.
+  - A mirror image's shape is checked once, on its source.
+- **Not supported yet.** A taper that curves (a profile's stations on a
+  square part), an arch that is not part of a circle, an arch across the
+  length (on an end), a curve marked out freely in an outline, and two
+  shapes on one part (a tapered leg with an arched foot). A shaped part
+  that is spliced end to end is cut on the pieces as any outline is.
 
 ---
 
@@ -3363,6 +3461,8 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions); `split` takes `at:` or `shares:` |
 | `overlay(...)`, `inset(reveal:)` | `Mount` | see [Regions](#regions) |
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
+| `tapered(to:, toward:, on:, square:)` | `Shape` | a square part planed thinner toward one end on the faces `on:` names; see [Shaped parts](#shaped-parts) |
+| `arched(rise:, on:, ends:)` | `Shape` | a square part with an arch sawn into the face `on:` names; see [Shaped parts](#shaped-parts) |
 | `joined(by:)` | `Boards` | how the boards of a part are joined: `by:` is a joint kind value or a list of them; see [Boards](#boards) |
 | `spliced(by:, at:, from:)` | `Splices` | where a part is spliced end to end into pieces: `by:` a joint kind value, `at:` a length or a list of them, measured from the end `from:` names; see [Splices](#splices) |
 | `box(length:, width:, thickness:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)). Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
@@ -4228,7 +4328,7 @@ The complete list of types. A `param` may name any of them.
 | `Axis` | `up`, `across`, `deep` |
 | `Direction` | `up`, `down`, `left`, `right`, `front`, `back` |
 | `Mount` | `overlay(...)`, `inset(...)` |
-| `Shape` | `turned(profile)` |
+| `Shape` | `turned(profile)`, `tapered(...)`, `arched(...)` |
 | `Boards` | `joined(by: ...)` |
 | `Splices` | `spliced(by: ..., at: ..., from: ...)` |
 | `Envelope` | `box(...)`, `cylinder(...)` |
