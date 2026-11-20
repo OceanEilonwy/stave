@@ -313,7 +313,10 @@ link to AI apps) has its own row below. `style.rs` (CSS and colours) has
 no state and no component, only stateless helpers that callers apply to
 their own widgets (`as_link`, `mark_dot`, `show_mark`) and `install`,
 which puts the stylesheets on the display once at startup and follows
-the style manager's high contrast with a handler holding only GObjects.
+the style manager's high contrast with a handler holding only GObjects:
+its stylesheet, and the display weakly (the display holds its style
+manager, which holds the handler, so a strong display would be a cycle
+for the life of the display).
 
 | File | Type | Callback slot → Output | Setter → Input | Notes |
 |---|---|---|---|---|
@@ -325,7 +328,7 @@ the style manager's high contrast with a handler holding only GObjects.
 | `edit_panel.rs` | `EditPanel` | — | — (`update() -> bool` stays a plain method; no message) | **Done** as a plain widget helper of `EditView`: it has no state of its own, no callbacks and no cells; `update()` reads its cards' visibility and picks the page, synchronously, from the window's update. A component would add nothing. |
 | `editor.rs` | `Editor` | a lens's links → a `LensClick` sent on the `relm4::Sender<LensClick>` given to `Editor::new`; `FilesComponent` forwards that channel's receiver into its own input as `FilesInput::ListUses` / `ShowIn3d`; a link above a conflict ("Keep yours", ...) → `LensClick::Settle(ConflictSettle)` on the same channel → `FilesInput::SettleConflict`, which calls `Editor::settle_conflict` (the link's handlers only send; they no longer write into the buffer). What its search hears → a `SearchEvent` on the `relm4::Sender<SearchEvent>` given to `Editor::new` (the bar's outputs, forwarded at launch as `SearchEvent::Bar`, and the search's `Counted`), which `FilesComponent` forwards into its own input as `FilesInput::EditorSearch` and hands back to `Editor::search_event` | — (called by its owner's `update`) | **Done** (with `files.rs`): no `Cell`s: its state is plain fields changed through `&mut self` (only `FilesComponent::update` calls it); a lens row's link handlers are made again with the declaration it shows (no shared symbol cell); a go-to's scroll keeps its frame callback and a newer go-to removes it (no shared ticket); the text view and its gutter marks read the dark style from their own CSS class. It is the view of `FilesComponent`, owned by its model and called only from its `update`, so `show_buffer`, `go_to` and the cursor queries take effect at once inside that update. Its search bar is the component `EditorSearch` (`Init = ()`), which never touches the text: `StartSearch(Option<String>)` (the selection, read by the editor), `Find(String)`, `CloseSearch` and `ShowCount(String)` are its inputs, and `EditorSearchOutput::Opened(String)`, `Typed(String)`, `Step { forward }` and `Closed` tell the editor, which holds the `SourceView` search (settings and `SearchContext`) of the buffer showing, selects and scrolls to each match, gives the text the keyboard back when the bar closes and tells the bar the count. `has_search()` is the editor's own record of what it asked of the bar and heard from it. GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. `EscapeProbe` answers "is anything open over the text?" from the widgets alone, for the Escape key handler. `new_buffer(table, text)` makes a buffer sharing the tags. |
 | `empty_state.rs` | `PageFit` (`fit`, `fit_every`) | — | — | **Done** as a GObject subclass of `gtk::Adjustment`, set as a docked status page's vertical adjustment: it hears the page's frame and words change size in its own `changed` method, and hides or shows the page's icon in an idle that holds it weakly. `fit(page)` is called once per page by the component that owns it, on its own page (`panels.rs`'s two panels, `files.rs`, `inspector.rs`, `edit_panel.rs`); `fit_every`, with which the workbench walked into every panel's widgets when it docked them, is gone. No closures share Rust state. Its instance state is an accepted exception (below). |
-| `files.rs` | `FilesPage` / `FilesComponent<Then>` | `FilesOutput::Link(CursorName)`, `Go { from, to }`, `Check`, `ShowIn3d { analysis, symbol }`, `Open`, `Notice(String)`; replies `Saved { ok, then }`, `UnsavedCounted { count, then }`; `SavedFiles(Vec<PathBuf>)` (every save the panel made, its files) → `VersionsInput::Saved`; publications `Documents(Documents { seen, open })`, `Analysed(Rc<Analysis>)`, `Unsaved(BTreeSet<PathBuf>)`, `Tabs(Vec<PageTab>)`; `NotInText` | `FocusText`, `SetFolder { folder, asked }`, `Save`, `Format`, `SaveAll { then }`, `CountUnsaved { then }`, `ForgetUnsaved`, `Search`, `ShowMarks`, `ShowResult`, `ShowLocation`, `Reveal`, `Wish`, `Restyle { dark }`, `OpenDocument`, `ShowTab(usize)`, `Adopt { document, made, asked }`, `Unreadable(String)`; the pending edit's struck-through lines (the window applied a tag in the buffer itself) → `MarkPending { document, lines }` and `ClearPending(document)`; the editor's search → `EditorSearch(SearchEvent)` (its own, see `editor.rs`) | **Done**. No `RefCell`, no `Rc<Self>`, no `Weak`, no `Cell`: timers and the worker thread send messages with tickets (a stale timer's message is ignored, so no fired timer is ever removed), the overlays' settling counts its frames in the model and removes its frame callback, programmatic cursor moves block the buffer's cursor handler. `FilesPage` is the window's handle: the one owner of the `Controller` (forwarded at launch, `update/project.rs`, `files_said`) and the window's own copies of what it published, which the window's synchronous reads (`edit_files`, `overlay_for_check`, `analysis`) and the edit writer use; see "Request and reply" and "Accepted exceptions". `buffer_for` is gone: the pending marks are the component's to draw. The analysis is handed over by the window when `FilesOutput::Analysed` reaches it (`ProjectInput::Analysed`); the shared `LatestAnalysis` cell is gone. |
+| `files.rs` | `FilesPage` / `FilesComponent<Then>` | `FilesOutput::Link(CursorName)`, `Go { from, to }`, `Check`, `ShowIn3d { analysis, symbol }`, `Open`, `Notice(String)`; replies `Saved { ok, then }`, `UnsavedCounted { count, then }`; `SavedFiles(Vec<PathBuf>)` (every save the panel made, its files) → `VersionsInput::Saved`; publications `Documents(Documents { seen, open })`, `Analysed(Rc<Analysis>)`, `Unsaved(BTreeSet<PathBuf>)`, `Tabs(Vec<PageTab>)`; `NotInText` | `FocusText`, `SetFolder { folder, asked }`, `Save`, `Format`, `SaveAll { then }`, `CountUnsaved { then }`, `ForgetUnsaved`, `Search`, `ShowMarks`, `ShowResult`, `ShowLocation`, `Reveal`, `Wish`, `Restyle { dark }`, `OpenDocument`, `ShowTab(usize)`, `Adopt { document, made, asked }`, `Unreadable(String)`; the pending edit's struck-through lines (the window applied a tag in the buffer itself) → `MarkPending { document, lines }` and `ClearPending(document)`; the editor's search → `EditorSearch(SearchEvent)` (its own, see `editor.rs`) | **Done**. No `RefCell`, no `Rc<Self>`, no `Weak`, no `Cell`: timers and the worker thread send messages with tickets (a stale timer's message is ignored, so no fired timer is ever removed), the overlays' settling counts its frames in the model and removes its frame callback, programmatic cursor moves block the buffer's cursor handler. `FilesPage` is the window's handle: the one owner of the `Controller` (forwarded at launch, `update/project.rs`, `files_said`) and the window's own copies of what it published, which the window's synchronous reads (`edit_files`, `overlay_for_check`, `analysis`) and the edit writer use; see "Request and reply" and "Accepted exceptions". `buffer_for` is gone: the pending marks are the component's to draw. The analysis is handed over by the window when `FilesOutput::Analysed` reaches it (`ProjectInput::Analysed`); the shared `LatestAnalysis` cell is gone. The window the Save a Copy dialog is modal to is the owner's, given at launch (`FilesInit::parent`, from `FilesPage::new(to, parent, map)`); the panel never walks up its widget tree to find it. |
 | `finder.rs` | `Finder` | `connect_search(&str) -> Vec<Hit>` → request `FinderOutput::Search(String)` / reply `FinderInput::Hits(Vec<Hit>)`; `connect_actions(&str) -> Vec<Action>` → `FinderOutput::SearchActions(String)` / `FinderInput::Actions(Vec<Action>)`; `connect_hit(Hit, Choice)` → `FinderOutput::Hit { hit, choice }`; `connect_action(usize)` → `FinderOutput::Action(usize)` | `present(&impl IsA<Widget>, &str)` → `Present { parent: gtk::Widget, query: String }`; `force_close()` → `ForceClose`, answered by `FinderOutput::ClosedForGood` (→ `ProjectInput::FinderClosedForGood`) | **Done**: rule 9 for the two searches: `FinderOutput::Search` / `SearchActions` are answered from the window's update with `Finder::show_hits` / `show_actions` (`FinderInput::Hits` / `Actions`). Forwarded at launch (`finder_said`); `ListenForHits` is gone, since the owner hears hits from launch. Root is an `adw::Dialog`, no longer a public field: a screenshot's closing asks the finder to close (`ForceClose`) and closes the window when it answers, instead of calling `dialog.force_close()`. Test getter `dialog()`. |
 | `floating.rs` | `Floats` | `FloatsOutput::Orient { group, orientation }`, `Docked { group, spot }`, forwarded at launch (`Floats::new(.., owner, message)`) → `RenderingInput::ToolOriented`, `ToolDocked` | `refresh(Spots)` → `Refresh(Spots)` | **Done**. Rule 11: the tool groups' spots have one keeper, the workbench; the floats hear them as `Refresh` whenever the window passes on `WorkbenchOutput::ToolsChanged`, the first published by the workbench at launch. Its root is the view's overlay (`Floats::root`, which the window places in the stage), with the 3D view as its child. Takes the 3D view and the floating controls at launch (`Init`) and places each control in a *float* of its own (an `adw::Bin`): the float, not the control, gets the gestures, the "Press and hold to move it" tooltip and `stave-dragging` while dragged (its shadow drawn on the group inside, `.stave-dragging > *`). The controls are other components' roots (the camera column, Pull apart's pop-out, the plan switch, the dock's scene menu and chips, the motion bar, the step card, the problem card) and four of the window's own plain widgets (the hint chip, the block line, the shared-wood key and the off-screen chip; see "The window's own plain widgets"); the floats only place them, and whoever made each shows, hides and styles it. A group let go is not docked in the floats' copy of the spots: they send `Docked` and move it when the workbench's `Refresh` comes back. The overlay's `get-child-position` handler gets a copy (`Placer`) after every update. |
 | `focus_panel.rs` | `FocusPanel` | `connect_source(SourceLocation)` → `FocusPanelOutput::Source(SourceLocation)`; (mod.rs) `done.connect_clicked` → `Done`; `xray`, `tint`, `fade` `connect_active_notify` → `Xray(bool)`, `Tint(bool)`, `Fade(bool)` | `show(Option<&Focus>)` → `Show(Option<Box<Focus>>)`; `show_options(focus::Options)` → `ShowOptions(focus::Options)` (the X-ray, Tint and Fade checks, set from the window's model: `update/selection.rs`) | **Done**: A click on a toggle row's words sends `RowPressed(FocusToggle)`, and the update turns that row's box, whose own handler reports people's change. `ShowOptions` sets the three checks with their handlers blocked (`block_signal` / `unblock_signal` on each check's handler id in `update_with_view`), so the outputs are people's changes only. The `FocusPanel` handle is a public field of the `Inspector` handle (`Inspector::focus`), which owns it beside the inspector's controller; it is launched in `Inspector::new` with `.forward()` into the window's leaf channel (`focus_panel_said`), and the window sends it `Show` and `ShowOptions` through `self.widgets.inspector.focus`. |
@@ -337,7 +340,7 @@ the style manager's high contrast with a handler holding only GObjects.
 | `header.rs` | `Header` | `HeaderOutput::View(View)`, forwarded at launch (`Header::new(folder_label, owner, message)`) → `RenderingInput::ShowView` | the application's recent projects → `show_recent(Vec<PathBuf>)` / `ShowRecent(Vec<PathBuf>)` (sent by the window on `ProjectInput::ShowRecent`, which the application sends every window whenever the list changes and to a window as it opens), filling the bar's own Open Recent submenu; `show_title(&str, &str)` → `ShowTitle { title, folder }`; `show_view(View)` → `ShowView(View)`; `show_pill(&Pill, usize, &str)` → `ShowPill(PillShown)`; `show_build(Build, &str)` → `ShowBuild { build, tooltip }`; `narrow(&adw::Breakpoint, f64)` → `Narrow { breakpoint, width }` (the bar adds its own setters to the window's breakpoint, as the workbench's `NarrowEdges` does: see "Accepted exceptions") | **Done**. The menus are the bar's own: `main_menu` (Project, Edit, View, Help) is built by the header with an Open Recent submenu of its own (`HeaderParts::recent`), so no menu model is shared between windows or written by anyone else (the application's one shared `gio::Menu` is gone). `block_signal` on the switcher in `ShowView`. Pill, back, forward and build use window actions. The scene menu moved to the dock. The window places only `bar`: `menu_bar`, `menu_button`, `switcher` and `switcher_labels()` are no longer public (the window used them to add breakpoint setters; the table called `switcher_labels()` a test getter, wrongly). Tests read the bar's widgets through a `#[cfg(test)]` copy of its parts. |
 | `icons.rs` | `PathIcon` | — | `set_shape(Shape)` (widget method) | A GObject subclass: stays a widget, used inside components' views. |
 | `inspector.rs` | `Inspector` | `connect_focus(Target)` → `InspectorOutput::Focus(Target)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; its name links' clicks and hovers → `Link(LinkTarget)`, `Hover(Option<LinkTarget>)` (the window's `connect_links` is gone); `connect_unsaved` is gone: the window sends `show_unsaved(set)` → `InspectorInput::Unsaved(BTreeSet<PathBuf>)` when `FilesOutput::Unsaved` says the set changed | `show_focus()` → `ShowFocus`; `show_idle(Option<Note>)` → `ShowIdle(Option<Note>)`; `show(Option<&Inspection>)` → `Show(Option<Inspection>)` | **Done**: the window owns the handle, the one owner of the component's `Controller`, launched in `build_widgets` with `.forward()` into the window's leaf channel (`update/selection.rs`, `inspector_said`); no `connect_outputs`, no `Bridge`. Owns `FocusPanel` (forwarded too, `focus_panel_said`); its name links send its own input (`LinkHandlers<InspectorInput>`). |
-| `new_project.rs` | `NewProjectDialog` | the old callbacks → `NewProjectOutput::Created(PathBuf)` (the project is written into this folder and the dialog closed) and `Closed` (the dialog has closed, with a project written or not) | — (people's presses are its own inputs: Cancel, Choose Folder… and Create `connect_clicked` → `NewProjectInput::Cancel`, `ChooseFolder`, `Create`; the folder dialog's answer → `FolderChosen(PathBuf)`; the dialog's `closed` → `Closed`) | **Done**: the component writes the project itself (`create_project`) and says where (`Created`). Owned by whoever shows it (the window's `State::new_project`, the start page's model) while it shows, forwarded at launch, let go on `NewProjectOutput::Closed`; the self-keeping `Rc<Cell<Option<NewProjectDialog>>>` and `ask` are gone. Its owner presents its root (`present`). Test getter `answers()`. |
+| `new_project.rs` | `NewProjectDialog` | the old callbacks → `NewProjectOutput::Created(PathBuf)` (the project is written into this folder and the dialog closed) and `Closed` (the dialog has closed, with a project written or not) | — (people's presses are its own inputs: Cancel, Choose Folder… and Create `connect_clicked` → `NewProjectInput::Cancel`, `ChooseFolder`, `Create`; the folder dialog's answer → `FolderChosen(PathBuf)`; the dialog's `closed` → `Closed`) | **Done**: the component writes the project itself (`create_project`) and says where (`Created`). Owned by whoever shows it (the window's `State::new_project`, the start page's model) while it shows, forwarded at launch, let go on `NewProjectOutput::Closed`; the self-keeping `Rc<Cell<Option<NewProjectDialog>>>` and `ask` are gone. `Init` is `NewProjectInit { form, parent }`: the owner's window (`NewProjectDialog::new(to, parent, map)`), which the dialog shows over (`present()`) and the folder chooser is modal to, so the dialog never walks up to find a window. Test getter `answers()`. |
 | `option_search.rs` | `OptionSearchComponent` | `connect_closed()` → `OptionSearchOutput::Closed`; `connect_chosen(String, String)` → `Chosen { setting, value }`; `connect_search(&str) -> Vec<SearchGroup>` is gone: the search holds the window's copy of the setting and searches it itself | `present(&str, &str)` → `Present { name, setting: Option<Box<SettingParam>>, query }`; `refresh()` → `Update(Box<SettingParam>)` (a fresh copy); `close()` → `Close`; typing → `QueryChanged`; `choose_selected()` → `ChooseSelected`; a row's click → `Activated(i32)`; the arrows → `Step(i32)` | **Done**: owned by the window, forwarded at launch. *query* `setting()` is the window's own `EditView::search_open` (set when it presents, cleared on `Closed`). Test getters `setting()`, `rows()` on the model, `entry()`, `selected(..)` on the widgets. |
 | `output.rs` | `OutputPanel` | — | `add_line(&str)` → `OutputPanelInput::AddLine(String)` | **Done**: owns a detached `Controller` (no outputs). |
 | `panels.rs` | `ProblemsPanel` | `connect_choose(usize)` → `ProblemsOutput::Choose(usize)`; `connect_source(SourceLocation)` → `Source(SourceLocation)` | `show(&[Report], Option<usize>, bool)` → `Show { reports: Vec<Report>, selected, stale }`; `show_selected(Option<usize>)` → `ShowSelected(Option<usize>)` | **Done**: the window owns the handle, the one owner of the component's `Controller`, launched in `build_widgets` with `.forward()` into the window's leaf channel (`update/selection.rs`, `problems_said`); no `connect_outputs`, no `Bridge`. `#[block_signal]` on row selection in `ShowSelected`. |
@@ -364,7 +367,7 @@ the style manager's high contrast with a handler holding only GObjects.
 | `edit_view/hold.rs` | `HoldCardComponent` | (`connect_hold`) `try_it.connect_clicked` and `reason.connect_activate` → `HoldCardOutput::TryIt(HoldFields)`; `cancel.connect_clicked` → `Cancel` | `show(&Measured, &Measured, &Result<Length, String>)` → `Show { title, now }` (`HoldCardInput::show`); a script's fields → `Fill(HoldFields)` | **Done**: the shim is gone; the window owns the `Controller` (`Hold::card`), forwarded at launch to `EditingInput::HoldCard`. `TryIt` carries what the fields hold. |
 | `edit_view/hold.rs` | `Hold` | (`connect_hold`) `from_space.connect_clicked` → `EditMenuOutput::HoldFromSpace` → `EditingInput::HoldFromSpace` | — | **Done**: not a component but the window's state for a hold (`step`, the card's `Controller`). The "Hold a distance from this space…" button is the edit menu's own (`connect_hold` and `Hold::from_space` are gone). |
 | `edit_view/repeat_handles.rs` | `Repeats` | the card's stepper (a `RepeatFoldComponent` the window owns, forwarded at launch): `Unfold` → `EditingInput::CardRepeatUnfolded`, `Changed { count, axis, shows }` → `CardRepeatChanged { count, axis, shows }` | `RepeatFoldShown::show`/`show_count` return the `RepeatFoldInput` the window sends | **Done**: plain model state of the window, not a component. The stepper's controller and its `RepeatFoldShown` copy (read at once by scripts) are fields of `Repeats`. The count and boundary handles on the model are gone: boundaries are rows of the Sizes card. A script's `Repeat…` marks the copy asked and queues `CardRepeatUnfolded`, as a click does. |
-| `edit_view/sizes.rs`, `edit_view/size_slider.rs` | `SizesCard`, `SizeSlider` | its rows' and the size editor's buttons, field, keys and radios → `EditingInput::OpenSize(index)`, `SizeNudged`, `SizeReset`, `SizeApply`, `CloseSize`, `GripPanel(PanelAction::Pick)`; the slider's drags and keys → `SizeSlid { position, released }`, `SizeNudged`, `SizeApply`, `CloseSize` (`SizeSlider::new(name, input, message)`, a message constructor, `sizes::slider_said`) | `show`, `open_editor`, `set_row_value`, `flash`, `clear` (plain methods called from the window's update) | **Done** as plain widgets of the window (as `EditPanel` and `Repeats` are): `GripView::sizes`, changed only from the window's update; their handlers only send the window's messages. The slider shares no state: its draw function is handed a copy of what it draws at each `show` (the old `Rc<Cell<SliderLook>>` is gone), and a drag reads its start from the gesture itself (the old `Rc<Cell<f64>>` is gone). A row's "just written" flash removes its class from a timeout holding the button weakly. |
+| `edit_view/sizes.rs`, `edit_view/size_slider.rs` | `SizesCard`, `SizeSlider` | its rows' and the size editor's buttons, field, keys and radios → `EditingInput::OpenSize(index)`, `SizeNudged`, `SizeReset`, `SizeApply`, `CloseSize`, `GripPanel(PanelAction::Pick)`; Enter in the size editor's field → `SizeTyped(String)` (what is typed); the size editor's ⋮ menu (`switch_menu`, shared with the grip panel) → `switch_asked(index, ask, SwitchMenu::Row(menu))`, i.e. `GripMakePlain` / `GripMakeSolved`; the slider's drags and keys → `SizeSlid { position, released }`, `SizeNudged`, `SizeApply`, `CloseSize` (`SizeSlider::new(name, input, message)`, a message constructor, `sizes::slider_said`) | `show`, `open_editor`, `set_row_value`, `flash`, `clear` (plain methods called from the window's update) | **Done** as plain widgets of the window (as `EditPanel` and `Repeats` are): `GripView::sizes`, changed only from the window's update; their handlers only send the window's messages. The slider shares no state: its draw function is handed a copy of what it draws at each `show` (the old `Rc<Cell<SliderLook>>` is gone), and a drag reads its start from the gesture itself (the old `Rc<Cell<f64>>` is gone). A row's "just written" flash removes its class from a timeout holding the button weakly. |
 
 ## Phase 2: the application and the window
 
@@ -579,10 +582,76 @@ shared with them:
   its head's fold button (`sections::section`), which opens or folds the
   section's own body, as a `gtk::Expander` would; the state is the
   revealer's own.
+- The Edit face button (`EditView::face_button`, made in
+  `EditView::new`, `edit_view.rs`, and put at the foot of the Details
+  panel by `connect_editing`): "Edit this face", shown, worded and
+  hidden by `update_face_button`. Its one handler, on `clicked`, only
+  sends `EditingInput::EditFace`, holding the window's input sender and
+  nothing else.
+- The unsaved-changes question ("Save Changes?",
+  `update/project.rs`, `ask_unsaved_question`): an `adw::AlertDialog`
+  presented over the window. What waits on the answer stays in the
+  window's model (`State::unsaved_then`); its one handler, on
+  `response`, only sends `ProjectInput::UnsavedAnswered`, holding only
+  the window's input sender, so nothing holds the dialog but the window
+  it is presented over and it is freed once it closes.
+- The export failure ("Couldn't Export the View",
+  `update/rendering.rs`, `show_export_failure`): an `adw::AlertDialog`
+  presented over the window, its one handler, on `response`, only
+  sending `RenderingInput::ExportView` for "Save Elsewhere…", holding
+  only the window's input sender; freed once it closes.
+- The window's file choosers (`gtk::FileDialog`s): Open a project
+  folder (`update/project.rs`, `choose_folder`) and Export 3D Model
+  (`update/rendering.rs`, `export_view`), modal to the window, each made
+  for one question. Their answer callbacks only send
+  `ProjectInput::GoToFolder` and `RenderingInput::ExportTo`, holding the
+  window's input sender and nothing else; the window doesn't keep the
+  dialog, so it is freed once answered.
 - The Sizes card and its slider (`edit_view/sizes.rs`,
   `size_slider.rs`) and `EditPanel`, as the leaf table says, and the
   window's containers (`details`, `edit_holder`, `sheet`, the
   views' and the 3D view's stacks, the focus stage).
+
+### Nobody walks up the widget tree
+
+A component knows only its own widgets and what its owner gives it. No
+component reaches up to its window (`root()`) or walks up from its
+root (`parent()`) to find something outside itself:
+
+- **A window to be modal to** is given by the owner at launch:
+  `FilesInit::parent` (Save a Copy, `files.rs`) and
+  `NewProjectInit::parent` (the New Project dialog and its folder
+  chooser, `new_project.rs`). libadwaita's own dialogs are presented
+  with the component's own widget (`adw::Dialog::present(Some(widget))`),
+  which libadwaita resolves itself.
+- **Where the keyboard is** is asked of the component's own widgets:
+  `ui::keyboard_in(widget)` (the widget or one inside it is the focus
+  widget) and `ui::keyboard_inside(widget)` (one inside it is). They read
+  the `FOCUS_WITHIN` state and otherwise ask each of the widget's own
+  descendants `is_focus()`, which holds while the window isn't active,
+  as the window's focus widget does, so the answer is the one the
+  window's focus widget gave before. Their users: the edit card's and
+  change card's `take_focus` (`edit_card.rs`) and the change card's
+  verdict (`edit_view/changes.rs`), the short list's focused entry
+  (`edit_card.rs`, `focused_choice`), the editor's `has_focus` (its own
+  text view and search bar, `editor.rs`) and the parts tree's arrow keys
+  (its own rows, `tree.rs`, `key_step`). The window's own shortcut
+  controller (`app.rs`, `window_action`, on the window itself) asks the
+  window, which it is attached to, for its focus widget.
+
+The `parent()` calls left all stay inside the caller's own widgets: the
+edit card moving its own name field and finding its own short list's
+row and revealer (`edit_card.rs`), the finder's and problems panel's
+own rows (`finder.rs`, `panels.rs`), the parts tree's own rows
+(`tree.rs`), the workbench finding which of its own dock's frames holds
+one of its panels (`workbench.rs`, `frame_of`, `reopen`), and the
+window's plain Pending section, size section and size editor taken
+out of where they were before they move or close (`edit_view/editor_link.rs`,
+`edit_view/grips.rs`, `edit_view/sizes.rs`). The 3D view
+(`viewport.rs`, `Viewport::scale`) asks its native surface for its
+scale, a GObject subclass asking GTK about its own drawing (the
+fractional scale is known only to the surface), not a walk to anything
+of another component's.
 
 ### Edit card and menu: answers by message
 
@@ -700,7 +769,10 @@ for later conversions, in this order of preference.
    with `FilesInput::Adopt { document, made, asked }`: a file opened, a
    place shown or revealed (so a commit straight after writes through
    its buffer), or a file an edit's commit writes while the editor shows.
-   The component never makes a buffer: `OpenDocument`, `ShowLocation`
+   Every document's buffer is made by the owner. (The component's one
+   buffer of its own is the empty placeholder the editor shows while no
+   tab is open, made on `SetFolder`: no document's, never published and
+   never in the owner's copies.) `OpenDocument`, `ShowLocation`
    and `Reveal` show a tab that is there and do nothing for a document
    without one (a file the owner couldn't read is said so with
    `FilesInput::Unreadable`). So the owner's copies never miss an open
@@ -1245,7 +1317,28 @@ rules can't remove:
   renderer (`Renderer::refuse_dmabufs`, a plain field of the exporter),
   so later frames take the readback path. The scope is exactly
   `crates/stave-gtk/src/render/`; under `ui/` only the versions' worker
-  (below) and the edit checks' stop tokens (above) cross threads.
+  (below) and the edit checks' stop tokens (above) share state across
+  threads. Other work under `ui/` runs off the main thread but shares no
+  UI state with it: each job is moved to a `gio::spawn_blocking` thread
+  owning what it works on (an owned copy, or data that thread alone
+  holds until it hands it back) and its answer comes back as a message
+  through a local future, ignored if the window has gone:
+  the check (`update/project.rs`, `run_check`: the folder, the overlay
+  of unsaved text and the mesh cache, → `ProjectInput::Checked` with
+  its ticket; the mesh cache, `stave_scene::MeshCache`, is the one
+  thing the job shares with the session: `stave-scene`'s store of part
+  meshes kept between checks, locked inside that crate, below the UI and
+  outside this document's rules like `stave-render`'s, never UI state),
+  the Code
+  panel's names (`files.rs`, `analyse_now`: the folder, the overlay and
+  the `AnalysisHost`, moved there and back, → `FilesInput::Analysed`
+  with its generation), the view's export (`update/rendering.rs`,
+  `export_to`: copies of the scene graph and the pose,
+  → `RenderingInput::Exported`), the item's full offer
+  (`edit_view/item_tools.rs`, `start_item_offer`: the job, holding the
+  session's read-only snapshot of the files, → `EditingInput::ItemOfferFound`)
+  and the setting up in AI apps (`app.rs`, `use_with_ai_app`:
+  `ai_link::install_found`, which takes nothing, → `ShellInput::UsedWithAiApp`).
 - `versions.rs`, the work on the project's versions off the main thread
   (`WindowVersions`): `stave_app::versions::Worker` runs each job on one
   thread of its own, in order (a save must never overlap a catch-up), and

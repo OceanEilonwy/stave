@@ -1724,12 +1724,7 @@ impl Editor {
 
     /// `true` while the keyboard is in the text or its search bar.
     pub fn has_focus(&self) -> bool {
-        self.view.has_focus()
-            || self
-                .view
-                .root()
-                .and_then(|root| root.focus())
-                .is_some_and(|focus| focus.is_ancestor(self.search.widget()))
+        self.view.has_focus() || super::keyboard_inside(self.search.widget().upcast_ref())
     }
 
     /// Opens the search bar (Ctrl+F in the text), when the main loop next

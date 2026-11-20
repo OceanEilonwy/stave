@@ -223,8 +223,9 @@ pub enum FilesInput<Then> {
     },
     /// Shows a document's tab at its top. The owner makes the buffer of a
     /// document with no tab and hands it over first
-    /// ([`FilesInput::Adopt`]): the component never makes one itself, so
-    /// the owner knows every open buffer before it shows.
+    /// ([`FilesInput::Adopt`]): the component never makes a document's
+    /// buffer itself, so the owner knows every open buffer before it
+    /// shows.
     OpenDocument(Document),
     /// The tab strip's tab at this place among the open files was chosen.
     ShowTab(usize),
@@ -617,6 +618,10 @@ pub struct FilesComponent<Then: fmt::Debug + 'static> {
     sender: ComponentSender<Self>,
     /// The panel, for dialogs' parent.
     root: gtk::Box,
+    /// The window the Save a Copy dialog is modal to: the owner's,
+    /// given at launch ([`FilesInit::parent`]), so the panel never walks
+    /// up its widget tree to find it.
+    parent: Option<gtk::Window>,
     /// What shows while no file is open.
     placeholder: gtk::Widget,
     /// The open file's text and what goes with it.
@@ -691,6 +696,10 @@ pub struct FilesInit {
     /// The tag table every buffer shares: the owner keeps it too, so a
     /// buffer it makes (see `edit_writer.rs`) can be adopted as a tab.
     pub table: gtk::TextTagTable,
+    /// The window a dialog the panel asks with (Save a Copy) is modal
+    /// to: the owner's window (none for a panel shown in no window, as
+    /// in tests).
+    pub parent: Option<gtk::Window>,
 }
 
 impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
@@ -822,6 +831,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
         let model = FilesComponent {
             sender,
             root,
+            parent: init.parent,
             placeholder,
             body,
             crumbs,
@@ -1186,6 +1196,8 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         self.checked = None;
         self.checked_files.clear();
         self.listed = None;
+        // The placeholder shown while no tab is open: no document's, so
+        // it is the component's own and never published.
         let empty = self.editor.new_buffer("");
         self.editor.show_buffer(&empty, false);
         self.uses.set_reveal_child(false);
@@ -1329,14 +1341,17 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
             .initial_name(document.file_name())
             .modal(true)
             .build();
-        let parent = self.root.root().and_downcast::<gtk::Window>();
         let input = self.sender.input_sender().clone();
-        dialog.save(parent.as_ref(), gio::Cancellable::NONE, move |result| {
-            let Ok(file) = result else { return };
-            let Some(path) = file.path() else { return };
-            let failure = stave_app::save_failure::save_copy(&path, &text).err();
-            let _ = input.send(FilesInput::CopyWritten { path, failure });
-        });
+        dialog.save(
+            self.parent.as_ref(),
+            gio::Cancellable::NONE,
+            move |result| {
+                let Ok(file) = result else { return };
+                let Some(path) = file.path() else { return };
+                let failure = stave_app::save_failure::save_copy(&path, &text).err();
+                let _ = input.send(FilesInput::CopyWritten { path, failure });
+            },
+        );
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
@@ -2553,7 +2568,8 @@ pub struct FilesPage<Then: fmt::Debug + 'static> {
     /// The open documents' buffers, as last published, plus the ones made
     /// here that the component hadn't adopted when it published them.
     /// Every buffer the component shows is made here and kept here first
-    /// (the component never makes one), so this never misses an open tab.
+    /// (the component makes no document's buffer), so this never misses
+    /// an open tab.
     buffers: BTreeMap<Document, gtk::TextBuffer>,
     /// The buffers made here (to show a file, or by an edit's commit) and
     /// handed over with [`FilesInput::Adopt`], with the request that
@@ -2574,15 +2590,18 @@ pub struct FilesPage<Then: fmt::Debug + 'static> {
 
 impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     /// An empty panel, each output made the owner's message by `map` and
-    /// sent to `to`.
+    /// sent to `to`. `parent` is the owner's window, which the panel's
+    /// own dialogs are modal to.
     pub fn new<X: 'static>(
         to: &relm4::Sender<X>,
+        parent: Option<&gtk::Window>,
         map: impl Fn(FilesOutput<Then>) -> X + 'static,
     ) -> FilesPage<Then> {
         let table = gtk::TextTagTable::new();
         let controller = FilesComponent::<Then>::builder()
             .launch(FilesInit {
                 table: table.clone(),
+                parent: parent.cloned(),
             })
             .forward(to, map);
         FilesPage {
@@ -2854,7 +2873,7 @@ mod tests {
     /// A page whose outputs are recorded, as its owner would hear them.
     fn recorded_page() -> (Page, Rc<RefCell<Vec<FilesOutput<&'static str>>>>) {
         let (to, heard) = crate::ui::gtk_test::recorder();
-        (Page::new(&to, |output| output), heard)
+        (Page::new(&to, None, |output| output), heard)
     }
 
     /// A copy of an example project in a folder of its own, so saving
@@ -2890,7 +2909,7 @@ mod tests {
         let to = crate::ui::gtk_test::listener(move |_: FilesOutput<&'static str>| {
             let _ = &held;
         });
-        let mut page = Page::new(&to, |output| output);
+        let mut page = Page::new(&to, None, |output| output);
         drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
@@ -3190,8 +3209,8 @@ mod tests {
     /// Opening a file makes its buffer in the owner's copies at once
     /// (the component shows that very buffer once it runs), so text typed
     /// into its tab is in the overlay a check or an edit reads before any
-    /// publication arrives. The component never makes a buffer itself: a
-    /// document not handed over has no tab to show.
+    /// publication arrives. The component never makes a document's buffer
+    /// itself: a document not handed over has no tab to show.
     fn file_opened_is_read_at_once() {
         let folder = scratch_copy("wall_shelf", "opened-at-once");
         let path = folder.join("shelf.stave");
