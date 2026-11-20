@@ -1,0 +1,34 @@
+---
+source: crates/stave-lang/tests/conflict_parse.rs
+expression: out
+---
+error[conflict]: 'your saved work' and 'Claude Desktop' change the same lines
+  --> conflict_snapshot.stave:16:1
+   |
+16 | <<<<<<< conflict 1 of 1
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: This file holds two versions of the same lines. Keep one, keep both, or edit between the marker lines.
+
+fix: Keep this side (Keep(0))
+fix: Keep the other side (Keep(1))
+
+error[conflict]: 'HEAD' and 'suggestion' change the same lines
+  --> conflict_git.stave:19:1
+   |
+19 | <<<<<<< HEAD
+   | ^^^^^^^^^^^^
+   = help: This file holds two versions of the same lines. Keep one, keep both, or edit between the marker lines.
+
+fix: Keep this side (Keep(0))
+fix: Keep the other side (Keep(1))
+fix: Keep both (KeepBoth)
+
+error[conflict]: 'your saved work' and 'Claude Desktop' change the same lines
+  --> conflict_in_block.stave:14:1
+   |
+14 | <<<<<<< your saved work
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: This file holds two versions of the same lines. Keep one, keep both, or edit between the marker lines.
+
+fix: Keep this side (Keep(0))
+fix: Keep the other side (Keep(1))

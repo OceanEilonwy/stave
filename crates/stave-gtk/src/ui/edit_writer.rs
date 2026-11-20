@@ -28,7 +28,7 @@ use stave_app::editing::{FileEdit, WriteEdits};
 use stave_app::scratch::DiskWriter;
 use stave_ide::Document;
 
-use super::files::Written;
+use super::files::{Made, Written};
 
 /// Writes an edit's files through the open buffers, else to disk.
 pub(super) struct BufferWriter {
@@ -81,23 +81,24 @@ impl BufferWriter {
 impl WriteEdits for BufferWriter {
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()> {
         let document = Document::File(file.path.clone());
-        let (buffer, created) = match self.buffer(file) {
-            Some(buffer) => (buffer, false),
+        // The text a buffer made here starts from: the file's on disk.
+        let (buffer, base) = match self.buffer(file) {
+            Some(buffer) => (buffer, None),
             None if self.wants_buffer(file) => {
                 let text = std::fs::read_to_string(&file.path)?;
-                (super::editor::new_buffer(&self.table, &text), true)
+                (super::editor::new_buffer(&self.table, &text), Some(text))
             }
             None => return DiskWriter.write_edits(file),
         };
         apply_to_buffer(&buffer, file)?;
-        if created {
+        if base.is_some() {
             self.buffers.insert(document.clone(), buffer.clone());
         }
-        if created || self.editor_open {
+        if base.is_some() || self.editor_open {
             // The window may have gone; then nobody needs to know.
             let _ = self.written.send(Written {
                 document,
-                created: created.then_some(buffer),
+                created: base.map(|base| Made { buffer, base }),
                 // The editor shows the file the change went into.
                 show: self.editor_open,
             });

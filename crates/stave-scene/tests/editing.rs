@@ -635,3 +635,45 @@ fn an_edit_meshes_again_only_the_parts_whose_cuts_changed() {
         usage.reused,
     );
 }
+
+#[test]
+fn ghosts_over_the_base_scene_keep_the_base_and_add_the_ghosts() {
+    let (design, graph) = base();
+    let candidate = wider();
+    let ghosts = Ghosts::new(
+        &design,
+        &graph,
+        &candidate,
+        BuildOptions::default(),
+        GhostVerdict::Fits,
+    );
+    let overlay = ghosts.over(&graph);
+    let drawn = overlay.graph();
+    // The base nodes first, as they were; then one node per ghost.
+    assert_eq!(drawn.nodes.len(), graph.nodes.len() + ghosts.ghosts().len());
+    assert_eq!(drawn.nodes[..graph.nodes.len()], graph.nodes[..]);
+    let looks = overlay.looks();
+    let base_node = graph.node_of_name("base");
+    assert_eq!(looks[base_node.index()], Look::Ghost, "the original faded");
+    assert_eq!(looks[graph.node_of_name("side_l").index()], Look::Normal);
+    for node in overlay.ghost_nodes() {
+        assert!(overlay.is_ghost(node));
+        assert_eq!(looks[node.index()], Look::XRay);
+        let candidate_node = overlay.candidate_node(node).unwrap();
+        assert_eq!(
+            drawn.node(node).unwrap().name,
+            ghosts.graph().node(candidate_node).unwrap().name
+        );
+        assert_eq!(overlay.of_candidate(candidate_node), Some(node));
+    }
+    // A node the candidate leaves alone is drawn by the base node.
+    let side_l = ghosts.graph().node_of_name("side_l");
+    assert_eq!(
+        overlay.of_candidate(side_l),
+        Some(graph.node_of_name("side_l"))
+    );
+    assert_eq!(overlay.candidate_node(base_node), None);
+    // Every node poses, the ghosts with the rest.
+    let posed = drawn.pose_with(&drawn.scenes[0], &[], 1.0);
+    assert_eq!(posed.transforms().len(), drawn.nodes.len());
+}

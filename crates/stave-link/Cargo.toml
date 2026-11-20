@@ -1,0 +1,19 @@
+[package]
+name = "stave-link"
+description = "Sets Stave up in AI apps (Claude Desktop, Claude Code, Codex) and asks the running Stave window to show a project"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json = "1"
+thiserror = "2"
+toml_edit = "0.25"
+zbus = "5"
+
+[dev-dependencies]
+pollster = "0.4"
+tempfile = "3"
+
+[lints]
+workspace = true

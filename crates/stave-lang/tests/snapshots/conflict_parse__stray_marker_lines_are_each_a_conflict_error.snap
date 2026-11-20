@@ -1,0 +1,17 @@
+---
+source: crates/stave-lang/tests/conflict_parse.rs
+expression: "render(\"stray.stave\", text)"
+---
+error[conflict]: this conflict marker line is not part of a conflict Stave can read
+  --> stray.stave:3:1
+   |
+ 3 | =======
+   | ^^^^^^^
+   = help: Delete the line, or write the whole conflict: a <<<<<<< line, each side after a +++++++ line, and a >>>>>>> line
+
+error[conflict]: this conflict marker line is not part of a conflict Stave can read
+  --> stray.stave:5:1
+   |
+ 5 | >>>>>>> theirs
+   | ^^^^^^^^^^^^^^
+   = help: Delete the line, or write the whole conflict: a <<<<<<< line, each side after a +++++++ line, and a >>>>>>> line

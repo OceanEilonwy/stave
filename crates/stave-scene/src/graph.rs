@@ -34,7 +34,7 @@ pub enum Item {
 
 /// The index of a node in [`SceneGraph::nodes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodeId(usize);
+pub struct NodeId(pub(crate) usize);
 
 impl NodeId {
     /// The index into [`SceneGraph::nodes`].
@@ -595,6 +595,54 @@ fn wood(part: &Part) -> Wood {
         colour: linear(species.colour()),
         pith,
         figure,
+    }
+}
+
+impl SceneGraph {
+    /// This scene with some nodes of `other` (another design's scene)
+    /// added after its own, each keeping its mesh, place and exploded
+    /// offsets. An added node's assemblies are `other`'s ids, put through
+    /// `assembly` to this scene's (an assembly it can't match is dropped,
+    /// so the node stays where it is when that assembly moves). The added
+    /// nodes' items are `other`'s ids too: they draw and pick, but a
+    /// scene's `show` and `hide` lists don't name them.
+    pub(crate) fn with_nodes_of(
+        &self,
+        other: &SceneGraph,
+        added: &[NodeId],
+        assembly: impl Fn(AssemblyId) -> Option<AssemblyId>,
+    ) -> SceneGraph {
+        let mut graph = self.clone();
+        for id in added {
+            let Some(node) = other.node(*id) else {
+                continue;
+            };
+            let mut node = node.clone();
+            node.assemblies = node
+                .assemblies
+                .iter()
+                .filter_map(|id| assembly(*id))
+                .collect();
+            node.follows = node.follows.and_then(|follower| {
+                Some(MemberFollower {
+                    assembly: assembly(follower.assembly)?,
+                    ..follower
+                })
+            });
+            graph.nodes.push(node);
+            graph.explode_assembly.push(
+                other
+                    .explode_assembly
+                    .get(id.0)
+                    .copied()
+                    .unwrap_or(Vec3::ZERO),
+            );
+            graph
+                .explode_part
+                .push(other.explode_part.get(id.0).copied().unwrap_or(Vec3::ZERO));
+            graph.drawn.push(other.drawn.get(id.0).copied().flatten());
+        }
+        graph
     }
 }
 

@@ -65,7 +65,62 @@ pub struct Orbit {
     pub projection: Projection,
 }
 
+/// The steepest a camera placed by [`Orbit::placed`] may look, in
+/// degrees above or below the horizontal.
+pub const STEEPEST_DEGREES: f32 = 89.0;
+
+/// Why a camera asked for in degrees and millimetres can't be placed.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum CameraError {
+    /// The yaw isn't a number.
+    #[error("yaw must be a number of degrees")]
+    Yaw,
+    /// The pitch is out of range (or not a number).
+    #[error("pitch must be between -{STEEPEST_DEGREES} and {STEEPEST_DEGREES} degrees, not {0}")]
+    Pitch(f32),
+    /// The distance is not more than zero (or not a number).
+    #[error("distance must be more than 0 millimetres, not {0}")]
+    Distance(f32),
+}
+
 impl Orbit {
+    /// This orbit moved where a camera asked for in degrees and
+    /// millimetres says: `yaw_degrees` around the target from the front
+    /// toward the right, `pitch_degrees` above the horizontal (within
+    /// [`STEEPEST_DEGREES`]), `distance_mm` from the target. What is left
+    /// out stays as it is.
+    ///
+    /// # Errors
+    ///
+    /// [`CameraError`] when a value given is one no camera can take.
+    pub fn placed(
+        self,
+        yaw_degrees: Option<f32>,
+        pitch_degrees: Option<f32>,
+        distance_mm: Option<f32>,
+    ) -> Result<Orbit, CameraError> {
+        let mut orbit = self;
+        if let Some(yaw) = yaw_degrees {
+            if !yaw.is_finite() {
+                return Err(CameraError::Yaw);
+            }
+            orbit.yaw = yaw.to_radians();
+        }
+        if let Some(pitch) = pitch_degrees {
+            if !(-STEEPEST_DEGREES..=STEEPEST_DEGREES).contains(&pitch) {
+                return Err(CameraError::Pitch(pitch));
+            }
+            orbit.pitch = pitch.to_radians();
+        }
+        if let Some(distance) = distance_mm {
+            if !(distance.is_finite() && distance > 0.0) {
+                return Err(CameraError::Distance(distance));
+            }
+            orbit.distance = distance;
+        }
+        Ok(orbit)
+    }
+
     /// A camera that shows the whole box, from the default direction.
     pub fn framing(bounds: Aabb, aspect: f32) -> Orbit {
         Orbit {
@@ -255,6 +310,33 @@ impl Orbit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_camera_in_degrees_is_checked_and_placed() {
+        let orbit = Orbit {
+            yaw: 0.5,
+            pitch: 0.25,
+            distance: 2000.0,
+            target: Vec3::ZERO,
+            projection: Projection::default(),
+        };
+        let placed = orbit.placed(Some(90.0), None, Some(1000.0)).unwrap();
+        assert!((placed.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((placed.pitch - 0.25).abs() < 1e-6, "left as it was");
+        assert!((placed.distance - 1000.0).abs() < 1e-3);
+        assert_eq!(
+            orbit.placed(None, Some(90.5), None),
+            Err(CameraError::Pitch(90.5))
+        );
+        assert_eq!(
+            orbit.placed(None, None, Some(0.0)),
+            Err(CameraError::Distance(0.0))
+        );
+        assert_eq!(
+            orbit.placed(Some(f32::NAN), None, None),
+            Err(CameraError::Yaw)
+        );
+    }
 
     fn cabinet_bounds() -> Aabb {
         Aabb {

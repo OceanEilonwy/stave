@@ -63,7 +63,7 @@ pub mod words;
 use std::path::{Path, PathBuf};
 
 pub use analysis::{Analysis, Crumb, FilePosition, Found, Hover, Lens, Location, Use, Uses};
-pub use buffers::{Buffers, OpenError, Overlay, Reload, SaveError};
+pub use buffers::{Buffers, MergeText, OpenError, Overlay, Reload, SaveError, Saved};
 pub use document::{Document, STD_SCHEME};
 pub use index::{Symbol, SymbolId, SymbolKind, UseKind};
 pub use rename::{RenameEdit, RenameError};

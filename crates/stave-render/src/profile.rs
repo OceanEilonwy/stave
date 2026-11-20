@@ -10,7 +10,9 @@
 //! With the variable unset nothing is timed and nothing is printed.
 
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 /// Whether `STAVE_PROFILE` asks for timings. Read once.
 pub fn enabled() -> bool {

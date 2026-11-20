@@ -389,10 +389,6 @@ pub(in crate::ui) fn struck_lines(change: &LineChange) -> (usize, usize) {
     (first, first.saturating_add(change.removed.len()))
 }
 
-/// How far above the view's bottom edge the line saying why editing in 3D
-/// is off stands: clear of the dock.
-const BLOCK_LINE_ABOVE_DOCK: i32 = 84;
-
 impl Window {
     /// The text of a file of the project as the editor has it (unsaved
     /// changes included), else as on disk.
@@ -521,26 +517,15 @@ impl Window {
         block_line(&*self.widgets.files.analysis()?)
     }
 
-    /// Shows why editing in 3D is off, when it is, low in the view above
-    /// the dock and wrapped, where it covers neither the parts list nor
-    /// the cards; puts the line back at the top of the view otherwise.
+    /// Shows why editing in 3D is off, when it is, on its own line low in
+    /// the view (the floats place it just above the foot, wrapped, where
+    /// it covers neither the parts list nor a card); hides it otherwise.
     pub(in crate::ui) fn show_parse_block_line(&self) {
-        let hint_box = &self.widgets.hint_box;
-        let hint = &self.widgets.hint;
-        match self.parse_block_line() {
-            Some(line) => {
-                hint.set_wrap(true);
-                hint.set_max_width_chars(56);
-                hint.set_justify(gtk::Justification::Center);
-                hint_box.set_valign(gtk::Align::End);
-                hint_box.set_margin_bottom(BLOCK_LINE_ABOVE_DOCK);
-                self.show_hint(&line);
-            }
-            None => {
-                hint_box.set_valign(gtk::Align::Start);
-                hint_box.set_margin_bottom(0);
-            }
-        }
+        let line = self.parse_block_line();
+        self.widgets
+            .block_line
+            .set_label(line.as_deref().unwrap_or_default());
+        self.widgets.block_box.set_visible(line.is_some());
     }
 
     /// `true` while the text reads, so the 3D view's gestures may edit it.

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stave preview</title>
+<style>
+  :root {
+    --page: #f4f2ee;
+    --panel: #ffffff;
+    --ink: #24211d;
+    --quiet: #6b655c;
+    --line: #dcd7cf;
+    --accent: #8a5a2b;
+    --fits: #2f7d4f;
+    --refused: #b3362c;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #1d1b19;
+      --panel: #272421;
+      --ink: #ece7df;
+      --quiet: #a59d92;
+      --line: #3a3632;
+      --accent: #d29a5e;
+      --fits: #6cc08f;
+      --refused: #f0796e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex;
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.45 system-ui, sans-serif;
+  }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  #view { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #view:active { cursor: grabbing; }
+  #message {
+    position: absolute; inset: 0; margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; text-align: center; font-size: 16px; color: var(--quiet);
+  }
+  #panel {
+    width: 260px; padding: 16px; overflow-y: auto; overflow-wrap: anywhere;
+    background: var(--panel); border-left: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 0 0 2px; }
+  p { margin: 0 0 8px; }
+  .quiet { color: var(--quiet); }
+  .fits { color: var(--fits); }
+  .refused { color: var(--refused); }
+  label { display: block; margin: 10px 0 0; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  #picked { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  @media (max-width: 600px) {
+    body { flex-direction: column; }
+    #stage { flex: 1 1 60%; }
+    #panel { width: auto; flex: 0 0 auto; max-height: 40%; border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <p id="message" hidden></p>
+</div>
+<aside id="panel">
+  <h1 id="title">Stave preview</h1>
+  <p id="status" class="quiet">Waiting for a project.</p>
+  <p id="verdict" hidden></p>
+  <div id="sliders"></div>
+  <label>Pull apart
+    <input type="range" id="explode" min="0" max="1" step="0.01" value="0">
+  </label>
+  <section id="picked" hidden>
+    <h2 id="picked-name"></h2>
+    <p id="picked-what" class="quiet"></p>
+    <p id="picked-joined"></p>
+  </section>
+</aside>
+<script>/*@STAVE_GLUE@*/</script>
+<script>
+(function () {
+  "use strict";
+  var NEEDS_WEBGPU = "This preview needs WebGPU. Ask your AI app for a picture of the design instead.";
+  var WASM_BLOCKED = "This app can't run the 3D preview here. Open the link from the preview's answer in a web browser.";
+  var WASM = "@STAVE_WASM_BASE64@";
+  var canvas = document.getElementById("view");
+  var message = document.getElementById("message");
+
+  function say(text) {
+    message.textContent = text;
+    message.hidden = false;
+  }
+
+  // Whether this page may compile WebAssembly. A host whose Content
+  // Security Policy leaves out 'wasm-unsafe-eval' (the MCP Apps default)
+  // refuses even the smallest module.
+  function wasmAllowed() {
+    if (typeof WebAssembly !== "object") return false;
+    try {
+      new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // An error's words, or WASM_BLOCKED when it is the host refusing
+  // WebAssembly.
+  function plain(error) {
+    var text = String((error && error.message) || error);
+    if ((typeof WebAssembly === "object" && error instanceof WebAssembly.CompileError) ||
+        /Content Security Policy/i.test(text)) {
+      return WASM_BLOCKED;
+    }
+    return text;
+  }
+
+  function wasmBytes() {
+    var raw = atob(WASM);
+    var bytes = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  }
+
+  function canvasSize() {
+    var ratio = window.devicePixelRatio || 1;
+    var box = canvas.getBoundingClientRect();
+    return {
+      width: Math.max(1, Math.round(box.width * ratio)),
+      height: Math.max(1, Math.round(box.height * ratio)),
+      ratio: ratio
+    };
+  }
+
+  function count(n, one, many) {
+    return n + " " + (n === 1 ? one : many);
+  }
+
+  function showSummary(viewer, summary) {
+    document.getElementById("title").textContent = summary.title || "Stave preview";
+    var status = document.getElementById("status");
+    // A design that doesn't place has nothing to draw: the last one
+    // drawn mustn't stay on show.
+    canvas.style.visibility = summary.placed ? "visible" : "hidden";
+    if (!summary.placed) {
+      status.textContent = "The design can't be drawn yet: " + count(summary.errors, "problem", "problems") + ".";
+    } else if (summary.errors === 0) {
+      status.textContent = "No problems.";
+    } else {
+      status.textContent = count(summary.errors, "problem", "problems") + ", shown in red.";
+    }
+    var verdict = document.getElementById("verdict");
+    if (summary.suggestion) {
+      verdict.hidden = false;
+      if (summary.suggestion.verdict === "fits") {
+        verdict.className = "fits";
+        verdict.textContent = "The suggestion checks clean. What it changes is tinted.";
+      } else {
+        verdict.className = "refused";
+        verdict.textContent = "The suggestion has " + count(summary.suggestion.errors, "problem", "problems") + ".";
+      }
+    } else {
+      verdict.hidden = true;
+    }
+    var sliders = document.getElementById("sliders");
+    sliders.textContent = "";
+    summary.motions.forEach(function (motion, index) {
+      var label = document.createElement("label");
+      label.textContent = (motion.turns ? "Open " : "Pull out ") + motion.name;
+      var input = document.createElement("input");
+      input.type = "range";
+      input.min = "0";
+      input.max = "1";
+      input.step = "0.01";
+      input.value = "0";
+      input.addEventListener("input", function () {
+        viewer.set_pose(index, Number(input.value));
+      });
+      label.appendChild(input);
+      sliders.appendChild(label);
+    });
+    document.getElementById("explode").value = "0";
+    document.getElementById("picked").hidden = true;
+  }
+
+  function showPicked(picked) {
+    var section = document.getElementById("picked");
+    if (!picked) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    document.getElementById("picked-name").textContent = picked.name;
+    document.getElementById("picked-what").textContent =
+      picked.what +
+        (picked.suggested ? " · added or changed by the suggestion" :
+         picked.replaced ? " · the suggestion takes this out or changes it" : "");
+    document.getElementById("picked-joined").textContent = picked.joined.length
+      ? "Joined to " + picked.joined.join(", ") + "."
+      : "Not joined to anything.";
+  }
+
+  function wire(viewer) {
+    var down = null;
+    var last = null;
+    canvas.addEventListener("pointerdown", function (event) {
+      down = { x: event.clientX, y: event.clientY };
+      last = down;
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener("pointermove", function (event) {
+      if (!last) return;
+      viewer.orbit(event.clientX - last.x, event.clientY - last.y);
+      last = { x: event.clientX, y: event.clientY };
+    });
+    canvas.addEventListener("pointerup", function (event) {
+      if (down && Math.abs(event.clientX - down.x) + Math.abs(event.clientY - down.y) < 4) {
+        var ratio = window.devicePixelRatio || 1;
+        var box = canvas.getBoundingClientRect();
+        var picked = viewer.pick((event.clientX - box.left) * ratio, (event.clientY - box.top) * ratio);
+        showPicked(JSON.parse(picked));
+      }
+      down = null;
+      last = null;
+    });
+    canvas.addEventListener("wheel", function (event) {
+      event.preventDefault();
+      viewer.zoom(-event.deltaY / 100);
+    }, { passive: false });
+    document.getElementById("explode").addEventListener("input", function (event) {
+      viewer.set_explode(Number(event.target.value));
+    });
+    new ResizeObserver(function () {
+      var size = canvasSize();
+      canvas.width = size.width;
+      canvas.height = size.height;
+      viewer.resize(size.width, size.height);
+    }).observe(canvas);
+  }
+
+  async function boot() {
+    if (!wasmAllowed()) {
+      say(WASM_BLOCKED);
+      return null;
+    }
+    if (!navigator.gpu) {
+      say(NEEDS_WEBGPU);
+      return null;
+    }
+    var viewer = wasm_bindgen;
+    await viewer({ module_or_path: wasmBytes() });
+    var size = canvasSize();
+    canvas.width = size.width;
+    canvas.height = size.height;
+    try {
+      await viewer.start(canvas);
+    } catch (error) {
+      say(String((error && error.message) || error));
+      return null;
+    }
+    wire(viewer);
+    return viewer;
+  }
+
+  var ready = boot().catch(function (error) {
+    say(plain(error));
+    return null;
+  });
+
+  /** The host's way in: show a project, and an agent's suggestion over it. */
+  window.staveViewer = {
+    show: async function (project) {
+      var viewer = await ready;
+      if (!viewer) return false;
+      try {
+        var summary = viewer.load(
+          project.folder || "/project",
+          JSON.stringify(project.files || {}),
+          project.suggestion ? JSON.stringify(project.suggestion) : ""
+        );
+        message.hidden = true;
+        showSummary(viewer, JSON.parse(summary));
+        return true;
+      } catch (error) {
+        say(String((error && error.message) || error));
+        return false;
+      }
+    }
+  };
+})();
+</script>
+</body>
+</html>
