@@ -18,7 +18,7 @@
 //! The reading is syntactic: where only the types tell (an enum word that
 //! is also an item's name), the checker's diagnostics have the last word.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use stave_lang::ast::Span;
@@ -303,6 +303,8 @@ pub(crate) struct Index {
     item_at: BTreeMap<(FileId, u32), SymbolId>,
     /// The component each assembly is an instance of.
     instance_of: BTreeMap<SymbolId, SymbolId>,
+    /// The params written `solved param`.
+    pub(crate) solved_params: BTreeSet<SymbolId>,
     /// Every reference, sorted by file and position.
     pub(crate) references: Vec<Reference>,
     /// Indices into `references`, by symbol.
@@ -402,6 +404,7 @@ impl Index {
             imports: Scopes::new(),
             item_at: BTreeMap::new(),
             instance_of: BTreeMap::new(),
+            solved_params: BTreeSet::new(),
             references: Vec::new(),
             uses: BTreeMap::new(),
             diagnostics: set.diagnostics,
@@ -587,6 +590,13 @@ impl Index {
             private,
             signature: signature(node),
         });
+        if kind == SymbolKind::Param
+            && node
+                .children_with_tokens()
+                .any(|element| element.kind() == SyntaxKind::KW_SOLVED)
+        {
+            self.solved_params.insert(id);
+        }
         // The first declaration of a name wins; a second is the checker's
         // `duplicate-name`.
         match container {

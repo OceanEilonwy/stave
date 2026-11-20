@@ -1,0 +1,175 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"nightstand\"))"
+---
+== nightstand.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   6 | import "std:casework"
+     = import:keyword  ":text  std:casework:text  ":text
+  12 | project "Nightstand" {
+     = project:keyword  ":text  Nightstand:text  ":text
+  13 |   goal:       "A cherry nightstand with one drawer and an open shelf"
+     = goal:field  ":text  A cherry nightstand with one drawer and an open shelf:text  ":text
+  14 |   units:      mm
+     = units:field  mm:word
+  15 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  16 |   style:      "shaker"
+     = style:field  ":text  shaker:text  ":text
+  20 |        param stand_width   = 450mm within 400mm..550mm
+     = param:keyword  stand_width:param+decl  450:number  mm:unit  within:keyword  400:number  mm:unit  550:number  mm:unit
+  21 |        param stand_height  = 600mm within 550mm..700mm     // floor to the top of the top
+     = param:keyword  stand_height:param+decl  600:number  mm:unit  within:keyword  550:number  mm:unit  700:number  mm:unit
+  22 |        param stand_depth   = 400mm within 380mm..450mm
+     = param:keyword  stand_depth:param+decl  400:number  mm:unit  within:keyword  380:number  mm:unit  450:number  mm:unit
+  23 |        param drawer_height = 150mm within 120mm..200mm     // the drawer opening, top to divider
+     = param:keyword  drawer_height:param+decl  150:number  mm:unit  within:keyword  120:number  mm:unit  200:number  mm:unit
+  24 |        param slide_length  = 350mm within [300mm, 350mm]
+     = param:keyword  slide_length:param+decl  350:number  mm:unit  within:keyword  300:number  mm:unit  350:number  mm:unit
+  25 | locked param reveal        = 2mm                           // the gap round the inset drawer front
+     = locked:keyword  param:keyword  reveal:param+decl  2:number  mm:unit
+  26 | let overhang  = 15mm                                       // the top overhangs the front and both sides
+     = let:keyword  overhang:let+decl  15:number  mm:unit
+  27 | let toe_space = 60mm                                       // floor to the underside of the bottom shelf
+     = let:keyword  toe_space:let+decl  60:number  mm:unit
+  30 | require drawer_room : bay[drawer].deep >= slide_length + cherry_19.thickness "the slide and the inset front must fit in the opening"
+     = require:keyword  drawer_room:require+decl  bay:region+ref  drawer:label+ref  deep:plain  slide_length:param+ref  cherry_19:stock+ref  thickness:plain  ":text  the slide and the inset front must fit in the opening:text  ":text
+  31 | require shelf_room  : bay[shelf].up >= 180mm "the open shelf should take a book standing up"
+     = require:keyword  shelf_room:require+decl  bay:region+ref  shelf:label+ref  up:plain  180:number  mm:unit  ":text  the open shelf should take a book standing up:text  ":text
+  34 | stock cherry_19 { species: cherry, form: solid, thickness: 19mm, max_width: 250mm, max_length: 2400mm }
+     = stock:keyword  cherry_19:stock+decl  species:field  cherry:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  250:number  mm:unit  max_length:field  2400:number  mm:unit
+  35 | stock maple_12  { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+     = stock:keyword  maple_12:stock+decl  species:field  hard_maple:word  form:field  solid:word  thickness:field  12:number  mm:unit  max_width:field  150:number  mm:unit  max_length:field  2400:number  mm:unit
+  36 | stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
+     = stock:keyword  ply_6:stock+decl  species:field  birch:word  form:field  plywood:word  thickness:field  6:number  mm:unit  max_width:field  1220:number  mm:unit  max_length:field  2440:number  mm:unit
+  41 | part side_l : cherry_19 {
+     = part:keyword  side_l:part+decl  cherry_19:stock+ref
+  42 |   length: stand_height - top.thickness
+     = length:field  stand_height:param+ref  top:part+ref  thickness:plain
+  43 |   width:  stand_depth
+     = width:field  stand_depth:param+ref
+  44 |   place {
+     = place:keyword
+  45 |     ground
+     = ground:function
+  46 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  51 | part side_r : cherry_19 {
+     = part:keyword  side_r:part+decl  cherry_19:stock+ref
+  52 |   length: stand_height - top.thickness
+     = length:field  stand_height:param+ref  top:part+ref  thickness:plain
+  53 |   width:  stand_depth
+     = width:field  stand_depth:param+ref
+  54 |   place {
+     = place:keyword
+  55 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  56 |     against(side_l.right, gap: stand_width - 2 * cherry_19.thickness)
+     = against:function  side_l:part+ref  right:plain  gap:field  stand_width:param+ref  2:number  cherry_19:stock+ref  thickness:plain
+  57 |     flush(side_l.bottom)
+     = flush:function  side_l:part+ref  bottom:plain
+  58 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  63 | part top : cherry_19 {
+     = part:keyword  top:part+decl  cherry_19:stock+ref
+  64 |   length: stand_width + 2 * overhang
+     = length:field  stand_width:param+ref  2:number  overhang:let+ref
+  65 |   width:  stand_depth + overhang
+     = width:field  stand_depth:param+ref  overhang:let+ref
+  66 |   place {
+     = place:keyword
+  67 |     against(side_l.top)
+     = against:function  side_l:part+ref  top:plain
+  68 |     center(from: side_l.left, to: side_r.right)
+     = center:function  from:field  side_l:part+ref  left:plain  to:field  side_r:part+ref  right:plain
+  69 |     flush(side_l.back)
+     = flush:function  side_l:part+ref  back:plain
+  74 | part bottom : cherry_19 {
+     = part:keyword  bottom:part+decl  cherry_19:stock+ref
+  75 |   length: fit
+     = length:field  fit:keyword
+  76 |   width:  stand_depth - back.thickness
+     = width:field  stand_depth:param+ref  back:part+ref  thickness:plain
+  77 |   place {
+     = place:keyword
+  78 |     flush(side_l.bottom, inset: toe_space)
+     = flush:function  side_l:part+ref  bottom:plain  inset:field  toe_space:let+ref
+  79 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+  80 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  85 | part divider : cherry_19 {
+     = part:keyword  divider:part+decl  cherry_19:stock+ref
+  86 |   length: fit
+     = length:field  fit:keyword
+  87 |   width:  stand_depth - back.thickness
+     = width:field  stand_depth:param+ref  back:part+ref  thickness:plain
+  88 |   place {
+     = place:keyword
+  89 |     against(top.bottom, gap: drawer_height)
+     = against:function  top:part+ref  bottom:plain  gap:field  drawer_height:param+ref
+  90 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+  91 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  96 | part back : ply_6 {
+     = part:keyword  back:part+decl  ply_6:stock+ref
+  97 |   length: between(bottom.bottom, top.bottom)
+     = length:field  between:function  bottom:part+ref  bottom:plain  top:part+ref  bottom:plain
+  98 |   width:  fit
+     = width:field  fit:keyword
+  99 |   place {
+     = place:keyword
+ 100 |     orient(length: up, width: right)
+     = orient:function  length:field  up:word  width:field  right:word
+ 101 |     against(top.bottom)
+     = against:function  top:part+ref  bottom:plain
+ 102 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+ 103 |     flush(side_l.back)
+     = flush:function  side_l:part+ref  back:plain
+ 108 | joint shelf_dados  : dado([bottom, divider], into: [side_l, side_r], depth: 8mm)
+     = joint:keyword  shelf_dados:joint+decl  dado:type+ref+std  bottom:part+ref  divider:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  8:number  mm:unit
+ 109 | joint back_rabbets : rabbet(back, into: [side_l, side_r], depth: 9mm)
+     = joint:keyword  back_rabbets:joint+decl  rabbet:type+ref+std  back:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  9:number  mm:unit
+ 110 | joint top_dowels   : dowel([side_l, side_r], into: top, count: 3)
+     = joint:keyword  top_dowels:joint+decl  dowel:type+ref+std  side_l:part+ref  side_r:part+ref  into:field  top:word  count:param+ref+std  3:number
+ 115 | region inside = opening(
+     = region:keyword  inside:region+decl  opening:function
+ 116 |   left:   side_l.right,
+     = left:field  side_l:part+ref  right:plain
+ 117 |   right:  side_r.left,
+     = right:field  side_r:part+ref  left:plain
+ 118 |   bottom: bottom.top,
+     = bottom:field  bottom:part+ref  top:plain
+ 119 |   top:    top.bottom,
+     = top:field  top:part+ref  bottom:plain
+ 120 |   front:  side_l.front,
+     = front:field  side_l:part+ref  front:plain
+ 121 |   back:   back.front,
+     = back:field  back:part+ref  front:plain
+ 126 | region bay[shelf, drawer] = split(inside, up, at: divider)
+     = region:keyword  bay:region+decl  shelf:label+decl  drawer:label+decl  split:function  inside:region+ref  up:word  at:field  divider:part+ref
+ 128 | assembly drawer : casework.Drawer {
+     = assembly:keyword  drawer:assembly+decl  casework:module+ref+std  Drawer:type+ref+std
+ 129 |   opening:      bay[drawer]
+     = opening:param+ref+std  bay:region+ref  drawer:label+ref
+ 130 |   mount:        inset(reveal: reveal)
+     = mount:param+ref+std  inset:function  reveal:field  reveal:param+ref
+ 131 |   front_stock:  cherry_19
+     = front_stock:param+ref+std  cherry_19:stock+ref
+ 132 |   box_stock:    maple_12
+     = box_stock:param+ref+std  maple_12:stock+ref
+ 133 |   bottom_stock: ply_6
+     = bottom_stock:param+ref+std  ply_6:stock+ref
+ 134 |   slide:        side_mount_slide(length: slide_length)
+     = slide:param+ref+std  side_mount_slide:type+ref+std  length:param+ref+std  slide_length:param+ref
+ 135 |   pull_kind:    knob(diameter: 30mm)
+     = pull_kind:param+ref+std  knob:type+ref+std  diameter:param+ref+std  30:number  mm:unit
+ 136 |   top_gap:      12mm
+     = top_gap:param+ref+std  12:number  mm:unit
+ 140 | scene drawer_open "Drawer open" {
+     = scene:keyword  drawer_open:scene+decl  ":text  Drawer open:text  ":text
+ 141 |   pose drawer = open
+     = pose:keyword  drawer:assembly+ref  open:word

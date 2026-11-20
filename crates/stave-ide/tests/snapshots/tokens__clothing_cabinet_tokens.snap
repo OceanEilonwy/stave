@@ -1,0 +1,351 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"clothing_cabinet\"))"
+---
+== cabinet.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   6 | project "Clothing cabinet" {
+     = project:keyword  ":text  Clothing cabinet:text  ":text
+   7 |   goal:       "Heirloom quality clothing cabinet with two hinged doors and two drawers at the bottom"
+     = goal:field  ":text  Heirloom quality clothing cabinet with two hinged doors and two drawers at the bottom:text  ":text
+   8 |   units:      mm
+     = units:field  mm:word
+   9 |   resolution: 0.5mm        // the cut list rounds to this and says where it rounded
+     = resolution:field  0.5:number  mm:unit
+  10 |   style:      "shaker"     // a hint for suggestions
+     = style:field  ":text  shaker:text  ":text
+  12 |   tools:      [pencil, marking_knife, square, tape, marking_gauge, awl, calipers,
+     = tools:field  pencil:type+ref+std  marking_knife:type+ref+std  square:type+ref+std  tape:type+ref+std  marking_gauge:type+ref+std  awl:type+ref+std  calipers:type+ref+std
+  13 |                tenon_saw, chisel, mallet, router_plane, clamps, screwdriver,
+     = tenon_saw:type+ref+std  chisel:type+ref+std  mallet:type+ref+std  router_plane:type+ref+std  clamps:type+ref+std  screwdriver:type+ref+std
+  14 |                router, straight_bit, drill, depth_stop,
+     = router:type+ref+std  straight_bit:type+ref+std  drill:type+ref+std  depth_stop:type+ref+std
+  15 |                lathe, roughing_gouge, spindle_gouge, parting_tool]
+     = lathe:type+ref+std  roughing_gouge:type+ref+std  spindle_gouge:type+ref+std  parting_tool:type+ref+std
+  20 |        param cabinet_width  = 900mm within 600mm..1200mm
+     = param:keyword  cabinet_width:param+decl  900:number  mm:unit  within:keyword  600:number  mm:unit  1200:number  mm:unit
+  21 |        param cabinet_height = 1700mm within 1400mm..2100mm    // bottom of the base to top of the top, without feet
+     = param:keyword  cabinet_height:param+decl  1700:number  mm:unit  within:keyword  1400:number  mm:unit  2100:number  mm:unit
+  22 |        param cabinet_depth  = 560mm within 550mm..650mm
+     = param:keyword  cabinet_depth:param+decl  560:number  mm:unit  within:keyword  550:number  mm:unit  650:number  mm:unit
+  23 |        param drawer_zone    = 500mm within 300mm..600mm       // height of the drawer section
+     = param:keyword  drawer_zone:param+decl  500:number  mm:unit  within:keyword  300:number  mm:unit  600:number  mm:unit
+  24 |        param slide_length   = 500mm within [350mm, 400mm, 450mm, 500mm]
+     = param:keyword  slide_length:param+decl  500:number  mm:unit  within:keyword  350:number  mm:unit  400:number  mm:unit  450:number  mm:unit  500:number  mm:unit
+  25 | locked param reveal         = 1.5mm                           // gap between neighbouring fronts
+     = locked:keyword  param:keyword  reveal:param+decl  1.5:number  mm:unit
+  27 | let overhang = 20mm
+     = let:keyword  overhang:let+decl  20:number  mm:unit
+  30 | require hanger_room    : cabinet_depth - back.thickness >= 540mm "room for coat hangers"
+     = require:keyword  hanger_room:require+decl  cabinet_depth:param+ref  back:part+ref  thickness:plain  540:number  mm:unit  ":text  room for coat hangers:text  ":text
+  31 | require overall_height : extent([base, side_l, top], up) == cabinet_height "overall height matches cabinet_height"
+     = require:keyword  overall_height:require+decl  extent:function  base:part+ref  side_l:part+ref  top:part+ref  up:word  cabinet_height:param+ref  ":text  overall height matches cabinet_height:text  ":text
+  34 | scene all_open "All open" {
+     = scene:keyword  all_open:scene+decl  ":text  All open:text  ":text
+  35 |   pose door_l = open
+     = pose:keyword  door_l:assembly+ref  open:word
+  36 |   pose door_r = open
+     = pose:keyword  door_r:assembly+ref  open:word
+  37 |   pose drawer[top] = open
+     = pose:keyword  drawer:assembly+ref  top:label+ref  open:word
+  40 | scene drawer_bench "Top drawer on the bench" {
+     = scene:keyword  drawer_bench:scene+decl  ":text  Top drawer on the bench:text  ":text
+  41 |   show:    drawer[top]
+     = show:field  drawer:assembly+ref  top:label+ref
+  42 |   explode: true
+     = explode:field  true:keyword
+== carcass.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   6 | part base : oak_19 {
+     = part:keyword  base:part+decl  oak_19:stock+ref
+   7 |   length: cabinet_width
+     = length:field  cabinet_width:param+ref
+   8 |   width:  cabinet_depth          // wider than oak_19's max_width: made of boards, glued edge to edge
+     = width:field  cabinet_depth:param+ref
+   9 |   place {
+     = place:keyword
+  10 |     ground
+     = ground:function
+  14 | part side_l : oak_19 {
+     = part:keyword  side_l:part+decl  oak_19:stock+ref
+  15 |   length: cabinet_height - base.thickness - top.thickness
+     = length:field  cabinet_height:param+ref  base:part+ref  thickness:plain  top:part+ref  thickness:plain
+  16 |   width:  cabinet_depth
+     = width:field  cabinet_depth:param+ref
+  17 |   place {
+     = place:keyword
+  18 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  19 |     against(base.top)            // stands on the base
+     = against:function  base:part+ref  top:plain
+  20 |     flush(base.left)
+     = flush:function  base:part+ref  left:plain
+  21 |     flush(base.back)
+     = flush:function  base:part+ref  back:plain
+  25 | part side_r = mirror(side_l, about: mid(base, across))
+     = part:keyword  side_r:part+decl  mirror:keyword  side_l:part+ref  about:field  mid:function  base:part+ref  across:word
+  27 | part top : oak_19 {
+     = part:keyword  top:part+decl  oak_19:stock+ref
+  28 |   length: cabinet_width + 2 * overhang
+     = length:field  cabinet_width:param+ref  2:number  overhang:let+ref
+  29 |   width:  cabinet_depth + overhang
+     = width:field  cabinet_depth:param+ref  overhang:let+ref
+  30 |   place {
+     = place:keyword
+  31 |     against(side_l.top)          // sits on the sides
+     = against:function  side_l:part+ref  top:plain
+  32 |     center(base, across)
+     = center:function  base:part+ref  across:word
+  33 |     flush(base.back)             // so it overhangs the front and both ends
+     = flush:function  base:part+ref  back:plain
+  38 | part back : ply_6 {
+     = part:keyword  back:part+decl  ply_6:stock+ref
+  39 |   length: between(base, top)
+     = length:field  between:function  base:part+ref  top:word
+  40 |   width:  fit                    // between the sides; the rabbet depth is added by the joint
+     = width:field  fit:keyword
+  41 |   place {
+     = place:keyword
+  42 |     orient(length: up, width: right)
+     = orient:function  length:field  up:word  width:field  right:word
+  43 |     against(base.top)
+     = against:function  base:part+ref  top:plain
+  44 |     center(base, across)
+     = center:function  base:part+ref  across:word
+  45 |     flush(base.back)
+     = flush:function  base:part+ref  back:plain
+  50 | part divider : oak_19 {
+     = part:keyword  divider:part+decl  oak_19:stock+ref
+  51 |   length: fit                    // between the sides; the dado depth is added by the joint
+     = length:field  fit:keyword
+  52 |   width:  cabinet_depth - back.thickness
+     = width:field  cabinet_depth:param+ref  back:part+ref  thickness:plain
+  53 |   place {
+     = place:keyword
+  54 |     against(base.top, gap: drawer_zone)
+     = against:function  base:part+ref  top:plain  gap:field  drawer_zone:param+ref
+  55 |     center(base, across)
+     = center:function  base:part+ref  across:word
+  56 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  60 | part shelf : oak_19 {
+     = part:keyword  shelf:part+decl  oak_19:stock+ref
+  61 |   length: fit
+     = length:field  fit:keyword
+  62 |   width:  cabinet_depth - back.thickness
+     = width:field  cabinet_depth:param+ref  back:part+ref  thickness:plain
+  63 |   place {
+     = place:keyword
+  64 |     against(top.bottom, gap: 160mm)
+     = against:function  top:part+ref  bottom:plain  gap:field  160:number  mm:unit
+  65 |     center(base, across)
+     = center:function  base:part+ref  across:word
+  66 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  70 | part rod : oak_dowel_28 {
+     = part:keyword  rod:part+decl  oak_dowel_28:stock+ref
+  71 |   length: fit                    // between the sides; the socket depth is added by the joint
+     = length:field  fit:keyword
+  72 |   place {
+     = place:keyword
+  73 |     against(shelf.bottom, gap: 50mm)
+     = against:function  shelf:part+ref  bottom:plain  gap:field  50:number  mm:unit
+  74 |     center(base, across)
+     = center:function  base:part+ref  across:word
+  75 |     center(from: side_l.front, to: back.front)
+     = center:function  from:field  side_l:part+ref  front:plain  to:field  back:part+ref  front:plain
+  79 | part foot[front_left, front_right, back_left, back_right] : oak_75_sq {
+     = part:keyword  foot:part+decl  front_left:label+decl  front_right:label+decl  back_left:label+decl  back_right:label+decl  oak_75_sq:stock+ref
+  80 |   length: fit                    // from the profile; the tenon is added by the joint
+     = length:field  fit:keyword
+  81 |   shape:  turned(bun_foot)
+     = shape:field  turned:function  bun_foot:profile+ref
+  82 |   place {
+     = place:keyword
+  83 |     orient(length: down)         // station 0 of the profile is at the top, against the base
+     = orient:function  length:field  down:word
+  84 |     corners(base, inset: 60mm)
+     = corners:function  base:part+ref  inset:field  60:number  mm:unit
+  85 |     against(base.bottom)
+     = against:function  base:part+ref  bottom:plain
+  90 | profile bun_foot {
+     = profile:keyword  bun_foot:profile+decl
+  91 |   measure: diameter
+     = measure:field  diameter:word
+  92 |   smooth:  true
+     = smooth:field  true:keyword
+  93 |   at 0mm:  70mm
+     = at:keyword  0:number  mm:unit  70:number  mm:unit
+  94 |   at 34mm: 70mm
+     = at:keyword  34:number  mm:unit  70:number  mm:unit
+  95 |   at 80mm: 40mm
+     = at:keyword  80:number  mm:unit  40:number  mm:unit
+  99 | joint shelf_dados  : dado([divider, shelf], into: [side_l, side_r], depth: 9mm)
+     = joint:keyword  shelf_dados:joint+decl  dado:type+ref+std  divider:part+ref  shelf:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  9:number  mm:unit
+ 100 | joint back_rabbets : rabbet(back, into: [side_l, side_r], depth: 9mm)
+     = joint:keyword  back_rabbets:joint+decl  rabbet:type+ref+std  back:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  9:number  mm:unit
+ 101 | joint base_dowels  : dowel([side_l, side_r], into: base, count: 4)
+     = joint:keyword  base_dowels:joint+decl  dowel:type+ref+std  side_l:part+ref  side_r:part+ref  into:field  base:part+ref  count:param+ref+std  4:number
+ 102 | joint top_dowels   : dowel([side_l, side_r], into: top, count: 4)
+     = joint:keyword  top_dowels:joint+decl  dowel:type+ref+std  side_l:part+ref  side_r:part+ref  into:field  top:word  count:param+ref+std  4:number
+ 103 | joint rod_sockets  : socket(rod, into: [side_l, side_r], depth: 9mm)
+     = joint:keyword  rod_sockets:joint+decl  socket:type+ref+std  rod:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  9:number  mm:unit
+ 104 | joint foot_tenons  : round_tenon(foot[*], into: base, diameter: 19mm, length: 16mm)
+     = joint:keyword  foot_tenons:joint+decl  round_tenon:type+ref+std  foot:part+ref  into:field  base:part+ref  diameter:param+ref+std  19:number  mm:unit  length:param+ref+std  16:number  mm:unit
+ 107 | region front_opening = opening(
+     = region:keyword  front_opening:region+decl  opening:function
+ 108 |   left:   side_l.right,
+     = left:field  side_l:part+ref  right:plain
+ 109 |   right:  side_r.left,
+     = right:field  side_r:part+ref  left:plain
+ 110 |   bottom: base.top,
+     = bottom:field  base:part+ref  top:plain
+ 111 |   top:    top.bottom,
+     = top:field  top:part+ref  bottom:plain
+ 112 |   front:  side_l.front,
+     = front:field  side_l:part+ref  front:plain
+ 113 |   back:   back.front,
+     = back:field  back:part+ref  front:plain
+ 115 | region bay[drawers, doors]     = split(front_opening, up, at: divider)
+     = region:keyword  bay:region+decl  drawers:label+decl  doors:label+decl  split:function  front_opening:region+ref  up:word  at:field  divider:part+ref
+ 116 | region drawer_bay[bottom, top] = split(bay[drawers], up)
+     = region:keyword  drawer_bay:region+decl  bottom:label+decl  top:label+decl  split:function  bay:region+ref  drawers:label+ref  up:word
+ 117 | region door_bay[left, right]   = split(bay[doors], across)
+     = region:keyword  door_bay:region+decl  left:label+decl  right:label+decl  split:function  bay:region+ref  doors:label+ref  across:word
+== doors.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   3 | import "std:casework"
+     = import:keyword  ":text  std:casework:text  ":text
+   4 | import "./hardware" as hw          // 'hardware' is a reserved word, so the module needs another name
+     = import:keyword  ":text  ./hardware:text  ":text  as:keyword  hw:module+ref
+   9 | assembly door_l : casework.FramePanelDoor {
+     = assembly:keyword  door_l:assembly+decl  casework:module+ref+std  FramePanelDoor:type+ref+std
+  10 |   opening:     door_bay[left]
+     = opening:param+ref+std  door_bay:region+ref  left:label+ref
+  11 |   hinge_side:  side_l
+     = hinge_side:param+ref+std  side_l:part+ref
+  12 |   mount:       overlay(left: 18mm, right: 18mm, top: -reveal, bottom: 8mm, meeting: -reveal / 2)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  reveal:param+ref  bottom:field  8:number  mm:unit  meeting:field  reveal:param+ref  2:number
+  13 |   frame:       oak_19
+     = frame:param+ref+std  oak_19:stock+ref
+  14 |   panel_stock: oak_6
+     = panel_stock:param+ref+std  oak_6:stock+ref
+  15 |   knob_kind:   hw.brass_knob_26
+     = knob_kind:param+ref+std  hw:module+ref  brass_knob_26:type+ref
+  18 | assembly door_r = mirror(door_l, about: mid(base, across))
+     = assembly:keyword  door_r:assembly+decl  mirror:keyword  door_l:assembly+ref  about:field  mid:function  base:part+ref  across:word
+== drawers.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   3 | import "std:casework"
+     = import:keyword  ":text  std:casework:text  ":text
+   4 | import "./hardware" as hw
+     = import:keyword  ":text  ./hardware:text  ":text  as:keyword  hw:module+ref
+   9 | assembly drawer[bottom, top] : casework.Drawer {
+     = assembly:keyword  drawer:assembly+decl  bottom:label+decl  top:label+decl  casework:module+ref+std  Drawer:type+ref+std
+  10 |   opening:      drawer_bay[same]         // drawer[bottom] gets drawer_bay[bottom], and so on
+     = opening:param+ref+std  drawer_bay:region+ref  same:keyword
+  11 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -reveal / 2)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  reveal:param+ref  2:number
+  12 |   front_stock:  oak_19
+     = front_stock:param+ref+std  oak_19:stock+ref
+  13 |   box_stock:    maple_12
+     = box_stock:param+ref+std  maple_12:stock+ref
+  14 |   bottom_stock: ply_6
+     = bottom_stock:param+ref+std  ply_6:stock+ref
+  15 |   slide:        side_mount_slide(length: slide_length)
+     = slide:param+ref+std  side_mount_slide:type+ref+std  length:param+ref+std  slide_length:param+ref
+  16 |   pull_kind:    hw.bar_pull_160
+     = pull_kind:param+ref+std  hw:module+ref  bar_pull_160:type+ref
+== hardware/handles.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   9 | kind brass_knob_26 : pull {
+     = kind:keyword  brass_knob_26:type+decl  pull:plain
+  10 |   roles {
+     = roles:keyword
+  11 |     piece: Part                      // the door or drawer front
+     = piece:role+decl  Part:type
+  13 |   diameter:       26mm
+     = diameter:field  26:number  mm:unit
+  14 |   screw_diameter: 4mm
+     = screw_diameter:field  4:number  mm:unit
+  16 |   mount {
+     = mount:keyword
+  17 |     face:   front
+     = face:field  front:word
+  18 |     across: open
+     = across:field  open:word
+  19 |     along:  open
+     = along:field  open:word
+  23 |   member knob {
+     = member:keyword  knob:member+decl
+  24 |     with:  piece
+     = with:field  piece:role+ref
+  25 |     shape: cylinder(diameter: 26mm, depth: -30mm..0mm)
+     = shape:field  cylinder:function  diameter:field  26:number  mm:unit  depth:field  30:number  mm:unit  0:number  mm:unit
+  28 |   member screw {
+     = member:keyword  screw:member+decl
+  29 |     with:  piece
+     = with:field  piece:role+ref
+  30 |     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
+     = shape:field  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain
+  33 |   cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screw:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word
+  37 | kind bar_pull_160 : pull {
+     = kind:keyword  bar_pull_160:type+decl  pull:plain
+  38 |   roles {
+     = roles:keyword
+  39 |     piece: Part                      // the door or drawer front
+     = piece:role+decl  Part:type
+  41 |   centres:        160mm
+     = centres:field  160:number  mm:unit
+  42 |   screw_diameter: 4mm
+     = screw_diameter:field  4:number  mm:unit
+  44 |   mount {
+     = mount:keyword
+  45 |     face:   front
+     = face:field  front:word
+  46 |     across: open
+     = across:field  open:word
+  47 |     along:  open
+     = along:field  open:word
+  51 |   member bar {
+     = member:keyword  bar:member+decl
+  52 |     with:  piece
+     = with:field  piece:role+ref
+  53 |     shape: box(along: 192mm, across: 12mm, depth: -35mm..0mm)
+     = shape:field  box:function  along:field  192:number  mm:unit  across:field  12:number  mm:unit  depth:field  35:number  mm:unit  0:number  mm:unit
+  56 |   member screws {
+     = member:keyword  screws:member+decl
+  57 |     with:        piece
+     = with:field  piece:role+ref
+  58 |     shape left:  cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: -80mm))
+     = shape:keyword  left:plain  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain  at:field  point:function  along:field  80:number  mm:unit
+  59 |     shape right: cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: 80mm))
+     = shape:keyword  right:plain  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain  at:field  point:function  along:field  80:number  mm:unit
+  62 |   cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through) }
+     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screws:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word
+== hardware/library.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   8 | library "Shop hardware"
+     = library:keyword  ":text  Shop hardware:text  ":text
+== stock.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   5 | stock oak_19       { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+   6 | stock oak_6        { species: white_oak, form: solid, thickness: 6mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_6:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  6:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+   7 | stock maple_12     { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+     = stock:keyword  maple_12:stock+decl  species:field  hard_maple:word  form:field  solid:word  thickness:field  12:number  mm:unit  max_width:field  150:number  mm:unit  max_length:field  2400:number  mm:unit
+   8 | stock ply_6        { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
+     = stock:keyword  ply_6:stock+decl  species:field  birch:word  form:field  plywood:word  thickness:field  6:number  mm:unit  max_width:field  1220:number  mm:unit  max_length:field  2440:number  mm:unit
+   9 | stock oak_dowel_28 { species: white_oak, form: dowel, diameter: 28mm }
+     = stock:keyword  oak_dowel_28:stock+decl  species:field  white_oak:word  form:field  dowel:word  diameter:field  28:number  mm:unit
+  10 | stock oak_75_sq    { species: white_oak, form: solid, thickness: 75mm, width: 75mm, max_length: 2700mm }
+     = stock:keyword  oak_75_sq:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  75:number  mm:unit  width:field  75:number  mm:unit  max_length:field  2700:number  mm:unit

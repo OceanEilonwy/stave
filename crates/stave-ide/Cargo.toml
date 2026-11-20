@@ -12,5 +12,8 @@ stave-schema = { path = "../stave-schema" }
 rowan = "0.17"
 thiserror = "2"
 
+[dev-dependencies]
+insta = "1"
+
 [lints]
 workspace = true

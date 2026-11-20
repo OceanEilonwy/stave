@@ -1,0 +1,47 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(&fixture(\"colouring\"))"
+---
+== project.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   6 | project "Colouring" {
+     = project:keyword  ":text  Colouring:text  ":text
+   7 |   units:      mm
+     = units:field  mm:word
+   8 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  11 | solved param overall_width = 900mm within 600mm..1200mm
+     = solved:keyword  param:keyword  overall_width:param+decl+solved  900:number  mm:unit  within:keyword  600:number  mm:unit  1200:number  mm:unit
+  12 |        param overall_depth = 3/4in
+     = param:keyword  overall_depth:param+decl  3/4:number  in:unit
+  13 |        param overhang      = 1-1/2in
+     = param:keyword  overhang:param+decl  1-1/2:number  in:unit
+  14 |        param slope         = 110deg
+     = param:keyword  slope:param+decl  110:number  deg:unit
+  15 | let half = overall_width / 2
+     = let:keyword  half:let+decl  overall_width:param+ref+solved  2:number
+  17 | stock oak_19 { species: white_oak, form: solid, thickness: 18.5mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  18.5:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+  19 | part side_l : oak_19 {
+     = part:keyword  side_l:part+decl  oak_19:stock+ref
+  20 |   length: overall_width
+     = length:field  overall_width:param+ref+solved
+  21 |   width:  overall_depth + missing_name
+     = width:field  overall_depth:param+ref  missing_name:plain+unresolved
+  24 | part shelf : oak_19 {
+     = part:keyword  shelf:part+decl  oak_19:stock+ref
+  25 |   length: half
+     = length:field  half:let+ref
+  26 |   width:  overall_depth
+     = width:field  overall_depth:param+ref
+  29 | joint housing : dado(side_l, shelf)
+     = joint:keyword  housing:joint+decl  dado:type+ref+std  side_l:part+ref  shelf:part+ref
+  33 | part floor : oak_19 {
+     = part:keyword  floor:part+decl  oak_19:stock+ref
+  34 |   length: half
+     = length:field  half:let+ref
+  35 |   width:  overall_depth
+     = width:field  overall_depth:param+ref
+  38 | joint floor_housing : dado(side_l, floor)
+     = joint:keyword  floor_housing:joint+decl  dado:type+ref+std  side_l:part+ref  floor:part+ref

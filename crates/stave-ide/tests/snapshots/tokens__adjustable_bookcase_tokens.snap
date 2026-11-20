@@ -1,0 +1,147 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"adjustable_bookcase\"))"
+---
+== bookcase.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  10 | import "std:casework"
+     = import:keyword  ":text  std:casework:text  ":text
+  12 | project "Adjustable bookcase" {
+     = project:keyword  ":text  Adjustable bookcase:text  ":text
+  13 |   goal:       "A pine bookcase whose two shelves move up and down on shelf pins"
+     = goal:field  ":text  A pine bookcase whose two shelves move up and down on shelf pins:text  ":text
+  14 |   units:      mm
+     = units:field  mm:word
+  15 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  16 |   tools:      [pencil, square, tape, marking_gauge, router, straight_bit, clamps,
+     = tools:field  pencil:type+ref+std  square:type+ref+std  tape:type+ref+std  marking_gauge:type+ref+std  router:type+ref+std  straight_bit:type+ref+std  clamps:type+ref+std
+  17 |                drill, depth_stop, awl]
+     = drill:type+ref+std  depth_stop:type+ref+std  awl:type+ref+std
+  21 | param case_height = 1100mm within 900mm..1500mm
+     = param:keyword  case_height:param+decl  1100:number  mm:unit  within:keyword  900:number  mm:unit  1500:number  mm:unit
+  22 | param case_width  = 700mm within 500mm..800mm      // longer shelves sag under books
+     = param:keyword  case_width:param+decl  700:number  mm:unit  within:keyword  500:number  mm:unit  800:number  mm:unit
+  23 | param case_depth  = 280mm within 240mm..350mm
+     = param:keyword  case_depth:param+decl  280:number  mm:unit  within:keyword  240:number  mm:unit  350:number  mm:unit
+  24 | let dado_depth = 9mm
+     = let:keyword  dado_depth:let+decl  9:number  mm:unit
+  27 | stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+     = stock:keyword  pine_19:stock+decl  species:field  pine:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  300:number  mm:unit  max_length:field  2400:number  mm:unit
+  28 | stock ply_6   { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
+     = stock:keyword  ply_6:stock+decl  species:field  birch:word  form:field  plywood:word  thickness:field  6:number  mm:unit  max_width:field  1220:number  mm:unit  max_length:field  2440:number  mm:unit
+  33 | part side_l : pine_19 {
+     = part:keyword  side_l:part+decl  pine_19:stock+ref
+  34 |   length: case_height
+     = length:field  case_height:param+ref
+  35 |   width:  case_depth
+     = width:field  case_depth:param+ref
+  36 |   place {
+     = place:keyword
+  37 |     ground
+     = ground:function
+  38 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  43 | part side_r : pine_19 {
+     = part:keyword  side_r:part+decl  pine_19:stock+ref
+  44 |   length: case_height
+     = length:field  case_height:param+ref
+  45 |   width:  case_depth
+     = width:field  case_depth:param+ref
+  46 |   place {
+     = place:keyword
+  47 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  48 |     against(side_l.right, gap: case_width - 2 * pine_19.thickness)
+     = against:function  side_l:part+ref  right:plain  gap:field  case_width:param+ref  2:number  pine_19:stock+ref  thickness:plain
+  49 |     flush(side_l.bottom)
+     = flush:function  side_l:part+ref  bottom:plain
+  50 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  55 | part top : pine_19 {
+     = part:keyword  top:part+decl  pine_19:stock+ref
+  56 |   length: fit
+     = length:field  fit:keyword
+  57 |   width:  case_depth - back.thickness
+     = width:field  case_depth:param+ref  back:part+ref  thickness:plain
+  58 |   place {
+     = place:keyword
+  59 |     flush(side_l.top, inset: 20mm)
+     = flush:function  side_l:part+ref  top:plain  inset:field  20:number  mm:unit
+  60 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+  61 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  66 | part bottom : pine_19 {
+     = part:keyword  bottom:part+decl  pine_19:stock+ref
+  67 |   length: fit
+     = length:field  fit:keyword
+  68 |   width:  case_depth - back.thickness
+     = width:field  case_depth:param+ref  back:part+ref  thickness:plain
+  69 |   place {
+     = place:keyword
+  70 |     flush(side_l.bottom, inset: 60mm)
+     = flush:function  side_l:part+ref  bottom:plain  inset:field  60:number  mm:unit
+  71 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+  72 |     flush(side_l.front)
+     = flush:function  side_l:part+ref  front:plain
+  77 | part back : ply_6 {
+     = part:keyword  back:part+decl  ply_6:stock+ref
+  78 |   length: between(bottom.bottom, top.top)
+     = length:field  between:function  bottom:part+ref  bottom:plain  top:part+ref  top:plain
+  79 |   width:  fit
+     = width:field  fit:keyword
+  80 |   place {
+     = place:keyword
+  81 |     orient(length: up, width: right)
+     = orient:function  length:field  up:word  width:field  right:word
+  82 |     flush(top.top)
+     = flush:function  top:part+ref  top:plain
+  83 |     center(from: side_l.right, to: side_r.left)
+     = center:function  from:field  side_l:part+ref  right:plain  to:field  side_r:part+ref  left:plain
+  84 |     flush(side_l.back)
+     = flush:function  side_l:part+ref  back:plain
+  89 | joint case_dados   : dado([top, bottom], into: [side_l, side_r], depth: dado_depth)
+     = joint:keyword  case_dados:joint+decl  dado:type+ref+std  top:part+ref  bottom:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  dado_depth:let+ref
+  90 | joint back_rabbets : rabbet(back, into: [side_l, side_r], depth: dado_depth)
+     = joint:keyword  back_rabbets:joint+decl  rabbet:type+ref+std  back:part+ref  into:field  side_l:part+ref  side_r:part+ref  depth:param+ref+std  dado_depth:let+ref
+  95 | region inside = opening(
+     = region:keyword  inside:region+decl  opening:function
+  96 |   left:   side_l.right,
+     = left:field  side_l:part+ref  right:plain
+  97 |   right:  side_r.left,
+     = right:field  side_r:part+ref  left:plain
+  98 |   bottom: bottom.top,
+     = bottom:field  bottom:part+ref  top:plain
+  99 |   top:    top.bottom,
+     = top:field  top:part+ref  bottom:plain
+ 100 |   front:  side_l.front,
+     = front:field  side_l:part+ref  front:plain
+ 101 |   back:   back.front,
+     = back:field  back:part+ref  front:plain
+ 105 | assembly lower_shelf : casework.AdjustableShelf {
+     = assembly:keyword  lower_shelf:assembly+decl  casework:module+ref+std  AdjustableShelf:type+ref+std
+ 106 |   space:       inside
+     = space:param+ref+std  inside:region+ref
+ 107 |   left_side:   side_l
+     = left_side:param+ref+std  side_l:part+ref
+ 108 |   right_side:  side_r
+     = right_side:param+ref+std  side_r:part+ref
+ 109 |   panel_stock: pine_19
+     = panel_stock:param+ref+std  pine_19:stock+ref
+ 110 |   height:      300mm
+     = height:param+ref+std  300:number  mm:unit
+ 115 | assembly upper_shelf : casework.AdjustableShelf {
+     = assembly:keyword  upper_shelf:assembly+decl  casework:module+ref+std  AdjustableShelf:type+ref+std
+ 116 |   space:       inside
+     = space:param+ref+std  inside:region+ref
+ 117 |   left_side:   side_l
+     = left_side:param+ref+std  side_l:part+ref
+ 118 |   right_side:  side_r
+     = right_side:param+ref+std  side_r:part+ref
+ 119 |   panel_stock: pine_19
+     = panel_stock:param+ref+std  pine_19:stock+ref
+ 120 |   height:      620mm
+     = height:param+ref+std  620:number  mm:unit

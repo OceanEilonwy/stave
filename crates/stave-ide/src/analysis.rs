@@ -417,11 +417,8 @@ impl Analysis {
     /// goes (a bare name in an expression, a reference, a path) and means
     /// nothing: a typo, or a name not declared yet. Enum words, built-in
     /// functions and fixed call heads are words of the language, not
-    /// unresolved names.
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
-    )]
+    /// unresolved names. Its token carries
+    /// [`crate::TokenModifier::Unresolved`] in [`Analysis::tokens`].
     pub fn is_unresolved(&self, position: FilePosition) -> bool {
         if self.reference_at(position).is_some() {
             return false;
@@ -429,32 +426,7 @@ impl Analysis {
         let Some(root) = self.index.files.get(&position.file).map(FileData::root) else {
             return false;
         };
-        let Some(token) = token_at(&root, position.offset) else {
-            return false;
-        };
-        if token.kind() != SyntaxKind::IDENT {
-            return false;
-        }
-        let text = token.text();
-        let Some(parent) = token.parent() else {
-            return false;
-        };
-        match parent.kind() {
-            SyntaxKind::NAME_REF => {
-                !(words::is_enum_word(text)
-                    || words::is_fixed_call(text)
-                    || words::builtin_signature(text).is_some()
-                    || text == "same")
-            }
-            SyntaxKind::NAME => parent.parent().is_some_and(|holder| {
-                matches!(holder.kind(), SyntaxKind::REF | SyntaxKind::PATH)
-                    && holder
-                        .children()
-                        .find(|c| c.kind() == SyntaxKind::NAME)
-                        .is_some_and(|first| first == parent)
-            }),
-            _ => false,
-        }
+        token_at(&root, position.offset).is_some_and(|token| crate::tokens::names_nothing(&token))
     }
 
     // ---- breadcrumbs ----

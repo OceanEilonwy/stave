@@ -19,9 +19,19 @@ pub fn is_enum_word(word: &str) -> bool {
     WordSet::ALL.iter().any(|set| set.contains(word))
 }
 
+/// `true` if `word` names a feature a recipe step works on (`waste`,
+/// `cheeks`, `floor`). Unlike [`is_enum_word`], a feature word may also
+/// be an item's name (a part called `floor`), so it never stops a name
+/// from resolving or being chosen in a rename: it only colours a word
+/// that resolves to nothing.
+pub fn is_feature_word(word: &str) -> bool {
+    stave_schema::operations::Feature::from_word(word).is_some()
+}
+
 /// `true` if `word` is the head of a call whose meaning is fixed by its
 /// position: a placement term, a spacing, a made part's term, an assembly
-/// step, a cut selector or operation, a recipe step or need.
+/// step, a cut selector or operation, a recipe step or need, an edge
+/// profile's `edge` or `around`, a hardware kind's `point`.
 pub fn is_fixed_call(word: &str) -> bool {
     PlacementTerm::from_word(word).is_some()
         || SpacingKind::from_word(word).is_some()
@@ -35,6 +45,9 @@ pub fn is_fixed_call(word: &str) -> bool {
         || NeedKind::from_word(word).is_some()
         || word == stave_schema::placement::EXTEND
         || word == stave_schema::operations::MARK
+        || word == stave_schema::operations::EDGE
+        || word == stave_schema::operations::AROUND
+        || word == stave_schema::functions::POINT
 }
 
 /// A built-in function's signature: `overlay(left: Length, ...) -> Mount`.
@@ -70,6 +83,8 @@ mod tests {
         assert!(is_enum_word("across"));
         assert!(is_enum_word("plywood"));
         assert!(!is_enum_word("door_l"));
+        assert!(is_feature_word("cheeks"));
+        assert!(!is_enum_word("floor"), "a part may be called floor");
         assert!(is_fixed_call("flush"));
         assert!(is_fixed_call("tenon"));
         assert!(!is_fixed_call("overlay"));

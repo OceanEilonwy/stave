@@ -8,6 +8,8 @@
 
 use gtk::gdk;
 
+use super::theme::Role;
+
 /// Sizes and shapes, the same in light and dark. Text sizes are in `rem`,
 /// a share of the interface font (11 pt, about 14.7 px, by default), so
 /// they grow with the desktop's Large Text and text-scaling settings as
@@ -378,16 +380,14 @@ button.stave-code-tab.active { background: alpha(@accent_bg_color, 0.2); color: 
 .stave-scrim { background: alpha(black, 0.28); }
 "#;
 
-/// The snippet's colours: keyword, type or call, number, string, comment.
+/// The snippet colours that markup outside the inspector's highlighted
+/// lines names: keyword, type or call, comment, error, warning. A
+/// highlighted line takes every colour from the theme table.
 pub struct CodeColours {
     /// `assembly`.
     pub keyword: &'static str,
     /// `FramePanelDoor`, `overlay(`.
     pub name: &'static str,
-    /// `18mm`.
-    pub number: &'static str,
-    /// Strings.
-    pub text: &'static str,
     /// Comments, and a diagnostic's arrows and gutter.
     pub comment: &'static str,
     /// An error's `error[code]` and carets.
@@ -397,15 +397,14 @@ pub struct CodeColours {
 }
 
 /// The snippet's colours on its dark background (#1e1e24 light, #121216
-/// dark): each at least 4.5:1 against both (tested below).
+/// dark), from the theme table (`theme.rs`): each at least 4.5:1 against
+/// both (tested below and there).
 pub const CODE: CodeColours = CodeColours {
-    keyword: "#f0a3c4",
-    name: "#8fd0ff",
-    number: "#ffcf80",
-    text: "#8ff0a4",
-    comment: "#8b8a93",
-    error: "#ff7b85",
-    warning: "#ffcf80",
+    keyword: Role::Keyword.look().on_code,
+    name: Role::Type.look().on_code,
+    comment: Role::Comment.look().on_code,
+    error: Role::Error.look().on_code,
+    warning: Role::Warning.look().on_code,
 };
 
 /// The code blocks' backgrounds as `COLOURS` writes them: light style,
@@ -520,7 +519,7 @@ button.stave-status-tab, .stave-status-text, stavetabstrip .stave-tab,
 "#;
 
 #[cfg(test)]
-const CODE_BACKGROUNDS: [&str; 2] = ["#1e1e24", "#121216"];
+pub(crate) const CODE_BACKGROUNDS: [&str; 2] = ["#1e1e24", "#121216"];
 
 /// Shows a problem mark on a dot: red for an error, amber for a warning, a
 /// red ring for a part a problem only involves; hidden for none.
@@ -597,24 +596,7 @@ pub fn install(display: &gdk::Display) {
 #[cfg(test)]
 mod tests {
     use super::{CODE, CODE_BACKGROUNDS, COLOURS, HIGH_CONTRAST, SHARED, SHELL};
-
-    /// The relative luminance of `#rrggbb` (WCAG 2).
-    fn luminance(hex: &str) -> f64 {
-        let channel = |range: std::ops::Range<usize>| {
-            let value = f64::from(u8::from_str_radix(&hex[range], 16).unwrap()) / 255.0;
-            if value <= 0.039_28 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(1..3) + 0.7152 * channel(3..5) + 0.0722 * channel(5..7)
-    }
-
-    fn contrast(a: &str, b: &str) -> f64 {
-        let (a, b) = (luminance(a), luminance(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
+    use crate::ui::theme::tests::contrast;
 
     #[test]
     fn code_colours_read_on_both_code_backgrounds() {
@@ -624,8 +606,6 @@ mod tests {
                 "#e7e5ea",
                 CODE.keyword,
                 CODE.name,
-                CODE.number,
-                CODE.text,
                 CODE.comment,
                 CODE.error,
                 CODE.warning,

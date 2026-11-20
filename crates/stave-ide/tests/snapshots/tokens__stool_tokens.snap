@@ -1,0 +1,113 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"stool\"))"
+---
+== stool.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   7 | project "Stool" {
+     = project:keyword  ":text  Stool:text  ":text
+   8 |   goal:       "A low ash stool with turned legs and dowel rungs"
+     = goal:field  ":text  A low ash stool with turned legs and dowel rungs:text  ":text
+   9 |   units:      mm
+     = units:field  mm:word
+  10 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  11 |   tools:      [pencil, square, tape, awl, calipers, drill, depth_stop, clamps,
+     = tools:field  pencil:type+ref+std  square:type+ref+std  tape:type+ref+std  awl:type+ref+std  calipers:type+ref+std  drill:type+ref+std  depth_stop:type+ref+std  clamps:type+ref+std
+  12 |                lathe, roughing_gouge, spindle_gouge, parting_tool]
+     = lathe:type+ref+std  roughing_gouge:type+ref+std  spindle_gouge:type+ref+std  parting_tool:type+ref+std
+  16 | param seat_height = 450mm within 400mm..500mm      // floor to the top of the seat
+     = param:keyword  seat_height:param+decl  450:number  mm:unit  within:keyword  400:number  mm:unit  500:number  mm:unit
+  17 | param seat_size   = 320mm within [280mm, 320mm, 360mm]
+     = param:keyword  seat_size:param+decl  320:number  mm:unit  within:keyword  280:number  mm:unit  320:number  mm:unit  360:number  mm:unit
+  18 | let leg_length   = seat_height - ash_30.thickness
+     = let:keyword  leg_length:let+decl  seat_height:param+ref  ash_30:stock+ref  thickness:plain
+  19 | let leg_inset    = 30mm                            // from the edge of the seat to the outside of a leg
+     = let:keyword  leg_inset:let+decl  30:number  mm:unit
+  20 | let leg_diameter = 40mm                            // the widest part of the leg, where the rungs go in
+     = let:keyword  leg_diameter:let+decl  40:number  mm:unit
+  21 | let low_rung     = 150mm                           // floor to the centre of the front and back rungs
+     = let:keyword  low_rung:let+decl  150:number  mm:unit
+  22 | let high_rung    = 185mm                           // floor to the centre of the side rungs
+     = let:keyword  high_rung:let+decl  185:number  mm:unit
+  25 | require legs_fit : seat_size >= 2 * (leg_inset + leg_diameter) + 100mm "the legs crowd each other on a small seat"
+     = require:keyword  legs_fit:require+decl  seat_size:param+ref  2:number  leg_inset:let+ref  leg_diameter:let+ref  100:number  mm:unit  ":text  the legs crowd each other on a small seat:text  ":text
+  28 | stock ash_30       { species: ash, form: solid, thickness: 30mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  ash_30:stock+decl  species:field  ash:word  form:field  solid:word  thickness:field  30:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  29 | stock ash_45_sq    { species: ash, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
+     = stock:keyword  ash_45_sq:stock+decl  species:field  ash:word  form:field  solid:word  thickness:field  45:number  mm:unit  width:field  45:number  mm:unit  max_length:field  2400:number  mm:unit
+  30 | stock ash_dowel_22 { species: ash, form: dowel, diameter: 22mm }
+     = stock:keyword  ash_dowel_22:stock+decl  species:field  ash:word  form:field  dowel:word  diameter:field  22:number  mm:unit
+  35 | part seat : ash_30 {
+     = part:keyword  seat:part+decl  ash_30:stock+ref
+  36 |   length: seat_size
+     = length:field  seat_size:param+ref
+  37 |   width:  seat_size
+     = width:field  seat_size:param+ref
+  38 |   place {
+     = place:keyword
+  39 |     ground
+     = ground:function
+  50 | profile leg_shape {
+     = profile:keyword  leg_shape:profile+decl
+  51 |   measure:               diameter
+     = measure:field  diameter:word
+  52 |   smooth:                true
+     = smooth:field  true:keyword
+  53 |   at 0mm:                34mm
+     = at:keyword  0:number  mm:unit  34:number  mm:unit
+  54 |   at leg_length - 230mm: leg_diameter
+     = at:keyword  leg_length:let+ref  230:number  mm:unit  leg_diameter:let+ref
+  55 |   at leg_length - 120mm: leg_diameter
+     = at:keyword  leg_length:let+ref  120:number  mm:unit  leg_diameter:let+ref
+  56 |   at leg_length:         30mm
+     = at:keyword  leg_length:let+ref  30:number  mm:unit
+  59 | part leg[front_left, front_right, back_left, back_right] : ash_45_sq {
+     = part:keyword  leg:part+decl  front_left:label+decl  front_right:label+decl  back_left:label+decl  back_right:label+decl  ash_45_sq:stock+ref
+  60 |   length: fit                          // from the profile; the round tenon is added by the joint
+     = length:field  fit:keyword
+  61 |   shape:  turned(leg_shape)
+     = shape:field  turned:function  leg_shape:profile+ref
+  62 |   place {
+     = place:keyword
+  63 |     orient(length: down)               // station 0 at the top, against the seat
+     = orient:function  length:field  down:word
+  64 |     corners(seat, inset: leg_inset)
+     = corners:function  seat:part+ref  inset:field  leg_inset:let+ref
+  65 |     against(seat.bottom)
+     = against:function  seat:part+ref  bottom:plain
+  74 | part rung[front, back] : ash_dowel_22 {
+     = part:keyword  rung:part+decl  front:label+decl  back:label+decl  ash_dowel_22:stock+ref
+  75 |   length: fit
+     = length:field  fit:keyword
+  76 |   place {
+     = place:keyword
+  77 |     center(seat, across)
+     = center:function  seat:part+ref  across:word
+  78 |     spaced(ends(inset: leg_inset + (leg_diameter - ash_dowel_22.diameter) / 2), from: seat.front, to: seat.back)
+     = spaced:function  ends:function  inset:field  leg_inset:let+ref  leg_diameter:let+ref  ash_dowel_22:stock+ref  diameter:plain  2:number  from:field  seat:part+ref  front:plain  to:field  seat:part+ref  back:plain
+  79 |     flush(leg[front_left].bottom, inset: low_rung - ash_dowel_22.diameter / 2)
+     = flush:function  leg:part+ref  front_left:label+ref  bottom:plain  inset:field  low_rung:let+ref  ash_dowel_22:stock+ref  diameter:plain  2:number
+  84 | part side_rung[left, right] : ash_dowel_22 {
+     = part:keyword  side_rung:part+decl  left:label+decl  right:label+decl  ash_dowel_22:stock+ref
+  85 |   length: fit
+     = length:field  fit:keyword
+  86 |   place {
+     = place:keyword
+  87 |     orient(length: back)
+     = orient:function  length:field  back:word
+  88 |     spaced(ends(inset: leg_inset + (leg_diameter - ash_dowel_22.diameter) / 2), from: seat.left, to: seat.right)
+     = spaced:function  ends:function  inset:field  leg_inset:let+ref  leg_diameter:let+ref  ash_dowel_22:stock+ref  diameter:plain  2:number  from:field  seat:part+ref  left:plain  to:field  seat:part+ref  right:plain
+  89 |     flush(leg[front_left].bottom, inset: high_rung - ash_dowel_22.diameter / 2)
+     = flush:function  leg:part+ref  front_left:label+ref  bottom:plain  inset:field  high_rung:let+ref  ash_dowel_22:stock+ref  diameter:plain  2:number
+  90 |     center(seat, deep)
+     = center:function  seat:part+ref  deep:word
+  95 | joint leg_tenons   : round_tenon(leg[*], into: seat, diameter: 22mm, length: 20mm)
+     = joint:keyword  leg_tenons:joint+decl  round_tenon:type+ref+std  leg:part+ref  into:field  seat:part+ref  diameter:param+ref+std  22:number  mm:unit  length:param+ref+std  20:number  mm:unit
+  96 | joint rung_sockets : socket([rung[*], side_rung[*]], into: leg[*], depth: 15mm)
+     = joint:keyword  rung_sockets:joint+decl  socket:type+ref+std  rung:part+ref  side_rung:part+ref  into:field  leg:part+ref  depth:param+ref+std  15:number  mm:unit
+  99 | scene underside "Legs and rungs" {
+     = scene:keyword  underside:scene+decl  ":text  Legs and rungs:text  ":text
+ 100 |   hide: seat
+     = hide:field  seat:part+ref

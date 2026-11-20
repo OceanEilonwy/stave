@@ -1,0 +1,195 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"picture_frame\"))"
+---
+== frame.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  17 | project "Picture frame" {
+     = project:keyword  ":text  Picture frame:text  ":text
+  18 |   goal:       "A mitred oak picture frame and a mitred box to match"
+     = goal:field  ":text  A mitred oak picture frame and a mitred box to match:text  ":text
+  19 |   units:      mm
+     = units:field  mm:word
+  20 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  21 |   tools:      [pencil, marking_knife, square, tape, sliding_bevel, tenon_saw,
+     = tools:field  pencil:type+ref+std  marking_knife:type+ref+std  square:type+ref+std  tape:type+ref+std  sliding_bevel:type+ref+std  tenon_saw:type+ref+std
+  22 |                block_plane, mitre_saw, router, chamfer_bit, roundover_bit, clamps]
+     = block_plane:type+ref+std  mitre_saw:type+ref+std  router:type+ref+std  chamfer_bit:type+ref+std  roundover_bit:type+ref+std  clamps:type+ref+std
+  26 | param frame_width  = 400mm within 200mm..800mm     // outside, left to right
+     = param:keyword  frame_width:param+decl  400:number  mm:unit  within:keyword  200:number  mm:unit  800:number  mm:unit
+  27 | param frame_height = 300mm within 150mm..600mm     // outside, front to back as it lies
+     = param:keyword  frame_height:param+decl  300:number  mm:unit  within:keyword  150:number  mm:unit  600:number  mm:unit
+  28 | param moulding     = 40mm within 25mm..70mm        // how wide each member is
+     = param:keyword  moulding:param+decl  40:number  mm:unit  within:keyword  25:number  mm:unit  70:number  mm:unit
+  29 | param box_length   = 240mm within 150mm..400mm
+     = param:keyword  box_length:param+decl  240:number  mm:unit  within:keyword  150:number  mm:unit  400:number  mm:unit
+  30 | param box_depth    = 160mm within 100mm..300mm
+     = param:keyword  box_depth:param+decl  160:number  mm:unit  within:keyword  100:number  mm:unit  300:number  mm:unit
+  31 | param box_height   = 90mm within 50mm..200mm
+     = param:keyword  box_height:param+decl  90:number  mm:unit  within:keyword  50:number  mm:unit  200:number  mm:unit
+  34 | stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  35 | stock oak_12 { species: white_oak, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  oak_12:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  12:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  38 | part rail_front : oak_19 {
+     = part:keyword  rail_front:part+decl  oak_19:stock+ref
+  39 |   length: frame_width
+     = length:field  frame_width:param+ref
+  40 |   width:  moulding
+     = width:field  moulding:param+ref
+  41 |   edges:  [roundover(6mm, on: edge(top, front)), chamfer(3mm, on: edge(top, back))]
+     = edges:field  roundover:function  6:number  mm:unit  on:field  edge:function  top:word  front:word  chamfer:function  3:number  mm:unit  on:field  edge:function  top:word  back:word
+  42 |   place {
+     = place:keyword
+  43 |     ground
+     = ground:function
+  47 | part rail_back : oak_19 {
+     = part:keyword  rail_back:part+decl  oak_19:stock+ref
+  48 |   length: frame_width
+     = length:field  frame_width:param+ref
+  49 |   width:  moulding
+     = width:field  moulding:param+ref
+  50 |   edges:  [roundover(6mm, on: edge(top, back)), chamfer(3mm, on: edge(top, front))]
+     = edges:field  roundover:function  6:number  mm:unit  on:field  edge:function  top:word  back:word  chamfer:function  3:number  mm:unit  on:field  edge:function  top:word  front:word
+  51 |   place {
+     = place:keyword
+  52 |     flush(rail_front.left)
+     = flush:function  rail_front:part+ref  left:plain
+  53 |     flush(rail_front.bottom)
+     = flush:function  rail_front:part+ref  bottom:plain
+  54 |     flush(rail_front.front, inset: frame_height - moulding)
+     = flush:function  rail_front:part+ref  front:plain  inset:field  frame_height:param+ref  moulding:param+ref
+  58 | part stile_left : oak_19 {
+     = part:keyword  stile_left:part+decl  oak_19:stock+ref
+  59 |   length: frame_height
+     = length:field  frame_height:param+ref
+  60 |   width:  moulding
+     = width:field  moulding:param+ref
+  61 |   edges:  [roundover(6mm, on: edge(top, left)), chamfer(3mm, on: edge(top, right))]
+     = edges:field  roundover:function  6:number  mm:unit  on:field  edge:function  top:word  left:word  chamfer:function  3:number  mm:unit  on:field  edge:function  top:word  right:word
+  62 |   place {
+     = place:keyword
+  63 |     orient(length: back, width: right)
+     = orient:function  length:field  back:word  width:field  right:word
+  64 |     flush(rail_front.left)
+     = flush:function  rail_front:part+ref  left:plain
+  65 |     flush(rail_front.front)
+     = flush:function  rail_front:part+ref  front:plain
+  66 |     flush(rail_front.bottom)
+     = flush:function  rail_front:part+ref  bottom:plain
+  70 | part stile_right : oak_19 {
+     = part:keyword  stile_right:part+decl  oak_19:stock+ref
+  71 |   length: frame_height
+     = length:field  frame_height:param+ref
+  72 |   width:  moulding
+     = width:field  moulding:param+ref
+  73 |   edges:  [roundover(6mm, on: edge(top, right)), chamfer(3mm, on: edge(top, left))]
+     = edges:field  roundover:function  6:number  mm:unit  on:field  edge:function  top:word  right:word  chamfer:function  3:number  mm:unit  on:field  edge:function  top:word  left:word
+  74 |   place {
+     = place:keyword
+  75 |     orient(length: back, width: right)
+     = orient:function  length:field  back:word  width:field  right:word
+  76 |     flush(rail_front.right)
+     = flush:function  rail_front:part+ref  right:plain
+  77 |     flush(rail_front.front)
+     = flush:function  rail_front:part+ref  front:plain
+  78 |     flush(rail_front.bottom)
+     = flush:function  rail_front:part+ref  bottom:plain
+  82 | joint frame_corners : mitre([rail_front, rail_back], into: [stile_left, stile_right])
+     = joint:keyword  frame_corners:joint+decl  mitre:type+ref+std  rail_front:part+ref  rail_back:part+ref  into:role+ref+std  stile_left:part+ref  stile_right:part+ref
+  85 | part box_front : oak_12 {
+     = part:keyword  box_front:part+decl  oak_12:stock+ref
+  86 |   length: box_length
+     = length:field  box_length:param+ref
+  87 |   width:  box_height
+     = width:field  box_height:param+ref
+  88 |   edges:  chamfer(2mm, on: [edge(top, front), edge(top, back)])
+     = edges:field  chamfer:function  2:number  mm:unit  on:field  edge:function  top:word  front:word  edge:function  top:word  back:word
+  89 |   loose:  true                                     // the box stands on its own beside the frame
+     = loose:field  true:keyword
+  90 |   place {
+     = place:keyword
+  91 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+  92 |     against(rail_front.right, gap: 100mm)
+     = against:function  rail_front:part+ref  right:plain  gap:field  100:number  mm:unit
+  93 |     flush(rail_front.bottom)
+     = flush:function  rail_front:part+ref  bottom:plain
+  94 |     flush(rail_front.front)
+     = flush:function  rail_front:part+ref  front:plain
+  98 | part box_back : oak_12 {
+     = part:keyword  box_back:part+decl  oak_12:stock+ref
+  99 |   length: box_length
+     = length:field  box_length:param+ref
+ 100 |   width:  box_height
+     = width:field  box_height:param+ref
+ 101 |   edges:  chamfer(2mm, on: [edge(top, front), edge(top, back)])
+     = edges:field  chamfer:function  2:number  mm:unit  on:field  edge:function  top:word  front:word  edge:function  top:word  back:word
+ 102 |   place {
+     = place:keyword
+ 103 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+ 104 |     flush(box_front.left)
+     = flush:function  box_front:part+ref  left:plain
+ 105 |     flush(box_front.bottom)
+     = flush:function  box_front:part+ref  bottom:plain
+ 106 |     flush(box_front.front, inset: box_depth - 12mm)
+     = flush:function  box_front:part+ref  front:plain  inset:field  box_depth:param+ref  12:number  mm:unit
+ 110 | part box_left : oak_12 {
+     = part:keyword  box_left:part+decl  oak_12:stock+ref
+ 111 |   length: box_depth
+     = length:field  box_depth:param+ref
+ 112 |   width:  box_height
+     = width:field  box_height:param+ref
+ 113 |   edges:  chamfer(2mm, on: [edge(top, left), edge(top, right)])
+     = edges:field  chamfer:function  2:number  mm:unit  on:field  edge:function  top:word  left:word  edge:function  top:word  right:word
+ 114 |   place {
+     = place:keyword
+ 115 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+ 116 |     flush(box_front.left)
+     = flush:function  box_front:part+ref  left:plain
+ 117 |     flush(box_front.bottom)
+     = flush:function  box_front:part+ref  bottom:plain
+ 118 |     flush(box_front.front)
+     = flush:function  box_front:part+ref  front:plain
+ 122 | part box_right : oak_12 {
+     = part:keyword  box_right:part+decl  oak_12:stock+ref
+ 123 |   length: box_depth
+     = length:field  box_depth:param+ref
+ 124 |   width:  box_height
+     = width:field  box_height:param+ref
+ 125 |   edges:  chamfer(2mm, on: [edge(top, left), edge(top, right)])
+     = edges:field  chamfer:function  2:number  mm:unit  on:field  edge:function  top:word  left:word  edge:function  top:word  right:word
+ 126 |   place {
+     = place:keyword
+ 127 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+ 128 |     flush(box_front.right)
+     = flush:function  box_front:part+ref  right:plain
+ 129 |     flush(box_front.bottom)
+     = flush:function  box_front:part+ref  bottom:plain
+ 130 |     flush(box_front.front)
+     = flush:function  box_front:part+ref  front:plain
+ 134 | part box_base : oak_12 {
+     = part:keyword  box_base:part+decl  oak_12:stock+ref
+ 135 |   length: box_length
+     = length:field  box_length:param+ref
+ 136 |   width:  box_depth
+     = width:field  box_depth:param+ref
+ 137 |   edges:  roundover(3mm, on: around(bottom))
+     = edges:field  roundover:function  3:number  mm:unit  on:field  around:function  bottom:word
+ 138 |   place {
+     = place:keyword
+ 139 |     flush(box_front.left)
+     = flush:function  box_front:part+ref  left:plain
+ 140 |     against(box_front.bottom)
+     = against:function  box_front:part+ref  bottom:plain
+ 141 |     flush(box_front.front)
+     = flush:function  box_front:part+ref  front:plain
+ 145 | joint box_corners : mitre([box_front, box_back], into: [box_left, box_right])
+     = joint:keyword  box_corners:joint+decl  mitre:type+ref+std  box_front:part+ref  box_back:part+ref  into:role+ref+std  box_left:part+ref  box_right:part+ref
+ 146 | joint box_bottom  : glued_face([box_front, box_back, box_left, box_right], into: box_base)
+     = joint:keyword  box_bottom:joint+decl  glued_face:type+ref+std  box_front:part+ref  box_back:part+ref  box_left:part+ref  box_right:part+ref  into:field  box_base:part+ref
