@@ -324,6 +324,20 @@ fn kind_values_carry_settings_and_are_readable() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_kind_without_settings_says_so_in_its_help() {
+    let opened = open("let glue = glued_face(wrong: 1mm)");
+    let unknown = opened
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("has no field 'wrong'"))
+        .expect("the unknown setting is reported");
+    assert_eq!(
+        unknown.help.as_deref(),
+        Some("'glued_face' takes no settings")
+    );
+}
+
+#[test]
 fn joint_kinds_are_evaluated_per_pair() {
     // The dado's default depth is into.thickness / 3, different per pair.
     let opened = open(&format!(

@@ -351,7 +351,11 @@ impl<'m> Solver<'m> {
                                             .iter()
                                             .map(|p| p.decl.name.as_str())
                                             .collect();
-                                        format!("its settings are: {}", names.join(", "))
+                                        if names.is_empty() {
+                                            format!("'{}' takes no settings", value.name)
+                                        } else {
+                                            format!("its settings are: {}", names.join(", "))
+                                        }
                                     }),
                                 )
                                 .into());

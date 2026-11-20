@@ -1347,14 +1347,18 @@ impl Resolver<'_> {
                 name.as_str()
             )
         };
-        let help = format!(
-            "its settings are: {}",
-            params
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let help = if params.is_empty() {
+            format!("'{}' takes no settings", self.kind_display(id, cx.file))
+        } else {
+            format!(
+                "its settings are: {}",
+                params
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         let mut candidates: Vec<String> =
             params.iter().map(|p| p.name.as_str().to_owned()).collect();
         candidates.extend(
