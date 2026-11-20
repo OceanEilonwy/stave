@@ -49,7 +49,7 @@ use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
 
 use super::grip_layer::GripLayer;
 use super::grip_panel::{
-    GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput, install_style,
+    GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput,
 };
 use super::grip_text::{
     GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
@@ -604,7 +604,6 @@ impl Window {
     /// section's actions were forwarded when it was launched).
     pub(in crate::ui) fn connect_grips(&mut self) {
         let grips = &self.editing.grips;
-        install_style(&self.widgets.design.display());
         let design = &self.widgets.design;
         design.add_overlay(&grips.area);
         design.add_overlay(&grips.layer);
