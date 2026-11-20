@@ -134,6 +134,7 @@ impl Ty {
             TypeName::HingeKind => kind(BaseKind::Hinge),
             TypeName::PullKind => kind(BaseKind::Pull),
             TypeName::SupportKind => kind(BaseKind::Support),
+            TypeName::FittingKind => kind(BaseKind::Fitting),
             TypeName::FastenerKind => kind(BaseKind::Fastener),
             TypeName::Tool => Ty::Tool,
             TypeName::Recipe => Ty::Recipe,
@@ -172,6 +173,8 @@ impl Ty {
             // `spliced(at:)` one length or a list of them.
             (Ty::Kind(_), Ty::List(inner)) if matches!(**inner, Ty::Kind(_)) => self.fits(inner),
             (Ty::Length, Ty::List(inner)) if **inner == Ty::Length => true,
+            // `tapered(on:)` one face or a list of them.
+            (Ty::Word(found), Ty::List(inner)) if **inner == Ty::Word(*found) => true,
             (Ty::Word(found), Ty::Word(wanted)) => {
                 found == wanted || (*found == WordSet::Grain && *wanted == WordSet::PartAxis)
             }
@@ -235,6 +238,7 @@ impl Ty {
                 Some(BaseKind::Hinge) => "a hinge kind".into(),
                 Some(BaseKind::Pull) => "a pull kind".into(),
                 Some(BaseKind::Support) => "a support kind".into(),
+                Some(BaseKind::Fitting) => "a fitting kind".into(),
                 Some(BaseKind::Fastener) => "a fastener kind".into(),
                 Some(BaseKind::Tool) => "a tool".into(),
                 None => "a hardware kind".into(),

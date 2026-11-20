@@ -20,8 +20,6 @@
 //! moves with the scroll wheel, and tells a screen reader its value in
 //! words and where it is blocked.
 
-use std::cell::Ref;
-
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
@@ -469,14 +467,8 @@ impl Slider {
         }
     }
 
-    /// The value, as of the last message the slider handled.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "kept for the slider's API; only tests read it now"
-        )
-    )]
+    /// The value, as of the last message the slider handled (tests).
+    #[cfg(test)]
     pub fn value(&self) -> f64 {
         self.model().track.value
     }
@@ -517,9 +509,10 @@ impl Slider {
         self.send(SliderInput::SetLabel(label.to_owned()));
     }
 
-    /// The model as of the last handled message: for the getters, never
-    /// from the slider's own handlers (rule 8).
-    fn model(&self) -> Ref<'_, SliderComponent> {
+    /// The model as of the last handled message: for the tests' getters,
+    /// never from the slider's own handlers (rule 8).
+    #[cfg(test)]
+    fn model(&self) -> std::cell::Ref<'_, SliderComponent> {
         self.controller.model()
     }
 

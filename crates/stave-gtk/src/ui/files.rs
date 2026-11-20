@@ -59,7 +59,7 @@ use stave_ide::{
 use stave_lang::Severity;
 use stave_lang::ast::Span;
 
-use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run};
+use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run, SearchEvent};
 use super::tab_strip::PageTab;
 
 /// How long typing must pause before the names are worked out again.
@@ -72,6 +72,10 @@ const LINK_DELAY: Duration = Duration::from_millis(120);
 const HOVER_DELAY: Duration = Duration::from_millis(450);
 /// How many frames the overlays follow the text's layout after a change.
 const SETTLE_FRAMES: u32 = 30;
+
+/// The tag that strikes old lines through in the text while an edit's
+/// change to them is pending ([`FilesInput::MarkPending`]).
+const PENDING_TAG: &str = "stave-pending-old";
 
 /// What the screenshot asks the editor to show, once the names are in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -179,6 +183,21 @@ pub enum FilesInput<Then> {
         /// Its buffer, holding the commit's text.
         buffer: gtk::TextBuffer,
     },
+    /// Strike these lines of a document's text through while an edit's
+    /// change to them is pending: each `(first, end)` from its first line
+    /// to the line after its last, counted from 0 (`end` past the text
+    /// reaches its end).
+    MarkPending {
+        /// The file.
+        document: Document,
+        /// The ranges of lines.
+        lines: Vec<(i32, i32)>,
+    },
+    /// Take the pending marks off a document's text.
+    ClearPending(Document),
+    /// The editor's search heard this (its bar, or its count): handed
+    /// back to the editor.
+    EditorSearch(SearchEvent),
     // ---- its own widgets, timers and worker ----
     /// People changed a document's text (or something wrote into it).
     TextChanged(Document),
@@ -562,7 +581,11 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 LensClick::Show(symbol) => FilesInput::ShowIn3d(symbol),
             }),
         );
-        let editor = Editor::new(&init.table, lens);
+        // So does what the editor's search hears (its bar's outputs and
+        // its counts), handed back to the editor in this update.
+        let (search_events, heard) = relm4::channel();
+        relm4::spawn_local(heard.forward(sender.input_sender().clone(), FilesInput::EditorSearch));
+        let editor = Editor::new(&init.table, lens, search_events);
 
         // The uses panel.
         let uses_title = label("", &["stave-uses-title"]);
@@ -636,8 +659,10 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             .description(tr("Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it."))
             .vexpand(true)
             .css_classes(["compact", "stave-code-placeholder"])
-            .build()
-            .upcast::<gtk::Widget>();
+            .build();
+        // It reads whole in any frame the panel is docked in.
+        super::empty_state::fit(&placeholder);
+        let placeholder = placeholder.upcast::<gtk::Widget>();
         // The open files show as tabs in the strip of the frame holding
         // this panel ([`FilesOutput::Tabs`]), beside the Model.
         root.append(&placeholder);
@@ -761,6 +786,9 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 }
             }
             FilesInput::Adopt { document, buffer } => self.adopt(document, buffer),
+            FilesInput::MarkPending { document, lines } => self.mark_pending(&document, &lines),
+            FilesInput::ClearPending(document) => self.clear_pending(&document),
+            FilesInput::EditorSearch(event) => self.editor.search_event(event),
             FilesInput::TextChanged(document) => self.text_changed(&document),
             FilesInput::CursorMoved => self.cursor_moved_now(true),
             FilesInput::AnalyseDue(ticket) => {
@@ -1384,6 +1412,45 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         self.refresh_markers();
         if self.buffers.is_dirty(&document) {
             self.schedule_analysis();
+        }
+    }
+
+    /// Strikes the pending old lines of a document's text through
+    /// ([`FilesInput::MarkPending`]).
+    fn mark_pending(&self, document: &Document, lines: &[(i32, i32)]) {
+        let Some(buffer) = self.buffer_of(document) else {
+            return;
+        };
+        let table = buffer.tag_table();
+        let tag = table.lookup(PENDING_TAG).unwrap_or_else(|| {
+            let tag = gtk::TextTag::builder()
+                .name(PENDING_TAG)
+                .strikethrough(true)
+                .background_rgba(&gtk::gdk::RGBA::new(0.85, 0.2, 0.15, 0.16))
+                .build();
+            table.add(&tag);
+            tag
+        });
+        for &(first, end) in lines {
+            let Some(start) = buffer.iter_at_line(first) else {
+                continue;
+            };
+            // Past the last line: to the end of the text.
+            let end = buffer
+                .iter_at_line(end)
+                .unwrap_or_else(|| buffer.end_iter());
+            buffer.apply_tag(&tag, &start, &end);
+        }
+    }
+
+    /// Takes the pending marks off a document's text
+    /// ([`FilesInput::ClearPending`]).
+    fn clear_pending(&self, document: &Document) {
+        if let Some(buffer) = self.buffer_of(document)
+            && let Some(tag) = buffer.tag_table().lookup(PENDING_TAG)
+        {
+            let (start, end) = buffer.bounds();
+            buffer.remove_tag(&tag, &start, &end);
         }
     }
 
@@ -2341,17 +2408,6 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
         self.edit_files()
     }
 
-    /// The text buffer of a file of the project, when it has a tab; with
-    /// `open`, a tab is opened for it first (not shown).
-    pub fn buffer_for(&mut self, path: &Path, open: bool) -> Option<gtk::TextBuffer> {
-        let document = Document::File(path.to_path_buf());
-        if open {
-            self.ensure_buffer(&document)
-        } else {
-            self.buffers.get(&document).cloned()
-        }
-    }
-
     /// The text buffer of a file of the project, when it has a tab.
     #[cfg_attr(not(test), allow(dead_code, reason = "tests read the buffers"))]
     pub fn open_buffer(&self, path: &Path) -> Option<gtk::TextBuffer> {
@@ -2468,14 +2524,16 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     }
 
     /// Shows a place, telling the window where the cursor rests. Its
-    /// file's buffer can be read at once.
+    /// file's buffer is in the window's copies at once (made here and
+    /// adopted by the component when it has no tab), so an edit's commit
+    /// straight after writes through it.
     pub fn show_location(&mut self, location: &SourceLocation) {
         self.ensure_buffer(&Document::from_source_path(&location.path));
         self.send(FilesInput::ShowLocation(location.clone()));
     }
 
-    /// Shows a place quietly. Its file's buffer can be read (and marked)
-    /// at once.
+    /// Shows a place quietly. Its file's buffer is in the window's copies
+    /// at once, as with [`FilesPage::show_location`].
     pub fn reveal(&mut self, location: &SourceLocation) {
         self.ensure_buffer(&Document::from_source_path(&location.path));
         self.send(FilesInput::Reveal(location.clone()));
@@ -2824,6 +2882,65 @@ mod tests {
                 .iter()
                 .any(|output| matches!(output, FilesOutput::Tabs(tabs) if tabs.len() == 1 && tabs[0].active && tabs[0].unsaved)),
             "shown as the active tab"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_pending_lines_are_struck_by_the_component() {
+        on_gtk_thread(pending_lines_are_struck);
+    }
+
+    /// The window used to apply the pending tag to the Code panel's
+    /// buffer itself; now it asks, after revealing the file, and the
+    /// component strikes the lines through in its own update and takes
+    /// them off again when told, with no text changed.
+    fn pending_lines_are_struck() {
+        let folder = scratch_copy("wall_shelf", "pending");
+        let path = folder.join("shelf.stave");
+        let (mut page, heard) = recorded_page();
+        page.set_folder(&folder);
+        settle();
+        page.reveal(&SourceLocation {
+            path: path.to_string_lossy().into_owned(),
+            line: stave_app::session::LineNumber::from_usize(1).unwrap(),
+        });
+        let document = Document::File(path.clone());
+        page.send(FilesInput::MarkPending {
+            document: document.clone(),
+            lines: vec![(0, 1)],
+        });
+        let Some(buffer) = page.open_buffer(&path) else {
+            panic!("revealing made the file's buffer");
+        };
+        let struck = |buffer: &gtk::TextBuffer| {
+            buffer
+                .tag_table()
+                .lookup(PENDING_TAG)
+                .is_some_and(|tag| buffer.start_iter().has_tag(&tag))
+        };
+        assert!(!struck(&buffer), "only queued");
+        heard.borrow_mut().clear();
+        settle();
+        assert!(struck(&buffer), "the first line is struck through");
+        let second = buffer.iter_at_line(1).unwrap();
+        assert!(
+            !buffer
+                .tag_table()
+                .lookup(PENDING_TAG)
+                .is_some_and(|tag| second.has_tag(&tag)),
+            "only the lines asked for"
+        );
+        assert!(!buffer.is_modified(), "marking changes no text");
+        page.send(FilesInput::ClearPending(document));
+        settle();
+        assert!(!struck(&buffer), "taken off again");
+        assert!(
+            !heard
+                .borrow()
+                .iter()
+                .any(|output| matches!(output, FilesOutput::Unsaved(_))),
+            "nothing became unsaved"
         );
         let _ = std::fs::remove_dir_all(&folder);
     }

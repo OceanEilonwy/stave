@@ -44,6 +44,11 @@ impl Expect {
         )]
         let words = match &ty {
             Ty::Word(set) => vec![*set],
+            // One word or a list of them: `tapered(on: [right, back])`.
+            Ty::List(inner) => match **inner {
+                Ty::Word(set) => vec![set],
+                _ => Vec::new(),
+            },
             // A spacing is a call (`ends(inset: 5mm)`) or a bare word
             // (`evenly`), wherever one is expected: a member's `spaced:`,
             // and a param or argument of type `Spacing`.
@@ -1342,14 +1347,18 @@ impl Resolver<'_> {
                 name.as_str()
             )
         };
-        let help = format!(
-            "its settings are: {}",
-            params
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let help = if params.is_empty() {
+            format!("'{}' takes no settings", self.kind_display(id, cx.file))
+        } else {
+            format!(
+                "its settings are: {}",
+                params
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         let mut candidates: Vec<String> =
             params.iter().map(|p| p.name.as_str().to_owned()).collect();
         candidates.extend(
@@ -1609,6 +1618,8 @@ impl Resolver<'_> {
                 | Builtin::Overlay
                 | Builtin::Inset
                 | Builtin::Turned
+                | Builtin::Tapered
+                | Builtin::Arched
                 | Builtin::Joined
                 | Builtin::Spliced
                 | Builtin::Box
@@ -1714,6 +1725,17 @@ fn builtin_call(builtin: Builtin, settings: Vec<Setting>, span: Span) -> Option<
         },
         Builtin::Turned => BuiltinCall::Turned {
             profile: required("profile"),
+        },
+        Builtin::Tapered => BuiltinCall::Tapered {
+            to: required("to"),
+            toward: required("toward"),
+            on: required("on"),
+            square: optional("square"),
+        },
+        Builtin::Arched => BuiltinCall::Arched {
+            rise: required("rise"),
+            on: required("on"),
+            ends: optional("ends"),
         },
         Builtin::Joined => BuiltinCall::Joined { by: required("by") },
         Builtin::Spliced => BuiltinCall::Spliced {

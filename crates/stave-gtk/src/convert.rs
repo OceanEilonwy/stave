@@ -17,11 +17,6 @@ pub fn f32_of_int(value: i32) -> f32 {
     f32_of(f64::from(value))
 }
 
-/// A small index as `f32` (exact below 2^24).
-pub fn f32_of_index(value: usize) -> f32 {
-    f32_of(f64::from(u32::try_from(value).unwrap_or(u32::MAX)))
-}
-
 /// A device pixel count from a scaled size: rounded and kept within
 /// `1..=16384`.
 pub fn pixels(value: f64) -> u32 {

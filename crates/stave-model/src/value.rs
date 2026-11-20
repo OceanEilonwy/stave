@@ -394,6 +394,52 @@ pub struct Joining {
     pub by: crate::nonempty::NonEmpty<KindValue>,
 }
 
+/// The shape of a square part (grammar, "Shaped parts"), its faces as
+/// placed: `tapered(...)` or `arched(...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SquareShape {
+    /// `tapered(to:, toward:, on:, square:)`.
+    Tapered {
+        /// The size at the narrow end, square to each tapered face.
+        to: ExactLength,
+        /// The narrow end.
+        toward: Face,
+        /// The faces planed, in the order written.
+        on: Vec<Face>,
+        /// How far it stays square from the wide end (`0mm` unless
+        /// written).
+        square: ExactLength,
+    },
+    /// `arched(rise:, on:, ends:)`.
+    Arched {
+        /// How far the arch rises into the part at its middle.
+        rise: ExactLength,
+        /// The face it is sawn into.
+        on: Face,
+        /// How much of the face stays straight at each end (`0mm` unless
+        /// written).
+        ends: ExactLength,
+    },
+}
+
+impl SquareShape {
+    /// The verb messages use: `tapered`, `arched`.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            SquareShape::Tapered { .. } => "tapered",
+            SquareShape::Arched { .. } => "arched",
+        }
+    }
+
+    /// The faces it shapes, as placed.
+    pub fn faces(&self) -> Vec<Face> {
+        match self {
+            SquareShape::Tapered { on, .. } => on.clone(),
+            SquareShape::Arched { on, .. } => vec![*on],
+        }
+    }
+}
+
 /// Where a part too long for its stock is spliced end to end:
 /// `spliced(by: ..., at: ..., from: ...)` (grammar, "Splices").
 #[derive(Debug, Clone, PartialEq)]
@@ -544,6 +590,8 @@ pub enum Value {
     Mount(Mount),
     /// `turned(profile)`.
     Turned(ProfileId),
+    /// `tapered(...)` or `arched(...)`: a shaped square part.
+    Shaped(SquareShape),
     /// `joined(by: ...)`.
     Boards(Joining),
     /// `spliced(by: ..., at: ..., from: ...)`.
@@ -614,7 +662,7 @@ impl Value {
             Value::Anchor(_) => "a face or mid-plane",
             Value::Word(_) => "a word",
             Value::Mount(_) => "a mount",
-            Value::Turned(_) => "a shape",
+            Value::Turned(_) | Value::Shaped(_) => "a shape",
             Value::Boards(_) => "a way of joining boards",
             Value::Splices(_) => "a way of splicing a part",
             Value::Envelope(_) => "an envelope",

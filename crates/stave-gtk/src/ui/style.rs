@@ -480,7 +480,10 @@ statuspage.compact > scrolledwindow > undershoot.top { box-shadow: inset 0 1px c
 statuspage.compact > scrolledwindow > undershoot.bottom { box-shadow: inset 0 -1px color-mix(in srgb, var(--shade-color) 75%, transparent); background: linear-gradient(to top, color-mix(in srgb, var(--shade-color) 75%, transparent), transparent 8px); }
 
 .stave-dock-targets { color: @accent_color; }
-.stave-dragging { opacity: 0.85; box-shadow: 0 6px 18px alpha(black, 0.35); }
+/* A dragged group's float: the group inside it takes the shadow, so it
+   follows the group's own rounded corners. */
+.stave-dragging { opacity: 0.85; }
+.stave-dragging > * { box-shadow: 0 6px 18px alpha(black, 0.35); }
 .stave-camera.flat-row, .stave-camera.flat-row.joined { border-radius: 10px; }
 "#;
 

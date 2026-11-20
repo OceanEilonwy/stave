@@ -10,7 +10,8 @@
 //!                                    mirror: Some(Split(Across)) }
 //! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use stave_lang::placement::Axis;
 use stave_model::solved::SolvedDesign;
@@ -204,27 +205,83 @@ pub fn item_offer(
     opened: &Opened,
     item: &str,
 ) -> Option<ItemOffer> {
+    let quick = quick_offer(opened, item)?;
     let design = opened.design.as_ref()?;
-    let model = opened.model.as_ref()?;
-    let pieces = piece_count(design, item);
-    let fills = !crate::spaces::filled_spaces(model, item).is_empty();
     let mirror = match mirror_offer(folder, files, opened, item) {
         Some(offer) => Some(MirrorGesture::Image(offer)),
         None => {
             let axis = Axis::Across;
             let scope = EditScope::new(opened).ok()?;
-            let split = pieces < 2
-                && fills
+            let fills = quick.repeatable && quick.pieces < 2;
+            let split = fills
                 && crate::repeat::mirror_image_of(&scope, item).is_none()
                 && crate::repeat::handed(&scope, design, item, axis);
             split.then_some(MirrorGesture::Split(axis))
         }
     };
+    Some(ItemOffer { mirror, ..quick })
+}
+
+/// The part of the offer for `item` that reads only the checked project
+/// `opened`: its pieces and whether the repeat controls apply, with no
+/// mirror gesture. Cheap enough to work out the moment an item is
+/// selected; the full offer ([`ItemOfferJob`]) reads the project again
+/// and works out the mirror. `None` when the project has no design.
+pub fn quick_offer(opened: &Opened, item: &str) -> Option<ItemOffer> {
+    let design = opened.design.as_ref()?;
+    let model = opened.model.as_ref()?;
+    let pieces = piece_count(design, item);
+    let fills = !crate::spaces::filled_spaces(model, item).is_empty();
     Some(ItemOffer {
         pieces,
         repeatable: pieces > 1 || fills,
-        mirror,
+        mirror: None,
     })
+}
+
+/// The full offer for one item ([`item_offer`]), to work out off the main
+/// thread: it opens the project again through the edit files, which
+/// takes far longer than a click should wait. Made by
+/// [`crate::session::Session::item_offer_job`].
+pub struct ItemOfferJob {
+    folder: PathBuf,
+    files: Arc<dyn FileSource + Send + Sync>,
+    item: String,
+}
+
+impl std::fmt::Debug for ItemOfferJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ItemOfferJob")
+            .field("folder", &self.folder)
+            .field("item", &self.item)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ItemOfferJob {
+    /// A job for `item` in the project in `folder`, read through `files`.
+    pub(crate) fn new(
+        folder: PathBuf,
+        files: Arc<dyn FileSource + Send + Sync>,
+        item: &str,
+    ) -> ItemOfferJob {
+        ItemOfferJob {
+            folder,
+            files,
+            item: item.to_owned(),
+        }
+    }
+
+    /// The item it works the offer out for.
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    /// Works the offer out: `None` when the project has no design.
+    pub fn run(&self) -> Option<ItemOffer> {
+        let opened = crate::open_with(&self.folder, self.files.as_ref()).ok()?;
+        item_offer(&self.folder, self.files.as_ref(), &opened, &self.item)
+    }
 }
 
 #[cfg(test)]

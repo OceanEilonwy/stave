@@ -98,7 +98,7 @@ pub(super) struct EditView {
     search_open: Option<String>,
     /// On the part's card: add onto the face that was clicked.
     face_button: gtk::Button,
-    /// The grips of the selection, on the model.
+    /// The sizes of the selection, in the Edit panel.
     grips: grips::GripView,
     state: EditState,
     // The changes of the design (lane W2b): their card, the item's tools,
@@ -181,6 +181,8 @@ impl EditView {
             changes.card.root.upcast_ref(),
             hold.card.widget().upcast_ref(),
         ]);
+        let grips = grips::GripView::new(input);
+        panel.set_sizes(grips.sizes.root.upcast_ref());
         let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
@@ -195,7 +197,7 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            grips: grips::GripView::new(input),
+            grips,
             state: EditState::default(),
             changes,
             tools: item_tools::ItemTools::new(input),
@@ -525,7 +527,6 @@ impl Window {
         self.install_edit_writer();
         self.connect_changes();
         self.connect_item_tools();
-        self.connect_repeats();
 
         // The menu's and the card's outputs were forwarded to the window
         // when they were launched (`EditView::new`).
@@ -543,7 +544,6 @@ impl Window {
         let input = self.input();
         motion.connect_leave(move |_| input.emit(EditingInput::PointerAt(None).into()));
         self.widgets.viewport.add_controller(motion);
-        self.connect_grips();
     }
 
     /// Add writes through the editor's buffers as they are now, opening a
@@ -1058,15 +1058,10 @@ impl Window {
         let workbench = &self.widgets.workbench;
         if shows && !was {
             workbench.bring_forward_beside_view(super::workbench::PanelId::Edit);
-        } else if !shows
-            && was
-            && workbench.share_a_frame(
-                super::workbench::PanelId::Edit,
-                super::workbench::PanelId::Details,
-            )
-            && workbench.is_shown(super::workbench::PanelId::Edit)
-        {
-            workbench.present(super::workbench::PanelId::Details);
+        } else if !shows && was {
+            // Whether Edit shares its frame with Details and shows is
+            // decided by the workbench, after the moves queued before.
+            workbench.edit_panel_hidden();
         }
     }
 
@@ -1312,10 +1307,8 @@ impl Window {
     /// Enter and Escape work there again.
     pub(in crate::ui) fn option_search_closed(&mut self) {
         self.editing.search_open = None;
-        let card = self.editing.card.widget();
-        if card.is_visible() {
-            card.grab_focus();
-        }
+        // Only fails once the card has shut down, with the window.
+        let _ = self.editing.card.sender().send(EditCardInput::Focus);
     }
 
     /// Opens the search over a setting's options, `query` typed; the
@@ -1521,13 +1514,6 @@ impl Window {
         }))
     }
 
-    /// Places the repeat handles after a frame is drawn. The ghost's
-    /// verdict is not said on the model: its tint says it (red when it
-    /// doesn't fit), and the Edit panel says it in words.
-    pub(super) fn place_ghost_verdict(&mut self) {
-        self.place_repeat_handles();
-    }
-
     // ---- driving it without a pointer (screenshots) ----
 
     /// Lights a space as if the pointer rested in it.
@@ -1566,7 +1552,6 @@ pub(in crate::ui) mod changes;
 mod changes_tests;
 mod editor_link;
 pub(in crate::ui) use editor_link::block_line;
-mod grip_layer;
 pub(in crate::ui) mod grip_panel;
 mod grip_script;
 mod grip_text;
@@ -1578,6 +1563,8 @@ pub(super) use links::Hovered;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;
+mod size_slider;
+mod sizes;
 #[cfg(test)]
 mod tests;
 mod verbs;

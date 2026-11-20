@@ -15,7 +15,7 @@ use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
 use stave_model::value::{
     self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelRef, Mount, ParamSettings,
-    RegionOrigin, RegionValue, Spacing, Value,
+    RegionOrigin, RegionValue, Spacing, SquareShape, Value,
 };
 use stave_schema::functions::Builtin;
 use stave_schema::kinds::{BaseField, JointSetting};
@@ -351,7 +351,11 @@ impl<'m> Solver<'m> {
                                             .iter()
                                             .map(|p| p.decl.name.as_str())
                                             .collect();
-                                        format!("its settings are: {}", names.join(", "))
+                                        if names.is_empty() {
+                                            format!("'{}' takes no settings", value.name)
+                                        } else {
+                                            format!("its settings are: {}", names.join(", "))
+                                        }
                                     }),
                                 )
                                 .into());
@@ -1555,6 +1559,55 @@ impl<'m> Solver<'m> {
     // Built-in functions
     // -----------------------------------------------------------------------
 
+    /// One face word, as `tapered(toward:)` and `arched(on:)` take it.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
+    fn eval_face(&mut self, expr: &RExpr, env: &Env<'_>, example: &str) -> Solved<Face> {
+        match self.eval(expr, env)? {
+            Value::Word(Word::Face(face)) => Ok(face),
+            other => Err(self
+                .eval_error(
+                    env,
+                    expr.span,
+                    format!("this needs a face, found {}", other.description()),
+                    format!("name one face of the part as it is placed, as in {example}"),
+                )
+                .into()),
+        }
+    }
+
+    /// One face word or a list of them, as `tapered(on:)` takes it.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
+    fn eval_faces(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<Vec<Face>> {
+        let wrong = |this: &mut Self, found: &Value| -> Reported {
+            this.eval_error(
+                env,
+                expr.span,
+                format!("'on' needs faces, found {}", found.description()),
+                "name the faces that are planed, as placed: on: [right, back]",
+            )
+        };
+        match self.eval(expr, env)? {
+            Value::Word(Word::Face(face)) => Ok(vec![face]),
+            Value::List(items) => {
+                let mut faces = Vec::with_capacity(items.len());
+                for item in &items {
+                    let Value::Word(Word::Face(face)) = item else {
+                        return Err(wrong(self, item).into());
+                    };
+                    faces.push(*face);
+                }
+                Ok(faces)
+            }
+            other => Err(wrong(self, &other).into()),
+        }
+    }
+
     fn builtin(&mut self, call: &BuiltinCall, env: &Env<'_>, span: Span) -> Solved<Value> {
         let length = |this: &mut Self, expr: &Option<RExpr>| -> Solved<Option<ExactLength>> {
             match expr {
@@ -1734,6 +1787,22 @@ impl<'m> Solver<'m> {
                     Err(Fault::Earlier.into())
                 }
             }
+            BuiltinCall::Tapered {
+                to,
+                toward,
+                on,
+                square,
+            } => Ok(Value::Shaped(SquareShape::Tapered {
+                to: self.eval_length(to, env)?,
+                toward: self.eval_face(toward, env, "toward: bottom")?,
+                on: self.eval_faces(on, env)?,
+                square: length(self, square)?.unwrap_or(ExactLength::ZERO),
+            })),
+            BuiltinCall::Arched { rise, on, ends } => Ok(Value::Shaped(SquareShape::Arched {
+                rise: self.eval_length(rise, env)?,
+                on: self.eval_face(on, env, "on: bottom")?,
+                ends: length(self, ends)?.unwrap_or(ExactLength::ZERO),
+            })),
             BuiltinCall::Joined { by: expr } => {
                 #[expect(
                     clippy::wildcard_enum_match_arm,

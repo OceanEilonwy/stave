@@ -1,0 +1,55 @@
+stave 1
+
+/// Screws through slots in one part into a solid top or panel, so the top
+/// can swell and shrink across its grain without splitting: a top screwed
+/// on from below through cleats or aprons. The piece gets slots, the
+/// other part pilot holes; the screws go in without glue.
+kind slotted_screw : joint {
+  /// Shank diameter of the screws.
+  param diameter = 4mm
+  /// Length of the screws.
+  param length = 30mm
+  /// Screws per connection.
+  param count = 2
+  /// How far each screw can slide either way along its slot. A top moves
+  /// about a millimetre for every 80mm of its width across the grain over
+  /// a year, half of it each way from where it is held still.
+  param slide = 3mm
+  /// Wood left each side of the slot, across the patch where the parts
+  /// touch.
+  param wall = 6mm
+  /// Wood left between neighbouring screws, and from the end screws to the
+  /// ends of the patch.
+  param gap = 15mm
+  /// How the screws are spread along the patch where the parts touch.
+  param spacing : Spacing = evenly
+  /// The pilot hole: about three quarters of the shank.
+  param pilot = diameter * 3 / 4
+
+  // The slots run across the piece (across the patch where the parts
+  // touch), which is across the other part's grain when the piece runs
+  // along it: a cleat or an apron under a top whose grain runs the same
+  // way. Stave doesn't check which way the slot runs.
+  require pilot_wall : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
+  require bites      : length >= piece.thickness + 8mm "the screw is too short to hold"
+  require seat_wide  : contact(piece, into).width >= diameter + 2 * slide + 2 * wall "the parts overlap too little for slots this long"
+  require seat_long  : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
+
+  insert: [push(piece, along: thickness)]
+
+  /// The screws: driven through the slots in the piece and into the other
+  /// part. Each is drawn and checked at the size of its core, the pilot
+  /// hole.
+  member screw : wood_screw(diameter: diameter, length: length) {
+    on:     contact(piece, into)
+    count:  count
+    spaced: spacing
+    shape:  cylinder(diameter: pilot, depth: -piece.thickness..length - piece.thickness)
+  }
+  // On a member, a pocket's width runs along the piece's length and its
+  // thickness across it: the slot is long across the piece.
+  cut screw_slot: crossing(piece, screw) { pocket(width: diameter + 0.5mm, thickness: diameter + 0.5mm + 2 * slide, depth: through) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
+
+  note: "Drill the pilot holes in the middle of the slots, and drive the screws snug but not tight, without glue, so the top can slide"
+}

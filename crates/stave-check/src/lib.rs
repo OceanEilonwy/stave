@@ -77,6 +77,7 @@
 
 mod explain;
 mod fixes;
+mod grain;
 mod held;
 mod instance;
 mod models;
@@ -253,6 +254,8 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     if !checker.diagnostics.iter().any(|(d, _)| d.is_error()) {
         stop.check()?;
         checker.held();
+        stop.check()?;
+        checker.grain();
     }
     stop.check()?;
     // Models are read from disk; one that can't be read is not checked.
@@ -705,6 +708,10 @@ impl<'a> Checker<'a> {
                     self.part_place(part),
                     format!("{}'s edges", self.part_name(part)),
                 ),
+                SourceKey::Shape(part) => (
+                    self.part_place(part),
+                    format!("{}'s shape", self.part_name(part)),
+                ),
             };
             let note = format!(
                 "{owner}: {} is drawn without this cut until it is fixed",
@@ -754,6 +761,10 @@ impl<'a> Checker<'a> {
                 SourceKey::Edges(part) => (
                     self.part_place(part),
                     format!("{}'s edges", self.part_name(part)),
+                ),
+                SourceKey::Shape(part) => (
+                    self.part_place(part),
+                    format!("{}'s shape", self.part_name(part)),
                 ),
             };
             let note = if names.len() == 1 {
@@ -1368,6 +1379,7 @@ enum SourceKey {
     Hardware(HardwareId),
     Boards(PartId),
     Edges(PartId),
+    Shape(PartId),
 }
 
 impl SourceKey {
@@ -1377,6 +1389,7 @@ impl SourceKey {
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
             CutSource::Boards { part, .. } => SourceKey::Boards(part),
             CutSource::Edges { part } => SourceKey::Edges(part),
+            CutSource::Shape { part } => SourceKey::Shape(part),
         }
     }
 }

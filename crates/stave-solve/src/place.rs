@@ -16,7 +16,7 @@ use stave_model::ids::{AssemblyId, PartId, RegionId, StockId};
 use stave_model::instance::ItemSlot;
 use stave_model::solved::Orientation;
 use stave_model::value::{
-    AnchorOwner, AnchorValue, ExactBox, RegionOrigin, RegionValue, Spacing, Value,
+    AnchorOwner, AnchorValue, ExactBox, RegionOrigin, RegionValue, Spacing, SquareShape, Value,
 };
 use stave_schema::words::StockForm;
 
@@ -503,16 +503,33 @@ impl<'m> Solver<'m> {
     }
 
     /// The profile of a turned part.
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "takes only the values it names: any other, a new variant included, is a type error"
-    )]
     pub(crate) fn part_profile(
         &mut self,
         part: PartId,
     ) -> Solved<Option<stave_model::ids::ProfileId>> {
+        match self.part_shape_value(part)? {
+            Some(PartShape::Turned(profile)) => Ok(Some(profile)),
+            Some(PartShape::Square(_)) | None => Ok(None),
+        }
+    }
+
+    /// The shape of a part with a `shape:` that is not turned: a taper or
+    /// an arch (grammar, "Shaped parts"). A mirror image has its source's.
+    pub(crate) fn part_square_shape(&mut self, part: PartId) -> Solved<Option<SquareShape>> {
+        match self.part_shape_value(part)? {
+            Some(PartShape::Square(shape)) => Ok(Some(shape)),
+            Some(PartShape::Turned(_)) | None => Ok(None),
+        }
+    }
+
+    /// A part's `shape:`, evaluated.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
+    fn part_shape_value(&mut self, part: PartId) -> Solved<Option<PartShape>> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
-            return self.part_profile(source);
+            return self.part_shape_value(source);
         }
         let body = self.sound_part_body(part)?;
         let Some(shape) = &body.shape else {
@@ -522,14 +539,15 @@ impl<'m> Solver<'m> {
             return Err(Fault::Internal("where a part is declared").into());
         };
         match self.eval(shape, &env)? {
-            Value::Turned(profile) => Ok(Some(profile)),
+            Value::Turned(profile) => Ok(Some(PartShape::Turned(profile))),
+            Value::Shaped(square) => Ok(Some(PartShape::Square(square))),
             other => Err(self
                 .error(
                     Code::TypeMismatch,
                     format!("'shape' needs a shape, found {}", other.description()),
                     env.file,
                     shape.span,
-                    "write shape: turned(profile)",
+                    "write shape: turned(profile), tapered(...) or arched(...)",
                 )
                 .into()),
         }
@@ -2119,4 +2137,12 @@ impl<'m> Solver<'m> {
                 .into()),
         }
     }
+}
+
+/// A part's `shape:`, evaluated: turned, or a shaped square part.
+enum PartShape {
+    /// `turned(profile)`.
+    Turned(stave_model::ids::ProfileId),
+    /// `tapered(...)` or `arched(...)`.
+    Square(SquareShape),
 }

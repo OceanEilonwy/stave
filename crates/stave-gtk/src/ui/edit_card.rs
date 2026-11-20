@@ -1346,6 +1346,9 @@ pub enum EditCardInput {
     Link(LinkTarget),
     /// The pointer entered a link (`Some`) or left it.
     Hover(Option<LinkTarget>),
+    /// Take the keyboard, while the card shows, so Enter and Escape work
+    /// on it (the option search closing gives it back).
+    Focus,
 }
 
 /// What the card tells its owner.
@@ -1641,6 +1644,13 @@ impl Component for EditCardComponent {
             }
             EditCardInput::Hover(target) => {
                 let _ = sender.output(EditCardOutput::Hover(target));
+            }
+            EditCardInput::Focus => {
+                // The card itself is focusable: it takes the keys its key
+                // handler listens for.
+                if root.is_visible() {
+                    root.grab_focus();
+                }
             }
         }
     }
@@ -2548,6 +2558,54 @@ mod tests {
             [EditCardOutput::OptionsOpen(Some("front_stock".to_owned()))],
             "only which list is open; no action"
         );
+    }
+
+    #[test]
+    fn the_card_takes_the_keyboard_when_told() {
+        crate::ui::gtk_test::on_gtk_thread(card_takes_focus);
+    }
+
+    /// The window used to grab the keyboard for the card's root when the
+    /// option search closed; now it tells the card, which takes it in its
+    /// own update while it shows, and reports nothing.
+    fn card_takes_focus() {
+        use crate::ui::gtk_test::settle;
+        let card = Bridge::<EditCardComponent>::launch(CardSlots::new());
+        let heard: Rc<RefCell<Vec<EditCardOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        card.connect(move |output| log.borrow_mut().push(output));
+        let elsewhere = gtk::Entry::new();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&elsewhere);
+        content.append(card.widget());
+        let window = gtk::Window::builder().child(&content).build();
+        window.present();
+        settle();
+        assert!(elsewhere.grab_focus());
+        let focus = || gtk::prelude::GtkWindowExt::focus(&window);
+        card.send(EditCardInput::Focus);
+        assert_ne!(
+            focus().as_ref(),
+            Some(card.widget().upcast_ref::<gtk::Widget>()),
+            "only queued"
+        );
+        settle();
+        assert_eq!(
+            focus().as_ref(),
+            Some(card.widget().upcast_ref::<gtk::Widget>()),
+            "the card has the keyboard"
+        );
+        // A hidden card leaves the keyboard where it is.
+        assert!(elsewhere.grab_focus());
+        card.widget().set_visible(false);
+        card.send(EditCardInput::Focus);
+        settle();
+        assert!(
+            focus().is_some_and(|focus| focus.is_ancestor(&elsewhere)),
+            "the entry keeps the keyboard"
+        );
+        assert!(heard.borrow().is_empty(), "nothing is reported");
+        window.destroy();
     }
 
     #[test]

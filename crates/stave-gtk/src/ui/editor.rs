@@ -33,7 +33,13 @@
 //!
 //! The search bar is a relm4 component, [`EditorSearch`]
 //! (docs/relm4-migration.md), whose controller the editor owns: what it
-//! is told is queued, and its widgets only send messages. The rest of
+//! is told is queued, and its widgets only send messages. It never
+//! touches the text: its outputs, and the search's counts, come back to
+//! the editor as [`SearchEvent`]s on the sender given to [`Editor::new`],
+//! which the component forwards into its own input and hands back to
+//! [`Editor::search_event`]; the editor holds the search of the buffer,
+//! selects the matches, gives the text the keyboard and tells the bar the
+//! count. The rest of
 //! the editor is the view of the Files page's component
 //! (`files::FilesComponent`): its model owns the [`Editor`] and only its
 //! `update` calls it, so [`Editor::show_buffer`] and [`Editor::go_to`]
@@ -824,18 +830,14 @@ pub struct Run {
     pub end: u32,
 }
 
-/// The search bar over the text (Ctrl+F in the editor) and the search of
-/// the buffer showing: a relm4 component (docs/relm4-migration.md). Its
-/// model is the only state, only its update changes it, and its widgets'
-/// handlers (and the search's count) only send [`EditorSearchInput`]
-/// messages. It tells nobody anything: what it finds, it selects in the
-/// text.
+/// The search bar over the text (Ctrl+F in the editor): a relm4
+/// component (docs/relm4-migration.md). Its model is the only state, only
+/// its update changes it, and its widgets' handlers only send
+/// [`EditorSearchInput`] messages. It never touches the text: what people
+/// ask of it goes to the editor as [`EditorSearchOutput`]s, and the editor,
+/// which owns the text view and the search of its buffer, selects the
+/// matches, gives the text the keyboard back and tells the bar the count.
 pub struct EditorSearch {
-    /// The text it searches.
-    view: gtk::TextView,
-    settings: sourceview5::SearchSettings,
-    /// The search of the buffer showing, while the bar is open.
-    context: Option<sourceview5::SearchContext>,
     /// "3 of 12", "No matches", or nothing.
     count: String,
 }
@@ -843,18 +845,18 @@ pub struct EditorSearch {
 /// What the editor's search bar is told.
 #[derive(Debug)]
 pub enum EditorSearchInput {
-    /// Open the bar with the selection (one line of it) as the text to
-    /// find, or the last one (Ctrl+F in the text).
-    StartSearch,
-    /// Open the bar on this text and highlight its matches, leaving the
-    /// selection where it is: [`Editor::find`] has already selected the
-    /// first match from the cursor, at once, so whatever its caller does
-    /// next acts on the match.
+    /// Open the bar (Ctrl+F in the text) with this text to find (one line
+    /// of the selection, read by the editor), or the last one.
+    StartSearch(Option<String>),
+    /// Open the bar on this text: [`Editor::find`] has already selected
+    /// its first match from the cursor, at once, so whatever its caller
+    /// does next acts on the match.
     Find(String),
-    /// Close the bar and its highlights, and give the text the keyboard.
+    /// Close the bar; the editor hears [`EditorSearchOutput::Closed`],
+    /// takes the highlights away and gives the text the keyboard.
     CloseSearch,
-    /// The editor shows another buffer: search that one.
-    BufferShown,
+    /// What the editor counted: "3 of 12", "No matches", or nothing.
+    ShowCount(String),
     /// People changed the text to find.
     Typed,
     /// People asked for the next match (Enter, Ctrl+G, the ↓ button).
@@ -862,8 +864,23 @@ pub enum EditorSearchInput {
     /// People asked for the previous match (Shift+Enter, Ctrl+Shift+G,
     /// the ↑ button).
     Previous,
-    /// The search counted its matches again.
-    Counted,
+}
+
+/// What the search bar tells the editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorSearchOutput {
+    /// The bar opened (or opened again) on this text to find: search the
+    /// buffer showing for it.
+    Opened(String),
+    /// People changed the text to find to this.
+    Typed(String),
+    /// People asked for the next match (`forward`) or the previous one.
+    Step {
+        /// The next match, not the previous one.
+        forward: bool,
+    },
+    /// The bar closed.
+    Closed,
 }
 
 impl EditorSearch {
@@ -872,113 +889,42 @@ impl EditorSearch {
         root.reveals_child()
     }
 
-    /// Opens the bar with the selection (one line of it) as the text to
-    /// find, or the last one.
+    /// Opens the bar with `text` to find, or the last one, and tells the
+    /// editor what it searches for.
     fn open(
-        &mut self,
+        text: Option<&str>,
         widgets: &EditorSearchWidgets,
         root: &gtk::Revealer,
         sender: &ComponentSender<Self>,
     ) {
-        let buffer = self.view.buffer();
-        if let Some((start, end)) = buffer.selection_bounds()
-            && start.line() == end.line()
-        {
-            widgets.entry.set_text(&buffer.text(&start, &end, false));
+        if let Some(text) = text {
+            widgets.entry.set_text(text);
         }
         root.set_visible(true);
         root.set_reveal_child(true);
-        self.attach(root, sender);
-        self.settings
-            .set_search_text(Some(widgets.entry.text().as_str()).filter(|t| !t.is_empty()));
-        self.refresh_count(&widgets.entry);
+        // Nobody listening is not a mistake.
+        let _ = sender.output(EditorSearchOutput::Opened(widgets.entry.text().into()));
         widgets.entry.grab_focus();
         widgets.entry.select_region(0, -1);
     }
 
-    fn close(&mut self, root: &gtk::Revealer) {
+    /// Closes the bar, telling the editor.
+    fn close(&mut self, root: &gtk::Revealer, sender: &ComponentSender<Self>) {
         if !Self::is_open(root) {
             return;
         }
         root.set_reveal_child(false);
         root.set_visible(false);
-        self.settings.set_search_text(None);
-        self.context = None;
-        self.view.grab_focus();
-    }
-
-    /// Searches the buffer showing, if the bar is open; its count comes
-    /// back as [`EditorSearchInput::Counted`].
-    fn attach(&mut self, root: &gtk::Revealer, sender: &ComponentSender<Self>) {
-        let buffer = self
-            .view
-            .buffer()
-            .downcast::<sourceview5::Buffer>()
-            .ok()
-            .filter(|_| Self::is_open(root));
-        self.context = buffer.map(|buffer| {
-            let context = sourceview5::SearchContext::new(&buffer, Some(&self.settings));
-            context.set_highlight(true);
-            let sender = sender.clone();
-            context.connect_occurrences_count_notify(move |_| {
-                sender.input_sender().emit(EditorSearchInput::Counted);
-            });
-            context
-        });
-    }
-
-    /// Opens the bar on `text`, whose first match from the cursor the
-    /// editor has already selected: the selection stays.
-    fn show_found(
-        &mut self,
-        text: &str,
-        widgets: &EditorSearchWidgets,
-        root: &gtk::Revealer,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.open(widgets, root, sender);
-        widgets.entry.set_text(text);
-        self.settings
-            .set_search_text(Some(text).filter(|t| !t.is_empty()));
-        self.refresh_count(&widgets.entry);
-    }
-
-    /// The text to find changed: find it from the start of the selection,
-    /// so a longer text keeps the match it had.
-    fn text_changed(&mut self, entry: &gtk::SearchEntry) {
-        let text = entry.text();
-        self.settings
-            .set_search_text(Some(text.as_str()).filter(|t| !t.is_empty()));
-        if !text.is_empty() {
-            self.step(entry, true, true);
-        }
-        self.refresh_count(entry);
-    }
-
-    /// Selects the next (or previous) match and scrolls to it; `again`
-    /// starts from the selection's start, to keep the match there.
-    fn step(&mut self, entry: &gtk::SearchEntry, forward: bool, again: bool) {
-        let Some(context) = self.context.clone() else {
-            return;
-        };
-        select_match(&self.view, &context, forward, again);
-        self.refresh_count(entry);
-    }
-
-    fn refresh_count(&mut self, entry: &gtk::SearchEntry) {
-        self.count = self
-            .context
-            .as_ref()
-            .map(|context| count_text(context, &self.view.buffer(), &entry.text()))
-            .unwrap_or_default();
+        self.count.clear();
+        let _ = sender.output(EditorSearchOutput::Closed);
     }
 }
 
 #[relm4::component(pub)]
 impl Component for EditorSearch {
-    type Init = gtk::TextView;
+    type Init = ();
     type Input = EditorSearchInput;
-    type Output = ();
+    type Output = EditorSearchOutput;
     type CommandOutput = ();
 
     view! {
@@ -1083,15 +1029,8 @@ impl Component for EditorSearch {
         }
     }
 
-    fn init(
-        view: gtk::TextView,
-        root: Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> ComponentParts<Self> {
+    fn init((): (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let model = EditorSearch {
-            view,
-            settings: search_settings(),
-            context: None,
             count: String::new(),
         };
         let widgets = view_output!();
@@ -1106,19 +1045,21 @@ impl Component for EditorSearch {
         root: &Self::Root,
     ) {
         match message {
-            EditorSearchInput::StartSearch => self.open(widgets, root, &sender),
-            EditorSearchInput::Find(text) => self.show_found(&text, widgets, root, &sender),
-            EditorSearchInput::CloseSearch => self.close(root),
-            EditorSearchInput::BufferShown => {
-                if Self::is_open(root) {
-                    self.attach(root, &sender);
-                    self.refresh_count(&widgets.entry);
-                }
+            EditorSearchInput::StartSearch(text) => {
+                Self::open(text.as_deref(), widgets, root, &sender);
             }
-            EditorSearchInput::Typed => self.text_changed(&widgets.entry),
-            EditorSearchInput::Next => self.step(&widgets.entry, true, false),
-            EditorSearchInput::Previous => self.step(&widgets.entry, false, false),
-            EditorSearchInput::Counted => self.refresh_count(&widgets.entry),
+            EditorSearchInput::Find(text) => Self::open(Some(&text), widgets, root, &sender),
+            EditorSearchInput::CloseSearch => self.close(root, &sender),
+            EditorSearchInput::ShowCount(count) => self.count = count,
+            EditorSearchInput::Typed => {
+                let _ = sender.output(EditorSearchOutput::Typed(widgets.entry.text().into()));
+            }
+            EditorSearchInput::Next => {
+                let _ = sender.output(EditorSearchOutput::Step { forward: true });
+            }
+            EditorSearchInput::Previous => {
+                let _ = sender.output(EditorSearchOutput::Step { forward: false });
+            }
         }
         self.update_view(widgets, sender);
     }
@@ -1199,8 +1140,22 @@ pub struct Editor {
     tags: Tags,
     marks: Marks,
     /// The search bar: the editor owns its controller (dropping the
-    /// editor shuts it down).
+    /// editor shuts it down), its outputs forwarded as
+    /// [`SearchEvent::Bar`] to `search_events`.
     search: Controller<EditorSearch>,
+    /// How the search searches, and the text it finds.
+    search_settings: sourceview5::SearchSettings,
+    /// The search of the buffer showing, while the bar is open.
+    search_context: Option<sourceview5::SearchContext>,
+    /// The bar is open, or asked to open: set when the editor asks it to
+    /// open, cleared when it asks it to close or hears that it closed
+    /// ([`EditorSearchOutput::Closed`]), so it never lags behind what was
+    /// asked of the bar.
+    search_shown: bool,
+    /// Where the search bar's outputs and the search's counts go: the
+    /// owner forwards them into its own input and hands each back to
+    /// [`Editor::search_event`].
+    search_events: relm4::Sender<SearchEvent>,
     dark: bool,
     /// The lens rows, made as needed and kept (GTK can't take an overlay
     /// back out of a text view, so they are hidden when not used).
@@ -1235,6 +1190,16 @@ struct ConflictRow {
     root: gtk::Box,
     /// The conflict's opening line, from 0.
     line: i32,
+}
+
+/// What the editor's search hears, for its owner to hand back to
+/// [`Editor::search_event`] from its own update.
+#[derive(Debug)]
+pub enum SearchEvent {
+    /// The search bar said this.
+    Bar(EditorSearchOutput),
+    /// The search of the buffer showing counted its matches again.
+    Counted,
 }
 
 /// Which link of a lens was clicked.
@@ -1400,8 +1365,13 @@ struct LensSlot {
 
 impl Editor {
     /// An empty editor whose buffers share `table`; a lens's links send
-    /// their clicks on `lens`.
-    pub fn new(table: &gtk::TextTagTable, lens: relm4::Sender<LensClick>) -> Editor {
+    /// their clicks on `lens`, and the search sends what it hears on
+    /// `search_events`.
+    pub fn new(
+        table: &gtk::TextTagTable,
+        lens: relm4::Sender<LensClick>,
+        search_events: relm4::Sender<SearchEvent>,
+    ) -> Editor {
         let table = table.clone();
         let tags = Tags::new(&table);
         let code: CodeView = glib::Object::builder::<CodeView>()
@@ -1470,8 +1440,9 @@ impl Editor {
             .visible(false)
             .build();
         view.add_overlay(&card_box, 0, 0);
-        // It tells nobody anything.
-        let search = EditorSearch::builder().launch(view.clone()).detach();
+        let search = EditorSearch::builder()
+            .launch(())
+            .forward(&search_events, SearchEvent::Bar);
         let root = gtk::Overlay::builder().child(&scrolled).build();
         root.add_overlay(search.widget());
         let editor = Editor {
@@ -1483,6 +1454,10 @@ impl Editor {
             tags,
             marks,
             search,
+            search_settings: search_settings(),
+            search_context: None,
+            search_shown: false,
+            search_events,
             dark: false,
             lenses: Vec::new(),
             lenses_used: 0,
@@ -1529,7 +1504,11 @@ impl Editor {
         self.view.set_buffer(Some(buffer));
         self.view.set_editable(editable);
         self.view.set_cursor_visible(true);
-        self.tell_search(EditorSearchInput::BufferShown);
+        // An open search goes on in the buffer now showing.
+        if self.search_context.is_some() {
+            self.attach_search();
+            self.recount();
+        }
         self.marks.queue_draw();
     }
 
@@ -1747,9 +1726,89 @@ impl Editor {
     }
 
     /// Opens the search bar (Ctrl+F in the text), when the main loop next
-    /// runs.
-    pub fn start_search(&self) {
-        self.tell_search(EditorSearchInput::StartSearch);
+    /// runs, with the selection (one line of it) as the text to find.
+    pub fn start_search(&mut self) {
+        self.search_shown = true;
+        let buffer = self.view.buffer();
+        let selected = buffer
+            .selection_bounds()
+            .filter(|(start, end)| start.line() == end.line())
+            .map(|(start, end)| buffer.text(&start, &end, false).to_string());
+        self.tell_search(EditorSearchInput::StartSearch(selected));
+    }
+
+    /// Acts on what the search heard ([`SearchEvent`]), from the owner's
+    /// update: searches the buffer showing for the bar's text, selects
+    /// the next or previous match, and tells the bar the count.
+    pub fn search_event(&mut self, event: SearchEvent) {
+        match event {
+            SearchEvent::Bar(EditorSearchOutput::Opened(text)) => {
+                self.set_search_text(&text);
+                self.attach_search();
+                self.recount();
+            }
+            SearchEvent::Bar(EditorSearchOutput::Typed(text)) => {
+                // Found from the start of the selection, so a longer text
+                // keeps the match it had.
+                self.set_search_text(&text);
+                if !text.is_empty() {
+                    self.step_search(true, true);
+                }
+                self.recount();
+            }
+            SearchEvent::Bar(EditorSearchOutput::Step { forward }) => {
+                self.step_search(forward, false);
+                self.recount();
+            }
+            SearchEvent::Bar(EditorSearchOutput::Closed) => {
+                self.search_shown = false;
+                self.search_settings.set_search_text(None);
+                self.search_context = None;
+                self.view.grab_focus();
+            }
+            SearchEvent::Counted => self.recount(),
+        }
+    }
+
+    /// The text the search finds (none for an empty one).
+    fn set_search_text(&self, text: &str) {
+        self.search_settings
+            .set_search_text(Some(text).filter(|text| !text.is_empty()));
+    }
+
+    /// Searches the buffer showing; its count comes back as
+    /// [`SearchEvent::Counted`].
+    fn attach_search(&mut self) {
+        let buffer = self.view.buffer().downcast::<sourceview5::Buffer>().ok();
+        self.search_context = buffer.map(|buffer| {
+            let context = sourceview5::SearchContext::new(&buffer, Some(&self.search_settings));
+            context.set_highlight(true);
+            let events = self.search_events.clone();
+            context.connect_occurrences_count_notify(move |_| {
+                // Once the owner has gone there is nobody to tell.
+                let _ = events.send(SearchEvent::Counted);
+            });
+            context
+        });
+    }
+
+    /// Selects the next (or previous) match and scrolls to it; `again`
+    /// starts from the selection's start, to keep the match there.
+    fn step_search(&self, forward: bool, again: bool) {
+        if let Some(context) = &self.search_context {
+            select_match(&self.view, context, forward, again);
+        }
+    }
+
+    /// Tells the bar the count: "3 of 12", "No matches", or nothing.
+    fn recount(&self) {
+        let text = self.search_settings.search_text().unwrap_or_default();
+        let count = self
+            .search_context
+            .as_ref()
+            .map(|context| count_text(context, &self.view.buffer(), &text))
+            .unwrap_or_default();
+        self.tell_search(EditorSearchInput::ShowCount(count));
     }
 
     /// Finds `text` from the cursor and selects it at once, as before, so
@@ -1759,7 +1818,8 @@ impl Editor {
     /// "mark-set" handlers run inside this call, as they always did; the
     /// search component is not running then, and anything they tell the
     /// bar is queued.
-    pub fn find(&self, text: &str) {
+    pub fn find(&mut self, text: &str) {
+        self.search_shown = true;
         if !text.is_empty()
             && let Ok(buffer) = self.view.buffer().downcast::<sourceview5::Buffer>()
         {
@@ -1772,15 +1832,24 @@ impl Editor {
         self.tell_search(EditorSearchInput::Find(text.to_owned()));
     }
 
-    /// `true` while the search bar is open (as of the last message it
-    /// handled).
+    /// `true` while the search bar is open or asked to open, as the
+    /// editor has asked of it and heard from it (never behind a queued
+    /// open or close).
     pub fn has_search(&self) -> bool {
+        self.search_shown
+    }
+
+    /// `true` while the bar shows, as of the last message it handled
+    /// (tests).
+    #[cfg(test)]
+    fn bar_open(&self) -> bool {
         EditorSearch::is_open(self.search.widget())
     }
 
     /// Closes the search bar and its highlights, when the main loop next
     /// runs.
-    pub fn close_search(&self) {
+    pub fn close_search(&mut self) {
+        self.search_shown = false;
         self.tell_search(EditorSearchInput::CloseSearch);
     }
 
@@ -2154,6 +2223,32 @@ mod tests {
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
 
+    /// What an editor's search heard, kept until handed back.
+    type Heard = Rc<RefCell<Vec<SearchEvent>>>;
+
+    /// An editor whose search events are kept in `Heard`, as the Files
+    /// component's input would queue them.
+    fn editor_hearing() -> (Editor, Heard) {
+        let (search_events, heard) = recorder();
+        let editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0, search_events);
+        (editor, heard)
+    }
+
+    /// Runs the main loop and hands the editor what its search heard,
+    /// until nothing more comes, as the Files component's update does.
+    fn pump(editor: &mut Editor, heard: &Heard) {
+        loop {
+            settle();
+            let events: Vec<SearchEvent> = heard.borrow_mut().drain(..).collect();
+            if events.is_empty() {
+                return;
+            }
+            for event in events {
+                editor.search_event(event);
+            }
+        }
+    }
+
     #[test]
     fn a_conflict_is_tinted_and_its_links_settle_it() {
         on_gtk_thread(conflict_links_settle);
@@ -2191,7 +2286,11 @@ mod tests {
     /// undoable change. A link left from before the conflict changed
     /// settles nothing.
     fn conflict_links_settle() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
+        let mut editor = Editor::new(
+            &gtk::TextTagTable::new(),
+            relm4::channel().0,
+            relm4::channel().0,
+        );
         let text = "stave 1\n\n<<<<<<< conflict 1 of 1\n+++++++ yours\nlet a = 1\n------- before\n+++++++ theirs\nlet b = 2\n>>>>>>> conflict 1 of 1 ends\n";
         let buffer = editor.new_buffer(text);
         editor.show_buffer(&buffer, true);
@@ -2262,12 +2361,17 @@ mod tests {
     /// model (with the search and the input channel the runtime held) and
     /// the editor's widgets are all freed.
     fn search_bar_is_freed() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
+        let (mut editor, heard) = editor_hearing();
         let buffer = editor.new_buffer("door\nshelf\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");
-        settle();
-        assert!(editor.has_search(), "the bar is open");
+        pump(&mut editor, &heard);
+        assert!(editor.bar_open(), "the bar is open");
+        assert!(editor.search_context.is_some(), "and the buffer searched");
+        let context = editor
+            .search_context
+            .as_ref()
+            .map(glib::object::ObjectExt::downgrade);
         let bar = editor.search.widget().downgrade();
         let root = editor.root.downgrade();
         let view = editor.view.downgrade();
@@ -2281,6 +2385,10 @@ mod tests {
             input.send(EditorSearchInput::CloseSearch).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
+        assert!(
+            context.and_then(|context| context.upgrade()).is_none(),
+            "the search of the buffer is freed"
+        );
     }
 
     #[test]
@@ -2293,7 +2401,7 @@ mod tests {
     /// is at the cursor: the match must be selected before `find` returns.
     /// The bar opening when the main loop runs leaves the match selected.
     fn find_selects_at_once() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
+        let (mut editor, heard) = editor_hearing();
         let text = "shelf\npart side\nshelf\n";
         let lines = LineStarts::new(text);
         let buffer = editor.new_buffer(text);
@@ -2312,10 +2420,11 @@ mod tests {
             second,
             "the cursor is on the next shelf as soon as find returns"
         );
-        assert!(!editor.has_search(), "the bar opens when the loop runs");
+        assert!(editor.has_search(), "asked for at once");
+        assert!(!editor.bar_open(), "the bar opens when the loop runs");
 
-        settle();
-        assert!(editor.has_search(), "the bar is open");
+        pump(&mut editor, &heard);
+        assert!(editor.bar_open(), "the bar is open");
         assert_eq!(
             editor.cursor(&lines),
             second,
@@ -2352,7 +2461,7 @@ mod tests {
             panic!("the wall shelf declares two things");
         };
         let (lens, heard) = recorder();
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), lens);
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), lens, relm4::channel().0);
         let buffer = editor.new_buffer("a\nb\n");
         editor.show_buffer(&buffer, true);
         let lens = |symbol: SymbolId| LensLine {
@@ -2393,17 +2502,18 @@ mod tests {
     /// When the old search bar selected a match, GTK's "mark-set" ran the
     /// Files page's handlers right then, inside the step: one that closed
     /// the search dropped the search the step was still using and moved
-    /// the keyboard mid-step. Now what the bar is told is queued, and a
-    /// close asked for from inside its step waits until the step is done.
+    /// the keyboard mid-step. Now the bar only asks for the step
+    /// ([`EditorSearchOutput::Step`]), the editor makes it from its owner's
+    /// update, and a close asked for from inside the step is queued until
+    /// the step is done; the editor hears the bar close after it.
     fn search_is_queued() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
+        let (mut editor, heard) = editor_hearing();
         let buffer = editor.new_buffer("door\nshelf\ndoor\n");
         editor.show_buffer(&buffer, true);
-        let editor = Rc::new(editor);
         editor.find("door");
-        assert!(!editor.has_search(), "opening the bar is only queued");
-        settle();
-        assert!(editor.has_search(), "the bar is open");
+        assert!(!editor.bar_open(), "opening the bar is only queued");
+        pump(&mut editor, &heard);
+        assert!(editor.bar_open(), "the bar is open");
         let selected = |buffer: &gtk::TextBuffer| {
             buffer
                 .selection_bounds()
@@ -2412,35 +2522,81 @@ mod tests {
         assert_eq!(selected(&buffer), Some((0, "door".to_owned())));
 
         // Whether the bar was still open each time the cursor moved while
-        // it stepped, after closing it from there.
+        // the editor stepped, after closing it from there.
         let open: Rc<RefCell<Vec<bool>>> = Rc::default();
         let log = Rc::clone(&open);
-        let weak = Rc::downgrade(&editor);
+        let bar = editor.search.widget().downgrade();
+        let input = editor.search.sender().clone();
         let handler = buffer.connect_mark_set(move |buffer, _, mark| {
-            let Some(editor) = weak.upgrade() else {
-                return;
-            };
             if *mark == buffer.get_insert() {
-                editor.close_search();
-                log.borrow_mut().push(editor.has_search());
+                let _ = input.send(EditorSearchInput::CloseSearch);
+                log.borrow_mut()
+                    .push(bar.upgrade().is_some_and(|bar| EditorSearch::is_open(&bar)));
             }
         });
         // Enter in the bar: the next match.
         editor.tell_search(EditorSearchInput::Next);
         assert!(open.borrow().is_empty(), "the step is only queued");
-        settle();
+        pump(&mut editor, &heard);
         assert!(!open.borrow().is_empty(), "the step moved the cursor");
         assert!(
             open.borrow().iter().all(|open| *open),
             "the close waited for the step"
         );
-        assert!(!editor.has_search(), "and then closed the bar");
+        assert!(!editor.bar_open(), "and then closed the bar");
+        assert!(!editor.has_search(), "which the editor heard");
+        assert!(
+            editor.search_context.is_none(),
+            "the editor heard it close and stopped searching"
+        );
         assert_eq!(
             selected(&buffer),
             Some((2, "door".to_owned())),
             "the step found the next door"
         );
         buffer.disconnect(handler);
+    }
+
+    #[test]
+    fn the_bar_asks_and_the_editor_searches_and_counts() {
+        on_gtk_thread(bar_asks_editor_counts);
+    }
+
+    /// The bar never touches the text: what people type and step reaches
+    /// the editor as outputs, the editor selects the match, and the count
+    /// it works out comes back to the bar as a message.
+    fn bar_asks_editor_counts() {
+        let (mut editor, heard) = editor_hearing();
+        let buffer = editor.new_buffer("door\nshelf\ndoor\n");
+        editor.show_buffer(&buffer, true);
+        if let Some((start, end)) = buffer.iter_at_line(1).zip(buffer.iter_at_line_offset(1, 5)) {
+            buffer.select_range(&start, &end);
+        }
+        editor.start_search();
+        pump(&mut editor, &heard);
+        assert!(
+            editor.bar_open() && editor.has_search(),
+            "Ctrl+F opened the bar"
+        );
+        assert_eq!(
+            editor.search_settings.search_text().as_deref(),
+            Some("shelf"),
+            "on the selection, which the editor read"
+        );
+        assert_eq!(editor.search.model().count, "1 of 1");
+        editor.tell_search(EditorSearchInput::Next);
+        let _ = editor.search.sender().send(EditorSearchInput::Typed);
+        pump(&mut editor, &heard);
+        assert!(
+            heard.borrow().is_empty(),
+            "everything the bar said was handed back"
+        );
+        assert_eq!(editor.search.model().count, "1 of 1");
+        editor.close_search();
+        pump(&mut editor, &heard);
+        assert!(!editor.bar_open() && !editor.has_search(), "closed");
+        assert!(editor.search_context.is_none(), "no longer searching");
+        assert_eq!(editor.search_settings.search_text(), None);
     }
 
     #[test]

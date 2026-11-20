@@ -1,0 +1,35 @@
+// expect: warning[grain] tenons: the grain of apron runs across its tenon, so the tenon can snap off along the grain
+stave 1
+
+// An apron whose grain runs across it, up and down, tenoned into a leg
+// (audit finding 89): the grain runs across the tenon, so its fibres are
+// only as long as the tenon is wide, and it snaps off at the shoulder.
+
+project "Short grain tenon" {
+  units: mm
+}
+
+stock oak    { species: white_oak, form: solid, thickness: 19mm, max_width: 500mm, max_length: 2400mm }
+stock oak_45 { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
+
+part leg : oak_45 {
+  length: 700mm
+  place {
+    orient(length: up, width: right)
+    ground
+  }
+}
+
+part apron : oak {
+  length: 400mm
+  width:  90mm
+  grain:  width
+  place {
+    orient(length: right, width: up)
+    against(leg.right)
+    flush(leg.top)
+    center(leg, deep)
+  }
+}
+
+joint tenons : mortise_tenon(apron, into: leg, thickness: 8mm, length: 20mm)

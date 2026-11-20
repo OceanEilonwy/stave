@@ -8,12 +8,14 @@
 //! reader. They step aside while a problem is posed or a joint
 //! is in focus.
 //!
-//! The chips are a relm4 component, [`DockComponent`]: whether the
-//! controls are offered, whether there are chips and which way they lie
-//! are its model, only its update changes that, and a chip only sends a
-//! [`DockInput`] message. [`Dock`] owns its controller and keeps the
-//! setters as plain methods; a chip chosen goes to the owner as the
-//! message it chose when it made the dock.
+//! The chips and the scene menu are a relm4 component, [`DockComponent`]:
+//! whether the controls are offered, whether there are chips, which way
+//! they lie and the scenes to choose from are its model, only its update
+//! changes that, and a chip or a scene's row only sends a [`DockInput`]
+//! message. [`Dock`] owns its controller and keeps the setters as plain
+//! methods; a chip or a scene chosen goes to the owner as the message it
+//! chose when it made the dock. The scene menu is the dock's own: it
+//! closes its menu on a choice before the owner hears it.
 
 use adw::prelude::*;
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
@@ -21,7 +23,7 @@ use stave_app::i18n::{fill_in, tr};
 use stave_app::problems::Mark;
 use stave_model::solved::AssemblyId;
 
-use super::chrome::MotionBar;
+use super::icons::{self, PathIcon};
 
 /// One moving assembly's chip.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +36,16 @@ pub struct MoveChip {
     pub mark: Option<Mark>,
 }
 
-/// The chips' state.
+/// The scenes to choose from and the one showing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScenesShown {
+    /// Each scene's title.
+    pub titles: Vec<String>,
+    /// The one showing, by its place in `titles`.
+    pub current: usize,
+}
+
+/// The chips' and the scene menu's state.
 #[derive(Debug)]
 pub struct DockComponent {
     /// There are chips to show.
@@ -47,14 +58,81 @@ pub struct DockComponent {
     orientation: gtk::Orientation,
     /// The chips' natural line length while they lie in a row.
     natural_line_length: i32,
+    /// The scenes to choose from; `None` keeps the menu as it was made
+    /// ("Rest").
+    scenes: Option<ScenesShown>,
 }
 
-/// What the chips are made with.
-#[derive(Debug)]
-pub struct DockInit {
-    /// The scene menu's floating box, shown while the controls are
-    /// offered.
-    pub scene: gtk::Box,
+/// The scene menu, made by [`Dock`] and handed to the component, which
+/// owns its state.
+#[derive(Clone, Debug)]
+pub struct SceneMenu {
+    /// Its floating box, shown while the controls are offered.
+    scene_box: gtk::Box,
+    /// The menu's button.
+    button: gtk::MenuButton,
+    /// The scene showing, on the button.
+    label: gtk::Label,
+    /// The scenes, in the button's popover.
+    scenes: gtk::ListBox,
+}
+
+impl SceneMenu {
+    /// The scene menu in its floating box, showing "Rest".
+    fn new() -> SceneMenu {
+        let label = gtk::Label::new(Some(&tr("Rest")));
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let icon = PathIcon::new(icons::SCENE, 15);
+        icon.add_css_class("dim");
+        let chevron = PathIcon::new(icons::CHEVRON_DOWN, 10);
+        chevron.add_css_class("dim");
+        content.append(&icon);
+        content.append(&label);
+        content.append(&chevron);
+        let scenes = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["navigation-sidebar"])
+            .build();
+        let popover = gtk::Popover::builder().child(&scenes).build();
+        let button = gtk::MenuButton::builder()
+            .child(&content)
+            .popover(&popover)
+            .tooltip_text(tr("Scene"))
+            .css_classes(["stave-scene"])
+            .valign(gtk::Align::Center)
+            .build();
+        let scene_box = gtk::Box::builder()
+            .css_classes(["stave-toolbar", "stave-scene-float"])
+            .name("scene-menu")
+            .build();
+        scene_box.append(&button);
+        SceneMenu {
+            scene_box,
+            button,
+            label,
+            scenes,
+        }
+    }
+}
+
+/// Fills the scene menu: a row per title, the current one in bold.
+fn fill_scenes(scenes: &gtk::ListBox, shown: &ScenesShown) {
+    while let Some(row) = scenes.row_at_index(0) {
+        scenes.remove(&row);
+    }
+    for (index, title) in shown.titles.iter().enumerate() {
+        let label = gtk::Label::builder()
+            .label(title)
+            .xalign(0.0)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        let row = gtk::ListBoxRow::builder().child(&label).build();
+        if index == shown.current {
+            label.add_css_class("heading");
+        }
+        scenes.append(&row);
+    }
 }
 
 /// What the chips are told.
@@ -75,13 +153,19 @@ pub enum DockInput {
     },
     /// People chose this assembly's chip.
     Chose(AssemblyId),
+    /// Fill the scene menu.
+    ShowScenes(ScenesShown),
+    /// People chose the scene at this place in the scene menu.
+    SceneChosen(usize),
 }
 
-/// What the chips tell their owner.
+/// What the chips and the scene menu tell their owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockOutput {
     /// People chose this assembly's chip.
     Move(AssemblyId),
+    /// People chose the scene at this place in the scene menu.
+    Scene(usize),
 }
 
 /// A chip: the tree's mark and the assembly's name, ringed for its
@@ -123,9 +207,20 @@ fn chip(
     button
 }
 
+impl DockComponent {
+    /// The scene showing, on the scene menu's button ("Rest" until the
+    /// scenes are shown).
+    fn scene_title(&self) -> String {
+        self.scenes
+            .as_ref()
+            .and_then(|scenes| scenes.titles.get(scenes.current))
+            .map_or_else(|| tr("Rest"), Clone::clone)
+    }
+}
+
 #[relm4::component(pub)]
 impl Component for DockComponent {
-    type Init = DockInit;
+    type Init = SceneMenu;
     type Input = DockInput;
     type Output = DockOutput;
     type CommandOutput = ();
@@ -155,23 +250,53 @@ impl Component for DockComponent {
         },
 
         #[local_ref]
-        scene -> gtk::Box {
+        scene_box -> gtk::Box {
             #[watch]
             set_visible: model.offered,
-        }
+        },
+
+        #[local_ref]
+        scene_label -> gtk::Label {
+            #[watch]
+            set_label: &model.scene_title(),
+        },
+
+        // Nothing to choose, nothing to open.
+        #[local_ref]
+        scene_button -> gtk::MenuButton {
+            #[watch]
+            set_sensitive: model.scenes.as_ref().is_none_or(|scenes| !scenes.titles.is_empty()),
+        },
+
+        #[local_ref]
+        scene_list -> gtk::ListBox {
+            connect_row_activated[sender] => move |_, row| {
+                if let Ok(index) = usize::try_from(row.index()) {
+                    sender.input_sender().emit(DockInput::SceneChosen(index));
+                }
+            },
+        },
     }
 
     fn init(
-        init: DockInit,
+        init: SceneMenu,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let DockInit { scene } = init;
+        let SceneMenu {
+            scene_box,
+            button,
+            label,
+            scenes,
+        } = init;
+        let (scene_box, scene_button, scene_label, scene_list) =
+            (&scene_box, &button, &label, &scenes);
         let mut model = DockComponent {
             has_moves: false,
             offered: true,
             orientation: gtk::Orientation::Horizontal,
             natural_line_length: 0,
+            scenes: None,
         };
         let widgets = view_output!();
         model.natural_line_length = widgets.chips.natural_line_length();
@@ -209,6 +334,15 @@ impl Component for DockComponent {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(DockOutput::Move(assembly));
             }
+            DockInput::ShowScenes(scenes) => {
+                fill_scenes(&widgets.scene_list, &scenes);
+                self.scenes = Some(scenes);
+            }
+            DockInput::SceneChosen(index) => {
+                // The menu closes on a choice, before the owner hears it.
+                widgets.scene_button.popdown();
+                let _ = sender.output(DockOutput::Scene(index));
+            }
         }
         self.update_view(widgets, sender);
     }
@@ -216,7 +350,9 @@ impl Component for DockComponent {
 
 /// The floating controls: it owns the [`DockComponent`] (dropping it
 /// shuts the component down), passes its setters on as [`DockInput`]
-/// messages, and its [`DockOutput`] goes to the owner's input.
+/// messages, and its [`DockOutput`] goes to the owner's input. It has two
+/// roots for the owner to place, the scene menu's box and the chips' box;
+/// everything inside them is the dock's own.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
@@ -225,35 +361,42 @@ pub struct Dock {
     pub scene: gtk::Box,
     /// The moving assemblies' chips (bottom left).
     pub moves: gtk::Box,
+    /// The scene menu's widgets, for tests.
+    #[cfg(test)]
+    scene_menu: SceneMenu,
     controller: Controller<DockComponent>,
 }
 
 impl Dock {
-    /// The controls round the scene menu; the motion bar floats on its
-    /// own (bottom right). A chip chosen goes to `owner` as
+    /// The scene menu and the chips; the motion bar floats on its own
+    /// (bottom right). A chip or a scene chosen goes to `owner` as
     /// `message(output)`.
     pub fn new<M: 'static>(
-        scene: &gtk::MenuButton,
-        motion: &MotionBar,
         owner: &relm4::Sender<M>,
         message: impl Fn(DockOutput) -> M + 'static,
     ) -> Dock {
-        let scene_box = gtk::Box::builder()
-            .css_classes(["stave-toolbar", "stave-scene-float"])
-            .name("scene-menu")
-            .build();
-        scene_box.append(scene);
-        motion.root.set_margin_bottom(0);
+        let scene_menu = SceneMenu::new();
+        let scene = scene_menu.scene_box.clone();
+        #[cfg(test)]
+        let kept = scene_menu.clone();
         let controller = DockComponent::builder()
-            .launch(DockInit {
-                scene: scene_box.clone(),
-            })
+            .launch(scene_menu)
             .forward(owner, message);
         Dock {
-            scene: scene_box,
+            scene,
             moves: controller.widget().clone(),
+            #[cfg(test)]
+            scene_menu: kept,
             controller,
         }
+    }
+
+    /// The scenes to choose from (titles) and the one showing.
+    pub fn show_scenes(&self, titles: &[String], current: usize) {
+        self.send(DockInput::ShowScenes(ScenesShown {
+            titles: titles.to_vec(),
+            current,
+        }));
     }
 
     /// Queues `input`; once the dock has shut down there is nobody to
@@ -301,17 +444,9 @@ mod tests {
     use super::*;
     use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
 
-    /// A dock round a bare menu button and a fresh motion bar, its
-    /// outputs going to `owner`.
+    /// A dock whose outputs go to `owner`.
     fn dock_for(owner: &relm4::Sender<DockOutput>) -> Dock {
-        let (motion_owner, _) = recorder();
-        let motion = MotionBar::new(&motion_owner, std::convert::identity);
-        Dock::new(
-            &gtk::MenuButton::new(),
-            &motion,
-            owner,
-            std::convert::identity,
-        )
+        Dock::new(owner, std::convert::identity)
     }
 
     /// A dock whose outputs nobody hears.
@@ -357,9 +492,7 @@ mod tests {
         let token = Rc::new(());
         let held = Rc::clone(&token);
         let (owner, _) = recorder::<DockOutput>();
-        let (motion_owner, _) = recorder();
-        let motion = MotionBar::new(&motion_owner, std::convert::identity);
-        let dock = Dock::new(&gtk::MenuButton::new(), &motion, &owner, move |output| {
+        let dock = Dock::new(&owner, move |output| {
             let _ = &held;
             output
         });
@@ -369,12 +502,14 @@ mod tests {
         settle();
         let moves = dock.moves.downgrade();
         let scene = dock.scene.downgrade();
+        let scenes = dock.scene_menu.scenes.downgrade();
         let input = dock.controller.sender().clone();
         assert!(moves.upgrade().is_some(), "the chips live while held");
         drop(dock);
         settle();
         assert!(moves.upgrade().is_none(), "the chips' box is freed");
         assert!(scene.upgrade().is_none(), "the scene menu's box is freed");
+        assert!(scenes.upgrade().is_none(), "the scene menu's list is freed");
         assert!(
             input.send(DockInput::Offer(true)).is_err(),
             "the component's runtime, and with it the model, is gone"
@@ -427,7 +562,10 @@ mod tests {
         let heard: Rc<RefCell<Vec<(AssemblyId, usize)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&dock);
-        handle_each(outputs, move |DockOutput::Move(assembly)| {
+        handle_each(outputs, move |output| {
+            let DockOutput::Move(assembly) = output else {
+                return;
+            };
             let Some(dock) = weak.upgrade() else {
                 return;
             };
@@ -458,6 +596,77 @@ mod tests {
             "each output after its update, the inner click after the rebuild"
         );
         assert_eq!(chips(&dock).len(), 1);
+    }
+
+    #[test]
+    fn the_scene_menu_shows_the_scenes_without_calling_back() {
+        on_gtk_thread(scenes_shown);
+    }
+
+    /// Filling the scene menu is queued and never calls back: a row per
+    /// scene, the current one's title on the button; no scenes leave the
+    /// button insensitive.
+    fn scenes_shown() {
+        let (owner, heard) = recorder();
+        let dock = dock_for(&owner);
+        let menu = &dock.scene_menu;
+        assert_eq!(menu.label.label(), "Rest");
+        dock.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 1);
+        assert!(menu.scenes.row_at_index(0).is_none(), "only queued");
+        settle();
+        assert!(menu.scenes.row_at_index(1).is_some());
+        assert!(menu.scenes.row_at_index(2).is_none());
+        assert_eq!(menu.label.label(), "Open");
+        assert!(menu.button.is_sensitive());
+        dock.show_scenes(&[], 0);
+        settle();
+        assert!(menu.scenes.row_at_index(0).is_none());
+        assert!(!menu.button.is_sensitive(), "nothing to choose");
+        assert!(heard.borrow().is_empty(), "setters never call back");
+    }
+
+    #[test]
+    fn choosing_a_scene_closes_the_menu_then_tells_the_owner() {
+        on_gtk_thread(a_scene_chosen_closes_the_menu);
+    }
+
+    /// The dock closes its own scene menu when people choose a scene, and
+    /// only then says which: the owner never reaches into it.
+    fn a_scene_chosen_closes_the_menu() {
+        let (owner, outputs) = relm4::channel();
+        let dock = Rc::new(dock_for(&owner));
+        let window = gtk::Window::new();
+        window.set_child(Some(&dock.scene));
+        window.present();
+        dock.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 0);
+        settle();
+        let button = dock.scene_menu.button.clone();
+        button.popup();
+        settle();
+        let open =
+            |button: &gtk::MenuButton| button.popover().is_some_and(|popover| popover.is_visible());
+        assert!(open(&button), "the scene menu is open");
+        let heard: Rc<RefCell<Vec<(DockOutput, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let seen = button.clone();
+        handle_each(outputs, move |output| {
+            log.borrow_mut().push((output, open(&seen)));
+        });
+        let row = dock
+            .scene_menu
+            .scenes
+            .row_at_index(1)
+            .expect("a second scene");
+        row.emit_activate();
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(DockOutput::Scene(1), false)],
+            "the owner hears the choice with the menu already closed"
+        );
+        assert!(!open(&button), "and stays closed");
+        window.destroy();
+        settle();
     }
 
     #[test]

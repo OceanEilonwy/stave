@@ -752,8 +752,22 @@ impl Session {
     /// the other side" does ([`crate::item_offer::item_offer`]), read from
     /// the project as the edit files give it. `None` when it has no design.
     pub fn item_offer(&self, item: &str) -> Option<crate::item_offer::ItemOffer> {
-        let opened = crate::open_with(&self.folder, self.ports.files.as_ref()).ok()?;
-        crate::item_offer::item_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
+        self.item_offer_job(item).run()
+    }
+
+    /// [`Session::item_offer`] as a job to run off the main thread
+    /// ([`crate::item_offer::ItemOfferJob::run`]): it reads the project
+    /// through the edit files as they are now.
+    pub fn item_offer_job(&self, item: &str) -> crate::item_offer::ItemOfferJob {
+        crate::item_offer::ItemOfferJob::new(self.folder.clone(), self.ports.files.clone(), item)
+    }
+
+    /// What the card of `item` offers in the shown design, without the
+    /// mirror gesture ([`crate::item_offer::quick_offer`]): what a card
+    /// shows at once while [`Session::item_offer_job`] runs. `None` with
+    /// no design shown.
+    pub fn quick_item_offer(&self, item: &str) -> Option<crate::item_offer::ItemOffer> {
+        crate::item_offer::quick_offer(&self.shown.as_ref()?.opened, item)
     }
 
     /// The grips listed by the last [`EditCommand::ListGrips`], with their

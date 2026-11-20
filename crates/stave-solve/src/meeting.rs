@@ -110,6 +110,8 @@ impl Meeting {
             | Builtin::Overlay
             | Builtin::Inset
             | Builtin::Turned
+            | Builtin::Tapered
+            | Builtin::Arched
             | Builtin::Joined
             | Builtin::Spliced
             | Builtin::Box

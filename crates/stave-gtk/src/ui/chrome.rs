@@ -68,9 +68,7 @@ impl Component for MotionBarComponent {
     view! {
         gtk::Box {
             add_css_class: "stave-floating",
-            set_halign: gtk::Align::Center,
-            set_valign: gtk::Align::End,
-            set_margin_bottom: 14,
+            // It floats on the 3D view, placed exactly by the floats.
             #[watch]
             set_orientation: model.orientation,
             #[watch]

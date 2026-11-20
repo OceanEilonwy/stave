@@ -6,7 +6,12 @@
 //!
 //! The window builds a writer for each Add ([`super::files::FilesPage::writer`])
 //! from its own copies of the open buffers (GObjects the Files component
-//! published) and whether the editor shows, so the writer shares no state.
+//! published) and whether the editor shows. It shares no Rust state, but
+//! it writes into the Code panel's live buffers inside `session.apply`,
+//! because `stave_app`'s [`WriteEdits`] must answer the commit at once:
+//! an accepted exception in docs/relm4-migration.md ("Accepted
+//! exceptions"), sound because the component's handlers on a buffer only
+//! queue messages.
 //! A file it writes while the editor is open but that has no tab gets a
 //! buffer made here, which the writer reports through a channel the window
 //! drains straight after the commit ([`super::files::FilesPage::take_written`]):

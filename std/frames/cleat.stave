@@ -27,6 +27,6 @@ component Cleat {
     }
   }
 
-  joint top_screws : screw(strip, into: under, count: screws, glue: false)
+  joint top_screws : slotted_screw(strip, into: under, count: screws, glue: false)
   joint glue       : glued_face(strip, into: apron)
 }

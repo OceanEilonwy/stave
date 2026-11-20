@@ -1,0 +1,18 @@
+// expect: error[unknown-field] stock 'ply_18' has no field 'rough_length'
+stave 1
+
+// Plywood is bought at its finished size and cut straight to it.
+
+project "Rough size on plywood" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, rough_length: 25mm, max_width: 1220mm, max_length: 2440mm }
+
+part panel : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}

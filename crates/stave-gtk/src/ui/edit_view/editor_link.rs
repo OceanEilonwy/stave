@@ -24,6 +24,7 @@ use stave_app::session::{Editor, LineNumber, Session, SourceLocation};
 use stave_ide::{Analysis, Document};
 
 use super::super::Window;
+use super::super::files::FilesInput;
 use super::super::sections;
 
 /// The most pending lines shown before "… and N more lines".
@@ -392,9 +393,6 @@ pub(in crate::ui) fn struck_lines(change: &LineChange) -> (usize, usize) {
 /// is off stands: clear of the dock.
 const BLOCK_LINE_ABOVE_DOCK: i32 = 84;
 
-/// The tag that marks old lines in the text while they are pending.
-const PENDING_TAG: &str = "stave-pending-old";
-
 impl Window {
     /// The text of a file of the project as the editor has it (unsaved
     /// changes included), else as on disk.
@@ -467,32 +465,21 @@ impl Window {
             });
         }
         let replaced = changes.iter().any(|change| !change.removed.is_empty());
-        if let Some(buffer) = self.widgets.files.buffer_for(&path, false)
-            && replaced
-        {
-            let tag = buffer.tag_table().lookup(PENDING_TAG).unwrap_or_else(|| {
-                let tag = gtk::TextTag::builder()
-                    .name(PENDING_TAG)
-                    .strikethrough(true)
-                    .background_rgba(&gtk::gdk::RGBA::new(0.85, 0.2, 0.15, 0.16))
-                    .build();
-                buffer.tag_table().add(&tag);
-                tag
+        if replaced {
+            // The Code panel strikes them through itself, after the
+            // reveal above has given the file its tab.
+            let lines = changes
+                .iter()
+                .filter(|change| !change.removed.is_empty())
+                .filter_map(|change| {
+                    let (first, end) = struck_lines(change);
+                    Some((i32::try_from(first).ok()?, i32::try_from(end).ok()?))
+                })
+                .collect();
+            self.widgets.files.send(FilesInput::MarkPending {
+                document: Document::File(path.clone()),
+                lines,
             });
-            for change in changes.iter().filter(|change| !change.removed.is_empty()) {
-                let (first, last) = struck_lines(change);
-                let (Ok(first), Ok(last)) = (i32::try_from(first), i32::try_from(last)) else {
-                    continue;
-                };
-                let start = buffer.iter_at_line(first);
-                // Past the last line: to the end of the text.
-                let end = buffer
-                    .iter_at_line(last)
-                    .unwrap_or_else(|| buffer.end_iter());
-                if let Some(start) = start {
-                    buffer.apply_tag(&tag, &start, &end);
-                }
-            }
             self.editing.pending_marked = Some(path);
         }
     }
@@ -521,12 +508,9 @@ impl Window {
         let Some(path) = self.editing.pending_marked.take() else {
             return;
         };
-        if let Some(buffer) = self.widgets.files.buffer_for(&path, false)
-            && let Some(tag) = buffer.tag_table().lookup(PENDING_TAG)
-        {
-            let (start, end) = buffer.bounds();
-            buffer.remove_tag(&tag, &start, &end);
-        }
+        self.widgets
+            .files
+            .send(FilesInput::ClearPending(Document::File(path)));
     }
 
     // ---- while the text doesn't read ----

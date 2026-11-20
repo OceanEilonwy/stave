@@ -5,8 +5,8 @@
 //! ```text
 //! pick <name>                          a click on a part, piece of hardware or assembly: selected
 //! repeat <count> [up|across|deep]      the card's count stepper (the candidate's, else the item's)
-//! drag count <count>                   the count handle dragged until it says × count
-//! drag boundary <n> <length>           the n-th boundary handle (from 1) dragged to a size
+//! drag count <count>                   the count set on the repeat stepper
+//! drag boundary <n> <length>           the n-th boundary (from 1) moved to a size
 //! mirror                               "And the other side" switched on
 //! hold <a> to <b>                      "Hold a distance…" from part a, then a click on b
 //! hold min|max [<length>] "<reason>"   the hold card's fields
