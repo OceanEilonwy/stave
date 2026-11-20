@@ -49,12 +49,13 @@ use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
 
 use super::grip_layer::GripLayer;
 use super::grip_panel::{
-    GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput,
+    GripOptions, GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput,
+    SwitchAsk, SwitchMenu, switch_menu,
 };
 use super::grip_text::{
     GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
     grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
-    suggested_range, typed_check, typed_refusal,
+    typed_check, typed_refusal,
 };
 use crate::ui::update::editing::EditingInput;
 use crate::ui::{EDGE, Window, WindowInput};
@@ -110,8 +111,32 @@ struct GripState {
     typing: Option<usize>,
     /// A listing from the new design is on its way.
     relist_queued: bool,
-    /// The grip whose options (⋮) the size section holds.
-    options_for: Option<usize>,
+}
+
+/// A grip mark's options menu (⋮), what it asks sent to the window.
+fn mark_switch_menu(
+    input: &relm4::Sender<WindowInput>,
+    index: usize,
+    switches: &[SolverSwitch],
+) -> gtk::MenuButton {
+    let input = input.clone();
+    switch_menu(switches, move |ask, menu| {
+        input.emit(switch_asked(index, ask, SwitchMenu::Mark(menu)).into());
+    })
+}
+
+/// What a grip's options menu asked, as the window's message.
+fn switch_asked(index: usize, ask: SwitchAsk, menu: SwitchMenu) -> EditingInput {
+    match ask {
+        SwitchAsk::MakePlain(param) => EditingInput::GripMakePlain { index, param },
+        SwitchAsk::MakeSolved { param, low, high } => EditingInput::GripMakeSolved {
+            index,
+            param,
+            low,
+            high,
+            menu,
+        },
+    }
 }
 
 /// Where a grip sits, at rest, in the render frame (millimetres).
@@ -629,6 +654,14 @@ impl Window {
     pub(in crate::ui) fn grip_panel_asked(&mut self, action: PanelAction) {
         match action {
             PanelAction::Pick(param) => self.pick_later(param),
+            PanelAction::Switch {
+                index,
+                ask: SwitchAsk::MakePlain(param),
+            } => self.grip_make_plain(index, param),
+            PanelAction::Switch {
+                index,
+                ask: SwitchAsk::MakeSolved { param, low, high },
+            } => self.grip_make_solved(index, param, (&low, &high), &SwitchMenu::Panel),
             PanelAction::Type(text) => {
                 let open = self.session.change().and_then(drag_index).or(self
                     .editing
@@ -1110,7 +1143,7 @@ impl Window {
         };
         let switches = solver_switches(listed);
         let switches = (!switches.is_empty() && place.look != GripLook::Locked)
-            .then(|| self.switch_menu(index, &switches));
+            .then(|| mark_switch_menu(&self.input(), index, &switches));
         if let Some(menu) = &switches {
             row.append(menu);
         }
@@ -1124,126 +1157,6 @@ impl Window {
             error,
             switches,
         }
-    }
-
-    /// The menu beside a grip's number: "Let the solver move this", with
-    /// the range a solved param needs, or the switch to make it plain.
-    fn switch_menu(&self, index: usize, switches: &[SolverSwitch]) -> gtk::MenuButton {
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
-            .css_classes(["stave-grip-switches"])
-            .build();
-        let menu = gtk::MenuButton::builder()
-            .icon_name("view-more-symbolic")
-            .css_classes(["flat"])
-            .tooltip_text(tr("Let the solver move this"))
-            .build();
-        menu.update_property(&[gtk::accessible::Property::Label(&tr(
-            "Let the solver move this",
-        ))]);
-        let popover = gtk::Popover::builder().child(&content).build();
-        menu.set_popover(Some(&popover));
-        let only = switches.len() == 1;
-        for switch in switches {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            let template = if only {
-                tr("Let the solver move this ({param})")
-            } else {
-                tr("Let the solver move {param}")
-            };
-            let words = fill_in(&template, &[("param", &switch.param.as_str())]);
-            row.append(
-                &gtk::Label::builder()
-                    .label(&words)
-                    .xalign(0.0)
-                    .hexpand(true)
-                    .build(),
-            );
-            let toggle = gtk::Switch::builder()
-                .active(switch.solved)
-                .valign(gtk::Align::Center)
-                .build();
-            toggle.update_property(&[gtk::accessible::Property::Label(&words)]);
-            row.append(&toggle);
-            content.append(&row);
-            // The range a solved param needs, typed before it is made one.
-            let (low_text, high_text) = suggested_range(switch.value);
-            let range = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(6)
-                .visible(false)
-                .build();
-            range.append(
-                &gtk::Label::builder()
-                    .label(tr("The solver keeps it within:"))
-                    .xalign(0.0)
-                    .css_classes(["stave-grip-note"])
-                    .build(),
-            );
-            let ends = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            let low = gtk::Entry::builder().text(&low_text).width_chars(8).build();
-            let high = gtk::Entry::builder()
-                .text(&high_text)
-                .width_chars(8)
-                .build();
-            low.update_property(&[gtk::accessible::Property::Label(&tr("Lowest value"))]);
-            high.update_property(&[gtk::accessible::Property::Label(&tr("Highest value"))]);
-            ends.append(&low);
-            ends.append(&gtk::Label::new(Some(&tr("to"))));
-            ends.append(&high);
-            range.append(&ends);
-            let make = gtk::Button::builder()
-                .label(tr("Make it solved"))
-                .css_classes(["suggested-action"])
-                .halign(gtk::Align::End)
-                .build();
-            range.append(&make);
-            content.append(&range);
-            let solved = switch.solved;
-            let param = switch.param.clone();
-            let input = self.input();
-            let shown = range.clone();
-            // The switch and the button live inside the menu's popover, so
-            // their handlers hold the menu weakly: a strong hold would be a
-            // cycle that keeps every menu alive after it is replaced.
-            let weak_menu = menu.downgrade();
-            toggle.connect_state_set(move |_, on| {
-                shown.set_visible(on && !solved);
-                if !on && solved {
-                    if let Some(menu) = weak_menu.upgrade() {
-                        menu.popdown();
-                    }
-                    input.emit(
-                        EditingInput::GripMakePlain {
-                            index,
-                            param: param.clone(),
-                        }
-                        .into(),
-                    );
-                }
-                glib::Propagation::Proceed
-            });
-            let param = switch.param.clone();
-            let input = self.input();
-            let weak_menu = menu.downgrade();
-            make.connect_clicked(move |_| {
-                let Some(menu) = weak_menu.upgrade() else {
-                    return;
-                };
-                input.emit(
-                    EditingInput::GripMakeSolved {
-                        index,
-                        param: param.clone(),
-                        low: low.text().trim().to_owned(),
-                        high: high.text().trim().to_owned(),
-                        menu,
-                    }
-                    .into(),
-                );
-            });
-        }
-        menu
     }
 
     // ---- dragging ----
@@ -1510,11 +1423,14 @@ impl Window {
         index: usize,
         param: Ident,
         (low, high): (&str, &str),
-        menu: &gtk::MenuButton,
+        menu: &SwitchMenu,
     ) {
         match (parse_value(low), parse_value(high)) {
             (Ok(low), Ok(high)) => {
-                menu.popdown();
+                match menu {
+                    SwitchMenu::Mark(menu) => menu.popdown(),
+                    SwitchMenu::Panel => self.editing.grips.panel.close_options(),
+                }
                 self.editing.grips.state.open = Some(index);
                 self.send_edit_later(EditCommand::MakeSolved { param, low, high });
             }
@@ -1901,36 +1817,17 @@ impl Window {
             }
             slot.append(&grips.panel.root);
         }
-        grips.panel.show(&model);
+        // The grip's options (⋮), which the section makes again only for
+        // another grip.
+        let options = open.and_then(|index| {
+            let listed = session.grips()?.grips().get(index)?;
+            let switches = solver_switches(listed);
+            (grip_look(listed) != GripLook::Locked && !switches.is_empty())
+                .then_some(GripOptions { index, switches })
+        });
+        grips.panel.show(&model, options);
         grips.panel.root.set_visible(true);
         grips.show_readout(model.readout.clone());
-        // The grip's options (⋮), made again only for another grip.
-        let wanted = open.filter(|index| {
-            session
-                .grips()
-                .and_then(|grips| grips.grips().get(*index))
-                .is_some_and(|listed| {
-                    grip_look(listed) != GripLook::Locked && !solver_switches(listed).is_empty()
-                })
-        });
-        let had = std::mem::replace(&mut self.editing.grips.state.options_for, wanted);
-        let (session, grips) = (&self.session, &self.editing.grips);
-        if wanted != had {
-            while let Some(child) = grips.panel.options.first_child() {
-                grips.panel.options.remove(&child);
-            }
-            let switches = wanted.and_then(|index| {
-                let listed = session.grips()?.grips().get(index)?.clone();
-                Some((index, solver_switches(&listed)))
-            });
-            if let Some((index, switches)) = switches {
-                let menu = self.switch_menu(index, &switches);
-                menu.set_tooltip_text(Some(&tr(
-                    "Options: let the solver move this, and its range",
-                )));
-                grips.panel.options.append(&menu);
-            }
-        }
     }
 
     // ---- driving it without a pointer (screenshots) ----
@@ -2343,7 +2240,7 @@ mod tests {
                 can_apply: true,
                 readout: Some(("overall_width".to_owned(), "940 → 1040 mm".to_owned())),
             };
-            section.show(&model);
+            section.show(&model, None);
             assert_eq!(
                 panel_words(&section.panel),
                 [
@@ -2376,40 +2273,14 @@ mod tests {
     #[test]
     fn a_grips_options_menu_is_freed_once_it_is_let_go() {
         on_gtk_thread(|| {
-            use relm4::{Component, ComponentController};
-
-            let application = adw::Application::new(
-                Some("org.stave.GripsTest.MenuFreed"),
-                gio::ApplicationFlags::NON_UNIQUE,
-            );
-            if let Err(error) = application.register(gio::Cancellable::NONE) {
-                panic!("the test's application registers: {error}");
-            }
-            let folder = table("menu-freed");
-            let options = crate::ui::Options {
-                layout: Some(std::env::temp_dir().join("stave-grips-test-no-layout")),
-                ..crate::ui::Options::default()
-            };
-            let builder = Window::builder();
-            let root = builder.widget().clone();
-            let widgets =
-                crate::ui::build_widgets(&root, &application, &folder, &gio::Menu::new(), &options)
-                    .unwrap();
-            let controller = builder
-                .launch(crate::ui::WindowInit {
-                    widgets,
-                    folder,
-                    options,
-                })
-                .detach();
-            crate::ui::gtk_test::settle();
             let width = Ident::new("width", stave_lang::ast::Span::default()).unwrap();
             let switches = [SolverSwitch {
                 param: width,
                 value: super::super::grip_text::mm_amount(100.0).unwrap(),
                 solved: false,
             }];
-            let menu = controller.model().switch_menu(0, &switches);
+            let (input, _receiver) = relm4::channel::<WindowInput>();
+            let menu = mark_switch_menu(&input, 0, &switches);
             let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             holder.append(&menu);
             let weak = menu.downgrade();
@@ -2419,9 +2290,6 @@ mod tests {
             // Its switch and button sit in its own popover: holding the
             // menu from their handlers would keep it alive for good.
             assert!(weak.upgrade().is_none(), "the menu is freed");
-            controller.widget().close();
-            drop(controller);
-            crate::ui::gtk_test::settle();
         });
     }
 }

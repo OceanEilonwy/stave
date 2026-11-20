@@ -75,7 +75,7 @@ impl Launched {
             EditMenuComponent::builder().launch(()).connect_receiver(
                 move |_, output| match output {
                     EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
-                    EditMenuOutput::Drawn => {}
+                    EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace => {}
                 },
             )
         };
@@ -1057,6 +1057,7 @@ fn case_card_fits() {
     let fold = item_tools::RepeatFoldComponent::builder()
         .launch(item_tools::RepeatFoldInit {
             least: 1,
+            classes: &[],
             apart: Some(item_tools::RepeatFoldSlots {
                 button: editing.slots.repeat_button_slot.clone(),
                 row: editing.slots.repeat_slot.clone(),
@@ -1142,6 +1143,7 @@ fn repeat_fold_row() {
     let fold = item_tools::RepeatFoldComponent::builder()
         .launch(item_tools::RepeatFoldInit {
             least: 1,
+            classes: &[],
             apart: None,
         })
         .connect_receiver(move |_, output| {

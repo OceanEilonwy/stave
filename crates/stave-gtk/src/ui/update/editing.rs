@@ -7,6 +7,7 @@
 use crate::ui::edit_card::CardAction;
 use crate::ui::edit_view::changes::ChangeAction;
 use crate::ui::edit_view::grip_panel::PanelAction;
+use crate::ui::edit_view::grip_panel::SwitchMenu;
 use crate::ui::edit_view::hold::HoldCardOutput;
 use crate::ui::edit_view::item_tools::{ItemToolsOutput, RepeatFoldOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
@@ -170,8 +171,8 @@ pub(in crate::ui) enum EditingInput {
         low: String,
         /// The range's high end, as typed.
         high: String,
-        /// The menu, closed once the range is read.
-        menu: gtk::MenuButton,
+        /// The menu that asked, closed once the range is read.
+        menu: SwitchMenu,
     },
     /// A grip's handle was pressed.
     GripPressed(usize),

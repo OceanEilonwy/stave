@@ -23,7 +23,9 @@
 //! It is a relm4 component, [`EditMenuComponent`], owned by the window
 //! (docs/relm4-migration.md): its entries only send it messages, and it
 //! tells the window what was chosen, and when it has drawn what it was
-//! shown (the window places it by its new size then).
+//! shown (the window places it by its new size then). Under the list, for
+//! a space, it offers "Hold a distance from this space…", heard as
+//! [`EditMenuOutput::HoldFromSpace`].
 
 use stave_app::i18n::{fill_in, tr};
 
@@ -34,7 +36,11 @@ use stave_lang::Diagnostic;
 use stave_lang::ast::Name;
 use stave_model::nonempty::NonEmpty;
 
+use super::EDGE;
 use super::edit_card::install_style;
+
+/// The menu's width, in pixels, beside its margins.
+const MENU_WIDTH: i32 = 340;
 
 /// Whether a candidate's applicability check has finished. Until the check
 /// is done the caller says so here, and the entry shows that it is being
@@ -374,11 +380,46 @@ fn menu_root() -> gtk::Box {
     }
     gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
         .css_classes(["stave-card-panel", "stave-edit-menu"])
         .width_request(320)
         .accessible_role(gtk::AccessibleRole::Group)
         .overflow(gtk::Overflow::Hidden)
         .build()
+}
+
+/// The button under a space's list: "Hold a distance from this space…".
+fn from_space_button() -> gtk::Button {
+    gtk::Button::builder()
+        .label(tr("Hold a distance from this space…"))
+        .css_classes(["flat", "stave-hold-from-space"])
+        .tooltip_text(tr(
+            "Pick a part or another space and keep the distance to it",
+        ))
+        .visible(false)
+        .build()
+}
+
+/// Places the menu (`root`, floating at the top left of the view) near
+/// `(x, y)`, where it was asked for, inside a view `width` by `height`:
+/// as high as it must be to show whole, clear of the dock at the bottom.
+fn place(root: &gtk::Box, (x, y): (f64, f64), (width, height): (f64, f64)) {
+    let left = (x + 24.0).min(width - f64::from(MENU_WIDTH) - f64::from(EDGE));
+    // A widget is measured with its margins, so the width asked about
+    // holds the margins it was last placed with (measured at 340 alone, a
+    // menu placed 593 pixels in "needs at least 913", as GTK warned on
+    // every run that opened a menu).
+    let across = MENU_WIDTH
+        .saturating_add(root.margin_start())
+        .saturating_add(root.margin_end());
+    let (_, natural, _, _) = root.measure(gtk::Orientation::Vertical, across);
+    let natural = natural
+        .saturating_sub(root.margin_top())
+        .saturating_sub(root.margin_bottom());
+    let top = (y - 60.0).min(height - f64::from(natural) - 96.0);
+    root.set_margin_start(crate::convert::int_of(left.max(f64::from(EDGE))));
+    root.set_margin_top(crate::convert::int_of(top.max(f64::from(EDGE))));
 }
 
 /// Puts the heading and the list, in a scrolled box, in the menu's
@@ -436,9 +477,23 @@ pub enum EditMenuInput {
         heading: Heading,
         /// The entries.
         items: Vec<MenuEntry>,
+        /// The selection is a space: offer "Hold a distance from this
+        /// space…" under the list.
+        from_space: bool,
+    },
+    /// Stand near `point` (where it was asked for) inside a view of size
+    /// `view`, as high as it must be to show whole: measured as it is now,
+    /// so after a [`EditMenuInput::Show`] sent before it.
+    Place {
+        /// Where it was asked for, in the view.
+        point: (f64, f64),
+        /// The view's width and height.
+        view: (f64, f64),
     },
     /// People pressed an entry that can be chosen.
     Chose(Declaration),
+    /// People pressed "Hold a distance from this space…".
+    FromSpacePressed,
 }
 
 /// What the menu tells its owner.
@@ -449,6 +504,9 @@ pub enum EditMenuOutput {
     /// The menu has drawn what [`EditMenuInput::Show`] gave it, so its
     /// owner can place it by its new size.
     Drawn,
+    /// People pressed "Hold a distance from this space…": the next click
+    /// picks what to keep the distance to.
+    HoldFromSpace,
 }
 
 /// The menu component's widgets.
@@ -456,6 +514,8 @@ pub enum EditMenuOutput {
 pub struct EditMenuWidgets {
     heading: gtk::Label,
     list: gtk::Box,
+    /// "Hold a distance from this space…", under the list.
+    from_space: gtk::Button,
 }
 
 impl Component for EditMenuComponent {
@@ -470,11 +530,19 @@ impl Component for EditMenuComponent {
         menu_root()
     }
 
-    fn init(_: (), root: gtk::Box, _: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(_: (), root: gtk::Box, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let (heading, list) = fill_frame(&root);
+        let from_space = from_space_button();
+        let input = sender.input_sender().clone();
+        from_space.connect_clicked(move |_| input.emit(EditMenuInput::FromSpacePressed));
+        root.append(&from_space);
         ComponentParts {
             model: EditMenuComponent::default(),
-            widgets: EditMenuWidgets { heading, list },
+            widgets: EditMenuWidgets {
+                heading,
+                list,
+                from_space,
+            },
         }
     }
 
@@ -486,7 +554,12 @@ impl Component for EditMenuComponent {
         root: &gtk::Box,
     ) {
         match message {
-            EditMenuInput::Show { heading, items } => {
+            EditMenuInput::Show {
+                heading,
+                items,
+                from_space,
+            } => {
+                widgets.from_space.set_visible(from_space);
                 let input = sender.input_sender().clone();
                 self.rows = fill_menu(
                     root,
@@ -502,6 +575,10 @@ impl Component for EditMenuComponent {
             EditMenuInput::Chose(declaration) => {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(EditMenuOutput::Chosen(declaration));
+            }
+            EditMenuInput::Place { point, view } => place(root, point, view),
+            EditMenuInput::FromSpacePressed => {
+                let _ = sender.output(EditMenuOutput::HoldFromSpace);
             }
         }
     }
@@ -664,7 +741,11 @@ pub(super) mod tests {
         use crate::ui::gtk_test::settle;
         let menu = Bridge::<EditMenuComponent>::launch(());
         let (heading, items, _) = fixture_entries();
-        menu.send(EditMenuInput::Show { heading, items });
+        menu.send(EditMenuInput::Show {
+            heading,
+            items,
+            from_space: false,
+        });
         let token = Rc::new(());
         let held = Rc::clone(&token);
         menu.connect(move |_| {
@@ -684,7 +765,8 @@ pub(super) mod tests {
             input
                 .send(EditMenuInput::Show {
                     heading: Heading::InThisSpace,
-                    items: Vec::new()
+                    items: Vec::new(),
+                    from_space: false,
                 })
                 .is_err(),
             "the component's runtime, and with it the model, is gone"
@@ -705,7 +787,11 @@ pub(super) mod tests {
         menu.connect(move |output| log.borrow_mut().push(output));
         let (heading, items, drawer) = fixture_entries();
         let count = items.len();
-        menu.send(EditMenuInput::Show { heading, items });
+        menu.send(EditMenuInput::Show {
+            heading,
+            items,
+            from_space: false,
+        });
         assert!(menu.model().rows.is_empty(), "only queued");
         settle();
         let rows = menu.model().rows.clone();
@@ -721,6 +807,84 @@ pub(super) mod tests {
         rows[1].1.emit_clicked();
         settle();
         assert!(heard.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_spaces_menu_offers_a_hold_and_reports_its_press() {
+        crate::ui::gtk_test::on_gtk_thread(menu_offers_a_hold);
+    }
+
+    /// The window used to put its own "Hold a distance from this space…"
+    /// button in the menu; now the menu owns it, shows it for a space and
+    /// reports its press after the update.
+    fn menu_offers_a_hold() {
+        use crate::ui::gtk_test::settle;
+        let menu = Bridge::<EditMenuComponent>::launch(());
+        let heard: Rc<std::cell::RefCell<Vec<EditMenuOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        menu.connect(move |output| log.borrow_mut().push(output));
+        let Some(button) = menu
+            .widget()
+            .last_child()
+            .and_then(|child| child.downcast::<gtk::Button>().ok())
+        else {
+            panic!("the hold button is under the list");
+        };
+        assert!(!button.is_visible(), "hidden until a space's menu shows");
+        let (heading, items, _) = fixture_entries();
+        menu.send(EditMenuInput::Show {
+            heading,
+            items: items.clone(),
+            from_space: true,
+        });
+        settle();
+        assert!(button.is_visible(), "offered for a space");
+        heard.borrow_mut().clear();
+        button.emit_clicked();
+        assert!(heard.borrow().is_empty(), "the press is only queued");
+        settle();
+        assert_eq!(*heard.borrow(), [EditMenuOutput::HoldFromSpace]);
+        menu.send(EditMenuInput::Show {
+            heading,
+            items,
+            from_space: false,
+        });
+        settle();
+        assert!(!button.is_visible(), "not offered otherwise");
+    }
+
+    #[test]
+    fn the_menu_places_itself_where_it_is_told() {
+        crate::ui::gtk_test::on_gtk_thread(menu_places_itself);
+    }
+
+    /// The window used to measure the menu and set its margins; now it
+    /// says where the menu was asked for and the menu places itself,
+    /// measured after what it was shown before.
+    fn menu_places_itself() {
+        use crate::ui::gtk_test::settle;
+        let menu = Bridge::<EditMenuComponent>::launch(());
+        let (heading, items, _) = fixture_entries();
+        menu.send(EditMenuInput::Show {
+            heading,
+            items,
+            from_space: false,
+        });
+        menu.send(EditMenuInput::Place {
+            point: (100.0, 200.0),
+            view: (1000.0, 2000.0),
+        });
+        assert_eq!(menu.widget().margin_start(), 0, "only queued");
+        settle();
+        assert_eq!(menu.widget().margin_start(), 124, "beside the point");
+        assert_eq!(menu.widget().margin_top(), 140, "a little above it");
+        // Near the right edge it stays inside the view.
+        menu.send(EditMenuInput::Place {
+            point: (990.0, 200.0),
+            view: (1000.0, 2000.0),
+        });
+        settle();
+        assert_eq!(menu.widget().margin_start(), 1000 - MENU_WIDTH - EDGE);
     }
 
     #[test]
@@ -741,6 +905,7 @@ pub(super) mod tests {
         menu.send(EditMenuInput::Show {
             heading,
             items: items.clone(),
+            from_space: false,
         });
         settle();
         // (what was heard, how many entries the model held then)
@@ -759,6 +924,7 @@ pub(super) mod tests {
                 menu.send(EditMenuInput::Show {
                     heading,
                     items: items[..1].to_vec(),
+                    from_space: false,
                 });
                 // And a press from in here is only queued.
                 rows[0].1.emit_clicked();

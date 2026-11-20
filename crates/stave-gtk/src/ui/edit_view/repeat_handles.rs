@@ -281,6 +281,7 @@ impl Repeats {
         let row = RepeatFoldComponent::builder()
             .launch(RepeatFoldInit {
                 least: 1,
+                classes: &[],
                 apart: Some(RepeatFoldSlots {
                     button: slots.repeat_button_slot.clone(),
                     row: slots.repeat_slot.clone(),
