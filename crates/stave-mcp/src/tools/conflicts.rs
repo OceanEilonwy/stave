@@ -9,12 +9,13 @@
 //! ```text
 //! list_conflicts   ─▶ each conflict: sides, base, origin, change, errors
 //! try_resolution   ─▶ stave_app::conflicts::try_resolution (writes nothing)
-//! resolve_conflict ─▶ project: file + History::save as the agent
+//! resolve_conflict ─▶ project: editing::write_all + History::save as the agent
 //!                     suggestion: History::write_suggestion_files
 //! ```
 //!
 //! Settling a clash in the project's own files moves main, so the result
-//! must check with no errors and the merge policy must not be `off`.
+//! must check with no errors (with other clashes left, add no errors to
+//! any side of them) and the merge policy must not be `off`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -28,11 +29,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use stave_app::Opened;
 use stave_app::conflicts::{self, SideChange};
+use stave_app::editing::{CommitError, FileEdit, WriteEdits as _, write_all};
+use stave_app::scratch::DiskWriter;
 use stave_history::{
     Actor, ActorKind, History, MergePolicy, ProjectFiles, RelativePath, Suggestion, SuggestionId,
     Version, VersionsStatus, merge_policy,
 };
 use stave_lang::conflict::{Conflict, Resolution, find_conflicts};
+use stave_lang::patch::TextEdit;
 use stave_lang::render_diagnostics;
 use stave_modules::{DiskFiles, FileSource, MemoryFiles};
 
@@ -121,10 +125,12 @@ impl StaveServer {
     /// A resolution, written.
     #[tool(
         description = "Settle one clash and write the result, as try_resolution tries it. In \
-                       the project's own files the result must check with no errors; it is \
-                       written to the file and recorded as a version made by this AI app. In \
-                       a suggestion it is written to the suggestion, which can be applied once \
-                       no clash is left.",
+                       the project's own files the result must check with no errors (with \
+                       other clashes left: it must add no errors to any side of them); it is \
+                       written to the file, only if the file hasn't changed since it was read, \
+                       and recorded as a version made by this AI app. A Stave window holding \
+                       the file with unsaved changes keeps its own text. In a suggestion it is \
+                       written to the suggestion, which can be applied once no clash is left.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn resolve_conflict(
@@ -587,14 +593,12 @@ fn describe(
             ),
             None => "not checked".to_owned(),
         };
-        let shown_label = if side.label.is_empty() {
-            String::new()
-        } else {
-            format!(" '{}'", side.label)
-        };
+        // The plain origin only: the raw marker label (jj's revision
+        // words for a suggestion) stays in the JSON, and `origin` already
+        // quotes it for a clash made outside Stave.
         let _ = writeln!(
             words,
-            "  side {}{shown_label}, from {origin}; {checks}:",
+            "  side {}, from {origin}; {checks}:",
             index.saturating_add(1)
         );
         push_indented(&mut words, &change, "    ");
@@ -607,10 +611,12 @@ fn describe(
             "errors": errors,
         }));
     }
+    // Only the resolutions, not the window's translated words for them,
+    // so the same project gives the same JSON in every locale.
     let actions: Vec<Value> = found
         .actions
         .iter()
-        .map(|action| json!({ "label": action.label, "resolution": resolution_json(&action.resolution) }))
+        .map(|action| resolution_json(&action.resolution))
         .collect();
     let json = json!({
         "file": file,
@@ -746,9 +752,74 @@ fn write_to_suggestion(
     Ok(answer(text, json))
 }
 
+/// How many clashes the project's own files hold with `target`'s file
+/// reading `text`.
+fn clashes_left(place: &Place, target: &Target, text: &str) -> usize {
+    place
+        .texts
+        .iter()
+        .map(|(file, file_text)| {
+            if *file == target.shown {
+                find_conflicts(text).len()
+            } else {
+                find_conflicts(file_text).len()
+            }
+        })
+        .sum()
+}
+
+/// Whether a tried resolution of the project's own files may be written:
+/// `None` when it may, else why not.
+///
+/// With no clash left the project must check with no errors. With clashes
+/// left, every clash still left is an `error[conflict]`, so the project
+/// can't check clean until the last is settled; instead each side of the
+/// clashes left (that side chosen in every one, as `list_conflicts`
+/// checks them) must have no more errors with the resolution than it had
+/// before it, so settling one clash never adds a problem to any way of
+/// settling the rest.
+fn refusal(
+    place: &Place,
+    target: &Target,
+    tried: &conflicts::Tried,
+    left: usize,
+) -> Result<Option<McpError>, McpError> {
+    if left == 0 {
+        let errors = tried.opened.error_count();
+        return Ok((errors > 0).then(|| McpError::NotClean {
+            errors: count_words(errors, "error", "errors"),
+            problems: problems_text(&tried.opened),
+        }));
+    }
+    let load = |error| load_error(&place.folder, error);
+    let before = conflicts::check_sides(&place.folder, &DiskFiles).map_err(load)?;
+    let resolved = conflicts::Replaced::new(&DiskFiles, &target.path, &tried.text);
+    let after = conflicts::check_sides(&place.folder, &resolved).map_err(load)?;
+    for (side, opened) in after.iter().enumerate() {
+        let had = before
+            .get(side)
+            .or(before.last())
+            .map_or(0, Opened::error_count);
+        let has = opened.error_count();
+        if has > had {
+            return Ok(Some(McpError::NotClean {
+                errors: format!(
+                    "{} with side {} chosen in the clashes left ({} before)",
+                    count_words(has, "error", "errors"),
+                    side.saturating_add(1),
+                    had
+                ),
+                problems: problems_text(opened),
+            }));
+        }
+    }
+    Ok(None)
+}
+
 /// `resolve_conflict` in the project's own files: written to the file
-/// when the result checks clean and the policy allows, then recorded as a
-/// version by the agent when versions are on.
+/// through the one writer when the result checks clean (or, with clashes
+/// left, adds no errors) and the policy allows, then recorded as a version
+/// by the agent when versions are on.
 fn write_to_project(
     place: &Place,
     target: &Target,
@@ -760,39 +831,65 @@ fn write_to_project(
         return Err(McpError::PolicyOff);
     }
     let tried = target.try_on(place)?;
-    let errors = tried.opened.error_count();
-    if errors > 0 {
-        return Err(McpError::NotClean {
-            errors: count_words(errors, "error", "errors"),
-            problems: problems_text(&tried.opened),
-        });
+    let left = clashes_left(place, target, &tried.text);
+    if let Some(refused) = refusal(place, target, &tried, left)? {
+        return Err(refused);
     }
-    // Only over the text the clash was settled from: anything written
-    // since (the window saving) is kept.
-    let now = std::fs::read_to_string(&target.path).map_err(|source| McpError::Io {
+    // Through the one writer, only over the text the clash was settled
+    // from: anything saved since (the window saving) is kept.
+    let edit = FileEdit {
         path: target.path.clone(),
-        source,
-    })?;
-    if now != target.text {
+        created: false,
+        before: target.text.clone(),
+        edits: vec![TextEdit {
+            range: 0..target.text.len(),
+            text: tried.text.clone(),
+        }],
+        after: tried.text.clone(),
+    };
+    if DiskWriter.can_write(&edit).is_err() {
         return Err(McpError::ChangedMeanwhile(target.shown.clone()));
     }
-    std::fs::write(&target.path, &tried.text).map_err(|source| McpError::Io {
-        path: target.path.clone(),
-        source,
+    write_all(std::slice::from_ref(&edit), &mut DiskWriter).map_err(|error| match error {
+        CommitError::Write { path, source } => McpError::Io { path, source },
+        CommitError::NothingChosen | CommitError::DoesNotFit => {
+            McpError::ChangedMeanwhile(target.shown.clone())
+        }
     })?;
     let mut text = format!(
         "Settled clash {number} in {}: {}.\n",
         target.shown,
         verdict(&tried.opened, &tried.text)
     );
+    if left > 0 {
+        let _ = writeln!(
+            text,
+            "The project's own files still have {}: list them with list_conflicts.",
+            count_words(left, "clash", "clashes")
+        );
+    }
+    let mut not_recorded = None;
     let recorded = match History::status(&place.folder)? {
         VersionsStatus::On => {
-            let mut history = History::open(&place.folder)?;
-            let files = history.read_folder()?;
             let message = format!("Settle the clash in {}", target.shown);
-            let revision = history.save(&files, actor, &message)?;
-            let _ = writeln!(text, "Recorded as a version of the project, \"{message}\".");
-            Some(revision.as_str().to_owned())
+            match record(&place.folder, actor, &message) {
+                Ok(revision) => {
+                    let _ = writeln!(text, "Recorded as a version of the project, \"{message}\".");
+                    Some(revision)
+                }
+                Err(error) => {
+                    // The file is written already: say so, so the clash
+                    // isn't settled again over the new text.
+                    let _ = writeln!(
+                        text,
+                        "The file was written, but it couldn't be recorded as a version: \
+                         {error}. Don't settle this clash again; the next save in Stave \
+                         records it."
+                    );
+                    not_recorded = Some(error.to_string());
+                    None
+                }
+            }
         }
         VersionsStatus::Off | VersionsStatus::Nested { .. } => {
             text.push_str("Versions are off for this project, so no version was recorded.\n");
@@ -802,6 +899,18 @@ fn write_to_project(
     let mut json = tried_json(&place.folder, &tried.opened, &tried.text, &target.shown);
     if let Value::Object(map) = &mut json {
         map.insert("version".to_owned(), json!(recorded));
+        map.insert("conflicts_left_in_project".to_owned(), json!(left));
+        if let Some(reason) = not_recorded {
+            map.insert("not_recorded".to_owned(), json!(reason));
+        }
     }
     Ok(answer(text, json))
+}
+
+/// Records the project folder as a version by `actor`.
+fn record(folder: &Path, actor: &Actor, message: &str) -> Result<String, McpError> {
+    let mut history = History::open(folder)?;
+    let files = history.read_folder()?;
+    let revision = history.save(&files, actor, message)?;
+    Ok(revision.as_str().to_owned())
 }

@@ -578,12 +578,21 @@ it is now. Settling one is a text edit, not a patch, and goes through
 `stave_app::conflicts`, which the window and the AI tools share:
 
 - `conflicts(text)` lists each conflict with its lines (from 1) and its
-  actions: "Keep this side", "Keep the other side", "Keep side 3" and on,
-  and "Keep both" only when every side is whole items with different
-  names. Each action is a `Resolution` and the same as one text edit.
+  actions: a "Keep" for each side, then "Keep both" only when every side
+  is whole items with different names. Each action is a `Resolution` and
+  the same as one text edit. All the links sit in one row above the
+  conflict, so each "Keep" names its side: by the label Stave's versions
+  write ("Keep yours" for the window's saved work, "Keep theirs" for the
+  change applied meanwhile, "Keep the suggestion's" and "Keep the
+  project's" for a suggestion moved onto main), else in a two-sided
+  conflict by its tint ("Keep the green side", "Keep the blue side"),
+  else by number ("Keep side 3").
 - `check_sides(folder, files)` opens the project once per side, that side
   chosen in every conflict of every file, so each side's problems are
   known before choosing (`SideFiles` is the file source that chooses).
+  The sides are counted from the files' text, so the project is opened
+  only once per side. `Replaced` is the project with one file's text
+  replaced, to check the sides as a tried resolution would leave them.
 - `side_change(text, conflict, side)` is what a side changes from the
   conflict's base, as the base's lines (`- `) and the side's (`+ `), so an
   AI reads "yours sets `box_length = 320mm`; theirs sets `350mm`".
@@ -599,9 +608,20 @@ base and its error count), `try_resolution` tries one and
 written to the file, and recorded as a version by the agent when versions
 are on, only when the result checks with no errors (an agent's change
 never reaches the main line unchecked), the project's merge policy is not
-`off`, and the file still holds the text it was resolved from (so nothing
-written meanwhile is lost; the window keeps unsaved changes over a file
-changed on disk). A conflict in a suggestion is written to the
+`off`, and the file still holds the text it was resolved from. With other
+conflicts left, every one of them is still an `error[conflict]`, so the
+project can't check clean until the last is settled: instead, each side
+of the conflicts left (`check_sides` over the resolved text) must have no
+more errors than it had before, and the reply says how many are left.
+The file is written through the one writer (`editing::write_all` with
+`DiskWriter`), which writes only over the text the resolution was made
+from, so nothing saved meanwhile is lost. The window can't yet say that
+it holds the file with unsaved changes: a window that does keeps its own
+text (it keeps unsaved changes over a file changed on disk), and its next
+save writes that text, markers and all, until the window reports its
+unsaved buffers to the AI tools. If the file is written but can't be
+recorded as a version, the reply says so rather than failing, so the
+agent doesn't settle the conflict again. A conflict in a suggestion is written to the
 suggestion whatever is left, since the suggestion is checked again before
 it can be applied; the tool reports any problems that remain.
 

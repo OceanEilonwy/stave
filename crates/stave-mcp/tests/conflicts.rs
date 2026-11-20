@@ -309,6 +309,12 @@ async fn resolve_in_a_suggestion_writes_the_suggestion() {
     assert!(!is_error(&listed), "{}", text(&listed));
     let conflicts = structured(&listed)["conflicts"].as_array().unwrap().clone();
     assert_eq!(conflicts.len(), 1, "{}", text(&listed));
+    // The words name where each side came from, not jj's revision labels.
+    assert!(
+        !text(&listed).contains("rebased revision"),
+        "{}",
+        text(&listed)
+    );
     let origins: Vec<String> = conflicts[0]["sides"]
         .as_array()
         .unwrap()
@@ -355,4 +361,100 @@ async fn resolve_in_a_suggestion_writes_the_suggestion() {
         std::fs::read_to_string(folder.join("box.stave")).unwrap(),
         before
     );
+}
+
+/// Turns the line of `text` starting `param {name}` into a clash whose
+/// sides set `yours` and `theirs`, keeping its `within` range.
+fn clash_over(text: &str, name: &str, yours: &str, theirs: &str) -> String {
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(&format!("param {name} ")))
+        .unwrap()
+        .to_owned();
+    let within = line[line.find(" within").unwrap()..].to_owned();
+    text.replacen(
+        &line,
+        &format!(
+            "<<<<<<< conflict\n\
+             +++++++ yours\n\
+             param {name} = {yours}{within}\n\
+             ------- before\n\
+             {line}\n\
+             +++++++ theirs\n\
+             param {name} = {theirs}{within}\n\
+             >>>>>>> conflict ends"
+        ),
+        1,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resolve_one_of_two_clashes_writes_and_leaves_the_other() {
+    let folder = example_copy("box", "resolve_one_of_two_clashes");
+    let path = folder.join("box.stave");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let conflicted = clash_over(
+        &clash_over(&original, "box_length", "320mm", "350mm"),
+        "box_depth",
+        "210mm",
+        "220mm",
+    );
+    std::fs::write(&path, &conflicted).unwrap();
+    let connection = connect(options("resolve_one_of_two_clashes")).await;
+    open(&connection, &folder).await;
+
+    // A resolution that breaks every way of settling the other clash is
+    // refused, and nothing is written.
+    let broken = connection
+        .call(
+            "resolve_conflict",
+            json!({
+                "file": "box.stave",
+                "conflict": 1,
+                "resolution": { "text": "param box_length = 500mm within 200mm..450mm\n" },
+            }),
+        )
+        .await;
+    assert!(is_error(&broken), "{}", text(&broken));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), conflicted);
+
+    // Settling the first clash is written, though the second is left.
+    let result = connection
+        .call(
+            "resolve_conflict",
+            json!({ "file": "box.stave", "conflict": 1, "resolution": { "keep": 1 } }),
+        )
+        .await;
+    assert!(!is_error(&result), "{}", text(&result));
+    assert_eq!(structured(&result)["conflicts_left_in_project"], json!(1));
+    assert!(
+        text(&result).contains("still have 1 clash"),
+        "{}",
+        text(&result)
+    );
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("param box_length = 320mm within"));
+    assert_eq!(stave_lang::conflict::find_conflicts(&written).len(), 1);
+
+    let listed = connection.call("list_conflicts", json!({})).await;
+    let conflicts = structured(&listed)["conflicts"].as_array().unwrap().clone();
+    assert_eq!(conflicts.len(), 1, "{}", text(&listed));
+    assert!(
+        conflicts[0]["base"]
+            .as_str()
+            .unwrap()
+            .contains("param box_depth")
+    );
+
+    // And the second can then be settled too.
+    let last = connection
+        .call(
+            "resolve_conflict",
+            json!({ "file": "box.stave", "conflict": 1, "resolution": { "keep": 2 } }),
+        )
+        .await;
+    assert!(!is_error(&last), "{}", text(&last));
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("param box_depth = 220mm within"));
+    assert!(stave_lang::conflict::find_conflicts(&written).is_empty());
 }

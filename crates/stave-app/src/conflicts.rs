@@ -4,7 +4,7 @@
 //! base, and a resolution tried on a scratch copy before it is written.
 //!
 //! ```text
-//! file text ──find_conflicts──▶ FileConflict { lines, actions: Keep this side, … }
+//! file text ──find_conflicts──▶ FileConflict { lines, actions: Keep yours, … }
 //! project   ──SideFiles(k)───▶ open_with ──▶ side k's problems
 //! resolve   ──Overlay────────▶ open_with ──▶ Tried { text, problems }
 //! ```
@@ -16,7 +16,9 @@ use std::io;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
-use stave_lang::conflict::{self, Conflict, Resolution, ResolveError, find_conflicts};
+use stave_lang::conflict::{
+    self, Conflict, ConflictSide, Resolution, ResolveError, find_conflicts,
+};
 use stave_lang::patch::{TextEdit, changed_line_runs};
 use stave_modules::{FileSource, LoadError};
 
@@ -41,7 +43,8 @@ pub struct FileConflict {
 /// A way to settle one conflict, worded for the window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictAction {
-    /// The text on its button: "Keep this side", "Keep both".
+    /// The text on its button, naming the side it keeps: "Keep yours",
+    /// "Keep the green side", "Keep both" (see [`actions`]).
     pub label: String,
     /// What it does.
     pub resolution: Resolution,
@@ -67,28 +70,60 @@ pub fn conflicts(text: &str) -> Vec<FileConflict> {
 /// The ways to settle conflict number `index` of `text` (from 0): keep
 /// each side, then keep both when the sides are whole items with
 /// different names. Empty when there is no such conflict.
+///
+/// Every link sits in one row above the conflict, so each "Keep" names
+/// the side it keeps: by the label Stave's versions write ("Keep yours"
+/// for the window's saved work, "Keep theirs" for the change applied
+/// meanwhile, "Keep the suggestion's" and "Keep the project's" for a
+/// suggestion moved onto main), else, in a two-sided conflict, by the
+/// tint the window gives it (the first side green, the other blue), else
+/// by its number ("Keep side 3").
 pub fn actions(text: &str, index: usize) -> Vec<ConflictAction> {
+    let found = find_conflicts(text);
+    let sides = found
+        .get(index)
+        .map_or(&[][..], |conflict| conflict.sides.as_slice());
     conflict::fixes(text, index)
         .into_iter()
         .map(|fix| ConflictAction {
-            label: action_label(&fix.resolution),
+            label: action_label(sides, &fix.resolution),
             resolution: fix.resolution,
             edit: fix.edit,
         })
         .collect()
 }
 
-/// The words for a resolution on a button.
-fn action_label(resolution: &Resolution) -> String {
+/// The words for a resolution on a button, `sides` being the conflict's.
+fn action_label(sides: &[ConflictSide], resolution: &Resolution) -> String {
     match resolution {
-        Resolution::Keep(0) => tr("Keep this side"),
-        Resolution::Keep(1) => tr("Keep the other side"),
-        Resolution::Keep(side) => fill_in(
+        Resolution::Keep(side) => keep_label(sides, *side),
+        Resolution::KeepBoth => tr("Keep both"),
+        Resolution::Text(_) => tr("Use this text"),
+    }
+}
+
+/// "Keep …" for side number `side` (from 0) of a conflict with `sides`.
+fn keep_label(sides: &[ConflictSide], side: usize) -> String {
+    let label = sides.get(side).map_or("", |found| found.label.as_str());
+    if label == "yours" {
+        return tr("Keep yours");
+    }
+    if label == "theirs" {
+        return tr("Keep theirs");
+    }
+    if label.ends_with("(rebased revision)") {
+        return tr("Keep the suggestion's");
+    }
+    if label.ends_with("(rebase destination)") {
+        return tr("Keep the project's");
+    }
+    match (sides.len(), side) {
+        (2, 0) => tr("Keep the green side"),
+        (2, 1) => tr("Keep the blue side"),
+        _ => fill_in(
             &tr("Keep side {number}"),
             &[("number", &side.saturating_add(1))],
         ),
-        Resolution::KeepBoth => tr("Keep both"),
-        Resolution::Text(_) => tr("Use this text"),
     }
 }
 
@@ -197,17 +232,29 @@ pub fn check_sides(folder: &Path, files: &dyn FileSource) -> Result<Vec<Opened>,
         .collect()
 }
 
-/// How many sides the conflict with the most sides has, in any file the
-/// project reads; 0 without conflicts.
+/// How many sides the conflict with the most sides has, in any of the
+/// project's own `.stave` files; 0 without conflicts. Reads the files'
+/// text only: the project is opened once per side afterwards.
 fn side_count(folder: &Path, files: &dyn FileSource) -> Result<usize, LoadError> {
-    let opened = open_with(folder, files)?;
-    Ok(opened
-        .sources
-        .files()
-        .flat_map(|(_, file)| find_conflicts(file.text()))
-        .map(|found| found.sides.len())
-        .max()
-        .unwrap_or(0))
+    let paths = files
+        .list_stave_files(folder)
+        .map_err(|source| LoadError::Unreadable {
+            folder: folder.to_owned(),
+            source,
+        })?;
+    let mut most = 0;
+    for path in paths {
+        let text = files
+            .read(&path)
+            .map_err(|source| LoadError::UnreadableFile {
+                path: path.clone(),
+                source,
+            })?;
+        for found in find_conflicts(&text) {
+            most = most.max(found.sides.len());
+        }
+    }
+    Ok(most)
 }
 
 /// A resolution tried on a scratch copy.
@@ -258,23 +305,26 @@ pub fn try_resolution(
         source,
     })?;
     let resolved = conflict::resolve(&text, index, resolution)?;
-    let overlay = Replaced {
-        files,
-        path,
-        text: &resolved,
-    };
-    let opened = open_with(folder, &overlay)?;
+    let opened = open_with(folder, &Replaced::new(files, path, &resolved))?;
     Ok(Tried {
         text: resolved,
         opened,
     })
 }
 
-/// A project's files with one file's text replaced.
-struct Replaced<'a> {
+/// A project's files with one file's text replaced: the project as a
+/// tried resolution would leave it, for [`check_sides`] or [`open_with`].
+pub struct Replaced<'a> {
     files: &'a dyn FileSource,
     path: &'a Path,
     text: &'a str,
+}
+
+impl<'a> Replaced<'a> {
+    /// `files` with the file at `path` reading `text`.
+    pub fn new(files: &'a dyn FileSource, path: &'a Path, text: &'a str) -> Self {
+        Self { files, path, text }
+    }
 }
 
 impl FileSource for Replaced<'_> {

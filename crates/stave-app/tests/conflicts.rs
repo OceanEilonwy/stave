@@ -51,7 +51,7 @@ fn conflict_fixes_keep_each_side() {
         .map(|action| action.label.as_str())
         .collect();
     // Both sides declare `box_length`, so keeping both is not offered.
-    assert_eq!(labels, ["Keep this side", "Keep the other side"]);
+    assert_eq!(labels, ["Keep yours", "Keep theirs"]);
     for (side, value) in [(0, "320mm"), (1, "350mm")] {
         let action = &conflict.actions[side];
         assert_eq!(action.resolution, Resolution::Keep(side));
@@ -78,9 +78,28 @@ fn keep_both_is_offered_for_whole_items_with_different_names() {
         .iter()
         .map(|action| action.label.as_str())
         .collect();
+    assert_eq!(labels, ["Keep yours", "Keep theirs", "Keep both"]);
+}
+
+#[test]
+fn each_keep_names_its_side() {
+    let labels = |text: &str| -> Vec<String> {
+        conflicts::conflicts(text)[0]
+            .actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect()
+    };
+    // No labels Stave knows: two sides by their tint, more by number.
+    let two = "stave 1\n<<<<<<<\nlet a = 1\n=======\nlet a = 2\n>>>>>>>\n";
+    assert_eq!(labels(two), ["Keep the green side", "Keep the blue side"]);
+    let three = "stave 1\n<<<<<<< conflict 1 of 1\n+++++++ one\nlet a = 1\n------- before\n+++++++ two\nlet a = 2\n------- before\n+++++++ three\nlet a = 3\n>>>>>>> conflict 1 of 1 ends\n";
+    assert_eq!(labels(three), ["Keep side 1", "Keep side 2", "Keep side 3"]);
+    // A suggestion moved onto main: jj's labels.
+    let rebased = "stave 1\n<<<<<<< conflict 1 of 1\n+++++++ abc \"Longer\" (rebased revision)\nlet a = 1\n------- before\n+++++++ def \"Saved\" (rebase destination)\nlet a = 2\n>>>>>>> conflict 1 of 1 ends\n";
     assert_eq!(
-        labels,
-        ["Keep this side", "Keep the other side", "Keep both"]
+        labels(rebased),
+        ["Keep the suggestion's", "Keep the project's"]
     );
 }
 

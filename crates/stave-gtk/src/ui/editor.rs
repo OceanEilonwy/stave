@@ -25,7 +25,7 @@
 //!
 //! Lenses and the peek are overlay children placed in the room a tag's
 //! `pixels-above-lines` / `pixels-below-lines` makes for them, and so are
-//! the links above a conflict ("Keep this side · Keep both"), which
+//! the links above a conflict ("Keep yours · Keep both"), which
 //! [`Editor::paint`] puts there while it tints the conflict's sides. A
 //! conflict link is the one widget here that changes something itself:
 //! it edits the buffer, as typing does, and the page hears the change as
@@ -1229,7 +1229,7 @@ pub struct Editor {
     conflict_rows_used: usize,
 }
 
-/// The links above one conflict: "Keep this side · Keep the other side ·
+/// The links above one conflict: "Keep yours · Keep theirs ·
 /// Keep both".
 struct ConflictRow {
     root: gtk::Box,
@@ -2210,10 +2210,7 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect();
-        assert_eq!(
-            labels,
-            ["Keep this side", "Keep the other side", "Keep both"]
-        );
+        assert_eq!(labels, ["Keep yours", "Keep theirs", "Keep both"]);
         let tagged = |line: i32, name: &str| {
             buffer.iter_at_line(line).is_some_and(|iter| {
                 iter.tags()
@@ -2227,7 +2224,7 @@ mod tests {
         assert!(!tagged(0, "conflict-marker"));
 
         // A link from before the conflict changed settles nothing.
-        let stale = link(row, "Keep this side");
+        let stale = link(row, "Keep yours");
         if let Some(mut at) = buffer.iter_at_line(4) {
             buffer.insert(&mut at, "let c = 3\n");
         }

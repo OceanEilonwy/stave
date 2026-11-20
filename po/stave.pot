@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-20 12:25+0800\n"
+"POT-Creation-Date: 2026-11-20 12:37+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -134,25 +134,41 @@ msgstr ""
 msgid "Standard · {module}"
 msgstr ""
 
-#: crates/stave-app/src/conflicts.rs:84
-msgid "Keep this side"
-msgstr ""
-
-#: crates/stave-app/src/conflicts.rs:85
-msgid "Keep the other side"
-msgstr ""
-
-#: crates/stave-app/src/conflicts.rs:87
-#, rust-format
-msgid "Keep side {number}"
-msgstr ""
-
-#: crates/stave-app/src/conflicts.rs:90
+#: crates/stave-app/src/conflicts.rs:100
 msgid "Keep both"
 msgstr ""
 
-#: crates/stave-app/src/conflicts.rs:91
+#: crates/stave-app/src/conflicts.rs:101
 msgid "Use this text"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:109
+msgid "Keep yours"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:112
+msgid "Keep theirs"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:115
+msgid "Keep the suggestion's"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:118
+msgid "Keep the project's"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:121
+msgid "Keep the green side"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:122
+msgid "Keep the blue side"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:124
+#, rust-format
+msgid "Keep side {number}"
 msgstr ""
 
 #: crates/stave-app/src/edit.rs:65

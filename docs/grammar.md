@@ -343,10 +343,14 @@ marker_char     = "<" | "|" | "=" | "%" | "+" | "-" | "\" | ">" ;
 - **Choosing.** A conflict is resolved as a text edit, not a patch (it is
   a layer 1 problem; see [Fixes](#fixes)): keep one side, keep both (the
   sides one after the other, in order), or write new text in its place.
-  Editors offer "Keep this side" (the first side), "Keep the other side"
-  (the second; a third side and on is "Keep side 3"), and "Keep both" only
-  when every side is whole items, at least one, and no two sides declare
-  the same name. Deleting the marker lines by hand resolves it too.
+  The language's fixes are "Keep this side" (the first side), "Keep the
+  other side" (the second; a third side and on is "Keep side 3"), and
+  "Keep both" only when every side is whole items, at least one, and no
+  two sides declare the same name. An editor that shows every link in one
+  row may name each side instead, by its marker label or its colour
+  (Stave's window says "Keep yours", "Keep theirs", "Keep the green
+  side"; `docs/editing.md`, "Conflicts"). Deleting the marker lines by
+  hand resolves it too.
 - **Formatting.** The formatter leaves a file with conflicts as it is, as
   it leaves any file with a syntax error.
 
