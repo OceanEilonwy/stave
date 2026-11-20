@@ -9,7 +9,12 @@
 # Needs the wasm32-unknown-unknown target and the wasm-bindgen CLI of the
 # same version as the wasm-bindgen crate in Cargo.lock. It installs
 # nothing: when either is missing it says how to get it and stops.
-# wasm-opt (binaryen) is used to shrink the module when it is installed.
+#
+# wasm-opt (binaryen) should be on PATH too: it shrinks the page from about
+# 3.6 MB to about 3.2 MB. Without it the build still works, with a warning.
+# The WASM is built with the `viewer` profile (Cargo.toml: size-tuned,
+# LTO) and wasm-bindgen drops its name section; the page assembler is
+# built with `--release`.
 #
 # CARGO_TARGET_DIR is honoured for the build; the page always goes to
 # target/viewer/ in the repository.
@@ -49,22 +54,34 @@ if command -v rustup >/dev/null 2>&1 &&
     exit 1
 fi
 
-cargo build --quiet --release -p stave-web --lib --target wasm32-unknown-unknown
+cargo build --quiet --profile viewer -p stave-web --lib --target wasm32-unknown-unknown
 cargo build --quiet --release -p stave-web --bin stave-viewer-page
 
 rm -rf "$work"
 mkdir -p "$work" "$out_dir"
-wasm-bindgen --target no-modules --no-typescript --out-dir "$work" \
-    "$target_dir/wasm32-unknown-unknown/release/stave_web.wasm"
+wasm-bindgen --target no-modules --no-typescript --remove-name-section \
+    --remove-producers-section --out-dir "$work" \
+    "$target_dir/wasm32-unknown-unknown/viewer/stave_web.wasm"
 
 module=$work/stave_web_bg.wasm
+# The features enabled are the ones rustc's wasm32 target emits and the
+# module uses (wasm-bindgen's externref table needs reference types).
+# wasm-opt also reads them from the module's target_features section;
+# naming them here keeps it from rejecting or lowering them if that
+# section is ever missing. A failing wasm-opt stops the build.
 if command -v wasm-opt >/dev/null 2>&1; then
-    wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
+    wasm-opt -Oz \
+        --enable-bulk-memory --enable-nontrapping-float-to-int \
         --enable-sign-ext --enable-mutable-globals \
+        --enable-reference-types --enable-multivalue \
         -o "$work/stave_web_opt.wasm" "$module"
     module=$work/stave_web_opt.wasm
 else
-    echo "build-viewer: wasm-opt not found; the page is larger than it needs to be." >&2
+    echo "build-viewer: WARNING: wasm-opt (binaryen) is not on PATH, so the" >&2
+    echo "  module is not optimised and the page is about 0.4 MB larger." >&2
+    echo "  Install binaryen (Arch: pacman -S binaryen; Debian/Ubuntu: apt" >&2
+    echo "  install binaryen; or a release from" >&2
+    echo "  https://github.com/WebAssembly/binaryen/releases) and run again." >&2
 fi
 
 "$target_dir/release/stave-viewer-page" "$work/stave_web.js" "$module" \

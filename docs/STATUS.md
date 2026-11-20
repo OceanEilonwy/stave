@@ -516,7 +516,9 @@ guide, and the design is
   running the pipeline over the project's text; rotate, zoom, pick, open,
   pull apart and a suggestion as a ghost. It is the MCP App page in
   Claude Desktop and a page on `127.0.0.1` with a per-session token for
-  the other apps. Read only.
+  the other apps. Read only. The page is one self-contained file of
+  about 3.2 MB (the `viewer` Cargo profile, then binaryen's `wasm-opt
+  -Oz`; about 3.6 MB when `wasm-opt` isn't installed, 6.5 MB before).
 
 ## Not done yet
 
