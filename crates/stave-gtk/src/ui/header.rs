@@ -13,20 +13,19 @@
 //! It is a relm4 component, [`HeaderComponent`]: its model (what the
 //! session last said) is the only state, only its update changes it, and
 //! its widgets' handlers only send [`HeaderInput`] messages. [`Header`]
-//! keeps the older API in front of it until the window moves to relm4
-//! too. The window still reaches into several of the bar's widgets (the
-//! breakpoint swaps the menus, the dock holds the
-//! scene menu, the switcher and the scene list are connected directly),
-//! so [`Header`] makes them and hands them to the component at launch.
+//! owns its controller and keeps the setters as plain methods; people's
+//! choices go to the owner as the message it chose when it made the bar.
+//! The window still reaches into several of the bar's widgets (the
+//! breakpoint swaps the menus, the dock holds the scene menu), so
+//! [`Header`] makes them and hands them to the component at launch.
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 use stave_app::session::{Activity, Build, Pill, Tone, View};
 
 use super::icons::{self, PathIcon};
-use super::relm4_shim::Bridge;
 
 /// `true` for a view that is made: one the switcher and its shortcut may
 /// lead to. A view that isn't made stays out of reach rather than show a
@@ -623,14 +622,20 @@ pub struct Header {
     /// The pill's icon, for tests to read its shape.
     #[cfg(test)]
     pill_icon: PathIcon,
-    bridge: Bridge<HeaderComponent>,
+    controller: Controller<HeaderComponent>,
 }
 
 impl Header {
     /// A title bar for a project in `folder_label` (shown as its name
     /// until the design is loaded), its menu bar made of `menus`: one
-    /// submenu each for Project, Edit, View and Help.
-    pub fn new(folder_label: &str, menus: &gio::Menu) -> Header {
+    /// submenu each for Project, Edit, View and Help. People's choices go
+    /// to `owner` as `message(output)`.
+    pub fn new<M: 'static>(
+        folder_label: &str,
+        menus: &gio::Menu,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(HeaderOutput) -> M + 'static,
+    ) -> Header {
         let parts = HeaderParts::new(folder_label, menus);
         let menu_bar = parts.menu_bar.clone();
         let menu_button = parts.menu_button.clone();
@@ -641,9 +646,11 @@ impl Header {
         let scenes = parts.scenes.clone();
         #[cfg(test)]
         let pill_icon = parts.pill_icon.clone();
-        let bridge = Bridge::<HeaderComponent>::launch(parts);
+        let controller = HeaderComponent::builder()
+            .launch(parts)
+            .forward(owner, message);
         Header {
-            bar: bridge.widget().clone(),
+            bar: controller.widget().clone(),
             menu_bar,
             menu_button,
             title,
@@ -653,18 +660,18 @@ impl Header {
             scenes,
             #[cfg(test)]
             pill_icon,
-            bridge,
+            controller,
         }
     }
 
-    /// Calls `callback` with each of the header's outputs.
-    pub fn connect(&self, callback: impl Fn(HeaderOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the bar has shut down there is nobody to tell.
+    fn send(&self, input: HeaderInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// The project's name, and its folder under it and in the tooltip.
     pub fn show_title(&self, title: &str, folder: &str) {
-        self.bridge.send(HeaderInput::ShowTitle {
+        self.send(HeaderInput::ShowTitle {
             title: title.to_owned(),
             folder: folder.to_owned(),
         });
@@ -672,7 +679,7 @@ impl Header {
 
     /// The view showing.
     pub fn show_view(&self, view: View) {
-        self.bridge.send(HeaderInput::ShowView(view));
+        self.send(HeaderInput::ShowView(view));
     }
 
     /// The switcher's words, hidden when the window is narrow.
@@ -682,7 +689,7 @@ impl Header {
 
     /// The scenes to choose from (titles) and the one showing.
     pub fn show_scenes(&self, titles: &[String], current: usize) {
-        self.bridge.send(HeaderInput::ShowScenes(ScenesShown {
+        self.send(HeaderInput::ShowScenes(ScenesShown {
             titles: titles.to_vec(),
             current,
         }));
@@ -692,7 +699,7 @@ impl Header {
     /// there are problems to step through, and the status line (what the
     /// last check found) in its tooltip.
     pub fn show_pill(&self, pill: &Pill, problems: usize, line: &str) {
-        self.bridge.send(HeaderInput::ShowPill(PillShown {
+        self.send(HeaderInput::ShowPill(PillShown {
             pill: pill.clone(),
             problems,
             line: line.to_owned(),
@@ -702,7 +709,7 @@ impl Header {
     /// The build button: building (spinning) or ready, with the tooltip
     /// the session gives (what it does, or why there is nothing to build).
     pub fn show_build(&self, build: Build, tooltip: &str) {
-        self.bridge.send(HeaderInput::ShowBuild {
+        self.send(HeaderInput::ShowBuild {
             build,
             tooltip: tooltip.to_owned(),
         });
@@ -711,7 +718,7 @@ impl Header {
     /// The component's model, as of the last message it handled.
     #[cfg(test)]
     fn model(&self) -> std::cell::Ref<'_, HeaderComponent> {
-        self.bridge.model()
+        self.controller.model()
     }
 }
 
@@ -721,10 +728,22 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
 
+    /// A bar whose outputs go to `owner`.
+    fn header_for(owner: &relm4::Sender<HeaderOutput>) -> Header {
+        Header::new(
+            "hall_table",
+            &gio::Menu::new(),
+            owner,
+            std::convert::identity,
+        )
+    }
+
+    /// A bar whose outputs nobody hears.
     fn header() -> Header {
-        Header::new("hall_table", &gio::Menu::new())
+        let (owner, _) = recorder();
+        header_for(&owner)
     }
 
     #[test]
@@ -733,20 +752,21 @@ mod tests {
     }
 
     /// Dropping the header shuts its component down when the main loop
-    /// next runs: the bar, the model (and its runtime) and the callback
-    /// are all freed.
+    /// next runs: the bar, the model (and its runtime) and the message
+    /// maker are all freed.
     fn header_is_freed() {
-        let header = header();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        header.connect(move |_| {
+        let (owner, _) = recorder();
+        let header = Header::new("hall_table", &gio::Menu::new(), &owner, move |output| {
             let _ = &held;
+            output
         });
         let callback = Rc::downgrade(&token);
         drop(token);
         let bar = header.bar.downgrade();
         let switcher = header.switcher.downgrade();
-        let input = header.bridge.sender().clone();
+        let input = header.controller.sender().clone();
         settle();
         assert!(bar.upgrade().is_some(), "the bar lives while held");
         drop(header);
@@ -757,7 +777,7 @@ mod tests {
             input.send(HeaderInput::ShowView(View::Design)).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the message maker is freed");
     }
 
     #[test]
@@ -766,10 +786,8 @@ mod tests {
     }
 
     fn setters_do_not_call_back() {
-        let header = header();
-        let heard: Rc<RefCell<Vec<HeaderOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        header.connect(move |output| log.borrow_mut().push(output));
+        let (owner, heard) = recorder();
+        let header = header_for(&owner);
         header.show_title("Hall table", "~/Projects/hall_table");
         header.show_view(View::CutList);
         header.show_scenes(&["Rest".to_owned(), "Open".to_owned()], 1);
@@ -807,15 +825,16 @@ mod tests {
     }
 
     /// People choosing a view only queues a message; its output reaches
-    /// the callback after the update has returned (reading the model
-    /// there would panic if it had not), and a choice made from inside
-    /// the callback is queued too.
+    /// the owner after the update has returned (reading the model there
+    /// would panic if it had not), and a choice made while the owner
+    /// handles it is queued too.
     fn choices_are_queued() {
-        let header = Rc::new(header());
+        let (owner, outputs) = relm4::channel();
+        let header = Rc::new(header_for(&owner));
         let heard: Rc<RefCell<Vec<(HeaderOutput, View)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&header);
-        header.connect(move |output| {
+        handle_each(outputs, move |output| {
             let Some(header) = weak.upgrade() else {
                 return;
             };

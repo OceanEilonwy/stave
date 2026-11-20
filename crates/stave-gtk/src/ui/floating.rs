@@ -14,17 +14,17 @@
 //! asks where each control goes while GTK lays it out, which no message
 //! can answer, so after every update the overlay's handler is given a
 //! copy of what it needs ([`Placer`]), as the outlines' draw function is.
-//! [`Floats`] keeps the older API in front of it until the window moves
-//! to relm4 too.
+//! [`Floats`] owns its controller; its outputs go to the owner's input,
+//! forwarded when it is made, and the workbench's moves come back to it
+//! as [`FloatsInput::Refresh`] (the spots have one keeper, the
+//! workbench, and the floats hold a copy).
 
 use stave_app::i18n::tr;
 
+use super::view_layout::{self, Floating, Group, Rect, Spot, Spots};
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
-
-use super::relm4_shim::Bridge;
-use super::view_layout::{self, Floating, Group, Rect, Spot, Spots};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 /// The floating controls, measured by GTK.
 #[derive(Clone)]
@@ -465,42 +465,46 @@ fn make_draggable(
 
 /// The controls floating on the view: it owns the [`FloatsComponent`]
 /// (dropping it shuts the component down and takes its handlers off the
-/// view) and passes its [`FloatsOutput`]s to the callback connected with
-/// [`Floats::connect_outputs`].
+/// view); its [`FloatsOutput`]s go to the owner's input.
 pub struct Floats {
-    bridge: Bridge<FloatsComponent>,
+    controller: Controller<FloatsComponent>,
 }
 
 impl Floats {
     /// Floats the controls on the 3D view, each where `view_layout` puts
     /// it for the view's size, what is showing and the groups' `spots`,
-    /// so none covers another. It tells its owner to lay every group out
-    /// for its spot ([`FloatsOutput::Orient`]) as soon as one listens.
-    pub fn new(
+    /// so none covers another. Its outputs (a group to lay flat or
+    /// upright, a group people docked) go to `owner` as `message(output)`,
+    /// starting with every group laid out for its spot
+    /// ([`FloatsOutput::Orient`]) when the main loop next runs.
+    pub fn new<M: 'static>(
         figure: &gtk::Overlay,
         floating: Vec<(Floating, gtk::Widget)>,
         spots: Spots,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(FloatsOutput) -> M + 'static,
     ) -> Floats {
-        let bridge = Bridge::<FloatsComponent>::launch(FloatsInit {
-            figure: figure.clone(),
-            floating,
-            spots,
-        });
-        Floats { bridge }
-    }
-
-    /// Calls `callback` with each output from now on (a group to lay flat
-    /// or upright, a group people docked), instead of the one connected
-    /// before.
-    pub fn connect_outputs(&self, callback: impl Fn(FloatsOutput) + 'static) {
-        self.bridge.connect(callback);
+        let controller = FloatsComponent::builder()
+            .launch(FloatsInit {
+                figure: figure.clone(),
+                floating,
+                spots,
+            })
+            .forward(owner, message);
+        Floats { controller }
     }
 
     /// Lays every group out for its spot and places them again (after a
     /// layout is applied or reset, or a group docked): the workbench keeps
     /// the spots and says where they are.
     pub fn refresh(&self, spots: Spots) {
-        self.bridge.send(FloatsInput::Refresh(spots));
+        self.send(FloatsInput::Refresh(spots));
+    }
+
+    /// Queues `input`; once the floats have shut down there is nobody to
+    /// tell.
+    fn send(&self, input: FloatsInput) {
+        let _ = self.controller.sender().send(input);
     }
 }
 
@@ -578,20 +582,38 @@ mod tests {
     use std::rc::{Rc, Weak};
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
     use crate::ui::workbench::{Layout, PanelId, Remember, Workbench, WorkbenchOutput};
 
     /// A workbench keeping the tool groups' spots, as the window's does,
-    /// every panel a label; nothing is written.
-    fn workbench() -> Workbench {
+    /// every panel a label; nothing is written. Its outputs go to `owner`.
+    fn workbench_for(owner: &relm4::Sender<WorkbenchOutput>) -> Workbench {
         let contents = PanelId::ALL
             .into_iter()
             .map(|id| (id, gtk::Label::new(Some(&id.title())).upcast()))
             .collect();
-        let Ok(workbench) = Workbench::new(contents, Remember::Nothing) else {
+        let Ok(workbench) =
+            Workbench::new(contents, Remember::Nothing, owner, std::convert::identity)
+        else {
             panic!("the dock is built");
         };
         workbench
+    }
+
+    /// A workbench whose outputs nobody hears.
+    fn workbench() -> Workbench {
+        let (owner, _) = recorder();
+        workbench_for(&owner)
+    }
+
+    /// Floats on `figure` whose outputs go to `owner`.
+    fn floats_for(
+        figure: &gtk::Overlay,
+        floating: Vec<(Floating, gtk::Widget)>,
+        spots: Spots,
+        owner: &relm4::Sender<FloatsOutput>,
+    ) -> Floats {
+        Floats::new(figure, floating, spots, owner, std::convert::identity)
     }
 
     /// A blank control of this size.
@@ -653,22 +675,23 @@ mod tests {
         let laid_by = laid.clone();
         let docked_by = docked.clone();
         let workbench = workbench();
-        let floats = Floats::new(&figure, controls(), workbench.tool_spots());
-        floats.connect_outputs(move |output| match output {
+        let (owner, outputs) = relm4::channel();
+        let floats = floats_for(&figure, controls(), workbench.tool_spots(), &owner);
+        handle_each(outputs, move |output| match output {
             FloatsOutput::Orient { group, orientation } => {
                 laid_by.borrow_mut().push((group, orientation));
             }
             FloatsOutput::Docked { group, spot } => docked_by.set(Some((group, spot))),
         });
         lay_out(&window);
-        floats.bridge.send(FloatsInput::Held {
+        floats.send(FloatsInput::Held {
             group: Group::Camera,
             x: 20.0,
             y: 20.0,
         });
         settle();
         let (targets, from) = {
-            let model = floats.bridge.model();
+            let model = floats.controller.model();
             let drag = model.drag.as_ref().expect("the drag started");
             let targets: Vec<Spot> = drag.targets.iter().map(|(spot, _)| *spot).collect();
             (targets, drag.from)
@@ -680,21 +703,21 @@ mod tests {
         );
         // Down to the bottom left corner.
         let pointer = (60, figure.height() - 60);
-        floats.bridge.send(FloatsInput::Moved {
+        floats.send(FloatsInput::Moved {
             x: f64::from(pointer.0 - from.x - 20),
             y: f64::from(pointer.1 - from.y - 20),
         });
-        floats.bridge.send(FloatsInput::LetGo);
+        floats.send(FloatsInput::LetGo);
         settle();
         assert_eq!(docked.get(), Some((Group::Camera, Spot::BottomLeft)));
-        let spots = floats.bridge.model().spots.clone();
+        let spots = floats.controller.model().spots.clone();
         assert_eq!(spots.spot_of(Group::Camera), Spot::BottomLeft);
         assert_eq!(spots.spot_of(Group::Moves), Spot::Right);
         assert!(
             laid.borrow()
                 .contains(&(Group::Camera, gtk::Orientation::Horizontal))
         );
-        assert!(floats.bridge.model().drag.is_none());
+        assert!(floats.controller.model().drag.is_none());
         window.destroy();
     }
 
@@ -731,15 +754,22 @@ mod tests {
         let token = Rc::new(());
         let held = Rc::clone(&token);
         let workbench = workbench();
-        let floats = Floats::new(&figure, floating, workbench.tool_spots());
-        floats.connect_outputs(move |_| {
-            let _ = &held;
-        });
+        let (owner, _) = recorder();
+        let floats = Floats::new(
+            &figure,
+            floating,
+            workbench.tool_spots(),
+            &owner,
+            move |output| {
+                let _ = &held;
+                output
+            },
+        );
         let callbacks = Rc::downgrade(&token);
         drop(token);
         lay_out(&window);
-        let outlines = floats.bridge.widget().downgrade();
-        let input = floats.bridge.sender().clone();
+        let outlines = floats.controller.widget().downgrade();
+        let input = floats.controller.sender().clone();
         assert!(matches!(gestures_of(&camera), (Some(_), Some(_))));
         drop(floats);
         settle();
@@ -763,11 +793,11 @@ mod tests {
 
     /// The old floats ran a drag's steps inside GTK's signals, borrowing
     /// the drag as they went. Now the gestures only queue messages: the
-    /// drag moves only when the main loop runs. The dock callback runs
-    /// after the update that docked the group (reading the model there
-    /// would panic if it had not), and a gesture's signal fired from
-    /// inside it, a dock asked of the workbench there and the refresh the
-    /// workbench asks for after it, are queued too.
+    /// drag moves only when the main loop runs. The owner hears of the
+    /// dock after the update that docked the group (reading the model
+    /// there would panic if it had not), and a gesture's signal fired
+    /// while it handles that, a dock asked of the workbench there and the
+    /// refresh the workbench asks for after it, are queued too.
     fn signals_are_queued() {
         let (figure, window) = figure_in_a_window();
         let floating = controls();
@@ -783,17 +813,24 @@ mod tests {
         let inner_drag: Rc<RefCell<Option<gtk::GestureDrag>>> = Rc::default();
         let fire = Rc::clone(&inner_drag);
         // The workbench keeps the groups' spots, as the window's does.
-        let workbench = Rc::new(workbench());
+        let (workbench_owner, workbench_outputs) = relm4::channel();
+        let workbench = Rc::new(workbench_for(&workbench_owner));
         let layout = Rc::downgrade(&workbench);
-        let floats = Rc::new(Floats::new(&figure, floating, workbench.tool_spots()));
-        floats.connect_outputs(move |output| {
+        let (owner, outputs) = relm4::channel();
+        let floats = Rc::new(floats_for(
+            &figure,
+            floating,
+            workbench.tool_spots(),
+            &owner,
+        ));
+        handle_each(outputs, move |output| {
             let FloatsOutput::Docked { group, spot } = output else {
                 return;
             };
             let Some(floats) = find.borrow().upgrade() else {
                 return;
             };
-            let dragging = floats.bridge.model().drag.is_some();
+            let dragging = floats.controller.model().drag.is_some();
             // Docking in the workbench is queued; it tells the floats
             // to refresh once it has handled it.
             if let Some(workbench) = layout.upgrade() {
@@ -810,7 +847,7 @@ mod tests {
         // As the window wires them: a refresh asked for when the workbench
         // says the groups moved, itself queued.
         let refresher = Rc::downgrade(&floats);
-        workbench.connect_outputs(move |output| {
+        handle_each(workbench_outputs, move |output| {
             if let WorkbenchOutput::ToolsChanged(spots) = output
                 && let Some(floats) = refresher.upgrade()
             {
@@ -827,16 +864,24 @@ mod tests {
         // only queued.
         hold.emit_by_name::<()>("pressed", &[&20.0_f64, &20.0_f64]);
         assert!(
-            floats.bridge.model().drag.is_none(),
+            floats.controller.model().drag.is_none(),
             "the hold is only queued"
         );
         settle();
-        assert!(floats.bridge.model().drag.is_some(), "then the drag starts");
+        assert!(
+            floats.controller.model().drag.is_some(),
+            "then the drag starts"
+        );
         let far = (-2000.0_f64, 2000.0_f64);
         drag.emit_by_name::<()>("drag-update", &[&far.0, &far.1]);
         drag.emit_by_name::<()>("drag-end", &[&far.0, &far.1]);
         assert_eq!(
-            floats.bridge.model().drag.as_ref().map(|drag| drag.moved),
+            floats
+                .controller
+                .model()
+                .drag
+                .as_ref()
+                .map(|drag| drag.moved),
             Some((0.0, 0.0)),
             "the move is only queued"
         );
@@ -848,12 +893,12 @@ mod tests {
             "docked once, told after the update, the inner drag-end a no-op"
         );
         assert_eq!(
-            floats.bridge.model().spots.spot_of(Group::Camera),
+            floats.controller.model().spots.spot_of(Group::Camera),
             Spot::BottomLeft
         );
         assert_eq!(
             workbench.layout().tools,
-            floats.bridge.model().spots,
+            floats.controller.model().spots,
             "the workbench keeps where the group went"
         );
         window.destroy();
@@ -874,20 +919,21 @@ mod tests {
         layout.tools.dock(Group::Scene, Spot::Right);
         workbench.apply(layout);
         settle();
-        let laid: Rc<RefCell<Vec<(Group, gtk::Orientation)>>> = Rc::default();
-        let laid_by = Rc::clone(&laid);
-        let floats = Floats::new(&figure, controls(), workbench.tool_spots());
-        floats.connect_outputs(move |output| {
-            if let FloatsOutput::Orient { group, orientation } = output {
-                laid_by.borrow_mut().push((group, orientation));
-            }
-        });
+        let (owner, heard) = recorder();
+        let floats = floats_for(&figure, controls(), workbench.tool_spots(), &owner);
         settle();
-        let groups: Vec<Group> = laid.borrow().iter().map(|(group, _)| *group).collect();
+        let laid: Vec<(Group, gtk::Orientation)> = heard
+            .borrow()
+            .iter()
+            .filter_map(|output| match *output {
+                FloatsOutput::Orient { group, orientation } => Some((group, orientation)),
+                FloatsOutput::Docked { .. } => None,
+            })
+            .collect();
+        let groups: Vec<Group> = laid.iter().map(|(group, _)| *group).collect();
         assert_eq!(groups, Group::ALL.to_vec(), "every group, once");
         assert!(
-            laid.borrow()
-                .contains(&(Group::Scene, gtk::Orientation::Vertical)),
+            laid.contains(&(Group::Scene, gtk::Orientation::Vertical)),
             "the scene menu stands upright on the right edge"
         );
         drop(floats);
@@ -905,14 +951,21 @@ mod tests {
     /// keeps (and saves) the groups, never at an older copy.
     fn floats_follow_reset_then_dock() {
         let (figure, window) = figure_in_a_window();
-        let workbench = workbench();
+        let (workbench_owner, workbench_outputs) = relm4::channel();
+        let workbench = workbench_for(&workbench_owner);
         let mut layout = Layout::default();
         layout.tools.dock(Group::Scene, Spot::Right);
         workbench.apply(layout);
         settle();
-        let floats = Rc::new(Floats::new(&figure, controls(), workbench.tool_spots()));
+        let (owner, _) = recorder();
+        let floats = Rc::new(floats_for(
+            &figure,
+            controls(),
+            workbench.tool_spots(),
+            &owner,
+        ));
         let refresher = Rc::downgrade(&floats);
-        workbench.connect_outputs(move |output| {
+        handle_each(workbench_outputs, move |output| {
             if let WorkbenchOutput::ToolsChanged(spots) = output
                 && let Some(floats) = refresher.upgrade()
             {
@@ -926,7 +979,7 @@ mod tests {
         let mut expected = Spots::default();
         expected.dock(Group::Motion, Spot::TopLeft);
         assert_eq!(workbench.layout().tools, expected);
-        assert_eq!(floats.bridge.model().spots, expected);
+        assert_eq!(floats.controller.model().spots, expected);
         window.destroy();
     }
 }

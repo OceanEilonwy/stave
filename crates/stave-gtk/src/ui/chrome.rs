@@ -6,13 +6,12 @@
 //! update changes it, and the slider's handler only sends a message. The
 //! window sets it with [`MotionBarInput::Show`], which moves the slider
 //! with its handler blocked, and hears only people's moves as
-//! [`MotionBarOutput::Moved`].
+//! [`MotionBarOutput::Moved`], forwarded to its input when the bar is
+//! made.
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
-
-use super::relm4_shim::Bridge;
 
 /// What the motion bar shows: a name, words at each end and the slider's
 /// range and value.
@@ -160,39 +159,42 @@ impl Component for MotionBarComponent {
 /// The floating bar at the bottom right of the 3D view: a name, words at
 /// each end and a slider ("door_l  closed ——— 110°"). It owns the
 /// [`MotionBarComponent`]: dropping it shuts the component down. Setters
-/// are queued.
+/// are queued; people's moves go to the owner as the message it chose.
 pub struct MotionBar {
     /// The bar, to overlay on the view.
     pub root: gtk::Box,
-    bridge: Bridge<MotionBarComponent>,
+    controller: Controller<MotionBarComponent>,
 }
 
 impl MotionBar {
-    /// A hidden bar.
-    pub fn new() -> MotionBar {
-        let bridge = Bridge::<MotionBarComponent>::launch(());
+    /// A hidden bar, whose outputs go to `owner` as `message(output)`.
+    pub fn new<M: 'static>(
+        owner: &relm4::Sender<M>,
+        message: impl Fn(MotionBarOutput) -> M + 'static,
+    ) -> MotionBar {
+        let controller = MotionBarComponent::builder()
+            .launch(())
+            .forward(owner, message);
         MotionBar {
-            root: bridge.widget().clone(),
-            bridge,
+            root: controller.widget().clone(),
+            controller,
         }
+    }
+
+    /// Queues `input`; once the bar has shut down there is nobody to tell.
+    fn send(&self, input: MotionBarInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Lays the bar out in a row (docked in a corner) or standing upright
     /// (docked on the right edge), its slider turned to match.
     pub fn set_orientation(&self, orientation: gtk::Orientation) {
-        self.bridge
-            .send(MotionBarInput::SetOrientation(orientation));
-    }
-
-    /// Calls `callback` with each of people's moves from now on, instead
-    /// of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(MotionBarOutput) + 'static) {
-        self.bridge.connect(callback);
+        self.send(MotionBarInput::SetOrientation(orientation));
     }
 
     /// Shows the bar, or hides it with `None`, without calling back.
     pub fn show(&self, shown: Option<MotionShown>) {
-        self.bridge.send(MotionBarInput::Show(shown));
+        self.send(MotionBarInput::Show(shown));
     }
 }
 
@@ -207,11 +209,8 @@ pub fn cut_list_page() -> adw::StatusPage {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
 
     /// The bar for a door, 0 to 110 at `value`.
     fn door(value: f64) -> Option<MotionShown> {
@@ -239,10 +238,8 @@ mod tests {
     /// slider without calling back; people's moves are heard after the
     /// update; dropping the bar frees it.
     fn motion_bar() {
-        let bar = MotionBar::new();
-        let heard: Rc<RefCell<Vec<MotionBarOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        bar.connect_outputs(move |output| log.borrow_mut().push(output));
+        let (owner, heard) = recorder();
+        let bar = MotionBar::new(&owner, std::convert::identity);
         bar.show(door(40.0));
         assert!(!bar.root.is_visible(), "show is queued");
         bar.show(door(80.0));
@@ -264,7 +261,7 @@ mod tests {
         settle();
         assert!(!bar.root.is_visible());
         let root = bar.root.downgrade();
-        let input = bar.bridge.sender().clone();
+        let input = bar.controller.sender().clone();
         drop(bar);
         settle();
         assert!(root.upgrade().is_none(), "the bar is freed");

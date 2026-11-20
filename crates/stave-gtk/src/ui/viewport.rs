@@ -15,11 +15,14 @@
 //!
 //! It is a GObject subclass (it draws in `snapshot` and sizes itself in
 //! `measure`), so it stays a widget rather than a relm4 component; its
-//! state is in [`Cell`]s, and nothing of it is borrowed while it calls the
-//! resize handler, so the handler may call back into it.
+//! state is in [`Cell`]s of its instance, as GTK's virtual methods take it
+//! shared, and nothing of it is borrowed while it emits its `resized`
+//! signal, so a handler may call back into it. The size is told as that
+//! GObject signal, like any widget's: the window's handler only sends
+//! itself a message, and the handler goes with the widget.
 
 use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use gtk::glib;
@@ -29,18 +32,16 @@ use gtk::subclass::prelude::*;
 /// How long the 3D view's size must hold still before it is reported.
 const SETTLE: Duration = Duration::from_millis(100);
 
+/// The signal telling the size in device pixels.
+const RESIZED: &str = "resized";
+
 mod imp {
     use super::*;
-
-    /// Called with the new size in device pixels.
-    pub type ResizeHandler = Rc<dyn Fn(u32, u32)>;
 
     #[derive(Default)]
     pub struct Viewport {
         /// The frame shown.
         pub frame: Cell<Option<gtk::gdk::Texture>>,
-        /// Called with the new size in device pixels.
-        pub on_resize: Cell<Option<ResizeHandler>>,
         /// How it asks for room.
         pub sizing: Cell<super::Sizing>,
         /// The size last reported, in device pixels.
@@ -62,6 +63,18 @@ mod imp {
     }
 
     impl ObjectImpl for Viewport {
+        fn signals() -> &'static [glib::subclass::Signal] {
+            static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
+            SIGNALS.get_or_init(|| {
+                // `resized(width, height)`, in device pixels.
+                vec![
+                    glib::subclass::Signal::builder(super::RESIZED)
+                        .param_types([u32::static_type(), u32::static_type()])
+                        .build(),
+                ]
+            })
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             // A window moved to a screen of another scale keeps its
@@ -82,17 +95,14 @@ mod imp {
             frame
         }
 
-        /// Tells the handler the size in device pixels.
+        /// Tells the size in device pixels, as the `resized` signal.
         pub(super) fn report_size(&self) {
             let (width, height) = self.obj().device_size();
             self.reported.set((width, height));
-            // Cloned out so that the handler may set a new one, or come
-            // back here through a synchronous allocation.
-            let handler = self.on_resize.take();
-            self.on_resize.set(handler.clone());
-            if let Some(handler) = handler {
-                handler(width, height);
-            }
+            // Nothing is borrowed: a handler may come back here through a
+            // synchronous allocation.
+            self.obj()
+                .emit_by_name::<()>(super::RESIZED, &[&width, &height]);
         }
 
         /// Drops a report waiting for the size to hold still.
@@ -314,17 +324,26 @@ impl Viewport {
         ]);
     }
 
-    /// Calls `handler` with the size in device pixels when it changes: at
-    /// once on a change of scale or the first allocation, and once a resize
-    /// of the 3D view has held still for [`SETTLE`].
-    pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
-        self.imp().on_resize.set(Some(Rc::new(handler)));
+    /// Connects `handler` to the `resized` signal: the size in device
+    /// pixels when it changes, at once on a change of scale or the first
+    /// allocation, and once a resize of the 3D view has held still for
+    /// [`SETTLE`]. A handler should only send a message; it goes with the
+    /// widget.
+    pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) -> glib::SignalHandlerId {
+        self.connect_local(RESIZED, false, move |values| {
+            let size = |place: usize| values.get(place).and_then(|value| value.get::<u32>().ok());
+            if let (Some(width), Some(height)) = (size(1), size(2)) {
+                handler(width, height);
+            }
+            None
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
@@ -334,15 +353,15 @@ mod tests {
         on_gtk_thread(handler_calls_back);
     }
 
-    /// The handler runs with nothing of the viewport borrowed: it may
-    /// show a frame, ask the size and connect a new handler from inside.
+    /// The `resized` handler runs with nothing of the viewport borrowed:
+    /// it may show a frame and ask the size from inside.
     fn handler_calls_back() {
         let viewport = Viewport::default();
         let heard: Rc<RefCell<Vec<(u32, u32)>>> = Rc::default();
         let log = Rc::clone(&heard);
+        viewport.connect_resized(move |width, height| log.borrow_mut().push((width, height)));
         let weak = viewport.downgrade();
-        viewport.connect_resized(move |width, height| {
-            log.borrow_mut().push((width, height));
+        viewport.connect_resized(move |_, _| {
             let Some(viewport) = weak.upgrade() else {
                 return;
             };
@@ -351,10 +370,6 @@ mod tests {
                 gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4);
             viewport.show_frame(texture.upcast());
             let _ = viewport.device_size();
-            let again = Rc::clone(&log);
-            viewport.connect_resized(move |width, height| {
-                again.borrow_mut().push((width + 1000, height));
-            });
         });
         viewport.imp().report_size();
         viewport.imp().report_size();
@@ -362,8 +377,8 @@ mod tests {
         let (width, height) = viewport.device_size();
         assert_eq!(
             *heard.borrow(),
-            vec![(width, height), (width + 1000, height)],
-            "the second report reached the handler set from inside the first"
+            vec![(width, height), (width, height)],
+            "each report reached the handler"
         );
         assert!(viewport.imp().frame().is_some(), "the frame is shown");
     }

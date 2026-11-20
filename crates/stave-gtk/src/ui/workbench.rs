@@ -32,8 +32,14 @@
 //! buttons and the dock's own signals only send [`WorkbenchInput`]
 //! messages (a breakpoint folding the edges too). Where each panel is
 //! stays in libpanel's widgets, which people drag about; the queries read
-//! them there. [`Workbench`] keeps the older
-//! API in front of it until the window moves to relm4 too.
+//! them there. It also keeps the panels' own tabs (the Code panel's open
+//! files, [`OwnTabs`]): it gives every frame its strip of tabs
+//! (`tab_strip`) with a copy of them, hands every strip a new copy when
+//! they change, and hears a strip's chosen own tab by message. The tool
+//! groups' spots are kept here and nowhere else: the floating controls
+//! hear them as [`WorkbenchOutput::ToolsChanged`]. [`Workbench`] owns the
+//! controller; its outputs go to the owner's input, forwarded when it is
+//! made.
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::collections::BTreeMap;
@@ -43,9 +49,9 @@ use std::path::PathBuf;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use panel::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
-use super::relm4_shim::Bridge;
+use super::tab_strip::{OwnTabs, PageTab, TabStrip, TabStripOutput};
 use super::view_layout::{Group, Spot, Spots};
 
 /// One of the window's panels.
@@ -594,18 +600,29 @@ impl Dockyard {
                 && !layout.frames(side).is_empty();
             self.dock.set_reveal_area(side.area(), shown);
         }
-        self.give_tabs();
     }
 
-    /// Gives every frame libpanel made itself the slim strip of tabs the
-    /// window's own frames have.
-    fn give_tabs(&self) {
+    /// Gives every frame that has none (the workbench's own new frames,
+    /// and those libpanel made itself) the slim strip of tabs, showing
+    /// the panels' own tabs as `own` has them; a chosen own tab comes back
+    /// to `owner`.
+    fn give_tabs(&self, own: &OwnTabs, owner: &relm4::Sender<WorkbenchInput>) {
         self.dock.foreach_frame(|frame| {
-            let has_tabs = frame
-                .header()
-                .is_some_and(|header| header.is::<super::tab_strip::TabStrip>());
+            let has_tabs = frame.header().is_some_and(|header| header.is::<TabStrip>());
             if !has_tabs {
-                give_tabs(frame);
+                give_tabs(frame, own, owner);
+            }
+        });
+    }
+
+    /// Hands every frame's strip the panels' own tabs as they are now.
+    fn show_own_tabs(&self, own: &OwnTabs) {
+        self.dock.foreach_frame(|frame| {
+            if let Some(strip) = frame
+                .header()
+                .and_then(|header| header.downcast::<TabStrip>().ok())
+            {
+                strip.show_own_tabs(own.clone());
             }
         });
     }
@@ -834,18 +851,24 @@ impl Dockyard {
     }
 }
 
-/// An empty frame, its tabs along the top wherever it is.
+/// An empty frame. It is given its tabs by [`Dockyard::give_tabs`] at
+/// the end of the workbench's update that made it, with the own tabs as
+/// they are then.
 fn new_frame() -> panel::Frame {
-    let frame = panel::Frame::new();
-    give_tabs(&frame);
-    frame
+    panel::Frame::new()
 }
 
 /// Puts a frame's tabs along its top as a slim strip of flush tabs, as in
-/// an IDE.
-fn give_tabs(frame: &panel::Frame) {
+/// an IDE, showing the panels' own tabs as `own` has them; a chosen own
+/// tab comes back to `owner`.
+fn give_tabs(frame: &panel::Frame, own: &OwnTabs, owner: &relm4::Sender<WorkbenchInput>) {
     frame.set_orientation(gtk::Orientation::Vertical);
-    frame.set_header(Some(&super::tab_strip::TabStrip::new()));
+    let strip = TabStrip::new(
+        own.clone(),
+        owner,
+        |TabStripOutput::Show { panel, index }| WorkbenchInput::OwnTabChosen { panel, index },
+    );
+    frame.set_header(Some(&strip));
 }
 
 /// The frame holding a panel, if it is open.
@@ -896,6 +919,9 @@ pub struct WorkbenchComponent {
     /// it showed before: unfolded as it was when the window widens, and
     /// remembered in the layout as it was, not as folded.
     folded: BTreeMap<Side, bool>,
+    /// The panels' own tabs (the Code panel's open files), as their
+    /// owner last handed them over: every frame's strip has a copy.
+    own_tabs: OwnTabs,
 }
 
 /// What a workbench is made with.
@@ -971,6 +997,22 @@ pub enum WorkbenchInput {
     Toggle(PanelId),
     /// The bottom edge was shown or hidden (by people or by the dock).
     EdgesChanged,
+    /// A panel's own tabs are these now (the Code panel's open files):
+    /// every frame's strip shows them in place of the panel's one tab.
+    ShowOwnTabs {
+        /// The panel.
+        panel: PanelId,
+        /// Its tabs; none shows its one tab again.
+        tabs: Vec<PageTab>,
+    },
+    /// People chose one of a panel's own tabs in a strip (its frame shows
+    /// the panel now).
+    OwnTabChosen {
+        /// The panel.
+        panel: PanelId,
+        /// Where the tab is among the panel's own tabs.
+        index: usize,
+    },
 }
 
 /// What a workbench tells its owner.
@@ -982,6 +1024,13 @@ pub enum WorkbenchOutput {
     ToolsChanged(Spots),
     /// The layout couldn't be saved: a line saying why (told once).
     SaveFailed(String),
+    /// People chose one of a panel's own tabs: show the panel on it.
+    ShowOwnTab {
+        /// The panel.
+        panel: PanelId,
+        /// Where the tab is among the panel's own tabs.
+        index: usize,
+    },
 }
 
 /// The workbench's widgets.
@@ -1128,6 +1177,8 @@ impl Component for WorkbenchComponent {
         root.append(&statusbar);
 
         yard.apply(&layout);
+        let own_tabs = OwnTabs::new();
+        yard.give_tabs(&own_tabs, sender.input_sender());
         let input = sender.input_sender().clone();
         yard.dock
             .connect_notify_local(Some("reveal-bottom"), move |_, _| {
@@ -1145,6 +1196,7 @@ impl Component for WorkbenchComponent {
             last: layout,
             save_failed: false,
             folded: BTreeMap::new(),
+            own_tabs,
         };
         let widgets = WorkbenchWidgets {
             yard,
@@ -1229,10 +1281,27 @@ impl Component for WorkbenchComponent {
             }
             WorkbenchInput::Toggle(id) => yard.toggle(id, &self.last),
             WorkbenchInput::EdgesChanged => {}
+            WorkbenchInput::ShowOwnTabs { panel, tabs } => {
+                let changed = if tabs.is_empty() {
+                    self.own_tabs.remove(&panel).is_some()
+                } else if self.own_tabs.get(&panel) == Some(&tabs) {
+                    false
+                } else {
+                    self.own_tabs.insert(panel, tabs);
+                    true
+                };
+                if changed {
+                    yard.show_own_tabs(&self.own_tabs);
+                }
+            }
+            WorkbenchInput::OwnTabChosen { panel, index } => {
+                // Nobody listening is not a mistake.
+                let _ = sender.output(WorkbenchOutput::ShowOwnTab { panel, index });
+            }
         }
         // A message may have made a frame (a panel moved or brought back,
         // or dropped somewhere new, which sends `Save`).
-        yard.give_tabs();
+        yard.give_tabs(&self.own_tabs, sender.input_sender());
         widgets.show_status_tabs();
     }
 }
@@ -1252,9 +1321,9 @@ fn folds_at(width: f64) -> Vec<Side> {
 }
 
 /// The dock and its panels: it owns the [`WorkbenchComponent`] (dropping
-/// it shuts the component down), passes its setters on as
-/// [`WorkbenchInput`] messages and its [`WorkbenchOutput`]s to the
-/// callback connected with [`Workbench::connect_outputs`].
+/// it shuts the component down) and passes its setters on as
+/// [`WorkbenchInput`] messages; its [`WorkbenchOutput`]s go to the
+/// owner's input.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned. The queries (`layout`,
@@ -1269,15 +1338,18 @@ pub struct Workbench {
     yard: Dockyard,
     /// Whether the layout is written to the user's file.
     remembers: bool,
-    bridge: Bridge<WorkbenchComponent>,
+    controller: Controller<WorkbenchComponent>,
 }
 
 impl Workbench {
     /// A dock with each panel's content in its panel, laid out as last
-    /// time (or as a first launch shows it).
-    pub fn new(
+    /// time (or as a first launch shows it). Its outputs go to `owner` as
+    /// `message(output)`.
+    pub fn new<M: 'static>(
         contents: Vec<(PanelId, gtk::Widget)>,
         remember: Remember,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(WorkbenchOutput) -> M + 'static,
     ) -> anyhow::Result<Workbench> {
         let yard = Dockyard::build(contents)?;
         let read = |path: PathBuf| {
@@ -1295,26 +1367,34 @@ impl Workbench {
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["stave-status-text"])
             .build();
-        let bridge = Bridge::<WorkbenchComponent>::launch(WorkbenchInit {
-            yard: yard.clone(),
-            status: status.clone(),
-            layout,
-            remembers,
-        });
+        let controller = WorkbenchComponent::builder()
+            .launch(WorkbenchInit {
+                yard: yard.clone(),
+                status: status.clone(),
+                layout,
+                remembers,
+            })
+            .forward(owner, message);
         Ok(Workbench {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             status,
             yard,
             remembers,
-            bridge,
+            controller,
         })
     }
 
-    /// Calls `callback` with each output from now on (the tool groups
-    /// moved, the layout couldn't be saved), instead of the one connected
-    /// before.
-    pub fn connect_outputs(&self, callback: impl Fn(WorkbenchOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the workbench has shut down there is nobody
+    /// to tell.
+    fn send(&self, input: WorkbenchInput) {
+        let _ = self.controller.sender().send(input);
+    }
+
+    /// A panel's own tabs are these now (the Code panel's open files):
+    /// every frame's strip shows them in place of the panel's one tab;
+    /// none shows its one tab again.
+    pub fn show_own_tabs(&self, panel: PanelId, tabs: Vec<PageTab>) {
+        self.send(WorkbenchInput::ShowOwnTabs { panel, tabs });
     }
 
     /// Puts every panel where `layout` says, closing the ones it leaves
@@ -1327,7 +1407,7 @@ impl Workbench {
         )
     )]
     pub fn apply(&self, layout: Layout) {
-        self.bridge.send(WorkbenchInput::Apply(layout));
+        self.send(WorkbenchInput::Apply(layout));
     }
 
     /// Narrows the left and right edges while `breakpoint` (a window at
@@ -1338,7 +1418,7 @@ impl Workbench {
     /// status bar's edge toggles still bring a folded edge back, and the
     /// window widening unfolds each edge that showed before.
     pub fn narrow_edges(&self, breakpoint: &adw::Breakpoint, width: f64) {
-        self.bridge.send(WorkbenchInput::NarrowEdges {
+        self.send(WorkbenchInput::NarrowEdges {
             breakpoint: breakpoint.clone(),
             width,
         });
@@ -1348,21 +1428,22 @@ impl Workbench {
     /// the workbench handled: where the view's floating controls start.
     /// Later moves are told as [`WorkbenchOutput::ToolsChanged`].
     pub fn tool_spots(&self) -> Spots {
-        self.bridge.model().tools.clone()
+        self.controller.model().tools.clone()
     }
 
     /// Docks a tool group in a spot (the group there takes its old spot)
     /// and remembers it.
     pub fn dock_tool(&self, group: Group, spot: Spot) {
-        self.bridge.send(WorkbenchInput::DockTool { group, spot });
+        self.send(WorkbenchInput::DockTool { group, spot });
     }
 
     /// How many problems the status bar's Problems button counts.
     pub fn show_problem_count(&self, count: usize) {
-        self.bridge.send(WorkbenchInput::ShowProblemCount(count));
+        self.send(WorkbenchInput::ShowProblemCount(count));
     }
 
-    /// A panel's widget.
+    /// A panel's widget, for tests to find its frame.
+    #[cfg(test)]
     pub fn panel(&self, id: PanelId) -> Option<&panel::Widget> {
         self.yard.panels.get(&id)
     }
@@ -1387,7 +1468,7 @@ impl Workbench {
     pub fn layout(&self) -> Layout {
         // Copied out: no borrow is held across the dock's widget calls.
         let (tools, folded) = {
-            let model = self.bridge.model();
+            let model = self.controller.model();
             (model.tools.clone(), model.folded.clone())
         };
         self.yard.layout(&tools, &folded)
@@ -1405,19 +1486,19 @@ impl Workbench {
         } else {
             None
         };
-        self.bridge.send(WorkbenchInput::Saved { layout, failure });
+        self.send(WorkbenchInput::Saved { layout, failure });
     }
 
     /// The first launch's panels again, the tool groups back in their
     /// spots.
     pub fn reset(&self) {
-        self.bridge.send(WorkbenchInput::Reset);
+        self.send(WorkbenchInput::Reset);
     }
 
     /// Shows a panel: brings it back where it last was if it was closed,
     /// shows its edge and makes it the frame's current tab.
     pub fn present(&self, id: PanelId) {
-        self.bridge.send(WorkbenchInput::Present(id));
+        self.send(WorkbenchInput::Present(id));
     }
 
     /// Brings a panel to the front of its frame, unless that frame also
@@ -1425,13 +1506,13 @@ impl Workbench {
     /// where it last was, showing its edge, but still not over the model.
     /// An open panel's edge isn't shown if people hid it.
     pub fn bring_forward_beside_view(&self, id: PanelId) {
-        self.bridge.send(WorkbenchInput::BringForwardBesideView(id));
+        self.send(WorkbenchInput::BringForwardBesideView(id));
     }
 
     /// Moves a panel to a side: at an edge into its first frame (as a new
     /// tab), in the middle into a new column beside what is there.
     pub fn move_to(&self, id: PanelId, side: Side) {
-        self.bridge.send(WorkbenchInput::MoveTo { panel: id, side });
+        self.send(WorkbenchInput::MoveTo { panel: id, side });
     }
 }
 
@@ -1441,7 +1522,23 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
+
+    /// A workbench of `contents`, nothing written, whose outputs go to
+    /// `owner`.
+    fn workbench_for(
+        contents: Vec<(PanelId, gtk::Widget)>,
+        owner: &relm4::Sender<WorkbenchOutput>,
+    ) -> anyhow::Result<Workbench> {
+        Workbench::new(contents, Remember::Nothing, owner, std::convert::identity)
+    }
+
+    /// A workbench of `contents`, nothing written, whose outputs nobody
+    /// hears.
+    fn unheard(contents: Vec<(PanelId, gtk::Widget)>) -> anyhow::Result<Workbench> {
+        let (owner, _) = recorder();
+        workbench_for(contents, &owner)
+    }
 
     #[test]
     fn a_first_launch_shows_the_model_parts_and_problems() {
@@ -1664,7 +1761,7 @@ show bottom true
                 )
             })
             .collect();
-        let workbench = Workbench::new(contents, Remember::Nothing).unwrap();
+        let workbench = unheard(contents).unwrap();
         workbench.apply(Layout::board());
         let window = gtk::Window::builder()
             .default_width(1200)
@@ -1702,7 +1799,7 @@ show bottom true
         // on Problems, and folds it away again.
         let dock = workbench.yard.dock.clone();
         let toggle = |id| {
-            workbench.bridge.send(WorkbenchInput::Toggle(id));
+            workbench.send(WorkbenchInput::Toggle(id));
             settle();
         };
         assert!(!dock.reveals_area(panel::Area::Bottom));
@@ -1764,21 +1861,30 @@ show bottom true
     }
 
     /// Dropping the workbench shuts its component down when the main loop
-    /// next runs: the dock, the model and the callbacks are all freed.
+    /// next runs: the dock, its strips of tabs, the model and the message
+    /// maker are all freed.
     fn workbench_is_freed() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
-            panic!("the dock is built");
-        };
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        workbench.connect_outputs(move |_| {
+        let (owner, _) = recorder();
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing, &owner, move |output| {
             let _ = &held;
-        });
+            output
+        }) else {
+            panic!("the dock is built");
+        };
         let callback = Rc::downgrade(&token);
         drop(token);
         let root = workbench.root.downgrade();
         let dock = workbench.yard.dock.downgrade();
-        let input = workbench.bridge.sender().clone();
+        let mut strips = Vec::new();
+        workbench.yard.dock.foreach_frame(|frame| {
+            if let Some(strip) = frame.header() {
+                strips.push(strip.downgrade());
+            }
+        });
+        assert!(!strips.is_empty(), "every frame has its strip");
+        let input = workbench.controller.sender().clone();
         settle();
         assert!(root.upgrade().is_some(), "the dock lives while held");
         drop(workbench);
@@ -1786,10 +1892,14 @@ show bottom true
         assert!(root.upgrade().is_none(), "the root is freed");
         assert!(dock.upgrade().is_none(), "the dock is freed");
         assert!(
+            strips.iter().all(|strip| strip.upgrade().is_none()),
+            "the strips are freed"
+        );
+        assert!(
             input.send(WorkbenchInput::Save).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the message maker is freed");
     }
 
     #[test]
@@ -1801,16 +1911,18 @@ show bottom true
     /// tell nobody; only the tool groups moving (a group docked, a layout
     /// applied) is told.
     fn setters_do_not_call_back() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let (owner, outputs) = relm4::channel();
+        let Ok(workbench) = workbench_for(labels(), &owner) else {
             panic!("the dock is built");
         };
         let heard: Rc<RefCell<Vec<Spots>>> = Rc::default();
         let log = Rc::clone(&heard);
-        workbench.connect_outputs(move |output| {
+        handle_each(outputs, move |output| {
             if let WorkbenchOutput::ToolsChanged(spots) = output {
                 log.borrow_mut().push(spots);
             }
         });
+        workbench.show_own_tabs(PanelId::Code, Vec::new());
         workbench.show_problem_count(3);
         workbench.present(PanelId::Code);
         workbench.move_to(PanelId::Files, Side::End);
@@ -1826,7 +1938,7 @@ show bottom true
         );
         assert_eq!(
             workbench
-                .bridge
+                .controller
                 .model()
                 .last
                 .places
@@ -1858,7 +1970,8 @@ show bottom true
     /// told with where the groups are then, in order, and the last told is
     /// where they end up, as saved.
     fn tool_spots_follow_reset_then_dock() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let (owner, outputs) = relm4::channel();
+        let Ok(workbench) = workbench_for(labels(), &owner) else {
             panic!("the dock is built");
         };
         let mut start = Layout::default();
@@ -1867,7 +1980,7 @@ show bottom true
         settle();
         let heard: Rc<RefCell<Vec<Spots>>> = Rc::default();
         let log = Rc::clone(&heard);
-        workbench.connect_outputs(move |output| {
+        handle_each(outputs, move |output| {
             if let WorkbenchOutput::ToolsChanged(spots) = output {
                 log.borrow_mut().push(spots);
             }
@@ -1879,7 +1992,11 @@ show bottom true
         expected.dock(Group::Motion, Spot::TopLeft);
         assert_eq!(heard.borrow().last(), Some(&expected), "the last told");
         assert_eq!(workbench.layout().tools, expected);
-        assert_eq!(workbench.bridge.model().last.tools, expected, "as saved");
+        assert_eq!(
+            workbench.controller.model().last.tools,
+            expected,
+            "as saved"
+        );
     }
 
     #[test]
@@ -1891,7 +2008,7 @@ show bottom true
     /// spots and hear later moves by message: the copy holds nothing of
     /// the workbench, which is freed all the same.
     fn tool_spots_are_weak() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let Ok(workbench) = unheard(labels()) else {
             panic!("the dock is built");
         };
         let tools = workbench.tool_spots();
@@ -1911,34 +2028,26 @@ show bottom true
     /// The old workbench called its tools callback from inside `apply`,
     /// with the callback's own `RefCell` borrowed: a callback that
     /// connected another, or applied a layout, panicked. Now a reset is
-    /// only queued; the callback runs after the update has returned, and a
-    /// panel presented from inside it is queued too, as is the dock's own
-    /// `notify::reveal-bottom`, fired while the update reveals the edge.
+    /// only queued; the owner hears of it after the update has returned,
+    /// and a panel it presents while it handles that is queued too, as is
+    /// the dock's own `notify::reveal-bottom`, fired while the update
+    /// reveals the edge.
     fn outputs_are_queued() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let (owner, outputs) = relm4::channel();
+        let Ok(workbench) = workbench_for(labels(), &owner) else {
             panic!("the dock is built");
         };
         let workbench = Rc::new(workbench);
-        // (whether Output showed when the callback was called, and
-        // straight after it asked for it)
+        // (whether Output showed when the owner heard, and straight after
+        // it asked for it)
         let heard: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&workbench);
-        workbench.connect_outputs(move |_| {
+        handle_each(outputs, move |_| {
             let Some(workbench) = weak.upgrade() else {
                 return;
             };
             let before = workbench.is_shown(PanelId::Output);
-            // Connecting from here is fine: nothing is borrowed.
-            let inner = Rc::clone(&log);
-            let again = weak.clone();
-            workbench.connect_outputs(move |_| {
-                if let Some(workbench) = again.upgrade() {
-                    inner
-                        .borrow_mut()
-                        .push((workbench.is_shown(PanelId::Output), true));
-                }
-            });
             workbench.present(PanelId::Output);
             log.borrow_mut()
                 .push((before, workbench.is_shown(PanelId::Output)));
@@ -1949,13 +2058,94 @@ show bottom true
         assert_eq!(
             *heard.borrow(),
             vec![(false, false)],
-            "the callback ran after the reset, and its present was queued"
+            "the owner heard after the reset, and its present was queued"
         );
         assert!(workbench.is_shown(PanelId::Output), "then shown");
         assert!(workbench.yard.dock.reveals_area(panel::Area::Bottom));
         workbench.reset();
         settle();
-        assert_eq!(heard.borrow().len(), 2, "the callback connected inside");
+        assert_eq!(heard.borrow().len(), 2, "each reset is heard");
+    }
+
+    #[test]
+    fn own_tabs_reach_every_strip_and_a_chosen_one_is_told() {
+        on_gtk_thread(own_tabs_reach_the_strips);
+    }
+
+    /// The Code panel's open files, handed to the workbench, show as tabs
+    /// in the strip of the frame that holds the Code panel, also once it
+    /// has moved to a frame made later; choosing one is told to the
+    /// owner, with the panel and the tab's place.
+    fn own_tabs_reach_the_strips() {
+        let (owner, heard) = recorder();
+        let Ok(workbench) = workbench_for(labels(), &owner) else {
+            panic!("the dock is built");
+        };
+        workbench.apply(Layout::board());
+        let files = |count: usize| -> Vec<PageTab> {
+            (0..count)
+                .map(|index| PageTab {
+                    title: format!("file{index}.stave"),
+                    tooltip: String::new(),
+                    unsaved: false,
+                    mark: None,
+                    active: index == 0,
+                })
+                .collect()
+        };
+        workbench.show_own_tabs(PanelId::Code, files(2));
+        settle();
+        // The file tabs of the strip heading the Code panel's frame.
+        let file_tabs = |workbench: &Workbench| -> Vec<gtk::Button> {
+            let Some(strip) = workbench
+                .panel(PanelId::Code)
+                .and_then(frame_of)
+                .and_then(|frame| frame.header())
+                .map(|header| header.upcast::<gtk::Widget>())
+            else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            let mut stack = vec![strip];
+            while let Some(widget) = stack.pop() {
+                if widget.has_css_class("stave-file-tab")
+                    && let Ok(button) = widget.clone().downcast::<gtk::Button>()
+                {
+                    found.push(button);
+                }
+                let mut child = widget.last_child();
+                while let Some(current) = child {
+                    child = current.prev_sibling();
+                    stack.push(current);
+                }
+            }
+            found
+        };
+        assert_eq!(file_tabs(&workbench).len(), 2, "one tab per open file");
+        // Moved to a frame made now, its strip shows them too.
+        workbench.move_to(PanelId::Code, Side::Centre);
+        settle();
+        let tabs = file_tabs(&workbench);
+        assert_eq!(tabs.len(), 2, "the new frame's strip has them");
+        tabs[1].emit_clicked();
+        settle();
+        assert_eq!(
+            heard
+                .borrow()
+                .iter()
+                .filter(|output| matches!(output, WorkbenchOutput::ShowOwnTab { .. }))
+                .collect::<Vec<_>>(),
+            vec![&WorkbenchOutput::ShowOwnTab {
+                panel: PanelId::Code,
+                index: 1
+            }]
+        );
+        workbench.show_own_tabs(PanelId::Code, Vec::new());
+        settle();
+        assert!(
+            file_tabs(&workbench).is_empty(),
+            "the panel's one tab again"
+        );
     }
 
     #[test]
@@ -1968,7 +2158,7 @@ show bottom true
     /// edit, comes to the right edge; Code, asked for, opens beside the
     /// Model and in front.
     fn first_launch_opens() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let Ok(workbench) = unheard(labels()) else {
             panic!("the dock is built");
         };
         settle();
@@ -2018,7 +2208,7 @@ show bottom true
     /// shown all along. The breakpoint's signals only send messages, so
     /// each change shows once the main loop has run.
     fn side_edges_fold() {
-        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+        let Ok(workbench) = unheard(labels()) else {
             panic!("the dock is built");
         };
         workbench.apply(Layout::board());
