@@ -123,6 +123,9 @@ pub enum FinderInput {
     RowSelected(gtk::ListBoxRow),
     /// People pressed Escape.
     Close,
+    /// The window is closing for good: close at once, whatever the
+    /// dialog would say, then answer [`FinderOutput::ClosedForGood`].
+    ForceClose,
 }
 
 /// What the finder tells its owner.
@@ -144,6 +147,9 @@ pub enum FinderOutput {
     /// The verb at this index of the last [`FinderInput::Actions`] was
     /// chosen, and the finder has closed.
     Action(usize),
+    /// The reply to [`FinderInput::ForceClose`]: the finder has closed
+    /// for good, after everything it was told before.
+    ClosedForGood,
 }
 
 impl FinderComponent {
@@ -549,6 +555,11 @@ impl Component for FinderComponent {
             FinderInput::Close => {
                 root.close();
             }
+            FinderInput::ForceClose => {
+                root.force_close();
+                // Nobody listening is not a mistake.
+                let _ = sender.output(FinderOutput::ClosedForGood);
+            }
         }
         self.update_view(widgets, sender);
     }
@@ -564,8 +575,6 @@ impl Component for FinderComponent {
 /// Everything is queued: the finder opens, lists and tells its owner when
 /// the main loop next runs, after whatever called it has returned.
 pub struct Finder {
-    /// The dialog.
-    pub dialog: adw::Dialog,
     controller: Controller<FinderComponent>,
 }
 
@@ -577,10 +586,20 @@ impl Finder {
         map: impl Fn(FinderOutput) -> X + 'static,
     ) -> Finder {
         let controller = FinderComponent::builder().launch(()).forward(to, map);
-        Finder {
-            dialog: controller.widget().clone(),
-            controller,
-        }
+        Finder { controller }
+    }
+
+    /// The dialog, for tests.
+    #[cfg(test)]
+    fn dialog(&self) -> &adw::Dialog {
+        self.controller.widget()
+    }
+
+    /// Closes the finder for good when the main loop next runs (the window
+    /// is closing), however it is, and answers
+    /// [`FinderOutput::ClosedForGood`].
+    pub fn force_close(&self) {
+        self.send(FinderInput::ForceClose);
     }
 
     /// Queues `input`; once the finder has gone there is nobody to tell.
@@ -755,7 +774,9 @@ mod tests {
             match output {
                 FinderOutput::Search(query) => finder.show_hits(search(&query)),
                 FinderOutput::SearchActions(query) => finder.show_actions(actions(&query)),
-                FinderOutput::Hit { .. } | FinderOutput::Action(_) => chosen(&finder, output),
+                FinderOutput::Hit { .. }
+                | FinderOutput::Action(_)
+                | FinderOutput::ClosedForGood => chosen(&finder, output),
             }
         });
         let finder = Rc::new(Finder::new(&to, |output| output));
@@ -767,9 +788,10 @@ mod tests {
     fn hit_of(output: FinderOutput) -> Option<(String, Choice)> {
         match output {
             FinderOutput::Hit { hit, choice } => Some((hit.label, choice)),
-            FinderOutput::Search(_) | FinderOutput::SearchActions(_) | FinderOutput::Action(_) => {
-                None
-            }
+            FinderOutput::Search(_)
+            | FinderOutput::SearchActions(_)
+            | FinderOutput::Action(_)
+            | FinderOutput::ClosedForGood => None,
         }
     }
 
@@ -789,7 +811,7 @@ mod tests {
 
     /// The first widget of type `T` in the finder's dialog.
     fn find<T: IsA<gtk::Widget>>(finder: &Finder) -> T {
-        let mut widgets: Vec<gtk::Widget> = finder.dialog.child().into_iter().collect();
+        let mut widgets: Vec<gtk::Widget> = finder.dialog().child().into_iter().collect();
         while let Some(widget) = widgets.pop() {
             if let Ok(found) = widget.clone().downcast::<T>() {
                 return found;
@@ -835,7 +857,7 @@ mod tests {
         drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
-        let dialog = finder.dialog.downgrade();
+        let dialog = finder.dialog().downgrade();
         let input = finder.controller.sender().clone();
         settle();
         assert!(dialog.upgrade().is_some(), "the dialog lives while held");
@@ -910,7 +932,43 @@ mod tests {
         assert_eq!(*ran.borrow(), [0]);
         assert_eq!(heard.borrow().len(), 1, "a verb previews nothing");
 
-        finder.dialog.force_close();
+        finder.dialog().force_close();
+        window.destroy();
+        settle();
+    }
+
+    #[test]
+    fn force_close_closes_the_open_finder_then_says_so() {
+        on_gtk_thread(force_close_then_says_so);
+    }
+
+    /// The window closing for good asks the finder to close by message:
+    /// it closes, whatever it shows, and only then tells the owner, so the
+    /// window closes after it.
+    fn force_close_then_says_so() {
+        let heard: Rc<RefCell<Vec<(FinderOutput, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let finder = answering(
+            |_| vec![file("doors")],
+            |_| Vec::new(),
+            move |finder, output| {
+                let open = finder.dialog().parent().is_some();
+                log.borrow_mut().push((output, open));
+            },
+        );
+        let (window, parent) = window();
+        finder.present(&parent, "d");
+        settle();
+        assert!(finder.dialog().parent().is_some(), "the finder is open");
+        finder.force_close();
+        assert!(finder.dialog().parent().is_some(), "only queued");
+        settle();
+        assert!(finder.dialog().parent().is_none(), "it has closed");
+        assert_eq!(
+            *heard.borrow(),
+            [(FinderOutput::ClosedForGood, false)],
+            "the owner hears it once the finder has closed"
+        );
         window.destroy();
         settle();
     }
@@ -932,7 +990,7 @@ mod tests {
         let closed = Rc::new(Cell::new(0_u32));
         let count = Rc::clone(&closed);
         finder
-            .dialog
+            .dialog()
             .connect_closed(move |_| count.set(count.get() + 1));
         let (window, parent) = window();
         finder.present(&parent, "d");
@@ -1010,7 +1068,7 @@ mod tests {
             "each choice after its update, Enter after the preview"
         );
 
-        finder.dialog.force_close();
+        finder.dialog().force_close();
         window.destroy();
         settle();
     }

@@ -137,6 +137,7 @@ impl Component for ProblemsComponent {
                     },
                 },
             },
+            #[name = "empty_page"]
             add_named[Some("empty")] = &adw::StatusPage {
                 set_icon_name: Some("object-select-symbolic"),
                 set_title: &tr("No problems"),
@@ -155,6 +156,8 @@ impl Component for ProblemsComponent {
             selected: None,
         };
         let widgets = view_output!();
+        // Its empty state reads whole in any frame it is docked in.
+        super::empty_state::fit(&widgets.empty_page);
         ComponentParts { model, widgets }
     }
 
@@ -610,6 +613,7 @@ impl Component for FilesListComponent {
                     },
                 },
             },
+            #[name = "empty_page"]
             add_named[Some("empty")] = &adw::StatusPage {
                 set_icon_name: Some("folder-symbolic"),
                 set_title: &tr("No files"),
@@ -632,6 +636,8 @@ impl Component for FilesListComponent {
         };
         let activation = None;
         let widgets = view_output!();
+        // Its empty state reads whole in any frame it is docked in.
+        super::empty_state::fit(&widgets.empty_page);
         ComponentParts { model, widgets }
     }
 

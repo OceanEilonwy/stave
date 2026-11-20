@@ -134,6 +134,10 @@ pub(in crate::ui) enum ProjectInput {
     /// With `--window-screenshot`: look again whether the window has
     /// drawn, and save it once it has.
     CaptureTick(Capture),
+    /// With `--window-screenshot`: the finder has closed for good (it
+    /// answers [`FinderInput::ForceClose`](crate::ui::finder::FinderInput::ForceClose)),
+    /// so the window, saved already, closes for good too.
+    FinderClosedForGood,
 }
 
 /// What people answered when asked about unsaved changes.
@@ -459,6 +463,7 @@ impl Window {
                 | workbench::PanelId::Output => {}
             },
             ProjectInput::CaptureTick(capture) => self.capture_tick(capture),
+            ProjectInput::FinderClosedForGood => self.close_after_capture(),
         }
     }
 
@@ -629,7 +634,7 @@ impl Window {
         };
         let titles: Vec<String> = graph.scenes.iter().map(|s| s.title.clone()).collect();
         let index = self.session.scene_index();
-        self.widgets.header.show_scenes(&titles, index);
+        self.widgets.dock.show_scenes(&titles, index);
         self.widgets.view_stack.set_visible_child_name("view");
         self.show_moves();
         self.repose();
@@ -779,10 +784,11 @@ impl Window {
             // first launch doesn't show code until it is asked for.
             (Some(_), Some(placed)) if !self.state.linking => {
                 files.reveal(&placed);
-                let workbench = &self.widgets.workbench;
-                if workbench.is_open(workbench::PanelId::Code) {
-                    workbench.bring_forward_beside_view(workbench::PanelId::Code);
-                }
+                // Whether it is open is decided by the workbench, after the
+                // moves queued before.
+                self.widgets
+                    .workbench
+                    .bring_forward_if_open(workbench::PanelId::Code);
             }
             _ => {}
         }
@@ -876,8 +882,15 @@ impl Window {
         }
         // What `--type` typed is never saved, and closing doesn't ask.
         self.widgets.files.forget_unsaved();
-        // An open finder would keep the window from closing.
-        self.widgets.finder.dialog.force_close();
+        // An open finder would keep the window from closing: the finder
+        // closes itself for good first, and says so
+        // (`FinderClosedForGood`), after the messages before.
+        self.widgets.finder.force_close();
+    }
+
+    /// With `--window-screenshot`, once the window is saved and the finder
+    /// has closed: closes the window for good.
+    fn close_after_capture(&mut self) {
         // Stops the application; its `close` only queues a request
         // (`close-request` sends a message), so the window closes here,
         // before the main loop stops, without asking about anything.
