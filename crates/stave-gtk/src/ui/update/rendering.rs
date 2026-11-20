@@ -1068,7 +1068,6 @@ impl Window {
                     Shown::Refused => self.request_render(),
                 }
                 self.show_pins();
-                self.place_ghost_verdict();
                 // Save the window once a frame drawn at the view's real
                 // size is up (not one drawn before the view had its size,
                 // shown stretched).

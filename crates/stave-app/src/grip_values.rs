@@ -5,7 +5,7 @@
 //! arithmetic, exact, is here.
 //!
 //! ```text
-//! pointer ──scrubbed──▶ wanted ──drag_target──▶ (target, held)   ──DragTo(target)──▶ session
+//! slider ──along──▶ wanted · button ──nudged──▶ wanted ──drag_target──▶ (target, held)   ──DragTo(target)──▶ session
 //! arrow key ──stepped──▶ wanted ──drag_target──▶ ...
 //! typed ──typed_check──▶ Ok, or why the session would write something else
 //! ```
@@ -143,31 +143,87 @@ pub fn stepped(listed: &ListedGrip, now: Amount, steps: i32, round: bool) -> Opt
     Some(now.with_raw(raw))
 }
 
-/// How far one pixel of a scrub moves a value of `like`'s kind: a
-/// millimetre, half a degree, an eighth of a count (eight pixels a
-/// piece) or a two-hundredth; a fifth of that when `fine`.
-fn scrub_rate(like: Amount, fine: bool) -> Option<Rational> {
-    let rate = match like {
+/// One whole unit of `like`'s kind, as the size editor's buttons step
+/// it: a millimetre, a degree, a piece, or a hundredth of a ratio.
+fn unit(like: Amount) -> Option<Rational> {
+    Some(match like {
         Amount::Length(_) => Rational::from_int(1_000_000),
-        Amount::Angle(_) => Rational::from_int(500_000),
-        Amount::Count(_) => Rational::new(1, 8)?,
-        Amount::Ratio(_) => Rational::new(1, 200)?,
-    };
-    if fine {
-        rate.checked_div(Rational::from_int(5))
-    } else {
-        Some(rate)
-    }
+        Amount::Angle(_) => Rational::from_int(1_000_000),
+        Amount::Count(_) => Rational::ONE,
+        Amount::Ratio(_) => Rational::new(1, 100)?,
+    })
 }
 
-/// The value a number field dragged sideways by `pixels` (right is
-/// larger) from `from` asks for, before [`drag_target`] snaps it and
-/// holds it in range: a millimetre a pixel for a length, half a degree
-/// for an angle, a piece every eight pixels for a count, a fifth as fast
-/// when `fine`. `None` when it can't be worked out.
-pub fn scrubbed(from: Amount, pixels: i32, fine: bool) -> Option<Amount> {
-    let by = scrub_rate(from, fine)?.checked_mul(Rational::from_int(i128::from(pixels)))?;
-    Some(from.with_raw(from.raw().checked_add(by)?))
+/// `now` moved by `units` whole units (−10, −1, +1, +10 millimetres for
+/// a length), before [`drag_target`] snaps it and holds it in range.
+/// `None` when it can't be worked out.
+pub fn nudged(now: Amount, units: i32) -> Option<Amount> {
+    let by = unit(now)?.checked_mul(Rational::from_int(i128::from(units)))?;
+    Some(now.with_raw(now.raw().checked_add(by)?))
+}
+
+/// How finely a slider position is read: ten thousand steps across.
+pub const SLIDER_STEPS: i32 = 10_000;
+
+/// The range a size's slider shows, low and high: its range (see
+/// [`grip_bounds`]) with an eighth of it more each side, where the slider
+/// draws the ends as blocked, never below zero; for a size that follows
+/// params, from half to one and a half times its value (a length of
+/// nothing, 0mm to 100mm).
+pub fn slider_range(listed: &ListedGrip) -> Option<(Amount, Amount)> {
+    let now = grip_value(listed);
+    let (low, high) = match grip_bounds(listed) {
+        Some((low, high)) => {
+            let margin = high
+                .raw()
+                .checked_sub(low.raw())?
+                .checked_div(Rational::from_int(8))?;
+            (
+                low.raw().checked_sub(margin)?,
+                high.raw().checked_add(margin)?,
+            )
+        }
+        None if now.raw() == Rational::ZERO => (
+            Rational::ZERO,
+            unit(now)?.checked_mul(Rational::from_int(100))?,
+        ),
+        None => {
+            let half = now.raw().checked_div(Rational::from_int(2))?;
+            (now.raw().checked_sub(half)?, now.raw().checked_add(half)?)
+        }
+    };
+    let low = if low.is_negative() {
+        Rational::ZERO
+    } else {
+        low
+    };
+    (high > low).then(|| (now.with_raw(low), now.with_raw(high)))
+}
+
+/// The value at `position` steps of [`SLIDER_STEPS`] along a slider
+/// showing `low` to `high`, before [`drag_target`] snaps it and holds it
+/// in range.
+pub fn along(low: Amount, high: Amount, position: i32) -> Option<Amount> {
+    let span = high.raw().checked_sub(low.raw())?;
+    let at = span
+        .checked_mul(Rational::from_int(i128::from(
+            position.clamp(0, SLIDER_STEPS),
+        )))?
+        .checked_div(Rational::from_int(i128::from(SLIDER_STEPS)))?;
+    Some(low.with_raw(low.raw().checked_add(at)?))
+}
+
+/// Where `value` sits along a slider showing `low` to `high`, in steps of
+/// [`SLIDER_STEPS`], held to the slider.
+pub fn position(low: Amount, high: Amount, value: Amount) -> Option<i32> {
+    let span = high.raw().checked_sub(low.raw())?;
+    let steps = value
+        .raw()
+        .checked_sub(low.raw())?
+        .checked_mul(Rational::from_int(i128::from(SLIDER_STEPS)))?
+        .checked_div(span)?
+        .round();
+    i32::try_from(steps.clamp(0, i128::from(SLIDER_STEPS))).ok()
 }
 
 /// Why a value typed for a movable grip would not be written as typed.
@@ -328,16 +384,30 @@ mod tests {
     }
 
     #[test]
-    fn a_scrub_moves_a_millimetre_a_pixel_then_snaps() {
-        let grip = movable(900, GripStops::NotSearched);
-        assert_eq!(scrubbed(mm(900), 37, false), Some(mm(937)));
-        assert_eq!(scrubbed(mm(900), -3, true), Some(tenths(8994)));
-        let wanted = scrubbed(mm(900), 3, true).unwrap();
-        assert_eq!(drag_target(&grip, wanted, false), (tenths(9005), None));
+    fn the_buttons_nudge_by_whole_units() {
+        assert_eq!(nudged(mm(900), -10), Some(mm(890)));
+        assert_eq!(nudged(mm(900), 1), Some(mm(901)));
         assert_eq!(
-            scrubbed(Amount::Count(Rational::from_int(3)), 16, false),
-            Some(Amount::Count(Rational::from_int(5)))
+            nudged(Amount::Count(Rational::from_int(3)), 1),
+            Some(Amount::Count(Rational::from_int(4)))
         );
+    }
+
+    #[test]
+    fn a_slider_shows_the_range_with_an_eighth_more_each_side() {
+        // The within is 600mm..1200mm: the slider shows 525mm..1275mm.
+        let grip = movable(900, GripStops::NotSearched);
+        let (low, high) = slider_range(&grip).unwrap();
+        assert_eq!((low, high), (mm(525), mm(1275)));
+        assert_eq!(position(low, high, mm(900)), Some(5000));
+        assert_eq!(along(low, high, 5000), Some(mm(900)));
+        // Past the range the slider asks for a value the drag holds.
+        let wanted = along(low, high, 0).unwrap();
+        assert_eq!(
+            drag_target(&grip, wanted, false),
+            (mm(600), Some(Held::Below))
+        );
+        assert_eq!(position(low, high, mm(2000)), Some(SLIDER_STEPS));
     }
 
     #[test]

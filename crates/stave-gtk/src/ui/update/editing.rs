@@ -45,8 +45,6 @@ pub(in crate::ui) enum EditingInput {
     PointerAt(Option<(f64, f64)>),
     /// Sends an editing command now (after the card's spinner showed).
     SendEdit(EditCommand),
-    /// Sends an editing command once the signal that asked is done.
-    SendEditLater(EditCommand),
     /// Chooses the menu entry for this declaration now.
     ChooseNow(Declaration),
     /// The next step of checking the menu's entries.
@@ -95,42 +93,6 @@ pub(in crate::ui) enum EditingInput {
         /// changed it (a later one replaces the change).
         shows: u64,
     },
-    /// The repeat count's handle was pressed here.
-    CountDragBegun {
-        /// Across.
-        x: f64,
-        /// Down.
-        y: f64,
-    },
-    /// The repeat count's handle moved this far.
-    CountDragged {
-        /// Across.
-        x: f64,
-        /// Down.
-        y: f64,
-    },
-    /// The repeat count's handle was let go.
-    CountDragEnded,
-    /// A boundary's handle was pressed here.
-    BoundaryDragBegun {
-        /// The handle.
-        index: usize,
-        /// Across.
-        x: f64,
-        /// Down.
-        y: f64,
-    },
-    /// A boundary's handle moved this far.
-    BoundaryDragged {
-        /// The handle.
-        index: usize,
-        /// Across.
-        x: f64,
-        /// Down.
-        y: f64,
-    },
-    /// A boundary's handle was let go.
-    BoundaryDragEnded,
     /// The finder asks which verbs a query names.
     FinderActions(String),
     /// A verb was chosen in the finder.
@@ -143,17 +105,28 @@ pub(in crate::ui) enum EditingInput {
     RelistGrips,
     /// A grip's stops were found on the worker thread.
     GripStopsFound(Box<FoundStops>),
-    /// A size's field was clicked: it turns into an entry.
-    OpenGripEntry(usize),
-    /// A value was typed into a grip's entry.
-    GripTyped {
-        /// The grip.
-        index: usize,
-        /// What was typed.
-        text: String,
+    /// A size's row was clicked: its editor opens.
+    OpenSize(usize),
+    /// Cancel or Escape in the size editor.
+    CloseSize,
+    /// The size editor's slider moved to a position (steps of
+    /// `grip_values::SLIDER_STEPS`), or was let go there.
+    SizeSlid {
+        /// Where along it.
+        position: i32,
+        /// It was let go.
+        released: bool,
     },
-    /// Escape in a grip's entry.
-    CloseGripTyping(usize),
+    /// A step button or an arrow key: whole units, up or down.
+    SizeNudged(i32),
+    /// "Back to …" in the size editor.
+    SizeReset,
+    /// Enter in the size editor's field, with what is typed.
+    SizeTyped(String),
+    /// Apply in the size editor.
+    SizeApply,
+    /// The wait before checking the size editor's value is over.
+    CheckSize(u64),
     /// A grip's range switch turned off.
     GripMakePlain {
         /// The grip.
@@ -174,30 +147,6 @@ pub(in crate::ui) enum EditingInput {
         /// The menu that asked, closed once the range is read.
         menu: SwitchMenu,
     },
-    /// A size's field began to be dragged.
-    GripPressed(usize),
-    /// A size's field was dragged this far sideways.
-    GripMoved {
-        /// Pixels from where it was pressed, right is larger.
-        dx: f64,
-        /// Shift is held: finer.
-        fine: bool,
-        /// Ctrl is held: round the value.
-        round: bool,
-    },
-    /// A size's field was let go.
-    GripReleased,
-    /// An arrow key stepped a size's field.
-    GripStepped {
-        /// The grip.
-        index: usize,
-        /// How many steps, and which way.
-        steps: i32,
-        /// Ctrl is held: round the value.
-        round: bool,
-    },
-    /// Sends the dragged value waiting, if any.
-    FlushDrag,
 }
 
 impl From<EditingInput> for WindowInput {
@@ -229,7 +178,6 @@ impl Window {
             EditingInput::EditFace => self.edit_face(),
             EditingInput::PointerAt(point) => self.edit_hover(point),
             EditingInput::SendEdit(command) => self.send_edit(command),
-            EditingInput::SendEditLater(command) => self.send_edit_later(command),
             EditingInput::ChooseNow(declaration) => self.choose_now(declaration),
             EditingInput::CheckMenuStep { generation, budget } => {
                 self.check_menu_step(generation, budget);
@@ -252,14 +200,6 @@ impl Window {
             EditingInput::CardRepeatChanged { count, axis, shows } => {
                 self.card_repeat_changed(count, axis, shows);
             }
-            EditingInput::CountDragBegun { x, y } => self.count_drag_begin(x, y),
-            EditingInput::CountDragged { x, y } => self.count_drag_update(x, y),
-            EditingInput::CountDragEnded => self.count_drag_end(),
-            EditingInput::BoundaryDragBegun { index, x, y } => {
-                self.boundary_drag_begun(index, x, y);
-            }
-            EditingInput::BoundaryDragged { index, x, y } => self.boundary_dragged(index, x, y),
-            EditingInput::BoundaryDragEnded => self.boundary_drag_ended(),
             EditingInput::FinderActions(query) => {
                 let actions = self.finder_actions(&query);
                 self.widgets.finder.show_actions(actions);
@@ -272,9 +212,14 @@ impl Window {
                 let events = self.session.grip_stops_found(*found);
                 self.handle(events);
             }
-            EditingInput::OpenGripEntry(index) => self.open_entry(index),
-            EditingInput::GripTyped { index, text } => self.apply_typed(index, &text),
-            EditingInput::CloseGripTyping(index) => self.close_typing(index),
+            EditingInput::OpenSize(index) => self.open_size(index),
+            EditingInput::CloseSize => self.close_size(),
+            EditingInput::SizeSlid { position, released } => self.size_slid(position, released),
+            EditingInput::SizeNudged(units) => self.size_nudged(units),
+            EditingInput::SizeReset => self.size_reset(),
+            EditingInput::SizeTyped(text) => self.size_typed(&text),
+            EditingInput::SizeApply => self.apply_size(),
+            EditingInput::CheckSize(ticket) => self.check_size(ticket),
             EditingInput::GripMakePlain { index, param } => self.grip_make_plain(index, param),
             EditingInput::GripMakeSolved {
                 index,
@@ -283,15 +228,6 @@ impl Window {
                 high,
                 menu,
             } => self.grip_make_solved(index, param, (&low, &high), &menu),
-            EditingInput::GripPressed(index) => self.grip_pressed(index),
-            EditingInput::GripMoved { dx, fine, round } => self.grip_moved(dx, fine, round),
-            EditingInput::GripReleased => self.grip_released(),
-            EditingInput::GripStepped {
-                index,
-                steps,
-                round,
-            } => self.grip_stepped(index, steps, round),
-            EditingInput::FlushDrag => self.flush_drag(),
         }
     }
 }

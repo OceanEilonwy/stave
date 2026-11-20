@@ -573,7 +573,7 @@ fn drag_panel(
     if detail.target.is_none() && !checking {
         verdict = PanelVerdict {
             class: "waiting",
-            words: tr("Drag the number, or type a value"),
+            words: tr("Drag, step or type a value"),
         };
     }
     let fits = matches!(progress, Progress::Tried(Verdict::Fits(_))) && !checking;
@@ -621,15 +621,6 @@ pub(super) fn panel_model(
             })
         }
         _ => None,
-    }
-}
-
-/// Why a typed value was not applied, in words, for under the entry;
-/// `None` when it fits.
-pub(super) fn typed_refusal(progress: &Progress) -> Option<String> {
-    match progress {
-        Progress::Tried(Verdict::Fits(_)) => None,
-        progress => Some(panel_verdict(progress, false).words),
     }
 }
 

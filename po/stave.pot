@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-20 11:15+0800\n"
+"POT-Creation-Date: 2026-11-20 12:34+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -804,44 +804,44 @@ msgstr ""
 msgid "this space is not one piece of a split, so it has no boundaries to move"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1205
+#: crates/stave-app/src/grips.rs:1217
 #, rust-format
 msgid "'{value}' can't be changed by a patch: it is set inside another component"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1209
+#: crates/stave-app/src/grips.rs:1221
 msgid "the value is not the same kind as the size (a length for a length)"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1214
+#: crates/stave-app/src/grips.rs:1226
 msgid "that value is not one this size follows"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1215 crates/stave-app/src/solve_edit.rs:157
+#: crates/stave-app/src/grips.rs:1227 crates/stave-app/src/solve_edit.rs:157
 #: crates/stave-app/src/stops.rs:190
 msgid "the numbers are too large"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1222
+#: crates/stave-app/src/grips.rs:1234
 #, rust-format
 msgid "'{path}' would have to be {numerator}/{denominator}, which has no exact decimal, so a drag can't write it"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1236
+#: crates/stave-app/src/grips.rs:1248
 msgid "this size is worked out from numbers only, so a drag has nothing to change"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1242
+#: crates/stave-app/src/grips.rs:1254
 #, rust-format
 msgid "{name} (the size is not worked out from it in a straight line)"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1249
+#: crates/stave-app/src/grips.rs:1261
 #, rust-format
 msgid "nothing this size follows can change: {reasons}"
 msgstr ""
 
-#: crates/stave-app/src/grips.rs:1357
+#: crates/stave-app/src/grips.rs:1369
 #, rust-format
 msgid "Set {path} to {value}"
 msgstr ""
@@ -1261,8 +1261,8 @@ msgstr ""
 
 #: crates/stave-app/src/problems.rs:126
 #: crates/stave-gtk/src/ui/edit_card.rs:577
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:709
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:717
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:711
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:719
 #: crates/stave-gtk/src/ui/new_project.rs:234
 msgid "Name"
 msgstr ""
@@ -1270,6 +1270,8 @@ msgstr ""
 #: crates/stave-app/src/problems.rs:127
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:264
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:354
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:446
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:464
 msgid "Value"
 msgstr ""
 
@@ -2314,7 +2316,7 @@ msgid "another assembly"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view.rs:349
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1081
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1078
 #, rust-format
 msgid "'{text}' can't be a name: {reason}"
 msgstr ""
@@ -2325,21 +2327,21 @@ msgstr ""
 msgid "'{text}' isn't a value Stave can read: {reason}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view.rs:772
+#: crates/stave-gtk/src/ui/edit_view.rs:771
 #, rust-format
 msgid "Add something onto its {face} face…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view.rs:775
+#: crates/stave-gtk/src/ui/edit_view.rs:774
 msgid "List what can go on the face you clicked"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view.rs:785
+#: crates/stave-gtk/src/ui/edit_view.rs:784
 #: crates/stave-gtk/src/ui/new_project.rs:661
 msgid "Click inside the box to add the first piece"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view.rs:790
+#: crates/stave-gtk/src/ui/edit_view.rs:789
 msgid "No parts yet. Click inside the box to add the first piece."
 msgstr ""
 
@@ -2436,12 +2438,12 @@ msgid "Still to choose: {names}"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/changes.rs:305
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:750
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:752
 msgid "And the other side"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/changes.rs:485
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:878
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:880
 msgid "Change"
 msgstr ""
 
@@ -2488,6 +2490,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: crates/stave-gtk/src/ui/edit_view/changes.rs:841
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:557
 #: crates/stave-gtk/src/ui/new_project.rs:454
 #: crates/stave-gtk/src/ui/sections.rs:286
 #: crates/stave-gtk/src/ui/sections.rs:290
@@ -2581,6 +2584,7 @@ msgid "Make it solved"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:262
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:444
 msgid "Type a value and press Enter"
 msgstr ""
 
@@ -2591,6 +2595,8 @@ msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:281
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:477
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:535
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:713
 msgid "Which size changes?"
 msgstr ""
 
@@ -2607,6 +2613,7 @@ msgid "Options: let the solver move this, and its range"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/grip_panel.rs:448
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:626
 #, rust-format
 msgid "was {value}"
 msgstr ""
@@ -2745,25 +2752,31 @@ msgid "Changes {change}"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/grip_text.rs:576
-msgid "Drag the number, or type a value"
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:545
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:557
+msgid "Drag, step or type a value"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/grips.rs:488
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:486
 msgid "the space"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/grips.rs:732
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:543
+msgid "Checking the design…"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:562
+#, rust-format
+msgid "{stop}. {verdict}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:570
+msgid "Not tried: the value above can't be written"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/grips.rs:901
 #, rust-format
 msgid "That range can't be read: {reason}"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/grips.rs:807
-#, rust-format
-msgid "Can't be {value}: it would be written as {written}"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/grips.rs:815
-msgid "it can't be tried"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/hold.rs:85
@@ -2912,89 +2925,101 @@ msgstr ""
 msgid "Repeat"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:716
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:718
 msgid "Click to retype the name: it changes everywhere it is used"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:749
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:751
 msgid "Add its mirror image on the other side"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:769
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:771
 #: crates/stave-gtk/src/ui/edit_view/verbs.rs:230
 msgid "Hold a distance…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:778
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:780
 msgid "Pick a second part or space and keep the distance to it"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:785
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:787
 msgid "Remove…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:788
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:790
 msgid "Take it out of the design (Delete)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1042
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1039
 #, rust-format
 msgid "And the other side · adds {image}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1046
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1043
 msgid "And the other side · splits its space across into a mirrored pair"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1063
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1060
 msgid "Select a part or an assembly first, then rename it"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1085
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1082
 #, rust-format
 msgid "'{item}' can't be renamed here"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1109
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1106
 msgid "A repeat makes two or more; Remove takes it away"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1131
+#: crates/stave-gtk/src/ui/edit_view/item_tools.rs:1128
 #, rust-format
 msgid "{item} has no other side to add"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/repeat_handles.rs:303
-msgid "Drag toward the start of the space for more pieces, back for fewer"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/repeat_handles.rs:703
-msgid "Drag to move the boundary: only these two pieces change size"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/scrub_field.rs:106
-#, rust-format
-msgid "Value of {size}"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/scrub_field.rs:133
-msgid "Drag left or right to change it (Shift: finer, Ctrl: round numbers). Click to type a value."
-msgstr ""
-
-#: crates/stave-gtk/src/ui/edit_view/sizes.rs:78
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:147
 msgid "Sizes"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/sizes.rs:80
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:150
 msgid "Part sizes"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/sizes.rs:83
-msgid "Drag a number left or right to change it, or click it to type a value."
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:154
+msgid "Click a size to change it. Nothing is written until Apply."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/edit_view/sizes.rs:145
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:218
 msgid "Its sizes follow its parts' sizes: open Part sizes."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:287
+#, rust-format
+msgid "Change {size}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:558
+#: crates/stave-gtk/src/ui/sections.rs:290
+msgid "Esc"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:561
+#: crates/stave-gtk/src/ui/sections.rs:321
+msgid "Apply"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:562
+#: crates/stave-gtk/src/ui/sections.rs:294
+msgid "Enter"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:681
+#, rust-format
+msgid "back to {value}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/edit_view/sizes.rs:686
+msgid "What changes"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/edit_view/verbs.rs:146
@@ -3946,18 +3971,6 @@ msgstr ""
 msgid "Leave the design as it is (Esc)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/sections.rs:290
-msgid "Esc"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/sections.rs:294
-msgid "Enter"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/sections.rs:321
-msgid "Apply"
-msgstr ""
-
 #: crates/stave-gtk/src/ui/slider.rs:229
 #, rust-format
 msgid "{value}, blocked"
@@ -4098,11 +4111,11 @@ msgid "Pulled apart · {percent}%"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/update/rendering.rs:1039
-#: crates/stave-gtk/src/ui/update/rendering.rs:1091
+#: crates/stave-gtk/src/ui/update/rendering.rs:1090
 msgid "Can't draw in 3D"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/update/rendering.rs:1322
+#: crates/stave-gtk/src/ui/update/rendering.rs:1321
 #, rust-format
 msgid "Show the problem: {message}"
 msgstr ""

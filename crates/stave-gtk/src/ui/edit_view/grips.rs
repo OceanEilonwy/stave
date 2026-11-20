@@ -1,27 +1,26 @@
 //! Sizes in the Edit panel (`docs/gui.md`, "Sizes"; `docs/editing.md`,
 //! "Grips"): the sizes of a selected assembly, of the envelope or of a
-//! split's boundaries, one row each in the Edit panel's Sizes card
-//! (`sizes.rs`), each a number field dragged sideways to change it or
-//! clicked to type a value; a drag moves the value live with its ghost
-//! and verdict; the sizes to pick from when a size follows several, and
-//! the switch that lets the solver move a param. Nothing is drawn on the
-//! model: what the drag changes, the sizes to pick from, the stop and the
-//! verdict are in the change card's Size section (`grip_panel.rs`),
-//! whose Apply writes it.
+//! split's boundaries, one compact row each in the Edit panel's Sizes
+//! card (`sizes.rs`); a row clicked opens the size editor in its place,
+//! where the value is moved with a slider, stepped with buttons or typed,
+//! and written with Apply. Nothing is drawn on the model and nothing is
+//! written before Apply.
 //!
 //! ```text
 //! selection / a click in a space ──ListGrips──▶ GripsChanged ──▶ the Sizes card's rows
-//!                                               StopsJob on a worker ──▶ GripStopsFound ──▶ each field's range
-//! drag a field ──BeginDrag(i)──▶ move ──DragTo(value)──▶ DragMoved / VerdictChanged ──▶ the field, the Size section, the ghost
-//! let go ──▶ Add when it fits          Escape or Cancel ──▶ nothing written
-//! click a field ──▶ entry ──Enter──▶ TypeGripValue ──▶ Add when it fits, else why, still editable
-//! the switch (⋮) ──▶ MakeSolved / MakePlain ──▶ Edit panel ──Apply──▶ Add
+//!                                               StopsJob on a worker ──▶ GripStopsFound ──▶ each slider's stops
+//! click a row ──▶ the editor (nothing sent yet)
+//! slide / step / type ──▶ the value shown at once, "Checking…"
+//!     ──(a pause, or let go)──▶ BeginDrag(i), DragTo(value) ──▶ the verdict, what changes, the ghost
+//! Apply (when it fits) ──Add──▶ written      Cancel or Escape ──Cancel──▶ nothing written
+//! the switch (⋮) ──▶ MakeSolved / MakePlain ──▶ the change card ──Apply──▶ Add
 //! ```
 //!
 //! The session decides everything: what a grip moves, where it snaps, what
-//! stops it, the verdict and the text written; how far a pixel of a drag
-//! moves a value is `stave_app::grip_values::scrubbed`. Here a field's
-//! travel becomes a value to send, and what the session holds is shown.
+//! stops it, the verdict and the text written; what a slider position or
+//! a step is worth is `stave_app::grip_values`. A check takes a moment, so
+//! the value is shown before it is checked, and a slider is checked only
+//! once it pauses or is let go.
 
 use stave_app::i18n::{fill_in, tr};
 use std::sync::Arc;
@@ -33,8 +32,9 @@ use gtk::{gio, glib};
 use stave_app::change::{Change, ChangeRequest};
 use stave_app::edit::{Picked, Verdict};
 use stave_app::editing::{EditCommand, EditEvent, Progress, parse_value};
+use stave_app::grip_values::{along, grip_bounds, nudged, position, slider_range};
 use stave_app::gripping::{FoundStops, GripList, ListedGrip};
-use stave_app::grips::{FollowKind, GripAction, GripSelection};
+use stave_app::grips::{GripAction, GripSelection};
 use stave_app::session::{Command, Event, Selection};
 use stave_lang::ast::Ident;
 use stave_model::ids::{AssemblyId, ParamId, PartId};
@@ -45,19 +45,24 @@ use super::grip_panel::{
     GripOptions, GripPanelOutput, GripSection, PanelAction, SwitchAsk, SwitchMenu,
 };
 use super::grip_text::{
-    GripLook, Held, amount_like, amount_words, grip_look, grip_value, held_words, panel_model,
-    solver_switches, typed_check, typed_refusal,
+    GripLook, Held, amount_like, amount_words, arrow_words, grip_look, grip_value, held_words,
+    panel_model, solver_switches, typed_check,
 };
-use super::sizes::SizesCard;
+use super::size_slider::{SliderLook, Tone};
+use super::sizes::{EditorView, SizesCard, short_name};
 use crate::ui::update::editing::EditingInput;
 use crate::ui::{Window, WindowInput};
 
+/// How long a slider must rest before its value is checked.
+const SLIDER_PAUSE: Duration = Duration::from_millis(120);
+
 /// The sizes' card and section, and what only they need.
 pub(in crate::ui) struct GripView {
-    /// The size a drag moves, as a section of the change's card; its
-    /// actions come to the window as [`EditingInput::GripPanel`].
+    /// The size section of the change card, for a param made solved or
+    /// plain; its actions come to the window as
+    /// [`EditingInput::GripPanel`].
     panel: GripSection,
-    /// The Sizes card of the Edit panel: a row per size.
+    /// The Sizes card of the Edit panel: a row per size, and the editor.
     pub(super) sizes: SizesCard,
     state: GripState,
 }
@@ -67,34 +72,34 @@ pub(in crate::ui) struct GripView {
 struct GripState {
     /// What the sizes shown are of.
     shown_for: Option<GripSelection>,
+    /// What the card's head names (`divider`), to shorten names by.
+    title: String,
     /// Stops the running stops search.
     cancel: Option<Arc<AtomicBool>>,
-    /// The pointer holds a field.
-    gesture: Option<Gesture>,
-    /// The value to send next, while one is being tried.
-    pending: Option<Amount>,
-    /// A `DragTo` is waiting to be sent.
-    sending: bool,
-    /// The last value sent.
-    last_sent: Option<Amount>,
-    /// The grip whose change (a drag, or a param made solved or plain) the
-    /// grips started and hold open.
+    /// The size the editor is open on.
     open: Option<usize>,
-    /// The drag was held at an end of its range.
+    /// The value the editor holds, once moved.
+    value: Option<Amount>,
+    /// The value was held at an end of its range.
     held: Option<Held>,
-    /// The grip whose value is being typed.
-    typing: Option<usize>,
+    /// Why the value typed was refused.
+    refusal: Option<String>,
+    /// The value shown waits for its check.
+    checking: bool,
+    /// Which wait for a check is the latest.
+    ticket: u64,
+    /// The last value checked.
+    last_sent: Option<Amount>,
+    /// Apply was pressed while a check waited: written once it fits.
+    apply_waiting: bool,
+    /// A cancel the editor sent itself, which keeps it open.
+    keep_open: bool,
+    /// The size whose kind (solved or plain) a change is switching.
+    kind_for: Option<usize>,
+    /// The size just written, marked once its row is made again.
+    flash: Option<usize>,
     /// A listing from the new design is on its way.
     relist_queued: bool,
-}
-
-/// The pointer holding a field.
-#[derive(Debug, Clone, Copy)]
-struct Gesture {
-    /// The grip.
-    index: usize,
-    /// Its value when it was pressed.
-    from: Amount,
 }
 
 /// What a grip's options menu asked, as the window's message.
@@ -138,6 +143,23 @@ fn top_level(design: &stave_model::solved::SolvedDesign, id: AssemblyId) -> Opti
     None
 }
 
+/// `to` less `from`, signed, as `.stave` writes it: "+40mm", "−2.5mm";
+/// empty when they are the same.
+fn delta_words(from: Amount, to: Amount) -> String {
+    let Some(by) = to.raw().checked_sub(from.raw()) else {
+        return String::new();
+    };
+    if by == stave_lang::units::Rational::ZERO {
+        return String::new();
+    }
+    let (sign, size) = if by.is_negative() {
+        ("−", by.checked_neg().unwrap_or(by))
+    } else {
+        ("+", by)
+    };
+    format!("{sign}{}", amount_words(to.with_raw(size)))
+}
+
 impl Window {
     /// The grips' panel asked for something.
     pub(in crate::ui) fn grip_panel_asked(&mut self, action: PanelAction) {
@@ -151,16 +173,7 @@ impl Window {
                 index,
                 ask: SwitchAsk::MakeSolved { param, low, high },
             } => self.grip_make_solved(index, param, (&low, &high), &SwitchMenu::Panel),
-            PanelAction::Type(text) => {
-                let open = self.session.change().and_then(drag_index).or(self
-                    .editing
-                    .grips
-                    .state
-                    .open);
-                if let Some(index) = open {
-                    self.apply_typed(index, &text);
-                }
-            }
+            PanelAction::Type(text) => self.size_typed(&text),
         }
     }
 
@@ -313,23 +326,16 @@ impl Window {
                 }
             }
             EditEvent::GripStopsFound(_) => {
-                let busy = {
-                    let state = &self.editing.grips.state;
-                    state.gesture.is_some() || state.typing.is_some() || state.open.is_some()
-                };
+                let busy = self.editing.grips.state.open.is_some();
                 if !busy {
                     self.build_grip_marks();
                 }
             }
             EditEvent::Started => self.grips_for_edit_start(),
             EditEvent::Committed => {
-                let state = &mut self.editing.grips.state;
-                state.open = None;
-                state.typing = None;
-                state.gesture = None;
-                state.held = None;
-                state.pending = None;
-                state.last_sent = None;
+                self.reset_editor_state();
+                self.editing.grips.sizes.close_editor();
+                self.editing.grips.state.kind_for = None;
             }
             EditEvent::Cancelled => {
                 let still_open = self.session.change().is_some_and(|change| {
@@ -338,29 +344,26 @@ impl Window {
                         ChangeRequest::Grip { .. } | ChangeRequest::ParamKind { .. }
                     )
                 });
-                let (was_open, region) = {
-                    let grips = &mut self.editing.grips;
-                    let state = &mut grips.state;
-                    let was_open = state.open.is_some();
-                    if !still_open {
-                        state.open = None;
-                        state.gesture = None;
-                        state.held = None;
-                        state.pending = None;
-                        state.last_sent = None;
-                        state.typing = None;
-                    }
-                    grips.sizes.close_entries();
+                let (was_open, keep, region) = {
+                    let state = &self.editing.grips.state;
                     (
-                        was_open,
+                        state.open.is_some() || state.kind_for.is_some(),
+                        state.keep_open,
                         matches!(
                             state.shown_for,
                             Some(GripSelection::Envelope | GripSelection::Split(_))
                         ),
                     )
                 };
-                // The menu of a space was let go (not a drag on its
-                // grips): its grips go with it.
+                // Dropped from elsewhere (Escape in the window, another
+                // edit): the editor goes with it.
+                if !still_open && !keep {
+                    self.reset_editor_state();
+                    self.editing.grips.sizes.close_editor();
+                    self.editing.grips.state.kind_for = None;
+                }
+                // The menu of a space was let go (not a change of its
+                // sizes): its sizes go with it.
                 if !was_open && !still_open && region && self.session.edit().is_none() {
                     self.show_grips(None);
                 }
@@ -390,10 +393,7 @@ impl Window {
     pub(in crate::ui) fn grips_result_changed(&mut self) {
         let busy = {
             let state = &self.editing.grips.state;
-            state.shown_for.is_none()
-                || state.gesture.is_some()
-                || state.typing.is_some()
-                || state.open.is_some()
+            state.shown_for.is_none() || state.open.is_some()
         };
         if !busy {
             self.relist_grips_soon();
@@ -462,13 +462,11 @@ impl Window {
         });
     }
 
-    // ---- the widgets on the model ----
-
     // ---- the rows ----
 
     fn clear_grip_marks(&mut self) {
         self.editing.grips.sizes.clear();
-        self.editing.grips.state.typing = None;
+        self.reset_editor_state();
         self.update_edit_panel();
     }
 
@@ -501,62 +499,255 @@ impl Window {
             (title, listed, part)
         };
         self.editing.grips.sizes.show(&title, &listed, part);
-        self.editing.grips.state.typing = None;
+        self.editing.grips.state.title = title;
+        if let Some(index) = self.editing.grips.state.flash.take() {
+            self.editing.grips.sizes.flash(index);
+        }
         self.update_edit_panel();
         self.refresh_sizes();
     }
 
-    /// Shows each field's value (the dragged one's where it was moved),
-    /// and the change card's Size section.
+    /// Shows each row's value, the open editor, and the change card's size
+    /// section for a param made solved or plain.
     pub(in crate::ui) fn refresh_sizes(&mut self) {
-        {
-            let session = &self.session;
-            let grips = &self.editing.grips;
-            let state = &grips.state;
-            let open = session.change().and_then(drag_index).or(state.open);
-            if let Some(list) = session.grips() {
-                for (index, listed) in list.grips().iter().enumerate() {
-                    if state.typing == Some(index) {
-                        continue;
-                    }
-                    let moved = (open == Some(index))
-                        .then(|| {
-                            session
-                                .change()
-                                .and_then(|change| drag_target(change, index))
-                                .or(state.pending)
-                        })
-                        .flatten();
-                    let value = moved.unwrap_or_else(|| grip_value(listed));
-                    grips.sizes.set_value(index, &amount_words(value));
-                }
+        if let Some(list) = self.session.grips() {
+            for (index, listed) in list.grips().iter().enumerate() {
+                self.editing
+                    .grips
+                    .sizes
+                    .set_row_value(index, &amount_words(grip_value(listed)));
             }
-            grips
-                .sizes
-                .set_scrubbing(state.gesture.map(|gesture| gesture.index));
+        }
+        if let Some(view) = self.editor_view() {
+            self.editing.grips.sizes.update_editor(&view);
         }
         self.show_grip_section();
     }
 
-    // ---- dragging ----
+    /// What the open editor shows, from its value and the session.
+    fn editor_view(&self) -> Option<EditorView> {
+        let state = &self.editing.grips.state;
+        let index = state.open?;
+        let listed = self.listed_grip(index)?;
+        let was = grip_value(&listed);
+        let now = state.value.unwrap_or(was);
+        let slider = slider_range(&listed);
+        let bounds = grip_bounds(&listed);
+        let change = self
+            .session
+            .change()
+            .filter(|change| drag_index(change) == Some(index));
+        let model =
+            change.and_then(|change| panel_model(change, |at| self.listed_grip(at), false, None));
+        let (tone, verdict) = if state.checking {
+            (Tone::Checking, tr("Checking the design…"))
+        } else if state.value.is_none() || state.value == Some(was) {
+            (Tone::Waiting, tr("Drag, step or type a value"))
+        } else {
+            match &model {
+                Some(model) => {
+                    let tone = match model.verdict.class {
+                        "fits" => Tone::Fits,
+                        "refused" => Tone::Refused,
+                        "checking" => Tone::Checking,
+                        _ => Tone::Waiting,
+                    };
+                    (tone, model.verdict.words.clone())
+                }
+                None => (Tone::Waiting, tr("Drag, step or type a value")),
+            }
+        };
+        let verdict = match state.held.and_then(|held| held_words(&listed, held)) {
+            Some(stop) if tone != Tone::Checking => fill_in(
+                &tr("{stop}. {verdict}"),
+                &[("stop", &capitalised(&stop)), ("verdict", &verdict)],
+            ),
+            Some(_) | None => verdict,
+        };
+        let (tone, verdict) = if state.refusal.is_some() {
+            (
+                Tone::Refused,
+                tr("Not tried: the value above can't be written"),
+            )
+        } else {
+            (tone, verdict)
+        };
+        let moved = state.value.is_some_and(|value| value != was);
+        Some(EditorView {
+            index,
+            name: short_name(&listed.grip.label, &state.title).to_owned(),
+            was: amount_words(was),
+            value: amount_words(now),
+            delta: delta_words(was, now),
+            slider: slider.and_then(|(low, high)| {
+                Some(SliderLook {
+                    stops: bounds.and_then(|(stop_low, stop_high)| {
+                        Some((
+                            position(low, high, stop_low)?,
+                            position(low, high, stop_high)?,
+                        ))
+                    }),
+                    was: position(low, high, was)?,
+                    value: position(low, high, now)?,
+                    tone,
+                })
+            }),
+            low: bounds
+                .or(slider)
+                .map(|(low, _)| amount_words(low))
+                .unwrap_or_default(),
+            high: bounds
+                .or(slider)
+                .map(|(_, high)| amount_words(high))
+                .unwrap_or_default(),
+            changes: if moved && !state.checking {
+                // The session lists what else changes; a plain number's
+                // own change is said first.
+                let mut lines = model
+                    .as_ref()
+                    .map(|model| model.changes.clone())
+                    .unwrap_or_default();
+                if matches!(listed.grip.action, GripAction::Moves(_)) {
+                    lines.insert(
+                        0,
+                        format!("{}  {}", listed.grip.label, arrow_words(was, now)),
+                    );
+                }
+                lines
+            } else {
+                Vec::new()
+            },
+            choices: model
+                .as_ref()
+                .map(|model| model.choices.clone())
+                .unwrap_or_default(),
+            verdict,
+            tone,
+            can_apply: moved
+                && !state.checking
+                && state.refusal.is_none()
+                && model.as_ref().is_some_and(|model| model.can_apply),
+            refusal: state.refusal.clone(),
+            switches: if grip_look(&listed) == GripLook::Locked {
+                Vec::new()
+            } else {
+                solver_switches(&listed)
+            },
+        })
+    }
+
+    // ---- the editor ----
 
     /// The listed grip at `index`.
     fn listed_grip(&self, index: usize) -> Option<ListedGrip> {
         self.session.grips()?.grips().get(index).cloned()
     }
 
-    /// The value a drag on `index` is at now: where it was moved, or its
-    /// value.
-    fn grip_target(&self, index: usize) -> Option<Amount> {
-        let session = &self.session;
-        let moved = session
-            .change()
-            .and_then(|change| drag_target(change, index));
-        moved.or_else(|| Some(grip_value(session.grips()?.grips().get(index)?)))
+    /// Forgets the editor's value and checks, leaving it as it is.
+    fn reset_editor_state(&mut self) {
+        let state = &mut self.editing.grips.state;
+        state.open = None;
+        state.value = None;
+        state.held = None;
+        state.refusal = None;
+        state.checking = false;
+        state.last_sent = None;
+        state.apply_waiting = false;
+        state.ticket = state.ticket.wrapping_add(1);
     }
 
-    /// Starts (or goes on with) a drag on `index`: a drag already open on
-    /// the same grip goes on from where it is.
+    /// A row was clicked: the editor opens on it, nothing sent yet; one
+    /// open on another size is closed, dropping its change.
+    pub(in crate::ui) fn open_size(&mut self, index: usize) {
+        if self.editing.grips.state.open == Some(index) {
+            return;
+        }
+        self.close_size();
+        self.editing.grips.state.open = Some(index);
+        if let Some(view) = self.editor_view() {
+            self.editing.grips.sizes.open_editor(&view);
+        }
+    }
+
+    /// Cancel or Escape: the editor closes and its change is dropped.
+    pub(in crate::ui) fn close_size(&mut self) {
+        let open = self.editing.grips.state.open;
+        let dragging = self
+            .session
+            .change()
+            .is_some_and(|change| open.is_some() && drag_index(change) == open);
+        self.reset_editor_state();
+        self.editing.grips.sizes.close_editor();
+        if dragging {
+            self.dispatch(Command::Edit(EditCommand::Cancel));
+        }
+    }
+
+    /// The value the editor's size is at now.
+    fn size_now(&self) -> Option<Amount> {
+        let state = &self.editing.grips.state;
+        let listed = self.listed_grip(state.open?)?;
+        Some(state.value.unwrap_or_else(|| grip_value(&listed)))
+    }
+
+    /// Moves the editor's value toward `wanted`, snapped and held in range
+    /// as the session would, shown at once; checked after `wait`.
+    fn set_size(&mut self, wanted: Amount, wait: Duration) {
+        let Some(index) = self.editing.grips.state.open else {
+            return;
+        };
+        let Some(listed) = self.listed_grip(index) else {
+            return;
+        };
+        let (target, held) = stave_app::grip_values::drag_target(&listed, wanted, false);
+        let ticket = {
+            let state = &mut self.editing.grips.state;
+            state.value = Some(target);
+            state.held = held;
+            state.refusal = None;
+            state.checking = state.last_sent != Some(target);
+            state.ticket = state.ticket.wrapping_add(1);
+            state.ticket
+        };
+        self.refresh_sizes();
+        if self.editing.grips.state.checking {
+            let input = self.input();
+            glib::timeout_add_local_once(wait, move || {
+                input.emit(EditingInput::CheckSize(ticket).into());
+            });
+        }
+    }
+
+    /// The wait for a check is over: the latest value is tried, unless a
+    /// newer wait has begun.
+    pub(in crate::ui) fn check_size(&mut self, ticket: u64) {
+        let (index, value) = {
+            let state = &self.editing.grips.state;
+            if state.ticket != ticket || !state.checking {
+                return;
+            }
+            let (Some(index), Some(value)) = (state.open, state.value) else {
+                return;
+            };
+            (index, value)
+        };
+        self.begin_grip_drag(index);
+        self.dispatch(Command::Edit(EditCommand::DragTo(value)));
+        let apply = {
+            let state = &mut self.editing.grips.state;
+            state.last_sent = Some(value);
+            state.checking = false;
+            std::mem::take(&mut state.apply_waiting)
+        };
+        self.refresh_sizes();
+        if apply {
+            self.apply_size();
+        }
+    }
+
+    /// Starts a drag on `index` unless one is open on it (the `DragTo`
+    /// that follows lists the sizes to pick from, for a size that follows
+    /// several plain params).
     fn begin_grip_drag(&mut self, index: usize) {
         let going_on = self
             .session
@@ -565,139 +756,115 @@ impl Window {
         if going_on {
             return;
         }
-        {
-            let state = &mut self.editing.grips.state;
-            state.open = Some(index);
-            state.held = None;
-            state.last_sent = None;
-            state.pending = None;
-        }
+        self.editing.grips.state.last_sent = None;
         self.dispatch(Command::Edit(EditCommand::BeginDrag(index)));
-        // A size that follows several plain params lists them at once,
-        // each with the value it would take, to pick from first.
-        let choices = self
-            .listed_grip(index)
-            .filter(|listed| match &listed.grip.action {
-                GripAction::Follows(follows) => {
-                    let plain = follows.follows.iter().filter(|value| {
-                        value.kind == FollowKind::Plain
-                            && value.coefficient.is_some()
-                            && value.path.is_some()
-                    });
-                    let solved = follows
-                        .follows
-                        .iter()
-                        .any(|value| value.kind == FollowKind::Solved);
-                    plain.count() > 1 && !solved
-                }
-                GripAction::Moves(_) => false,
-            });
-        if let Some(listed) = choices {
-            let value = grip_value(&listed);
-            self.editing.grips.state.last_sent = Some(value);
-            self.dispatch(Command::Edit(EditCommand::DragTo(value)));
+    }
+
+    /// The slider moved to `at`; checked once it rests, or at once when
+    /// it is let go.
+    pub(in crate::ui) fn size_slid(&mut self, at: i32, released: bool) {
+        let Some(listed) = self
+            .editing
+            .grips
+            .state
+            .open
+            .and_then(|index| self.listed_grip(index))
+        else {
+            return;
+        };
+        let Some(wanted) = slider_range(&listed).and_then(|(low, high)| along(low, high, at))
+        else {
+            return;
+        };
+        let wait = if released {
+            Duration::ZERO
+        } else {
+            SLIDER_PAUSE
+        };
+        self.set_size(wanted, wait);
+    }
+
+    /// A step button or an arrow key: `units` whole units (millimetres).
+    pub(in crate::ui) fn size_nudged(&mut self, units: i32) {
+        if let Some(wanted) = self.size_now().and_then(|now| nudged(now, units)) {
+            self.set_size(wanted, Duration::ZERO);
         }
     }
 
-    /// The pointer began to drag a field.
-    pub(in crate::ui) fn grip_pressed(&mut self, index: usize) {
-        self.begin_grip_drag(index);
-        let Some(from) = self.grip_target(index) else {
-            return;
-        };
-        self.editing.grips.state.gesture = Some(Gesture { index, from });
-        self.refresh_sizes();
-        self.request_render();
-    }
-
-    /// The pointer moved `dx` pixels sideways since it began to drag.
-    pub(in crate::ui) fn grip_moved(&mut self, dx: f64, fine: bool, round: bool) {
-        let Some(gesture) = self.editing.grips.state.gesture else {
-            return;
-        };
-        let pixels = crate::convert::int_of(dx);
-        let Some(wanted) = stave_app::grip_values::scrubbed(gesture.from, pixels, fine) else {
-            return;
-        };
-        self.grip_wanted(gesture.index, wanted, round);
-    }
-
-    /// Arrow keys on a field: a step of its resolution each way.
-    pub(in crate::ui) fn grip_stepped(&mut self, index: usize, steps: i32, round: bool) {
-        let Some(listed) = self.listed_grip(index) else {
-            return;
-        };
-        self.begin_grip_drag(index);
-        let Some(now) = self.grip_target(index) else {
-            return;
-        };
-        let Some(wanted) = stave_app::grip_values::stepped(&listed, now, steps, round) else {
-            return;
-        };
-        self.grip_wanted(index, wanted, round);
-        self.flush_drag();
-    }
-
-    /// Moves a drag toward `wanted`: snapped to the grip's steps (or to
-    /// round numbers), held inside its range, and sent once the last try
-    /// is done.
-    fn grip_wanted(&mut self, index: usize, wanted: Amount, round: bool) {
-        let Some(listed) = self.listed_grip(index) else {
-            return;
-        };
-        let (target, held) = stave_app::grip_values::drag_target(&listed, wanted, round);
-        let send = {
-            let state = &mut self.editing.grips.state;
-            state.held = held;
-            if state.last_sent == Some(target) && state.pending.is_none() {
-                false
-            } else {
-                state.pending = Some(target);
-                !std::mem::replace(&mut state.sending, true)
-            }
-        };
-        if send {
-            // Once the events in hand are handled.
-            self.send(EditingInput::FlushDrag);
-        }
-        self.refresh_sizes();
-        self.request_render();
-    }
-
-    /// Sends the value waiting, if any.
-    pub(in crate::ui) fn flush_drag(&mut self) {
-        let pending = {
-            let state = &mut self.editing.grips.state;
-            state.sending = false;
-            let pending = state.pending.take();
-            if pending.is_some() {
-                state.last_sent = pending;
-            }
-            pending
-        };
-        if let Some(target) = pending {
-            self.dispatch(Command::Edit(EditCommand::DragTo(target)));
-        }
-    }
-
-    /// The pointer let the field go: writes the drag when it fits;
-    /// otherwise the Size section says why and offers Cancel.
-    pub(in crate::ui) fn grip_released(&mut self) {
-        self.flush_drag();
-        self.editing.grips.state.gesture = None;
-        let fits = self
+    /// "Back to …": the value it had, the change dropped, the editor open.
+    pub(in crate::ui) fn size_reset(&mut self) {
+        let open = self.editing.grips.state.open;
+        let dragging = self
             .session
             .change()
-            .is_some_and(|change| drag_index(change).is_some() && fits(change.progress()));
+            .is_some_and(|change| open.is_some() && drag_index(change) == open);
+        {
+            let state = &mut self.editing.grips.state;
+            state.value = None;
+            state.held = None;
+            state.refusal = None;
+            state.checking = false;
+            state.last_sent = None;
+            state.ticket = state.ticket.wrapping_add(1);
+            state.keep_open = dragging;
+        }
+        if dragging {
+            self.dispatch(Command::Edit(EditCommand::Cancel));
+        }
+        self.editing.grips.state.keep_open = false;
+        self.refresh_sizes();
+    }
+
+    /// Enter in the editor's field: what is typed is tried; Enter again on
+    /// the value tried applies it. A value the session would write as
+    /// another number (past an end, off the resolution) is refused first.
+    pub(in crate::ui) fn size_typed(&mut self, text: &str) {
+        let Some(index) = self.editing.grips.state.open else {
+            return;
+        };
+        let Some(listed) = self.listed_grip(index) else {
+            return;
+        };
+        let typed = amount_like(grip_value(&listed), text.trim())
+            .and_then(|value| typed_check(&listed, value).map(|()| value));
+        match typed {
+            Err(why) => {
+                self.editing.grips.state.refusal = Some(why);
+                self.refresh_sizes();
+            }
+            Ok(value) => {
+                let tried = {
+                    let state = &self.editing.grips.state;
+                    state.value == Some(value) && !state.checking
+                };
+                if tried {
+                    self.apply_size();
+                } else {
+                    self.set_size(value, Duration::ZERO);
+                }
+            }
+        }
+    }
+
+    /// Apply: writes the change when it fits; while a check waits, once it
+    /// is done.
+    pub(in crate::ui) fn apply_size(&mut self) {
+        if self.editing.grips.state.checking {
+            self.editing.grips.state.apply_waiting = true;
+            return;
+        }
+        let open = self.editing.grips.state.open;
+        let fits = self.session.change().is_some_and(|change| {
+            open.is_some() && drag_index(change) == open && fits(change.progress())
+        });
         if fits {
+            self.editing.grips.state.flash = open;
             self.send_edit_later(EditCommand::Add);
         }
-        self.refresh_sizes();
-        self.request_render();
     }
 
     /// A pick from the sizes a follows grip could change, sent once the
-    /// panel's own signal is done.
+    /// editor's own signal is done.
     fn pick_later(&mut self, param: ParamId) {
         self.send(EditingInput::Dispatch(Command::Edit(
             EditCommand::PickParam(param),
@@ -706,7 +873,8 @@ impl Window {
 
     /// A grip's range switch turned off: the size is written plain again.
     pub(in crate::ui) fn grip_make_plain(&mut self, index: usize, param: Ident) {
-        self.editing.grips.state.open = Some(index);
+        self.close_size();
+        self.editing.grips.state.kind_for = Some(index);
         self.send_edit_later(EditCommand::MakePlain(param));
     }
 
@@ -724,7 +892,8 @@ impl Window {
                     SwitchMenu::Row(menu) => menu.popdown(),
                     SwitchMenu::Panel => self.editing.grips.panel.close_options(),
                 }
-                self.editing.grips.state.open = Some(index);
+                self.close_size();
+                self.editing.grips.state.kind_for = Some(index);
                 self.send_edit_later(EditCommand::MakeSolved { param, low, high });
             }
             (Err(error), _) | (_, Err(error)) => {
@@ -736,136 +905,20 @@ impl Window {
         }
     }
 
-    // ---- typing ----
-
-    // ---- typing ----
-
-    /// The field turns into an entry holding the value.
-    pub(in crate::ui) fn open_entry(&mut self, index: usize) {
-        self.editing.grips.state.typing = Some(index);
-        self.editing.grips.sizes.open_entry(index);
-    }
-
-    /// Escape in the entry: back to the number; a value typed and tried is
-    /// dropped.
-    pub(in crate::ui) fn close_typing(&mut self, index: usize) {
-        let typed = {
-            let grips = &mut self.editing.grips;
-            grips.sizes.close_entry(index);
-            grips.state.typing = None;
-            grips.state.open == Some(index)
-        };
-        if typed {
-            self.send_edit_later(EditCommand::Cancel);
-        }
-        self.refresh_sizes();
-    }
-
-    /// Enter in the entry: the value is tried through the same check as a
-    /// drag; it is written when it fits, else the entry says why and stays.
-    pub(in crate::ui) fn apply_typed(&mut self, index: usize, text: &str) {
-        let Some(listed) = self.listed_grip(index) else {
-            return;
-        };
-        // A value the session would write differently (past an end of the
-        // range, off the resolution) is refused before it is tried: what
-        // is written is always the number typed.
-        let typed = amount_like(grip_value(&listed), text.trim())
-            .and_then(|value| typed_check(&listed, value).map(|()| value));
-        let refusal = match typed {
-            Err(words) => {
-                // A value tried before and still shown in the panel goes,
-                // so the panel never shows another number than the entry.
-                self.drop_typed_change(index);
-                Some(words)
-            }
-            Ok(value) => {
-                {
-                    let state = &mut self.editing.grips.state;
-                    state.open = Some(index);
-                    state.typing = Some(index);
-                    state.held = None;
-                }
-                self.dispatch(Command::Edit(EditCommand::TypeGripValue {
-                    grip: index,
-                    value,
-                }));
-                let (progress, written) = {
-                    let session = &self.session;
-                    let change = session.change();
-                    (
-                        change.map(|change| change.progress().clone()),
-                        change.and_then(|change| typed_written(&listed, change, index)),
-                    )
-                };
-                match (progress, written) {
-                    // Whatever the verdict, the session would write
-                    // another number: refused, and its try dropped.
-                    (_, Some(written)) if written.raw() != value.raw() => {
-                        self.drop_typed_change(index);
-                        Some(fill_in(
-                            &tr("Can't be {value}: it would be written as {written}"),
-                            &[
-                                ("value", &amount_words(value)),
-                                ("written", &amount_words(written)),
-                            ],
-                        ))
-                    }
-                    (Some(progress), _) => typed_refusal(&progress),
-                    (None, _) => Some(tr("it can't be tried")),
-                }
-            }
-        };
-        self.show_typed_result(index, text, refusal);
-    }
-
-    /// A typed value's try that is still open on grip `index` is
-    /// cancelled; the entry stays open.
-    fn drop_typed_change(&mut self, index: usize) {
-        let open = self.session.change().and_then(drag_index) == Some(index);
-        if open {
-            self.dispatch(Command::Edit(EditCommand::Cancel));
-        }
-    }
-
-    /// Shows what became of a typed value: written (Add), or why not,
-    /// under the entry, which stays open holding the text typed.
-    fn show_typed_result(&mut self, index: usize, text: &str, refusal: Option<String>) {
-        match refusal {
-            Some(words) => {
-                self.editing.grips.state.typing = Some(index);
-                self.editing.grips.sizes.show_refusal(index, text, &words);
-            }
-            None => {
-                self.editing.grips.state.typing = None;
-                self.editing.grips.sizes.close_entry(index);
-                self.dispatch(Command::Edit(EditCommand::Add));
-            }
-        }
-        self.refresh_sizes();
-    }
-
-    /// Draws the size section of the change's card for a change the grips
-    /// started (a drag, or a param made solved or plain), with the grip's
-    /// options.
+    /// Draws the change card's size section for a param made solved or
+    /// plain from a size's menu.
     fn show_grip_section(&mut self) {
         let session = &self.session;
         let grips = &self.editing.grips;
-        let (stop, open) = {
-            let state = &grips.state;
-            let open = session.change().and_then(drag_index).or(state.open);
-            let stop = state
-                .held
-                .zip(open)
-                .and_then(|(held, index)| held_words(session.grips()?.grips().get(index)?, held));
-            (stop, open)
-        };
-        let model = session.change().and_then(|change| {
+        let kind = session
+            .change()
+            .filter(|change| matches!(change.request(), ChangeRequest::ParamKind { .. }));
+        let model = kind.and_then(|change| {
             panel_model(
                 change,
                 |index| session.grips()?.grips().get(index).cloned(),
                 false,
-                stop,
+                None,
             )
         });
         let Some(model) = model else {
@@ -879,9 +932,7 @@ impl Window {
             }
             slot.append(&grips.panel.root);
         }
-        // The grip's options (⋮), which the section makes again only for
-        // another grip.
-        let options = open.and_then(|index| {
+        let options = grips.state.kind_for.and_then(|index| {
             let listed = session.grips()?.grips().get(index)?;
             let switches = solver_switches(listed);
             (grip_look(listed) != GripLook::Locked && !switches.is_empty())
@@ -893,49 +944,63 @@ impl Window {
 
     // ---- driving it without a pointer (scripts) ----
 
-    /// A drag on grip `index` to `value`, as the pointer would make it,
-    /// still held.
+    /// The editor opened on `index` and its value moved to `value`, checked
+    /// at once, not written.
     pub(in crate::ui) fn drag_grip_to(&mut self, index: usize, value: Amount) {
-        self.grip_pressed(index);
-        self.grip_wanted(index, value, false);
-        self.flush_drag();
+        self.open_size(index);
+        self.set_size(value, Duration::ZERO);
+        let ticket = self.editing.grips.state.ticket;
+        self.check_size(ticket);
     }
 
-    /// Lets the held field go.
+    /// Apply, as the button.
     pub(in crate::ui) fn release_grip(&mut self) {
-        self.flush_drag();
-        self.editing.grips.state.gesture = None;
-        let fits = self
-            .session
-            .change()
-            .is_some_and(|change| drag_index(change).is_some() && fits(change.progress()));
+        let open = self.editing.grips.state.open;
+        let fits = self.session.change().is_some_and(|change| {
+            open.is_some() && drag_index(change) == open && fits(change.progress())
+        });
         if fits {
+            self.editing.grips.state.flash = open;
             self.dispatch(Command::Edit(EditCommand::Add));
         }
-        self.refresh_sizes();
     }
 
-    /// Types a value into grip `index`'s field and presses Enter.
+    /// The editor opened on `index`, `text` typed and Enter pressed (and
+    /// pressed again, to apply, when it fits).
     pub(in crate::ui) fn type_grip(&mut self, index: usize, text: &str) {
-        self.open_entry(index);
-        self.editing.grips.sizes.type_text(index, text);
-        self.apply_typed(index, text);
+        self.open_size(index);
+        self.editing.grips.sizes.type_text(text);
+        self.size_typed(text);
+        let ticket = self.editing.grips.state.ticket;
+        self.check_size(ticket);
+        if self.editing.grips.state.refusal.is_none() {
+            self.release_grip();
+        }
     }
 
-    /// Opens grip `index`'s menu with the solver's switch.
-    pub(in crate::ui) fn open_grip_menu(&self, index: usize) -> bool {
-        self.editing.grips.sizes.open_menu(index)
+    /// Opens grip `index`'s editor and its menu with the solver's switch.
+    pub(in crate::ui) fn open_grip_menu(&mut self, index: usize) -> bool {
+        self.open_size(index);
+        self.editing.grips.sizes.open_menu()
     }
 
     /// Marks a change of a param's kind as started from grip `index`.
     pub(in crate::ui) fn grip_change_opened(&mut self, index: usize) {
-        self.editing.grips.state.open = Some(index);
+        self.editing.grips.state.kind_for = Some(index);
     }
 
     /// The listed grip numbered `index`, for a script.
     pub(in crate::ui) fn grip_at(&self, index: usize) -> Option<ListedGrip> {
         self.listed_grip(index)
     }
+}
+
+/// `text` with its first letter capitalised.
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 fn drag_index(change: &Change) -> Option<usize> {
@@ -946,6 +1011,7 @@ fn drag_index(change: &Change) -> Option<usize> {
 }
 
 /// Where a drag on `index` was last moved to.
+#[cfg(test)]
 fn drag_target(change: &Change, index: usize) -> Option<Amount> {
     if drag_index(change) != Some(index) {
         return None;
@@ -968,16 +1034,6 @@ fn drag_target(change: &Change, index: usize) -> Option<Amount> {
     }
 }
 
-/// The value a typed movable grip's change would write, when it is open
-/// on `index`; `None` for a size that follows params (its params are
-/// written, and the size they reach is shown in the panel).
-fn typed_written(listed: &ListedGrip, change: &Change, index: usize) -> Option<Amount> {
-    match listed.grip.action {
-        GripAction::Moves(_) => drag_target(change, index),
-        GripAction::Follows(_) => None,
-    }
-}
-
 /// `true` when a change fits.
 fn fits(progress: &Progress) -> bool {
     matches!(progress, Progress::Tried(Verdict::Fits(_)))
@@ -992,7 +1048,9 @@ mod tests {
     use crate::ui::edit_view::grip_text::{
         PanelChoice, PanelModel, SolverSwitch, label_words, mm_amount,
     };
+    use crate::ui::edit_view::size_slider::Tone;
     use crate::ui::gtk_test::on_gtk_thread;
+    use stave_app::grip_values::SLIDER_STEPS;
     use stave_app::session::Session;
 
     /// A copy of the side table built from a box (read, never written)
@@ -1055,7 +1113,7 @@ mod tests {
         // A movable grip: the value it is moved to, what it was, the verdict.
         send(&mut session, EditCommand::BeginDrag(1));
         let waiting = panel(&session);
-        assert_eq!(waiting.verdict.words, "Drag the number, or type a value");
+        assert_eq!(waiting.verdict.words, "Drag, step or type a value");
         assert!(!waiting.can_apply);
         send(&mut session, EditCommand::DragTo(mm_amount(6.0).unwrap()));
         let moved = panel(&session);
@@ -1095,25 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scrub_of_forty_pixels_moves_a_size_forty_millimetres() {
-        let folder = table("scrub");
-        let mut session = Session::new(folder.clone());
-        apron_grips(&folder, &mut session);
-        let listed = session.grips().unwrap().grips()[1].clone();
-        // The setback, 5mm: forty pixels right asks for 45mm, which the
-        // session snaps and holds in its range.
-        let wanted = stave_app::grip_values::scrubbed(grip_value(&listed), 40, false).unwrap();
-        assert_eq!(amount_words(wanted), "45mm");
-        let (target, _) = stave_app::grip_values::drag_target(&listed, wanted, false);
-        send(&mut session, EditCommand::BeginDrag(1));
-        send(&mut session, EditCommand::DragTo(target));
-        let at = drag_target(session.change().unwrap(), 1).unwrap();
-        assert_eq!(at.raw(), target.raw());
-        let _ = std::fs::remove_dir_all(&folder);
-    }
-
-    #[test]
-    fn the_sizes_card_shows_the_selections_own_sizes_and_folds_the_parts() {
+    fn the_sizes_card_lists_rows_and_opens_the_editor_in_place() {
         let folder = table("card");
         let mut session = Session::new(folder.clone());
         apron_grips(&folder, &mut session);
@@ -1134,12 +1174,59 @@ mod tests {
             // Every listed size has a row, by its index in the listing.
             assert_eq!(card.indices(), (0..count).collect::<Vec<_>>());
             assert_eq!(card.value_of(1).as_deref(), Some("5mm"));
-            card.set_value(1, "6mm");
-            assert_eq!(card.value_of(1).as_deref(), Some("6mm"));
+            // The editor opens on a row, showing what it is handed.
+            let view = EditorView {
+                index: 1,
+                name: "setback".to_owned(),
+                was: "5mm".to_owned(),
+                value: "6mm".to_owned(),
+                delta: "+1mm".to_owned(),
+                verdict: "It fits".to_owned(),
+                tone: Tone::Fits,
+                can_apply: true,
+                ..EditorView::default()
+            };
+            card.open_editor(&view);
+            assert_eq!(card.open(), Some(1));
+            crate::ui::gtk_test::settle();
+            assert_eq!(
+                card.editor_words(),
+                (
+                    "6mm".to_owned(),
+                    "+1mm".to_owned(),
+                    "It fits".to_owned(),
+                    true
+                )
+            );
+            card.close_editor();
+            assert_eq!(card.open(), None);
             card.clear();
             assert!(!card.root.is_visible());
             assert!(card.indices().is_empty());
         });
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_value_moved_by_its_slider_or_buttons_is_snapped_and_held_by_the_session_rules() {
+        let folder = table("slider");
+        let mut session = Session::new(folder.clone());
+        apron_grips(&folder, &mut session);
+        let listed = session.grips().unwrap().grips()[1].clone();
+        // The setback, 5mm: +10 asks for 15mm.
+        let wanted = nudged(grip_value(&listed), 10).unwrap();
+        let (target, _) = stave_app::grip_values::drag_target(&listed, wanted, false);
+        assert_eq!(amount_words(target), "15mm");
+        assert_eq!(delta_words(grip_value(&listed), target), "+10mm");
+        // The slider's far right end asks for more than the range allows:
+        // held at the high end.
+        let (low, high) = slider_range(&listed).unwrap();
+        let (_, held) = stave_app::grip_values::drag_target(
+            &listed,
+            along(low, high, SLIDER_STEPS).unwrap(),
+            false,
+        );
+        assert_eq!(held, Some(Held::Above));
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -1167,19 +1254,7 @@ mod tests {
             typed_check(&listed, mm_amount(9000.0).unwrap()).unwrap_err(),
             "Can't be 9000mm: this grip moves it between 400mm and 600mm"
         );
-        // Tried anyway, the session would write the end of the range: the
-        // window sees another number than the one typed, and refuses it.
-        send(
-            &mut session,
-            EditCommand::TypeGripValue {
-                grip: index,
-                value: mm_amount(9000.0).unwrap(),
-            },
-        );
-        let written = typed_written(&listed, session.change().unwrap(), index).unwrap();
-        assert_eq!(amount_words(written), "600mm");
-        // A value inside the range is written as typed.
-        send(&mut session, EditCommand::Cancel);
+        // A value inside the range is tried as typed.
         let typed = mm_amount(550.0).unwrap();
         assert_eq!(typed_check(&listed, typed), Ok(()));
         send(
@@ -1189,7 +1264,7 @@ mod tests {
                 value: typed,
             },
         );
-        let written = typed_written(&listed, session.change().unwrap(), index).unwrap();
+        let written = drag_target(session.change().unwrap(), index).unwrap();
         assert_eq!(written.raw(), typed.raw());
         let _ = std::fs::remove_dir_all(&folder);
     }

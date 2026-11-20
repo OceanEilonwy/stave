@@ -41,8 +41,6 @@ crates/stave-gtk/src/ui/edit_view/grip_text.rs
 crates/stave-gtk/src/ui/edit_view/grips.rs
 crates/stave-gtk/src/ui/edit_view/hold.rs
 crates/stave-gtk/src/ui/edit_view/item_tools.rs
-crates/stave-gtk/src/ui/edit_view/repeat_handles.rs
-crates/stave-gtk/src/ui/edit_view/scrub_field.rs
 crates/stave-gtk/src/ui/edit_view/sizes.rs
 crates/stave-gtk/src/ui/edit_view/verbs.rs
 crates/stave-gtk/src/ui/edit_writer.rs

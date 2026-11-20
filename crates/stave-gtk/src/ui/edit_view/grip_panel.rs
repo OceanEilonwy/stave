@@ -659,15 +659,13 @@ pub(in crate::ui) fn install_style(display: &gdk::Display) {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     );
-    for style in [super::scrub_field::STYLE, super::sizes::STYLE] {
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(style);
-        gtk::style_context_add_provider_for_display(
-            display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    }
+    let sizes = gtk::CssProvider::new();
+    sizes.load_from_string(super::sizes::STYLE);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &sizes,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+    );
 }
 
 #[cfg(test)]

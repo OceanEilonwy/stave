@@ -10,7 +10,8 @@ use stave_app::editing::{EditCommand, parse_name};
 use stave_app::session::{Command, Event, Selection, Session};
 
 use super::changes::{Commit, change_words};
-use super::item_tools::{piece_count, selected_item};
+use super::item_tools::selected_item;
+use stave_app::item_offer::piece_count;
 
 fn fixture(name: &str) -> PathBuf {
     let folder =

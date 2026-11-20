@@ -340,10 +340,11 @@ the checker's fixes on the card).
   by the setting just changed says
   so first ("It stopped fitting when joinery became chigiri.") with a
   button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
-  side", hold a distance, remove with what depends on it); count and
-  boundary handles; the selection's sizes in the Edit panel's Sizes card
-  (number fields dragged sideways or typed, stops, sizes that follow,
-  "Let the solver move this"); the finder's verbs.
+  side", hold a distance, remove with what depends on it); the repeat count; the selection's sizes in the Edit panel's Sizes card
+  (each opened in a size editor: slider, steps, typed value, what
+  changes, verdict, Apply; boundaries between pieces; stops; sizes that
+  follow; "Let the solver move this"); nothing is dragged on the model;
+  the finder's verbs.
 - **Command line**: `stave edit <folder> --patch <file> [--commit]` and
   `stave edit <folder> --script <file>` (a whole build as steps, with
   `options <setting>` listing a setting's options and whether each fits,

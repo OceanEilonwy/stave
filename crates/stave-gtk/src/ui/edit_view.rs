@@ -527,7 +527,6 @@ impl Window {
         self.install_edit_writer();
         self.connect_changes();
         self.connect_item_tools();
-        self.connect_repeats();
 
         // The menu's and the card's outputs were forwarded to the window
         // when they were launched (`EditView::new`).
@@ -1517,13 +1516,6 @@ impl Window {
         }))
     }
 
-    /// Places the repeat handles after a frame is drawn. The ghost's
-    /// verdict is not said on the model: its tint says it (red when it
-    /// doesn't fit), and the Edit panel says it in words.
-    pub(super) fn place_ghost_verdict(&mut self) {
-        self.place_repeat_handles();
-    }
-
     // ---- driving it without a pointer (screenshots) ----
 
     /// Lights a space as if the pointer rested in it.
@@ -1573,7 +1565,7 @@ pub(super) use links::Hovered;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;
-mod scrub_field;
+mod size_slider;
 mod sizes;
 #[cfg(test)]
 mod tests;
