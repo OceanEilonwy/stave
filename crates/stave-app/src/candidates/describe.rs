@@ -130,10 +130,16 @@ impl EditScope<'_> {
             TypeName::Stock => return self.in_scope(|item| matches!(item, DefId::Stock(_))),
             TypeName::Mount => return self.mounts(),
             TypeName::JointKind => &[BaseKind::Joint],
-            TypeName::HardwareKind => &[BaseKind::Slide, BaseKind::Hinge, BaseKind::Pull],
+            TypeName::HardwareKind => &[
+                BaseKind::Slide,
+                BaseKind::Hinge,
+                BaseKind::Pull,
+                BaseKind::Support,
+            ],
             TypeName::SlideKind => &[BaseKind::Slide],
             TypeName::HingeKind => &[BaseKind::Hinge],
             TypeName::PullKind => &[BaseKind::Pull],
+            TypeName::SupportKind => &[BaseKind::Support],
             TypeName::FastenerKind => &[BaseKind::Fastener],
             TypeName::Tool => &[BaseKind::Tool],
             TypeName::Bool => {

@@ -45,3 +45,66 @@ component Shelf {
     back:   space.back,
   )
 }
+
+/// An adjustable shelf: a board that rests on four shelf pins, two in each
+/// side, and lifts out to move to another pair of holes. It is a little
+/// shorter than the space is wide so it lifts out freely, and each side is
+/// drilled with a row of spare holes above and below the pins.
+component AdjustableShelf {
+  param space         : Region         // the space it sits in, from side to side
+  param left_side     : Part           // the side on the left of the space
+  param right_side    : Part           // the side on the right of the space
+  param panel_stock   : Stock
+  param height        = 300mm          // from the bottom of the space up to the underside of the shelf
+  param pins          : SupportKind = shelf_pin(holes_above: 4, holes_below: 4)
+  param end_gap       = 1mm            // between each end of the shelf and the side
+  param front_setback = 10mm           // from the front of the space to the front of the shelf
+  param back_gap      = 0mm            // between the back of the shelf and the back of the space
+  param pin_inset     = 40mm           // from the front and back of the shelf to the pins
+
+  require shelf_inside : height + panel_stock.thickness <= space.up "the shelf is higher than the top of its space; make the height smaller"
+
+  part board : panel_stock {
+    length: space.across - 2 * end_gap
+    width:  space.deep - front_setback - back_gap
+    place {
+      flush(space.bottom, inset: height)
+      center(space, across)
+      flush(space.front, inset: front_setback)
+    }
+  }
+
+  hardware left_pins[front, back] : pins(left_side, shelf: board) {
+    place {
+      spaced(ends(inset: pin_inset), from: board.front, to: board.back)
+      against(board.bottom)
+    }
+  }
+
+  hardware right_pins[front, back] : pins(right_side, shelf: board) {
+    place {
+      spaced(ends(inset: pin_inset), from: board.front, to: board.back)
+      against(board.bottom)
+    }
+  }
+
+  /// The space under the shelf.
+  region below = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: space.bottom,
+    top:    board.bottom,
+    front:  space.front,
+    back:   space.back,
+  )
+
+  /// The space over the shelf, up to the top of the space.
+  region above = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: board.top,
+    top:    space.top,
+    front:  space.front,
+    back:   space.back,
+  )
+}

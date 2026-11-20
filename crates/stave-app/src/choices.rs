@@ -38,6 +38,7 @@ pub fn matched_by_name(ty: TypeName) -> bool {
         | TypeName::SlideKind
         | TypeName::HingeKind
         | TypeName::PullKind
+        | TypeName::SupportKind
         | TypeName::FastenerKind
         | TypeName::Tool
         | TypeName::Bool

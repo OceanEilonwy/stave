@@ -50,18 +50,23 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
         | ast::KindEntry::Field(_) => None,
     });
     match (syntax.base.value, declared) {
-        (BaseKind::Joint | BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull, Some(roles)) => {
-            roles
-                .roles
-                .iter()
-                .map(|role| {
-                    let ty = ast::TypeName::from_word(role.ty.as_str())
-                        .and_then(RoleType::from_type)
-                        .unwrap_or(RoleType::Parts);
-                    (role.name.as_str().to_owned(), ty, role.span)
-                })
-                .collect()
-        }
+        (
+            BaseKind::Joint
+            | BaseKind::Slide
+            | BaseKind::Hinge
+            | BaseKind::Pull
+            | BaseKind::Support,
+            Some(roles),
+        ) => roles
+            .roles
+            .iter()
+            .map(|role| {
+                let ty = ast::TypeName::from_word(role.ty.as_str())
+                    .and_then(RoleType::from_type)
+                    .unwrap_or(RoleType::Parts);
+                (role.name.as_str().to_owned(), ty, role.span)
+            })
+            .collect(),
         (BaseKind::Joint, None) => JOINT_DEFAULT_ROLES
             .iter()
             .map(|role| (role.name.to_owned(), role.ty, syntax.name.span()))
@@ -70,6 +75,7 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
             BaseKind::Slide
             | BaseKind::Hinge
             | BaseKind::Pull
+            | BaseKind::Support
             | BaseKind::Fastener
             | BaseKind::Tool,
             _,
@@ -1173,6 +1179,16 @@ impl Resolver<'_> {
     }
 
     fn lower_cut(&mut self, cx: &Cx, _kind: KindId, cut: &ast::Cut) -> Option<CutDef> {
+        if cut.selector.head.as_str() == super::hardware::ROW {
+            self.error_help(
+                Code::TypeMismatch,
+                "a joint kind can't cut a row of holes with row(...)",
+                cx.file,
+                cut.selector.head.span(),
+                "give the joint a member for what goes in the holes, with count: and spaced:, and drill crossing(role, member): one hole for every copy",
+            );
+            return None;
+        }
         let selector = self.lower_selector(
             cx,
             &cut.selector.head,

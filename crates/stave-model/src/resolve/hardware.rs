@@ -14,12 +14,15 @@ use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
     AxisRule, BodyDef, BodyId, CutName, FaceRule, FrameAxis, FromTerm, MemberCutDef,
-    MemberPlacement, MountDef, MountSelector, MountTerm, RoleDef, RoleIndex,
+    MemberPlacement, MountDef, MountSelector, MountTerm, RoleDef, RoleIndex, RowCopies, RowDef,
 };
 use crate::types::Ty;
 
 /// The anchors a `from(...)` takes.
 const ANCHORS: [&str; 3] = ["edge", "end", "face"];
+
+/// The selector that repeats a hardware cut in a row.
+pub(super) const ROW: &str = "row";
 
 /// Which anchors an entry may use.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,7 +137,8 @@ impl Resolver<'_> {
     }
 
     /// `cut [name:] crossing(role, member) { operations }` in a hardware
-    /// kind.
+    /// or joint kind, or in a hardware kind
+    /// `cut [name:] row(crossing(role, member), ...) { operations }`.
     pub(super) fn lower_hardware_cut(
         &mut self,
         cx: &Cx,
@@ -143,7 +147,17 @@ impl Resolver<'_> {
         cut: &ast::Cut,
     ) -> Option<MemberCutDef> {
         let head = cut.selector.head.as_str();
-        if head != Selector::Crossing.word() {
+        let (crossing_args, crossing_span, row) = if head == ROW {
+            let (crossing, row) = self.lower_row(cx, cut)?;
+            (crossing.0, crossing.1, Some(row))
+        } else if head == Selector::Crossing.word() {
+            (
+                self.split_args(cx, head, &cut.selector.args, &[], 2)
+                    .positional,
+                cut.selector.span,
+                None,
+            )
+        } else {
             self.error_help(
                 Code::TypeMismatch,
                 format!("a hardware kind cuts on crossing, found '{head}'"),
@@ -152,10 +166,10 @@ impl Resolver<'_> {
                 "write cut crossing(piece, member) { ... }: the face of the part the member touches or enters",
             );
             return None;
-        }
-        let args = self.split_args(cx, head, &cut.selector.args, &[], 2);
-        let [part, member] = args.positional.as_slice() else {
-            self.missing_argument(cx, head, "a role and a member", cut.selector.span);
+        };
+        let crossing = Selector::Crossing.word();
+        let [part, member] = crossing_args.as_slice() else {
+            self.missing_argument(cx, crossing, "a role and a member", crossing_span);
             return None;
         };
         let part = self.role_of(cx, roles, part, "crossing")?;
@@ -173,11 +187,81 @@ impl Resolver<'_> {
             part,
             body,
             operations,
+            row,
             span: cut.span,
         })
     }
 
-    /// `face: back` or `face: face(piece, nearer: in)`.
+    /// `row(crossing(role, member), pitch: d, up: n, ...)`: the arguments
+    /// of the `crossing` inside it, with its span, and the row.
+    fn lower_row<'c>(
+        &mut self,
+        cx: &Cx,
+        cut: &'c ast::Cut,
+    ) -> Option<((Vec<&'c ast::Expr>, Span), RowDef)> {
+        let mut named = vec!["pitch"];
+        named.extend(Direction::ALL.map(Direction::word));
+        let args = self.split_args(cx, ROW, &cut.selector.args, &named, 1);
+        let crossing = Selector::Crossing.word();
+        let inner = args.positional.first().and_then(|expr| {
+            if let ExprKind::Call { callee, args } = &expr.kind
+                && callee_word(callee) == Some(crossing)
+            {
+                Some((args, expr.span))
+            } else {
+                None
+            }
+        });
+        let Some((inner_args, inner_span)) = inner else {
+            self.error_help(
+                Code::TypeMismatch,
+                "a row repeats a crossing(role, member) cut",
+                cx.file,
+                args.positional.first().map_or(cut.selector.span, |e| e.span),
+                "write row(crossing(piece, member), pitch: 32mm, up: 4): the member's hole, then the spare holes beside it",
+            );
+            return None;
+        };
+        let inner = self.split_args(cx, crossing, inner_args, &[], 2).positional;
+        let Some(pitch) = args.get("pitch") else {
+            self.missing_argument(cx, ROW, "pitch:", cut.selector.span);
+            return None;
+        };
+        let pitch = self.value(cx, pitch, &Expect::ty(Ty::Length).named("pitch"));
+        let mut copies = Vec::new();
+        for (name, expr) in &args.named {
+            let Some(toward) = Direction::from_word(name.as_str()) else {
+                continue;
+            };
+            let count = self.value(cx, expr, &Expect::ty(Ty::Count).named(name.as_str()));
+            copies.push(RowCopies {
+                toward,
+                count,
+                span: name.span().to(expr.span),
+            });
+        }
+        if copies.is_empty() {
+            self.error_help(
+                Code::MissingField,
+                "a row needs a direction and how many spare holes go that way",
+                cx.file,
+                cut.selector.span,
+                "add one, as in row(crossing(piece, member), pitch: 32mm, up: 4, down: 4)",
+            );
+            return None;
+        }
+        Some((
+            (inner, inner_span),
+            RowDef {
+                pitch,
+                copies,
+                span: cut.selector.span,
+            },
+        ))
+    }
+
+    /// `face: back`, `face: face(piece, nearer: in)` or
+    /// `face: face(piece, toward: on)`.
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
@@ -200,10 +284,32 @@ impl Resolver<'_> {
                 }
             },
             ExprKind::Call { callee, args } if callee_word(callee) == Some("face") => {
-                let parsed = self.split_args(cx, "face", args, &["nearer"], 1);
+                let parsed = self.split_args(cx, "face", args, &["nearer", "toward"], 1);
+                if let (Some(part), Some(other)) = (parsed.positional.first(), parsed.get("toward"))
+                {
+                    let part = self.role_of(cx, roles, part, "face")?;
+                    let other_index = self.role_of(cx, roles, other, "toward")?;
+                    let is_part = roles
+                        .get(other_index.index())
+                        .is_some_and(|role| role.ty == RoleType::Part);
+                    if !is_part {
+                        self.error_help(
+                            Code::TypeMismatch,
+                            "'toward' of a mount's face needs a role that is one part",
+                            cx.file,
+                            other.span,
+                            "name a Part role of the kind, as in face(piece, toward: on); for a Region role write face(piece, nearer: in)",
+                        );
+                        return None;
+                    }
+                    return Some(FaceRule::Toward {
+                        part,
+                        other: other_index,
+                    });
+                }
                 let (Some(part), Some(region)) = (parsed.positional.first(), parsed.get("nearer"))
                 else {
-                    self.missing_argument(cx, "face", "a role and nearer:", expr.span);
+                    self.missing_argument(cx, "face", "a role and nearer: or toward:", expr.span);
                     return None;
                 };
                 let part = self.role_of(cx, roles, part, "face")?;
@@ -229,7 +335,7 @@ impl Resolver<'_> {
             _ => {
                 self.error_help(
                     Code::TypeMismatch,
-                    "'face' of a mount needs a face word or face(piece, nearer: region)",
+                    "'face' of a mount needs a face word, face(piece, nearer: region) or face(piece, toward: part)",
                     cx.file,
                     expr.span,
                     "write face: back, or face: face(piece, nearer: in)",

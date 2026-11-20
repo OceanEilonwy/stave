@@ -61,6 +61,7 @@ fn every_example_and_standard_module_checks_clean() {
     assert_eq!(
         projects,
         [
+            "adjustable_bookcase",
             "bookshelf",
             "box",
             "chest_of_drawers",

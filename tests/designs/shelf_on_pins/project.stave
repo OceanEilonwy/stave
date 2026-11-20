@@ -1,0 +1,70 @@
+stave 1
+
+// A shelf that rests on four shelf pins, with a row of spare holes in each
+// side so it can move up and down (grammar, "Shelf supports").
+
+project "Shelf on pins" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 900mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part bottom : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint bottom_dowels : dowel(bottom, into: [side_l, side_r], count: 2)
+
+/// The shelf: 1mm clear of each side, so it lifts out.
+part shelf : pine_19 {
+  length: 598mm
+  width:  260mm
+  place {
+    flush(side_l.bottom, inset: 400mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 10mm)
+  }
+}
+
+// Two shelf pins in each side hold the shelf up: it touches neither side
+// and no joint binds it, and it needs no loose: true. Each side has three
+// spare holes above each pin and two below, 32mm apart.
+hardware pins_l[front, back] : shelf_pin(side_l, shelf: shelf, holes_above: 3, holes_below: 2) {
+  place {
+    spaced(ends(inset: 40mm), from: shelf.front, to: shelf.back)
+    against(shelf.bottom)
+  }
+}
+
+hardware pins_r[front, back] : shelf_pin(side_r, shelf: shelf, holes_above: 3, holes_below: 2) {
+  place {
+    spaced(ends(inset: 40mm), from: shelf.front, to: shelf.back)
+    against(shelf.bottom)
+  }
+}

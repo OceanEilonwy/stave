@@ -1677,6 +1677,8 @@ pub enum HardwareBase {
     Hinge,
     /// A knob or pull.
     Pull,
+    /// A shelf support.
+    Support,
 }
 
 impl HardwareBase {
@@ -1686,6 +1688,7 @@ impl HardwareBase {
             BaseKind::Slide => Some(HardwareBase::Slide),
             BaseKind::Hinge => Some(HardwareBase::Hinge),
             BaseKind::Pull => Some(HardwareBase::Pull),
+            BaseKind::Support => Some(HardwareBase::Support),
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }

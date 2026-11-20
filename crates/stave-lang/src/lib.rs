@@ -229,6 +229,7 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "slide",
     "hinge",
     "pull",
+    "support",
     "fastener",
     "tool",
     "roles",

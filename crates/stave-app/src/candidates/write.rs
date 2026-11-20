@@ -228,7 +228,10 @@ impl EditScope<'_> {
                 let kind = defs.kind(id).ok_or(WriteError::UnknownDeclaration)?;
                 let keyword = match kind.base() {
                     ast::BaseKind::Joint => "joint",
-                    ast::BaseKind::Slide | ast::BaseKind::Hinge | ast::BaseKind::Pull => "hardware",
+                    ast::BaseKind::Slide
+                    | ast::BaseKind::Hinge
+                    | ast::BaseKind::Pull
+                    | ast::BaseKind::Support => "hardware",
                     base @ (ast::BaseKind::Fastener | ast::BaseKind::Tool) => {
                         return Err(WriteError::NotPlaceable(
                             kind.decl.name.clone(),
@@ -550,7 +553,7 @@ impl EditScope<'_> {
         let solved = self.design.and_then(|design| design.part(piece));
         let face_axis = match (clicked, hardware.mount.face) {
             (Some(face), _) | (None, FaceRule::Word(face)) => Some(face.axis()),
-            (None, FaceRule::Nearer { .. }) => {
+            (None, FaceRule::Nearer { .. } | FaceRule::Toward { .. }) => {
                 solved.map(|part| part.pose.orientation.direction(PartAxis::Thickness).axis())
             }
         };
