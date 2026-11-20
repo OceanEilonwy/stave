@@ -1,0 +1,32 @@
+// expect: warning[grain] glued: top is glued across its grain to batten over 450mm, and wood held that wide splits as it moves with the seasons
+stave 1
+
+// A batten glued across the underside of a solid top (audit finding 89):
+// the top's grain runs left to right, the batten's front to back, so the
+// batten holds the top still across its whole 450mm width, and the top
+// splits within a season as it swells and shrinks.
+
+project "Glue across the grain" {
+  units: mm
+}
+
+stock oak { species: white_oak, form: solid, thickness: 19mm, max_width: 500mm, max_length: 2400mm }
+
+part top : oak {
+  length: 800mm
+  width:  450mm
+  place { ground }
+}
+
+part batten : oak {
+  length: 450mm
+  width:  60mm
+  place {
+    orient(length: back, width: right)
+    against(top.bottom)
+    flush(top.left, inset: 50mm)
+    flush(top.front)
+  }
+}
+
+joint glued : glued_face(batten, into: top)

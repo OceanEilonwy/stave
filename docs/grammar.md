@@ -604,7 +604,7 @@ without an import or a prefix:
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`, `mitre`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
+| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `slotted_screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`, `mitre`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
 | `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`, `shelf_pin`, `tabletop_fastener`, `cam_lock`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
@@ -824,7 +824,7 @@ missing both is warned about its length only.
 | `length` | `Length` or `fit` | yes | yes | along the grain, by default |
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
 | `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's. A sheet (`plywood`, `mdf`) can't be planed: a part cut from one that writes any other thickness is `error[type-mismatch]` (`panel: its thickness is 10mm, but plywood can't be planed; ply_18 is 18mm thick`) |
-| `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
+| `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs. Stave warns about glue on end grain, glue across the grain, a tenon with the grain across it and a solid part held fast too far apart across its grain; see [Grain and wood movement](#grain-and-wood-movement) |
 | `shape` | `Shape` | no | no | `tapered(to:, toward:, on:, square:)` or `arched(rise:, on:, ends:)` for a square part, see [Shaped parts](#shaped-parts); or `turned(profile)`: the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |
 | `face_edge` | face word | no | no | the reference edge |
@@ -2437,7 +2437,7 @@ than 0mm`).
 |---|---|---|
 | `notch(depth:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
 | `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle`. An angle that turns it into the face it is cut from is `error[type-mismatch]` |
-| `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes |
+| `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes. On `crossing(role, member)`, where a member has no axes of its own, it is centred on the member's shape, and `width` runs along the part's length and `thickness` across it (on an end, `width` along the part's width and `thickness` along its thickness): std's `slotted_screw` cuts its slots this way |
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
@@ -3937,6 +3937,109 @@ A group with a loose part is not warned: the whole group lifts out
 together, so one part of a tray is enough. `loose:` is a `Bool`, so a
 component can take it as a param.
 
+### Grain and wood movement
+
+Solid wood is strong along its grain and weak across it, and it swells
+and shrinks across its grain with the seasons (about a millimetre for
+every 80mm of width over a year), hardly at all along it. Plywood and
+MDF don't move. A design that works against the grain checks clean and
+then fails in the shop or within a season, so Stave warns about four
+mistakes, each `warning[grain]` (layer 4). Like the held check they are
+asked only once the design has no errors, and like the backstops in
+[Cuts stay in their part](#cuts-stay-in-their-part) they hold for every
+kind alike: they read only the language's own words (`glue:`, a part's
+`grain:` and stock `form:`, the `tenon`, `spigot`, `drill` and `pocket`
+operations, a joint's members and what it `adds:`), never a kind's name.
+
+A part's grain runs along its length, or along its width for `grain:
+width`. A **solid board** is a part of `solid` stock that isn't round or
+turned: it is what moves, along the axis across its grain in its faces
+(its width, or its length for `grain: width`). A part **holds still**
+along an axis when it is a sheet (`plywood`, `mdf`), or when its grain
+runs along that axis. Glue is **on the patch** when a glued pair's
+kind cuts nothing, places no member and no `uses:` fastener, makes no
+part and adds nothing (std's `glued_face`): all its glue is spread where
+the parts touch (`contact(a, b)`, on their drawn boxes). Glue in a
+joint's cuts (a tenon's cheeks, a panel in its groove) is not measured,
+except as below for a part a joint extends into a housing.
+
+1. **End grain glued.** A pair glued on the patch where one part, of
+   `solid` or `dowel` stock, meets the other with its end (its grain runs
+   square to the patch): `<joint>: <apron> meets <leg> with its end grain,
+   and glue on end grain holds almost nothing`, at the joint's call, with
+   the help `join them with a kind that cuts the parts or places fasteners
+   in them, so the glue holds on long grain, or turn <apron> so it meets
+   <leg> with a face or an edge`. When it is reported, the pair is not
+   checked for glue across the grain.
+2. **Glue across the grain.** A pair glued on the patch where the other
+   part holds still along the way a solid board moves, over more than
+   80mm of the patch: `<joint>: <top> is glued across its grain to
+   <batten> over <450mm>, and wood held that wide splits as it moves with
+   the seasons`, at the joint's call, with the help `glue only a strip no
+   wider than 80mm across the grain of <top>, or hold it with fasteners
+   that let it move`. A cleat glued along an apron, with its grain the
+   same way, is not warned.
+3. **Short grain.** A `tenon` or `spigot` cut on the end of a part of
+   `solid` stock (`end(p, facing: q)`) whose grain runs along its width,
+   across the tenon: its fibres are only as long as the tenon is wide,
+   and it snaps off at the shoulder: `<joint>: the grain of <apron> runs
+   across its <tenon>, so the <tenon> can snap off along the grain`, at
+   the joint's call, with the help `make <apron> with its grain along its
+   length (grain: length), so the grain runs along the <tenon>`. A tongue
+   (a `tenon` on `crossing`, along an edge) is left alone.
+4. **Held fast across the grain.** A solid board is **fixed** to another
+   part:
+   - over the patch, by glue on the patch (above);
+   - at its edge, by a glued pair whose kind extends it (`adds:`) across
+     its grain into the other part, a panel glued into its groove;
+   - where a member is, by a joint's or a piece of hardware's member that
+     has a round hole (`drill`) in this part and in the other. A hole of
+     any other shape (a `pocket` cut long as a slot) is taken as room to
+     move, which way it is long is not checked, so a member drilled in
+     one part only (a tabletop fastener's screws, each in its own part)
+     fixes nothing.
+
+   It is **held fast** over the widest of: the spread across its grain of
+   its fixings to one other part that holds still that way; and the
+   distance across its grain between the middles of where two other parts
+   hold it, when those two are joined to each other (through joints and
+   hardware, as for [Held](#held)) other than through this part. A top
+   screwed through round holes into a cleat at its front and one at its
+   back, the cleats joined through the aprons and legs, is held fast
+   across the distance between them; two legs doweled into a seat, front
+   and back, with nothing else joining them, are not, since the legs move
+   apart with it. A part made of boards whose seams are all unglued
+   (`glue: false`) moves board by board, and each board is measured on
+   its own. Held fast over more than 80mm: `<top> is held fast at places
+   <372mm> apart across its grain, so it can't swell and shrink with the
+   seasons`, at the part's name, a note `held to <cleat_front> by
+   <top_screws>` for each of the two places, and the help `hold <top>
+   fast along one line only and let it slide everywhere else: screw it
+   through slots, use fittings made to let it move, or keep its fixings
+   within 80mm of each other across its grain`. A part already warned
+   for glue across the grain or end grain is not warned again here.
+
+std's `slotted_screw` drives its screws through slots in the piece (a
+`pocket` on `crossing(piece, screw)`, long across the piece) into pilot
+holes in the other part, so a top screwed down through cleats or
+aprons that run along its grain can move; std's `tabletop_fastener` is
+the fitting for the same job. The examples' side tables screw their tops
+down this way.
+
+```
+warning[grain]: top is held fast at places 372mm apart across its grain, so it can't swell and shrink with the seasons
+  --> table.stave:43:6
+   = note: held to cleat_front by top_screws
+   = note: held to cleat_back by top_screws
+   = help: hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain
+```
+
+**Not measured yet.** Glue in a joint's cuts (a wide tenon glued across a
+leg's grain, a solid panel glued in a groove that doesn't extend it), a
+slot that is long the wrong way, and movement in a part's thickness. The
+80mm is one number for every species; how much more one wood moves than
+another is not yet taken into account.
+
 ### Diagnostics
 
 A diagnostic is printed compiler-style: `error[code]: message`, then
@@ -3984,7 +4087,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`, `unnamed-cut`, `loose-part`.
+`model-mismatch`, `unnamed-cut`, `loose-part`, `grain`.
 
 A stock with no `max_length` is the one `missing-field` that is a warning
 (see [`stock`](#stock-name--)): the design can still be checked and built.

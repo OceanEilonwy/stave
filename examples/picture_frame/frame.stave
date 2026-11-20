@@ -11,8 +11,10 @@ stave 1
 //
 // The box's four sides stand on edge and cross at the corners the same
 // way, so their mitres run across their thickness: no end grain shows on
-// the outside. Its base is glued under the sides, and its top edges are
-// chamfered all round.
+// the outside. Its base is plywood glued under the sides: a solid base
+// glued all round would be held across its grain by the box's ends and
+// split as it moved with the seasons, and plywood doesn't move. The top
+// edges are chamfered all round.
 
 project "Picture frame" {
   goal:       "A mitred oak picture frame and a mitred box to match"
@@ -33,6 +35,7 @@ param box_height   = 90mm within 50mm..200mm
 // ---- stock ----
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2400mm }
 stock oak_12 { species: white_oak, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+stock ply_12 { species: birch, form: plywood, thickness: 12mm, max_width: 1220mm, max_length: 2440mm }
 
 // ---- the frame ----
 part rail_front : oak_19 {
@@ -131,7 +134,7 @@ part box_right : oak_12 {
   }
 }
 
-part box_base : oak_12 {
+part box_base : ply_12 {
   length: box_length
   width:  box_depth
   edges:  roundover(3mm, on: around(bottom))

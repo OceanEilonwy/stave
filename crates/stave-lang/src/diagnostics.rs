@@ -324,6 +324,10 @@ codes! {
     ModelMismatch = "model-mismatch", layer 4;
     /// Warning: a part that no joint or hardware joins to the ground part.
     LoosePart = "loose-part", layer 4;
+    /// Warning: wood joined or held against its grain: end grain glued,
+    /// glue across the grain, a tenon with the grain across it, or a solid
+    /// part held fast too far apart across its grain.
+    Grain = "grain", layer 4;
 }
 
 impl Code {
