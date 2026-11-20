@@ -1,0 +1,29 @@
+[package]
+name = "stave-render"
+description = "The Stave renderer: draws a scene to a wgpu texture or surface, on the desktop and on the web"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+# Asks the device for dmabuf export where the adapter has it, for the
+# window's live view (`stave-gtk` turns it on); nothing here uses it.
+dmabuf = []
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.30"
+png = "0.18"
+stave-geom = { path = "../stave-geom" }
+stave-scene = { path = "../stave-scene" }
+thiserror = "2"
+# `std::time::Instant` panics on the web.
+web-time = "1"
+wgpu = "30"
+
+[dev-dependencies]
+pollster = "0.4"
+stave-app = { path = "../stave-app" }
+
+[lints]
+workspace = true

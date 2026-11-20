@@ -363,6 +363,16 @@ design places and has no more errors than before. What a commit writes
 is, per file, the one edit from the text the change began from to the
 final text.
 
+A patch can also come whole, written elsewhere: `ChangeRequest::Patch`
+(`EditCommand::ShowPatch`) takes a patch file's text (`stave 1` and one
+or more `patch` blocks) as an AI app's suggestion sends it to the window
+(`docs/gui.md`, "Starting Stave"). It can't start when the text doesn't
+read as a patch file or holds no patch; otherwise it is tried as it is,
+its summary is its patches' summaries joined by "; ", and it is written
+only on Add, like any change. It never throws away what the user is
+making: while an edit or change is in progress it is refused
+(`Rejection::ChangeInProgress`) and the user's own is kept.
+
 `Change::summary` says what it does ("Make 3 of drawer"),
 `Change::detail` what it found (`ChangeDetail::Mirror { renamed, image,
 about }`, `Hold { name, condition }`, `Remove { removal, dependants }`,
@@ -558,6 +568,62 @@ written for it) and tries the candidate again.
 
 A value can always be typed in the setting's entry, a refused one
 included; a typed value that is refused is blamed as above.
+
+## Conflicts
+
+A file can hold two versions of the same lines between conflict marker
+lines (grammar, "Conflicts"): the window's saved work and a change an
+agent applied, or a suggestion whose patches no longer fit the project as
+it is now. Settling one is a text edit, not a patch, and goes through
+`stave_app::conflicts`, which the window and the AI tools share:
+
+- `conflicts(text)` lists each conflict with its lines (from 1) and its
+  actions: a "Keep" for each side, then "Keep both" only when every side
+  is whole items with different names. Each action is a `Resolution` and
+  the same as one text edit. All the links sit in one row above the
+  conflict, so each "Keep" names its side: by the label Stave's versions
+  write ("Keep yours" for the window's saved work, "Keep theirs" for the
+  change applied meanwhile, "Keep the suggestion's" and "Keep the
+  project's" for a suggestion moved onto main), else in a two-sided
+  conflict by its tint ("Keep the green side", "Keep the blue side"),
+  else by number ("Keep side 3").
+- `check_sides(folder, files)` opens the project once per side, that side
+  chosen in every conflict of every file, so each side's problems are
+  known before choosing (`SideFiles` is the file source that chooses).
+  The sides are counted from the files' text, so the project is opened
+  only once per side. `Replaced` is the project with one file's text
+  replaced, to check the sides as a tried resolution would leave them.
+- `side_change(text, conflict, side)` is what a side changes from the
+  conflict's base, as the base's lines (`- `) and the side's (`+ `), so an
+  AI reads "yours sets `box_length = 320mm`; theirs sets `350mm`".
+- `try_resolution(folder, files, path, conflict, resolution)` settles one
+  conflict on a scratch copy and opens the project as it would then be.
+  It writes nothing.
+
+In the window the actions are links above the conflict (`docs/gui.md`,
+"The editor"). Through the AI tools, `list_conflicts` describes every
+conflict (each side's text, where it came from, its change against the
+base and its error count), `try_resolution` tries one and
+`resolve_conflict` writes it. A conflict in the project's own files is
+written to the file, and recorded as a version by the agent when versions
+are on, only when the result checks with no errors (an agent's change
+never reaches the main line unchecked), the project's merge policy is not
+`off`, and the file still holds the text it was resolved from. With other
+conflicts left, every one of them is still an `error[conflict]`, so the
+project can't check clean until the last is settled: instead, each side
+of the conflicts left (`check_sides` over the resolved text) must have no
+more errors than it had before, and the reply says how many are left.
+The file is written through the one writer (`editing::write_all` with
+`DiskWriter`), which writes only over the text the resolution was made
+from, so nothing saved meanwhile is lost. The window can't yet say that
+it holds the file with unsaved changes: a window that does keeps its own
+text (it keeps unsaved changes over a file changed on disk), and its next
+save writes that text, markers and all, until the window reports its
+unsaved buffers to the AI tools. If the file is written but can't be
+recorded as a version, the reply says so rather than failing, so the
+agent doesn't settle the conflict again. A conflict in a suggestion is written to the
+suggestion whatever is left, since the suggestion is checked again before
+it can be applied; the tool reports any problems that remain.
 
 ## The command line
 

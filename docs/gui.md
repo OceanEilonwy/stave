@@ -272,6 +272,35 @@ window options apply to the first window of a Stave that was not
 running. `--window-screenshot` always runs on its own (`NON_UNIQUE`) and
 needs one folder.
 
+**AI apps** reach the running Stave through the application action
+`app.show-project` (`ui/ai_link.rs`), parameter `(ss)`: a project folder
+(an absolute path; anything else is ignored) and a patch file's text, or
+an empty string. GApplication answers it on the session bus as
+`org.freedesktop.Application.ActivateAction` at
+`/io/github/OceanEilonwy/Stave`, which is what the MCP server's
+`show_in_stave` calls (`stave_link::show_in_stave`; it asks only when the
+name `io.github.OceanEilonwy.Stave` has an owner, so the bus never starts
+Stave for it). The folder opens as Open does (or its window comes
+forward); a patch is then started in that window as a change of the
+design (`EditCommand::ShowPatch`, see [`docs/editing.md`](editing.md),
+"Changes of the design"): tried on a scratch copy and shown as a ghost
+with its card, its words "a suggested change", written only if the user
+presses Add. Nothing an AI app sends is ever written by itself, and it
+never replaces what the user is making: while an edit or change is in
+progress there the patch is refused with a toast and theirs is kept.
+
+Help's **Use with an AI App…** (`app.use-with-ai-app`, also on the start
+page's menu) sets Stave up in every AI app found on the computer
+(Claude Desktop, Claude Code, Codex: `stave_link::install`, the same as
+`stave mcp install`), off the main thread, then says in a dialog what was
+done in each ("Claude Desktop: ready. Start Claude Desktop again to use
+Stave there.") or why not. The apps run the `stave` program found beside
+`stave-gtk` or on `PATH`; with none found, or no app found, the dialog
+says so and what to install. The window's words never name the protocol:
+why an app couldn't be set up is said in plain words (its settings file
+couldn't be read, or isn't laid out the way the app writes it; its own
+setup command failed), and the full error goes to standard error.
+
 Started with no folder (from the app grid or the dock), Stave shows the
 **start page** (`ui/start_page.rs`): an `AdwStatusPage` with Open
 Folder… and New Project… and, under them, the recent projects
@@ -335,7 +364,7 @@ The desktop file, the AppStream metainfo and the icons are in `data/`;
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
 the 3D view (its tab reads "Model"), Parts, Files, Details, Edit, Code,
-Problems and Output.
+Problems, Output and Versions.
 Nothing but the problem pins, the editing menu at a click and the small
 labels that belong on the model (the ghost's verdict, the repeat
 nothing that can be dragged) sits over the model; the sizes a selection
@@ -354,13 +383,13 @@ status bar's Panels menu (Code also from "Edit the Text" and Ctrl+E; Edit
 when an edit starts), into its home on the compact board (H2,
 `Layout::board`): Parts in a frame above Files on the left; the Model in
 the centre with Code as the next tab of the same frame (so the open files
-sit beside the Model); Details with Edit as tabs on the right; Problems
-and Output at the bottom. Choosing a part reveals its line in the Code
+sit beside the Model); Details with Edit as tabs on the right; Problems,
+Output and Versions at the bottom. Choosing a part reveals its line in the Code
 panel only while that panel is open. The edges start 272 px (left), 340 px
 (right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
 the sides to 220 and 260. A layout file older than the Edit panel puts it
 beside Details wherever that file put Details, and a panel a file doesn't
-mention (Output, in a board B file) goes where the compact board puts it, so a
+mention (Output or Versions, in a board B file) goes where the compact board puts it, so a
 saved board B still opens as board B. The layout is remembered per user
 in `~/.config/stave/layout` (saved on every drop and when the window
 closes; a broken file means the default) and never in a `.stave` file:
@@ -471,6 +500,8 @@ first launch's three panels back, the tool groups in their usual spots.
   back to the front, showing what was just added.
 - **Output panel** lists what each check said, one line each ("Checked 5
   files · 0 errors · 0 warnings · 26 ms"), the newest at the foot.
+- **Versions panel** lists the suggestions AI apps made, then the
+  project's versions, newest first; see [Versions](#versions).
 - **Status bar**: the bottom panels folded into it. On its left,
   "Problems N" (the count green at none, amber otherwise) and "Output"
   are tab-like buttons: each opens the bottom edge on its panel
@@ -483,8 +514,9 @@ first launch's three panels back, the tool groups in their usual spots.
   with Project (New Project…, Open Project…, Save, Check Again, Build
   Plan, Export 3D Model…), Edit (Find…, Find in the Text, Format the
   Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
-  Frame Everything, the panels, Reset Layout, the style) and Help (About
-  Stave), all from `main_menu`; then the project's name in small grey
+  Frame Everything, the panels, Reset Layout, the style) and Help (Use
+  with an AI App…, Keyboard Shortcuts, About Stave), all from
+  `main_menu`; then the project's name in small grey
   words (`Session::title()`, its folder in the tooltip). The Design | Cut
   list switcher sits in the middle. On the right: a find button (a
   magnifier; "Find a part, file, line or problem (Ctrl+K)", `win.find`),
@@ -516,8 +548,9 @@ first launch's three panels back, the tool groups in their usual spots.
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes); the View menu frames everything, brings back closed panels and
   sets the style (follow system, light, dark: `app.style`, remembered);
-  Help has "Keyboard Shortcuts" (`app.shortcuts`, Ctrl+?) and "About
-  Stave" (`app.about`).
+  Help has "Use with an AI App…" (`app.use-with-ai-app`, see
+  [Starting Stave](#starting-stave)), "Keyboard Shortcuts"
+  (`app.shortcuts`, Ctrl+?) and "About Stave" (`app.about`).
 - **Parts panel, "joint chips"** (`TreeSidebar`, top left; rows from
   `inspect::parts_tree`, joints from `part_joints::PartJoints`): a flat
   list grouped by assembly instead of a deep tree. Each group has a slim
@@ -766,6 +799,83 @@ free of its warning.
   handle ringed red past it), "closed 0°", "blocked from 0.6°", "opens to
   110°". The line at the top of the view says "Posed at contact · door
   at 2.6°".
+
+## Versions
+
+A project's versions are every saved state of it, kept in the project
+folder (`.stave/history/`), with the suggestions AI apps make
+(`docs/superpowers/specs/2026-11-20-ai-integration-design.md`,
+"Revisions"). The window names them in plain words only: Versions,
+Suggestions, Apply, Discard, Undo. Everyone works on a line of their own
+and the project's main line moves only when a line is merged into it; the
+window's line is the folder.
+
+- **Saving merges.** Every save the Code panel makes (Ctrl+S, saving them
+  all, trying a failed save again: `FilesOutput::SavedFiles`) is recorded
+  as the person's version ("Saved shelf.stave", "Saved 3 files") and
+  merged into the main line (`stave_app::versions::save`), off the main
+  thread. A save is never refused for problems in the design; one
+  identical to the main line records nothing. An edit added in the 3D
+  view straight to a file with no tab open is recorded with the next save.
+- **Turning versions on.** The first save after opening a project whose
+  versions are off asks, once, "Turn on versions for this project?"
+  (Not Now / Turn On). Turn On records the project as it is ("Turned on
+  versions"). Not Now is remembered for that project in
+  `~/.config/stave/versions-not-now` (one folder per line) and never asked
+  again; Escape puts the question away until the project is next opened.
+  The Versions panel of a project whose versions are off says so and has
+  a Turn On of its own. A project inside another project's history (a
+  folder in a git repository that isn't its root, as `examples/` is)
+  can't have versions: nothing is asked, and the panel says why, naming
+  the folder around it, and that a copy of the project in a folder of its
+  own can have them.
+- **Catching up.** When someone else moves the main line (an AI app
+  applies a suggestion, or undoes), the window hears it from
+  `.stave/history` (`HistoryWatcher`) and catches up: main's changes are
+  written into the folder at once, and the check that follows reloads the
+  Code panel's clean files, as for any file changed on disk. If the window
+  holds unsaved changes in a file main changed, nothing is written: a
+  toast says "shelf.stave changed in the project; your unsaved changes are
+  kept, and the two meet when you save", and the next save merges both.
+  The decision and the writing happen under the versions' lock, so main
+  can't move between them, and the unsaved files are read again just
+  before writing (from the set the Code panel keeps up to date, not a
+  copy taken when the work was queued): a file saved, or made unsaved,
+  since the folder was read holds the whole catch-up back, and the window
+  is recorded as in step with main only once every file is written.
+  Where both changed the same
+  lines, the file is written with both kept between conflict marker lines
+  (`docs/grammar.md`, "Conflicts"), and a toast says so. Opening a project
+  catches it up too, and so does the window coming to the front while its
+  versions aren't watched yet (an AI app turned them on meanwhile), after
+  which they are. Catching up never writes or removes a file through a
+  symbolic link, which could lead out of the project: it then writes
+  nothing and says which link stood in the way. The window's work on its
+  versions (saving, catching up, Apply, Discard, Undo) runs one job at a
+  time, in order (`stave_app::versions::Worker`), so a save never records
+  files read before a catch-up wrote main's changes.
+- **The Versions panel** (`VersionsPanel`, at the bottom beside Output on
+  the compact board): "Suggestions" with Undo beside the heading, each
+  suggestion its title over "From Claude Desktop" and three buttons:
+  **Show** tries its patches, as one patch file with one format line
+  (`stave_app::versions::shown_patch`), on the design and shows the
+  result as a ghost over the model, a change in progress like any other
+  (nothing is written unless it is added); **Apply** tries its patches
+  again on the main line as it is now and, when every one fits and the
+  design checks with no errors, makes the result the main line's latest
+  version, by the person. A patch that fits but leaves errors is refused,
+  saying why, and the suggestion is left as it is. When something a patch
+  names is no longer there, the suggestion's own files are moved onto the
+  main line: if that is clean and the design then checks with no errors,
+  they are applied; one whose changes clash says so and can't be applied
+  until they are resolved. **Discard**
+  throws it away. Then "Versions": each its message over who made it and
+  when ("Henry, 2026-11-20 10:00"), the latest 50. **Undo** undoes the
+  last change to the project by anyone, the person or an AI app (an AI
+  app's own undo reaches only its own changes), and the folder catches
+  up. Each ends in a toast in plain words ("Applied “Widen the drawer”",
+  "Undid “Saved shelf.stave”", "Undid applying “Widen the drawer”",
+  "Brought back the suggestion “Widen the drawer”") or says why not.
 
 ## Focus mode
 
@@ -1642,7 +1752,43 @@ step and changes nothing in the interface.
   files or views; closing the window or opening another folder with
   unsaved changes asks: Save, Don't Save or Cancel. A file changed on disk
   by something else reloads when its buffer is clean and keeps unsaved
-  changes otherwise (with a toast).
+  changes otherwise (with a toast); saving such a buffer then merges the
+  two changes from the text they were both made from
+  (`stave_app::versions::merge_for_save`), both kept between conflict
+  marker lines where they touch the same lines, so a change written by an
+  AI app or a catch-up is never just written over.
+- **Conflicts** (grammar, "Conflicts"): where a file holds two versions
+  of the same lines (the window caught up with a change someone else
+  applied and the two clash, or the user's own work outside Stave), the
+  editor tints them: the marker lines grey, the first side green, the
+  other sides blue and the base (what both changed from) amber, as a
+  paragraph background over the whole line. Above each conflict's
+  opening marker line a row of links, placed like a lens, offers the
+  ways to settle it, from `stave_app::conflicts::actions`: a "Keep" for
+  each side, named after it ("Keep yours", "Keep theirs"; the green or
+  blue side when its marker has no label Stave wrote; "Keep side 3" and
+  on), and "Keep both" only when every side is whole items with
+  different names. A link
+  replaces the conflict in the buffer as one undoable change (the file
+  is not written until it is saved, like any edit); it reads the
+  conflict from the buffer as it is when clicked, so a link left from
+  an older layout settles nothing rather than the wrong lines.
+  Deleting the marker lines by hand and saving settles it too.
+  `error[conflict]` is underlined at the opening marker line as any
+  problem is. The window never names jj or git.
+  A suggestion with a clash shows **Resolve** in the Versions panel: a
+  dialog opens each clashing file of the suggestion
+  (`stave_app::versions::to_resolve`), marker lines and all, to edit by
+  hand, and *Save to Suggestion* writes them back to the suggestion
+  (`stave_app::versions::save_resolved`), never to the project's folder.
+  Saving is refused when the suggestion moved on since it was read
+  (an AI app added to it or resolved it meanwhile).
+  *Not yet:* the Resolve dialog is a plain text view, without the
+  editor's conflict links; and the 3D view can't yet show one side of a
+  conflict as a ghost (the spec's "the 3D view can show either side as
+  a ghost"): only a suggestion's patches are shown that way. In the
+  Problems panel, a conflict reads as `error[conflict]` only; `stave
+  check` and the AI apps' `check` also check each side on its own.
 
 **Highlighting stays single-sourced.** The buffer's own syntax
 highlighting is off and there is no `.lang` file: a GtkSourceView

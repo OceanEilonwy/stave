@@ -15,13 +15,11 @@ anyhow = "1"
 # version wgpu-hal uses.
 ash = "0.38"
 async-channel = "2"
-bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 glam = "0.30"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_8"] }
 panel = { package = "libpanel", version = "0.7", features = ["v1_8"] }
-png = "0.18"
 pollster = "0.4"
 # gnome_47 is the level of our gtk4 feature (v4_16); our own libadwaita and
 # libpanel features (v1_8) stay as they are, since features only add.
@@ -31,8 +29,10 @@ stave-app = { path = "../stave-app" }
 stave-geom = { path = "../stave-geom" }
 stave-ide = { path = "../stave-ide" }
 stave-lang = { path = "../stave-lang" }
+stave-link = { path = "../stave-link" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
+stave-render = { path = "../stave-render", features = ["dmabuf"] }
 stave-scene = { path = "../stave-scene" }
 stave-schema = { path = "../stave-schema" }
 wgpu = "30"

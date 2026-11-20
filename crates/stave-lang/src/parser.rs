@@ -25,8 +25,9 @@
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder};
 
 use crate::ast::Span;
+use crate::conflict::Conflict;
 use crate::diagnostics::{Code, Diagnostic, FileId, Label};
-use crate::lexer::Token;
+use crate::lexer::{Token, in_conflict};
 use crate::syntax::SyntaxKind::{self, *};
 
 /// Expressions nested deeper than this are rejected instead of risking the
@@ -53,18 +54,21 @@ pub(crate) fn parse(
     file: FileId,
     text: &str,
     tokens: &[Token],
+    conflicts: &[Conflict],
     entry: Entry,
 ) -> (GreenNode, Vec<Diagnostic>) {
     let significant: Vec<usize> = tokens
         .iter()
         .enumerate()
-        .filter(|(_, token)| !token.kind.is_trivia())
+        .filter(|(_, token)| !token.kind.is_trivia() && !in_conflict(conflicts, token.span))
         .map(|(index, _)| index)
         .collect();
     let mut parser = Parser {
         file,
         text,
         tokens,
+        conflicts,
+        next_conflict: 0,
         significant,
         cursor: 0,
         emitted: 0,
@@ -78,6 +82,10 @@ pub(crate) fn parse(
         Entry::PatchFile => parser.patch_file(),
     }
     (parser.builder.finish(), parser.diagnostics)
+}
+
+fn span_start(span: Span) -> usize {
+    usize::try_from(span.start()).unwrap_or(usize::MAX)
 }
 
 /// Where an item is being parsed; decides what may follow and how to
@@ -189,6 +197,11 @@ struct Parser<'t> {
     file: FileId,
     text: &'t str,
     tokens: &'t [Token],
+    /// The conflicts in the text, in order; their tokens are trivia, added
+    /// to the tree as a [`SyntaxKind::CONFLICT`] node each.
+    conflicts: &'t [Conflict],
+    /// Index into `conflicts` of the next one to add to the tree.
+    next_conflict: usize,
     /// Indexes into `tokens` of the significant (non-trivia) tokens.
     significant: Vec<usize>,
     /// Index into `significant` of the current token.
@@ -285,10 +298,69 @@ impl<'t> Parser<'t> {
             .unwrap_or(self.tokens.len());
         while self.emitted < until {
             if let Some(&token) = self.tokens.get(self.emitted) {
-                self.emit(token);
+                let conflicts: &'t [Conflict] = self.conflicts;
+                // Skip any conflict already passed: one inside a block
+                // comment is never reached.
+                while conflicts
+                    .get(self.next_conflict)
+                    .is_some_and(|conflict| conflict.range.start < span_start(token.span))
+                {
+                    self.next_conflict += 1;
+                }
+                match conflicts.get(self.next_conflict) {
+                    Some(conflict) if conflict.range.start == span_start(token.span) => {
+                        self.next_conflict += 1;
+                        self.conflict(conflict);
+                        continue;
+                    }
+                    Some(_) | None => self.emit(token),
+                }
             }
             self.emitted += 1;
         }
+    }
+
+    /// Adds a conflict's tokens, starting at the next one to emit, as a
+    /// `CONFLICT` node with a `CONFLICT_SIDE` node for each side and the
+    /// base, in the order they are written; an empty side gets an empty
+    /// node.
+    fn conflict(&mut self, conflict: &Conflict) {
+        let sides: Vec<&std::ops::Range<usize>> = conflict
+            .sections()
+            .into_iter()
+            .map(|side| &side.range)
+            .collect();
+        let mut sides = sides.into_iter().peekable();
+        let mut open: Option<usize> = None;
+        self.builder.start_node(CONFLICT.into());
+        while let Some(&token) = self.tokens.get(self.emitted) {
+            let start = span_start(token.span);
+            if start >= conflict.range.end {
+                break;
+            }
+            if open.is_some_and(|end| start >= end) {
+                self.builder.finish_node();
+                open = None;
+            }
+            while let Some(side) = sides.next_if(|side| side.start <= start) {
+                self.builder.start_node(CONFLICT_SIDE.into());
+                if side.end > start {
+                    open = Some(side.end);
+                    break;
+                }
+                self.builder.finish_node();
+            }
+            self.emit(token);
+            self.emitted += 1;
+        }
+        if open.is_some() {
+            self.builder.finish_node();
+        }
+        for _ in sides {
+            self.builder.start_node(CONFLICT_SIDE.into());
+            self.builder.finish_node();
+        }
+        self.builder.finish_node();
     }
 
     /// Adds the current token (and the trivia before it) to the tree.

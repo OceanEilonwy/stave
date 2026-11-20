@@ -51,6 +51,32 @@ fn check_reports_errors_and_fails() {
 }
 
 #[test]
+fn check_reports_conflict_and_checks_each_side() {
+    let folder = scratch("conflict_sides");
+    std::fs::write(
+        folder.join("box.stave"),
+        "stave 1\n\nproject \"Box\" {\n  units: mm\n}\n\n\
+         <<<<<<< yours\nparam width = 300mm\n||||||| before\nparam width = 250mm\n=======\n\
+         param width = 300mm + nothing_here\n>>>>>>> Claude Desktop\n",
+    )
+    .unwrap();
+    let output = stave(&["check", folder.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("error[conflict]"), "{stderr}");
+    assert!(
+        stderr.contains("in side 2 of the conflicts ('Claude Desktop'):"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing_here"), "{stderr}");
+    assert!(
+        !stderr.contains("in side 1 of the conflicts"),
+        "the first side has no problem of its own: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
 fn check_fails_cleanly_on_a_missing_path() {
     let output = stave(&["check", "no/such/folder"]);
     assert_eq!(output.status.code(), Some(2));
