@@ -547,6 +547,8 @@ impl Dockyard {
                     .build();
                 widget.set_id(id.word());
                 widget.set_child(Some(&content));
+                // Its empty state reads whole in any frame it is docked in.
+                super::empty_state::fit_every(content.upcast_ref());
                 // The tab's menu moves the panel without dragging it.
                 let menu = gio::Menu::new();
                 for side in Side::ALL {

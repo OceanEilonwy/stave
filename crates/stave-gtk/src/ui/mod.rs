@@ -28,6 +28,7 @@ mod edit_script;
 mod edit_view;
 mod edit_writer;
 mod editor;
+mod empty_state;
 mod files;
 mod finder;
 mod floating;

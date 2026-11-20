@@ -463,9 +463,10 @@ textview.stave-output { font-size: 0.818rem; background: transparent; }
    bottom dock's Problems panel (about 190 px at 1440x900), so its
    description was cut off at the panel's edge. A 48 px icon and 12 px
    margins and gaps make it about 130 px, with room for a second line of
-   description and Large Text. A still shorter panel scrolls the page,
-   and a shadow at the edge where the words go on says so (GTK draws a
-   scrolled window's undershoot only on a side with more to scroll to). */
+   description and Large Text. In a still shorter frame the page drops
+   its icon and shows a real scrollbar (empty_state.rs), and a shadow
+   marks the edge where the words go on (GTK draws a scrolled window's
+   undershoot only on a side with more to scroll to). */
 statuspage.compact > scrolledwindow > viewport > box { margin: 12px; border-spacing: 12px; }
 statuspage.compact > scrolledwindow > viewport > box > clamp > box { border-spacing: 12px; }
 statuspage.compact > scrolledwindow > viewport > box > clamp > box > .icon { -gtk-icon-size: 48px; }
