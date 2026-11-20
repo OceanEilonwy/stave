@@ -27,6 +27,29 @@ pub enum ValueType {
     Special(Special),
 }
 
+impl ValueType {
+    /// The bare words a value of this type may be written as, in the
+    /// order the grammar lists them: a closed list's words, `through` for
+    /// a depth, `fit` for a length that may fit, `true` and `false`, the
+    /// bare spacings; the words of a list's elements for a list. What
+    /// completion offers where this type is expected (grammar, "Tooling
+    /// and editors").
+    pub fn words(self) -> Vec<&'static str> {
+        match self {
+            ValueType::Words(set) => set.words(),
+            ValueType::Depth => WordSet::Through.words(),
+            ValueType::LengthOrFit => vec![FIT],
+            ValueType::Type(TypeName::Bool) => vec!["true", "false"],
+            ValueType::Type(TypeName::Spacing) => WordSet::Spacing.words(),
+            ValueType::ListOf(inner) => inner.words(),
+            ValueType::Type(_) | ValueType::Items | ValueType::Special(_) => Vec::new(),
+        }
+    }
+}
+
+/// The word `fit`: a part's length or width worked out from where it sits.
+pub const FIT: &str = "fit";
+
 /// Field values made of calls whose heads are fixed by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Special {

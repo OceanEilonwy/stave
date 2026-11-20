@@ -79,7 +79,7 @@ pub struct Parameter {
     pub required: bool,
 }
 
-const fn positional(name: &'static str, ty: ValueType) -> Parameter {
+pub(crate) const fn positional(name: &'static str, ty: ValueType) -> Parameter {
     Parameter {
         name,
         positional: true,
@@ -88,7 +88,7 @@ const fn positional(name: &'static str, ty: ValueType) -> Parameter {
     }
 }
 
-const fn named(name: &'static str, ty: ValueType, required: bool) -> Parameter {
+pub(crate) const fn named(name: &'static str, ty: ValueType, required: bool) -> Parameter {
     Parameter {
         name,
         positional: false,
