@@ -35,6 +35,12 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             // test exercises an input method, so none is listened to.
             if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_im_module(Some("gtk-im-context-simple"));
+                // The font and resolution `tools/window-shot` lays the
+                // window out with (GNOME's default), so tests that measure
+                // text read the same on a desktop and on a private
+                // Broadway display, which has no desktop settings.
+                settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+                settings.set_gtk_xft_dpi(96 * 1024);
             }
             // What the application puts on the display at startup that
             // the windows tests build rely on: the grips' sizes.
