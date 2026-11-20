@@ -80,9 +80,13 @@ impl Window {
             "select" => {
                 let picked = self.picked_named(rest)?;
                 let point = self.point_of(self.volume_of(&picked));
+                // As a click there: refused, saying why, while the text
+                // doesn't read.
                 self.start_edit(picked, point);
                 if self.session.edit().is_none() {
-                    return Err(format!("no edit started from '{rest}'"));
+                    return Err(self
+                        .parse_block_line()
+                        .unwrap_or_else(|| format!("no edit started from '{rest}'")));
                 }
                 self.check_menu_now();
             }

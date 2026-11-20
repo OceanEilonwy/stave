@@ -578,8 +578,15 @@ fn fill_card(root: &gtk::Box, slots: CardSlots) -> CardFrame {
         .build();
     name.update_property(&[gtk::accessible::Property::Label(&tr("Name"))]);
     let (apply_buttons, cancel, add) = sections::footer_buttons();
-    let buttons = gtk::Box::builder()
-        .spacing(8)
+    // "Repeat…" at the start of the line, Cancel and Add at its end; in a
+    // panel too narrow for all three (the docked layout's default Edit
+    // panel at GNOME's default font), Cancel and Add go on a line of their
+    // own under it rather than widening the card past its panel.
+    let buttons = adw::WrapBox::builder()
+        .child_spacing(8)
+        .line_spacing(6)
+        .justify(adw::JustifyMode::Spread)
+        .justify_last_line(true)
         .css_classes(["stave-edit-buttons"])
         .build();
     buttons.append(&repeat_button_slot);
@@ -1277,27 +1284,6 @@ fn options_row(list: &ChoiceList) -> Option<gtk::Widget> {
     Some(at)
 }
 
-/// Lays the window out to find where the open short list is, scrolls it
-/// into sight and lays the window out again to show it scrolled: for an
-/// edit script, whose picture is taken from the last layout. Returns
-/// whether the target is in sight (so let go).
-fn scroll_now(root: &gtk::Box, frame: &CardFrame, target: &gtk::Widget) -> bool {
-    let Some(window) = root
-        .root()
-        .and_then(|root| root.downcast::<gtk::Window>().ok())
-    else {
-        return false;
-    };
-    let (width, height) = (window.width(), window.height());
-    if width <= 0 || height <= 0 {
-        return false;
-    }
-    window.allocate(width, height, -1, None);
-    let done = scroll_to_target(&frame.scrolled.vadjustment(), &frame.body, target);
-    window.allocate(width, height, -1, None);
-    done
-}
-
 /// The card for a chosen candidate as a relm4 component. Its model is the
 /// card's state: what the last show drew, the open short list, the name
 /// as shown and whether Add is enabled. Only
@@ -1330,8 +1316,11 @@ pub enum EditCardInput {
     /// (nothing, when the card shows no list for it: the owner knows
     /// which it shows from [`CardView::offers`]).
     OpenOptions(String),
-    /// Bring the open short list into sight at once, laying the window
-    /// out (for an edit script's picture).
+    /// Bring the open short list into sight now (for an edit script's
+    /// picture): the card scrolls its own scrolled window if the list is
+    /// laid out, and otherwise asks its owner to lay the window out
+    /// ([`EditCardOutput::WantsLayout`]), which answers with
+    /// [`EditCardInput::LaidOut`].
     ScrollToOpenOptions,
     /// People did something in the body.
     Body(BodyEvent),
@@ -1371,6 +1360,11 @@ pub enum EditCardOutput {
     Link(LinkTarget),
     /// The pointer entered a link (`Some`) or left it.
     Hover(Option<LinkTarget>),
+    /// The open short list can't be brought into sight until the window
+    /// is laid out (asked by [`EditCardInput::ScrollToOpenOptions`]): the
+    /// owner lays its own window out and answers
+    /// [`EditCardInput::LaidOut`]. The card never lays out a window.
+    WantsLayout,
 }
 
 impl EditCardComponent {
@@ -1616,10 +1610,13 @@ impl Component for EditCardComponent {
                 }
             }
             EditCardInput::ScrollToOpenOptions => {
-                if let Some(target) = &self.scroll_target
-                    && scroll_now(root, frame, target)
-                {
-                    self.scroll_target = None;
+                if let Some(target) = &self.scroll_target {
+                    if scroll_to_target(&frame.scrolled.vadjustment(), &frame.body, target) {
+                        self.scroll_target = None;
+                    } else {
+                        // Nobody listening is not a mistake.
+                        let _ = sender.output(EditCardOutput::WantsLayout);
+                    }
                 }
             }
             EditCardInput::Body(BodyEvent::Action(action)) => Self::act(&sender, action),
@@ -2558,7 +2555,8 @@ mod tests {
         // Opening a list says so, and keeps it open across a redraw.
         card.send(EditCardInput::OpenOptions("front_stock".to_owned()));
         card.send(EditCardInput::OpenOptions("no_such_setting".to_owned()));
-        // Off screen there is no window to lay out: it waits, quietly.
+        // Off screen the list isn't laid out: the card asks its owner to
+        // lay the window out, and lays out nothing itself.
         card.send(EditCardInput::ScrollToOpenOptions);
         settle();
         assert_eq!(card.model().open_options.as_deref(), Some("front_stock"));
@@ -2587,8 +2585,11 @@ mod tests {
         }
         assert_eq!(
             *heard.borrow(),
-            [EditCardOutput::OptionsOpen(Some("front_stock".to_owned()))],
-            "only which list is open; no action"
+            [
+                EditCardOutput::OptionsOpen(Some("front_stock".to_owned())),
+                EditCardOutput::WantsLayout,
+            ],
+            "which list is open, and a layout asked for; no action"
         );
         // Its handler was blocked only while the card opened it: people
         // closing it are heard.

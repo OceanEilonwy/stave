@@ -237,7 +237,9 @@ impl Window {
     pub(in crate::ui) fn show_grips(&mut self, wanted: Option<GripSelection>) {
         self.stop_stops_search();
         self.editing.grips.state.shown_for = wanted;
-        let Some(selection) = wanted else {
+        // While the text doesn't read the Sizes card lists nothing to
+        // change; it is listed again once the text reads.
+        let Some(selection) = wanted.filter(|_| self.gestures_allowed()) else {
             self.clear_grip_marks();
             self.show_card();
             self.request_render();
