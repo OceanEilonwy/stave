@@ -1,0 +1,4 @@
+stave 1$0
+
+param width = 18mm
+// expect: -

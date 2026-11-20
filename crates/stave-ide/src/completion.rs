@@ -20,14 +20,14 @@
 
 use std::collections::BTreeSet;
 
-use stave_lang::ast::{BaseKind, CutOperation, Span, Unit};
+use stave_lang::ast::{BaseKind, CutOperation, Span, TypeName, Unit};
 use stave_lang::placement::Face;
 use stave_lang::{FileId, SyntaxKind, SyntaxNode, SyntaxToken};
 use stave_schema::fields::{self, FieldSpec, Special, ValueType};
 use stave_schema::kinds;
 use stave_schema::operations::{self, ArgumentDefault, Selector};
 use stave_schema::placement::{MadePartTerm, PlacementTerm};
-use stave_schema::positions::{Argument, ArgumentPosition, Block, Callee};
+use stave_schema::positions::{Argument, ArgumentPosition, Block, CallSite, Callee};
 use stave_schema::recipes::{CuttingStep, MarkingStep};
 use stave_schema::words::MotionWord;
 
@@ -664,10 +664,14 @@ struct Context<'a> {
 impl Context<'_> {
     fn candidates(&self) -> Vec<Candidate> {
         let cursor = self.cursor;
-        if cursor.after_number {
-            return units();
-        }
         let context = cursor.context();
+        if cursor.after_number {
+            return if self.number_takes_unit() {
+                units()
+            } else {
+                Vec::new()
+            };
+        }
         if let Some(dot) = context.len().checked_sub(1)
             && cursor.kind(dot) == Some(SyntaxKind::DOT)
         {
@@ -680,6 +684,27 @@ impl Context<'_> {
             Some(open) if cursor.kind(open) == Some(SyntaxKind::L_PAREN) => self.in_call(open),
             Some(open) if cursor.kind(open) == Some(SyntaxKind::L_BRACK) => self.in_brackets(open),
             open => self.in_block(open),
+        }
+    }
+
+    /// `true` unless the number before the cursor is one that never takes
+    /// a unit: the version in `stave 1`, or a count or index in `[ ]`
+    /// after a name (`part shelf[3]`, `shelf[2]`).
+    fn number_takes_unit(&self) -> bool {
+        let cursor = self.cursor;
+        let previous = cursor.before.checked_sub(1);
+        if previous.and_then(|index| cursor.kind(index)) == Some(SyntaxKind::KW_STAVE) {
+            return false;
+        }
+        match cursor.innermost() {
+            Some(open) if cursor.kind(open) == Some(SyntaxKind::L_BRACK) => {
+                let named = open
+                    .checked_sub(1)
+                    .and_then(|index| cursor.kind(index))
+                    .is_some_and(|kind| kind.is_word() || kind == SyntaxKind::R_BRACK);
+                !named
+            }
+            Some(_) | None => true,
         }
     }
 
@@ -793,6 +818,20 @@ impl Context<'_> {
         {
             return words(spec.ty);
         }
+        // `name: ` in an assembly: the words of the component's param.
+        if let [name, colon] = entry
+            && name.kind().is_word()
+            && colon.kind() == SyntaxKind::COLON
+            && first == Some(SyntaxKind::KW_ASSEMBLY)
+        {
+            return self
+                .component_params(head)
+                .into_iter()
+                .find(|param| param.name == name.text())
+                .and_then(|param| param_parameter(param, ParameterKind::Param).ty)
+                .map(|ty| written_type_words(&ty))
+                .unwrap_or_default();
+        }
         Vec::new()
     }
 
@@ -854,23 +893,30 @@ impl Context<'_> {
 
     // ---- calls ----
 
-    /// `true` for a call in `place { }`, and for one on a `cut` line or in
-    /// its block.
-    fn call_position(&self, depth: usize) -> (bool, bool) {
+    /// Where a call below the bracket at `depth` is written: in
+    /// `place { }`, on a `cut` line or in its block, or elsewhere.
+    fn call_site(&self, depth: usize) -> CallSite {
         let cursor = self.cursor;
         let Some((_, brace)) = cursor.brace_below(depth) else {
-            return (false, false);
+            return CallSite::Expression;
         };
         let head = cursor.head(brace);
-        let place = head
+        if head
             .first()
-            .is_some_and(|t| t.kind() == SyntaxKind::KW_PLACE);
+            .is_some_and(|t| t.kind() == SyntaxKind::KW_PLACE)
+        {
+            return CallSite::Place;
+        }
         let in_cut_block = head.first().is_some_and(|t| t.text() == "cut");
         let on_cut_line = cursor
             .entry(Some(brace))
             .first()
             .is_some_and(|t| t.text() == "cut");
-        (place, in_cut_block || on_cut_line)
+        if in_cut_block || on_cut_line {
+            CallSite::Cut
+        } else {
+            CallSite::Expression
+        }
     }
 
     fn callee(&self, open: usize, depth: usize) -> Option<Callee> {
@@ -884,8 +930,7 @@ impl Context<'_> {
         {
             return None;
         }
-        let (place, cut) = self.call_position(depth);
-        let callee = Callee::from_word(word.text(), place, cut)?;
+        let callee = Callee::from_word(word.text(), self.call_site(depth))?;
         // A kind in scope with a built-in's name is called instead.
         if matches!(callee, Callee::Builtin(_))
             && self
@@ -900,16 +945,38 @@ impl Context<'_> {
     fn in_call(&self, open: usize) -> Vec<Candidate> {
         let cursor = self.cursor;
         let depth = cursor.open.len().saturating_sub(1);
-        let Some(callee) = self.callee(open, depth) else {
-            return Vec::new();
-        };
         let Some(argument) = cursor.argument(open, false) else {
             return Vec::new();
         };
-        callee
-            .expects(argument.position())
-            .map(words)
+        if let Some(callee) = self.callee(open, depth) {
+            return callee
+                .expects(argument.position())
+                .map(words)
+                .unwrap_or_default();
+        }
+        // A kind's call: the words of the param or setting named.
+        let ArgumentAt::Named(name) = argument else {
+            return Vec::new();
+        };
+        let Some((_, kind)) = self.called_kind(open) else {
+            return Vec::new();
+        };
+        self.kind_parameters(kind)
+            .into_iter()
+            .find(|parameter| parameter.name == name)
+            .and_then(|parameter| parameter.ty)
+            .map(|ty| written_type_words(&ty))
             .unwrap_or_default()
+    }
+
+    /// The kind a call opened at `open` calls, and its name as written.
+    fn called_kind(&self, open: usize) -> Option<(Vec<String>, &Symbol)> {
+        let head = open.checked_sub(1)?;
+        let words = self.cursor.chain(head);
+        let kind = self
+            .resolve(&words)
+            .filter(|id| self.symbol_kind(*id) == Some(SymbolKind::Kind))?;
+        Some((words, self.analysis.symbol(kind)?))
     }
 
     // ---- brackets ----
@@ -1090,12 +1157,7 @@ impl Context<'_> {
                     callee.arguments().iter().map(argument_parameter).collect();
                 return Some(help(callee.word().to_owned(), parameters, argument, None));
             }
-            let head = open.checked_sub(1)?;
-            let words = cursor.chain(head);
-            let kind = self
-                .resolve(&words)
-                .filter(|id| self.symbol_kind(*id) == Some(SymbolKind::Kind))?;
-            let symbol = self.analysis.symbol(kind)?;
+            let (words, symbol) = self.called_kind(open)?;
             let parameters = self.kind_parameters(symbol);
             return Some(help(words.join("."), parameters, argument, docs_of(symbol)));
         }
@@ -1238,6 +1300,14 @@ fn words(ty: ValueType) -> Vec<Candidate> {
         .into_iter()
         .map(|word| Candidate::new(word, CompletionKind::Word, detail.clone()))
         .collect()
+}
+
+/// The words of a type written in a declaration (`Bool`, `Direction`);
+/// none for a type that is not one of the language's names.
+fn written_type_words(ty: &str) -> Vec<Candidate> {
+    TypeName::from_word(ty.trim())
+        .map(|name| words(ValueType::Type(name)))
+        .unwrap_or_default()
 }
 
 fn field_candidate(spec: &FieldSpec) -> Candidate {

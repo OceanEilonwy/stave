@@ -109,21 +109,38 @@ pub enum ArgumentPosition<'a> {
 /// part cut, and the part entering it for `crossing`.
 const SELECTOR_PARTS: [&str; 2] = ["part", "other"];
 
+/// Where a call is written, which decides what its head word may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallSite {
+    /// A term of `place { }`: a placement term or a built-in function.
+    Place,
+    /// On a `cut` line or in its block: a face selector, a cut operation
+    /// or a built-in function.
+    Cut,
+    /// Anywhere else: a built-in function.
+    Expression,
+}
+
 impl Callee {
-    /// The callee a word names in a position: a placement term inside
-    /// `place { }`, a selector or cut operation inside a cut, else a
-    /// built-in function.
-    pub fn from_word(word: &str, place: bool, cut: bool) -> Option<Callee> {
-        if place && let Some(term) = PlacementTerm::from_word(word) {
-            return Some(Callee::Placement(term));
-        }
-        if cut {
-            if let Some(selector) = Selector::from_word(word) {
-                return Some(Callee::Selector(selector));
+    /// The callee a word names where it is written: a placement term
+    /// inside `place { }`, a selector or cut operation inside a cut, else
+    /// a built-in function.
+    pub fn from_word(word: &str, site: CallSite) -> Option<Callee> {
+        match site {
+            CallSite::Place => {
+                if let Some(term) = PlacementTerm::from_word(word) {
+                    return Some(Callee::Placement(term));
+                }
             }
-            if let Some(operation) = CutOperation::from_word(word) {
-                return Some(Callee::Cut(operation));
+            CallSite::Cut => {
+                if let Some(selector) = Selector::from_word(word) {
+                    return Some(Callee::Selector(selector));
+                }
+                if let Some(operation) = CutOperation::from_word(word) {
+                    return Some(Callee::Cut(operation));
+                }
             }
+            CallSite::Expression => {}
         }
         Builtin::from_word(word).map(Callee::Builtin)
     }
@@ -251,13 +268,21 @@ mod tests {
             side.expects(ArgumentPosition::Named("normal")),
             Some(ValueType::Words(WordSet::PartAxis))
         );
-        let mid = Callee::from_word("mid", false, false);
+        let mid = Callee::from_word("mid", CallSite::Expression);
         assert_eq!(mid, Some(Callee::Builtin(Builtin::Mid)));
         assert_eq!(
-            Callee::from_word("flush", true, false),
+            Callee::from_word("flush", CallSite::Place),
             Some(Callee::Placement(PlacementTerm::Flush))
         );
-        assert_eq!(Callee::from_word("flush", false, false), None);
+        assert_eq!(Callee::from_word("flush", CallSite::Expression), None);
+        assert_eq!(
+            Callee::from_word("crossing", CallSite::Cut),
+            Some(Callee::Selector(Selector::Crossing))
+        );
+        assert_eq!(
+            Callee::from_word("drill", CallSite::Cut),
+            Some(Callee::Cut(CutOperation::Drill))
+        );
     }
 
     #[test]
