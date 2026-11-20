@@ -375,9 +375,9 @@ fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
         .and_then(|rest| rest.split("> set joinery").next())
         .unwrap();
     let mut lines = listing.lines();
-    assert_eq!(lines.next(), Some("joinery: 20 options, 7 fit"));
+    assert_eq!(lines.next(), Some("joinery: 21 options, 7 fit"));
     let rows: Vec<&str> = lines.collect();
-    assert_eq!(rows.len(), 20, "{listing}");
+    assert_eq!(rows.len(), 21, "{listing}");
     let row = |name: &str| -> &str {
         rows.iter()
             .find(|row| row.split_whitespace().nth(1) == Some(name))
@@ -482,13 +482,13 @@ fn a_script_prints_a_settings_short_list_and_a_searchs_matches() {
     // A new project: the default only, nothing used yet.
     assert_eq!(
         after("choices joinery", 1),
-        "joinery: 1 to choose from (0 used in this project), then search 20 options\n  1. dowel(count: 4)  default, now"
+        "joinery: 1 to choose from (0 used in this project), then search 21 options\n  1. dowel(count: 4)  default, now"
     );
     // Chigiri is found by its description, refused with the checker's
     // reason; dowel by its name, and it fits.
     let key = after("search joinery key", 1);
     assert!(
-        key.starts_with("joinery: 1 of 20 options match \"key\"\n  Standard · joinery\n    chigiri  by description  refused: error[require]: "),
+        key.starts_with("joinery: 1 of 21 options match \"key\"\n  Standard · joinery\n    chigiri  by description  refused: error[require]: "),
         "{key}"
     );
     assert!(
@@ -497,14 +497,14 @@ fn a_script_prints_a_settings_short_list_and_a_searchs_matches() {
     );
     let dow = after("search joinery dow", 1);
     assert!(
-        dow.starts_with("joinery: 1 of 20 options match \"dow\"\n  Standard · joinery\n    dowel  by name  fits\n"),
+        dow.starts_with("joinery: 1 of 21 options match \"dow\"\n  Standard · joinery\n    dowel  by name  fits\n"),
         "{dow}"
     );
     // With a case that uses screws in the project, screw is offered as
     // used; the value chosen is listed as now, and the default again.
     assert!(
         after("choices joinery", 2).starts_with(
-            "joinery: 2 to choose from (1 used in this project), then search 20 options\n  1. dowel(count: 4)  default, now\n  2. screw            used, "
+            "joinery: 2 to choose from (1 used in this project), then search 21 options\n  1. dowel(count: 4)  default, now\n  2. screw            used, "
         ),
         "{text}"
     );

@@ -77,6 +77,7 @@
 
 mod explain;
 mod fixes;
+mod grain;
 mod held;
 mod instance;
 mod models;
@@ -253,6 +254,8 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     if !checker.diagnostics.iter().any(|(d, _)| d.is_error()) {
         stop.check()?;
         checker.held();
+        stop.check()?;
+        checker.grain();
     }
     stop.check()?;
     // Models are read from disk; one that can't be read is not checked.

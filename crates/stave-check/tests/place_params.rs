@@ -46,7 +46,9 @@ part side_r = mirror(side_l, about: mid(base, across))
 
 joint sides : screw(base, into: [side_l, side_r], length: 40mm)
 
-/// A cleat screwed to the inside of a side.
+/// A cleat screwed to the inside of a side, by one screw: it runs across
+/// the side's grain, so two would hold the side fast across its grain
+/// (grammar, "Grain and wood movement").
 component Cleat {
   param side   : Part
   param face   : Anchor
@@ -61,7 +63,7 @@ component Cleat {
       center(side, deep)
     }
   }
-  joint fix : screw(cleat, into: side, length: 30mm)
+  joint fix : screw(cleat, into: side, length: 30mm, count: 1)
 }
 
 assembly cleat_l : Cleat { side: side_l, face: side_l.right }
