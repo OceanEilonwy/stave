@@ -38,7 +38,6 @@
 //!   build the overlay from the live text without asking.
 
 use stave_app::i18n::{fill_in, ntr, tr, trc};
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -48,7 +47,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::check::Checked;
 use stave_app::format::Formatted;
 use stave_app::problems::Marks;
@@ -61,7 +60,6 @@ use stave_lang::Severity;
 use stave_lang::ast::Span;
 
 use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run};
-use super::relm4_shim::Bridge;
 use super::tab_strip::PageTab;
 
 /// How long typing must pause before the names are worked out again.
@@ -106,33 +104,6 @@ pub enum CursorName {
     /// Anything else (a keyword, a field name, a number, a space, or text
     /// not worked out yet): the link stays as it is.
     Other,
-}
-
-/// The latest analysis of the project, as the files component last
-/// published it: a handle the window (and anything it gives a copy to,
-/// such as a key handler that must answer GTK at once) reads without
-/// asking the component. Only [`FilesPage`] writes it, as the analysis
-/// arrives; readers clone the `Rc<Analysis>` out and hold no borrow.
-#[derive(Clone, Default)]
-pub struct LatestAnalysis(Rc<Cell<Option<Rc<Analysis>>>>);
-
-impl LatestAnalysis {
-    /// The latest analysis, if one has arrived.
-    pub fn get(&self) -> Option<Rc<Analysis>> {
-        let analysis = self.0.take();
-        self.0.set(analysis.clone());
-        analysis
-    }
-
-    fn set(&self, analysis: Rc<Analysis>) {
-        self.0.set(Some(analysis));
-    }
-}
-
-impl fmt::Debug for LatestAnalysis {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("LatestAnalysis(..)")
-    }
 }
 
 /// A file an edit's commit wrote through a buffer (see `edit_writer.rs`),
@@ -513,6 +484,10 @@ pub struct FilesComponent<Then: fmt::Debug + 'static> {
     link_ticket: u64,
     hover_ticket: u64,
     settle_ticket: u64,
+    /// The settling under way: its frame callback on the text, and how
+    /// many frames it has placed the overlays on. Removed after
+    /// [`SETTLE_FRAMES`], or when a newer settling replaces it.
+    settling: Option<(gtk::TickCallbackId, u32)>,
     /// The text the hover card is about, while it shows: the pointer
     /// leaving it hides the card at once.
     hover_span: Option<Span>,
@@ -682,6 +657,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             link_ticket: 0,
             hover_ticket: 0,
             settle_ticket: 0,
+            settling: None,
             hover_span: None,
             marks: Rc::default(),
             wish: None,
@@ -828,6 +804,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             FilesInput::SettleTick(ticket) => {
                 if ticket == self.settle_ticket {
                     self.editor.place_overlays();
+                    self.settled_a_frame();
                 }
             }
             FilesInput::SaveAgain(document) => self.save_again(&document),
@@ -1138,19 +1115,36 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
     /// one, whose frames are then ignored.
     fn settle_overlays(&mut self) {
         self.editor.place_overlays();
+        if let Some((older, _)) = self.settling.take() {
+            older.remove();
+        }
         self.settle_ticket = self.settle_ticket.wrapping_add(1);
         let ticket = self.settle_ticket;
         let input = self.sender.input_sender().clone();
-        let frames = Cell::new(0u32);
-        self.editor.view.add_tick_callback(move |_, _| {
-            frames.set(frames.get().saturating_add(1));
-            if input.send(FilesInput::SettleTick(ticket)).is_err() || frames.get() >= SETTLE_FRAMES
-            {
+        // The callback only sends; the update counts the frames and
+        // removes it.
+        let callback = self.editor.view.add_tick_callback(move |_, _| {
+            if input.send(FilesInput::SettleTick(ticket)).is_err() {
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
             }
         });
+        self.settling = Some((callback, 0));
+    }
+
+    /// Counts a frame of the settling under way, and ends it after
+    /// [`SETTLE_FRAMES`].
+    fn settled_a_frame(&mut self) {
+        let Some((callback, frames)) = self.settling.take() else {
+            return;
+        };
+        let frames = frames.saturating_add(1);
+        if frames >= SETTLE_FRAMES {
+            callback.remove();
+        } else {
+            self.settling = Some((callback, frames));
+        }
     }
 
     fn active_tab(&self) -> Option<(Document, gtk::TextBuffer)> {
@@ -1188,14 +1182,14 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
 
     /// Moves the cursor of the text showing without its cursor handler
     /// hearing (people didn't move it).
-    fn quietly(&self, change: impl FnOnce(&Editor)) {
+    fn quietly(&mut self, change: impl FnOnce(&mut Editor)) {
         match self.active.and_then(|index| self.tabs.get(index)) {
             Some(tab) => {
                 tab.buffer.block_signal(&tab.cursor_handler);
-                change(&self.editor);
+                change(&mut self.editor);
                 tab.buffer.unblock_signal(&tab.cursor_handler);
             }
-            None => change(&self.editor),
+            None => change(&mut self.editor),
         }
     }
 
@@ -2182,22 +2176,24 @@ fn markup_line(text: &str, start: u32, tokens: &[stave_ide::SemanticToken], dark
 }
 
 /// The Code panel as its owner holds it: the one owner of the component's
-/// controller, and the owner's own copies of what the component
-/// publishes, read without asking it: the open documents' buffers (for
-/// the unsaved text a check or an edit reads, and for the edit writer),
-/// the latest analysis, and the shared tag table.
+/// controller (its outputs forwarded at launch to where the owner said),
+/// and the owner's own copies of what the component publishes, read
+/// without asking it: the open documents' buffers (for the unsaved text a
+/// check or an edit reads, and for the edit writer), the latest analysis
+/// (handed over by the owner when [`FilesOutput::Analysed`] reaches it),
+/// and the shared tag table.
 ///
 /// Its senders are queued: they take effect when the main loop next
 /// runs. `Then` is what the owner wants done once a request is answered.
 pub struct FilesPage<Then: fmt::Debug + 'static> {
     /// The panel's content.
     pub root: gtk::Box,
-    bridge: Bridge<FilesComponent<Then>>,
+    controller: Controller<FilesComponent<Then>>,
     /// The open documents' buffers, as last published, plus any an edit's
     /// commit made since (taken by [`FilesPage::take_written`]).
     buffers: BTreeMap<Document, gtk::TextBuffer>,
     /// The latest analysis, as last published.
-    analysis: LatestAnalysis,
+    analysis: Option<Rc<Analysis>>,
     /// The tag table every buffer shares.
     table: gtk::TextTagTable,
     /// Where the edit writer says what it wrote, and where it is read.
@@ -2205,37 +2201,37 @@ pub struct FilesPage<Then: fmt::Debug + 'static> {
 }
 
 impl<Then: fmt::Debug + 'static> FilesPage<Then> {
-    /// An empty panel.
-    pub fn new() -> FilesPage<Then> {
+    /// An empty panel, each output made the owner's message by `map` and
+    /// sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(FilesOutput<Then>) -> X + 'static,
+    ) -> FilesPage<Then> {
         let table = gtk::TextTagTable::new();
-        let bridge = Bridge::<FilesComponent<Then>>::launch(FilesInit {
-            table: table.clone(),
-        });
+        let controller = FilesComponent::<Then>::builder()
+            .launch(FilesInit {
+                table: table.clone(),
+            })
+            .forward(to, map);
         FilesPage {
-            root: bridge.widget().clone(),
-            bridge,
+            root: controller.widget().clone(),
+            controller,
             buffers: BTreeMap::new(),
-            analysis: LatestAnalysis::default(),
+            analysis: None,
             table,
             written: mpsc::channel(),
         }
     }
 
-    /// Calls `callback` with each output from now on. The latest analysis
-    /// is kept here first, so it can be read as soon as it arrives.
-    pub fn connect_outputs(&self, callback: impl Fn(FilesOutput<Then>) + 'static) {
-        let latest = self.analysis.clone();
-        self.bridge.connect(move |output| {
-            if let FilesOutput::Analysed(analysis) = &output {
-                latest.set(Rc::clone(analysis));
-            }
-            callback(output);
-        });
+    /// Queues a message for the component; once it has gone there is
+    /// nobody to tell.
+    pub fn send(&self, input: FilesInput<Then>) {
+        let _ = self.controller.sender().send(input);
     }
 
-    /// Queues a message for the component.
-    pub fn send(&self, input: FilesInput<Then>) {
-        self.bridge.send(input);
+    /// Takes a [`FilesOutput::Analysed`]: the latest analysis.
+    pub fn set_analysis(&mut self, analysis: Rc<Analysis>) {
+        self.analysis = Some(analysis);
     }
 
     /// Takes a [`FilesOutput::Documents`]: the open documents' buffers.
@@ -2245,13 +2241,6 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
 
     /// The latest analysis of the project.
     pub fn analysis(&self) -> Option<Rc<Analysis>> {
-        self.analysis.get()
-    }
-
-    /// A handle on the latest analysis, for a handler that must answer GTK
-    /// at once (it reads, never borrows): the Delete key's, asking whether
-    /// the text reads.
-    pub fn latest_analysis(&self) -> LatestAnalysis {
         self.analysis.clone()
     }
 
@@ -2435,13 +2424,13 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
     /// The component's model, for tests.
     #[cfg(test)]
     pub(crate) fn model(&self) -> std::cell::Ref<'_, FilesComponent<Then>> {
-        self.bridge.model()
+        self.controller.model()
     }
 
     /// The component's input sender, for tests.
     #[cfg(test)]
     pub(crate) fn sender(&self) -> &relm4::Sender<FilesInput<Then>> {
-        self.bridge.sender()
+        self.controller.sender()
     }
 }
 
@@ -2462,12 +2451,10 @@ mod tests {
 
     type Page = FilesPage<&'static str>;
 
-    /// What the page told its owner, recorded.
-    fn record(page: &Page) -> Rc<RefCell<Vec<FilesOutput<&'static str>>>> {
-        let heard: Rc<RefCell<Vec<FilesOutput<&'static str>>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        page.connect_outputs(move |output| log.borrow_mut().push(output));
-        heard
+    /// A page whose outputs are recorded, as its owner would hear them.
+    fn recorded_page() -> (Page, Rc<RefCell<Vec<FilesOutput<&'static str>>>>) {
+        let (to, heard) = crate::ui::gtk_test::recorder();
+        (Page::new(&to, |output| output), heard)
     }
 
     /// A copy of an example project in a folder of its own, so saving
@@ -2498,12 +2485,13 @@ mod tests {
     /// owner's callback are freed, with a folder opened, its analysis
     /// running and a file open.
     fn page_is_freed() {
-        let mut page = Page::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        page.connect_outputs(move |_| {
+        let to = crate::ui::gtk_test::listener(move |_: FilesOutput<&'static str>| {
             let _ = &held;
         });
+        let mut page = Page::new(&to, |output| output);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2539,8 +2527,7 @@ mod tests {
     fn typing_is_published() {
         let folder = scratch_copy("wall_shelf", "typing");
         let path = folder.join("shelf.stave");
-        let mut page = Page::new();
-        let heard = record(&page);
+        let (mut page, heard) = recorded_page();
         page.set_folder(&folder);
         page.open_document(&Document::File(path.clone()));
         settle();
@@ -2617,8 +2604,7 @@ mod tests {
     fn requests_are_answered_in_order() {
         let folder = scratch_copy("wall_shelf", "order");
         let path = folder.join("shelf.stave");
-        let mut page = Page::new();
-        let heard = record(&page);
+        let (mut page, heard) = recorded_page();
         page.set_folder(&folder);
         page.open_document(&Document::File(path.clone()));
         settle();
@@ -2666,8 +2652,7 @@ mod tests {
     fn made_buffer_is_adopted() {
         let folder = scratch_copy("wall_shelf", "adopt");
         let path = folder.join("shelf.stave");
-        let mut page = Page::new();
-        let heard = record(&page);
+        let (mut page, heard) = recorded_page();
         page.set_folder(&folder);
         settle();
         let text = std::fs::read_to_string(&path).unwrap();

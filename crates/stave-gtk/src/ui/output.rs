@@ -4,14 +4,12 @@
 //!
 //! It is a relm4 component, [`OutputPanelComponent`]: its model (the line
 //! last added) is the only state and only its update changes it.
-//! [`OutputPanel`] keeps the older API in front of it until the window
-//! moves to relm4 too.
+//! [`OutputPanel`] is the window's handle on it: the one owner of its
+//! controller, its setter sent as an input message.
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::tr;
-
-use super::relm4_shim::Bridge;
 
 /// The Output panel's state: the line last added, so a line said again
 /// isn't repeated.
@@ -98,31 +96,36 @@ fn append(text: &gtk::TextView, line: &str) {
     buffer.delete_mark(&mark);
 }
 
-/// The Output panel, behind the API the window still uses: it owns the
-/// component (dropping it shuts the component down) and passes its
-/// setter on as an [`OutputPanelInput`] message.
+/// The Output panel as the window holds it: it owns the component's
+/// controller (dropping it shuts the component down) and passes its
+/// setter on as an [`OutputPanelInput`] message. The panel tells nobody
+/// anything.
 ///
 /// Lines are queued: they show when the main loop next runs, after
 /// whatever added them has returned.
 pub struct OutputPanel {
     /// The panel's content.
     pub root: gtk::ScrolledWindow,
-    bridge: Bridge<OutputPanelComponent>,
+    controller: Controller<OutputPanelComponent>,
 }
 
 impl OutputPanel {
     /// An empty panel.
     pub fn new() -> OutputPanel {
-        let bridge = Bridge::<OutputPanelComponent>::launch(());
+        let controller = OutputPanelComponent::builder().launch(()).detach();
         OutputPanel {
-            root: bridge.widget().clone(),
-            bridge,
+            root: controller.widget().clone(),
+            controller,
         }
     }
 
     /// Adds a line at the foot, unless it is the line last added.
     pub fn add_line(&self, line: &str) {
-        self.bridge.send(OutputPanelInput::AddLine(line.to_owned()));
+        // Once the component has gone there is nowhere to show it.
+        let _ = self
+            .controller
+            .sender()
+            .send(OutputPanelInput::AddLine(line.to_owned()));
     }
 }
 
@@ -156,7 +159,7 @@ mod tests {
     fn output_panel_is_freed() {
         let panel = OutputPanel::new();
         let root = panel.root.downgrade();
-        let input = panel.bridge.sender().clone();
+        let input = panel.controller.sender().clone();
         settle();
         assert!(root.upgrade().is_some(), "the widget lives while held");
         drop(panel);
@@ -186,6 +189,6 @@ mod tests {
         assert_eq!(shown(&panel), "", "nothing shows until the loop runs");
         settle();
         assert_eq!(shown(&panel), "Checked: 0 problems\nChecked: 1 problem");
-        assert_eq!(panel.bridge.model().last, "Checked: 1 problem");
+        assert_eq!(panel.controller.model().last, "Checked: 1 problem");
     }
 }

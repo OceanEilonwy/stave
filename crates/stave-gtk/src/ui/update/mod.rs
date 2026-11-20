@@ -14,8 +14,6 @@
 //! - [`rendering`]: the 3D view's camera, drawing, pins, pulling apart and
 //!   exporting.
 
-use std::fmt;
-
 use adw::prelude::*;
 use gtk::gio;
 
@@ -25,16 +23,6 @@ pub(super) mod editing;
 pub(super) mod project;
 pub(super) mod rendering;
 pub(super) mod selection;
-
-/// A message's payload that has no `Debug` of its own: printed as its
-/// type's name.
-pub(in crate::ui) struct Unprinted<T>(pub(in crate::ui) T);
-
-impl<T> fmt::Debug for Unprinted<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Unprinted<{}>", std::any::type_name::<T>())
-    }
-}
 
 /// Adds a window action that sends `message` when activated.
 pub(in crate::ui) fn add_action<Message: Into<WindowInput>>(

@@ -27,8 +27,6 @@ use gtk::{gdk, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 
-use super::relm4_shim::Bridge;
-
 /// The design's red (#e01b24) and its pale stripe (#f6b8bb).
 const BLOCKED: (f64, f64, f64) = (0.878, 0.106, 0.141);
 const BLOCKED_PALE: (f64, f64, f64) = (0.965, 0.722, 0.733);
@@ -430,17 +428,7 @@ impl Component for SliderComponent {
 pub struct Slider {
     /// The widget.
     pub root: gtk::DrawingArea,
-    launched: Launched,
-}
-
-/// How a slider's component was launched.
-enum Launched {
-    /// Its outputs forwarded to the owner's input ([`Slider::launch`]).
-    Forwarded(Controller<SliderComponent>),
-    /// Its outputs going to a callback ([`Slider::new`] and
-    /// [`Slider::connect_changed`]): only for focus mode's cards
-    /// (`focus_stage.rs`) until they launch theirs with [`Slider::launch`].
-    Bridged(Bridge<SliderComponent>),
+    controller: Controller<SliderComponent>,
 }
 
 impl Slider {
@@ -467,37 +455,7 @@ impl Slider {
             });
         Slider {
             root: controller.widget().clone(),
-            launched: Launched::Forwarded(controller),
-        }
-    }
-
-    /// A slider as [`Slider::launch`] makes one, whose moves go to the
-    /// callback [`Slider::connect_changed`] connects.
-    ///
-    /// Only focus mode's cards (`focus_stage.rs`, another lane's) still
-    /// use this; once each launches its slider with [`Slider::launch`]
-    /// (a one-line change per card), this and `connect_changed` go.
-    pub fn new(label: &str, height: i32, handle: f64, ring: f64) -> Slider {
-        let bridge = Bridge::<SliderComponent>::launch(SliderInit {
-            label: label.to_owned(),
-            height,
-            handle,
-            ring,
-        });
-        Slider {
-            root: bridge.widget().clone(),
-            launched: Launched::Bridged(bridge),
-        }
-    }
-
-    /// Calls `callback` with the value whenever people move a slider made
-    /// with [`Slider::new`] (one made with [`Slider::launch`] already
-    /// sends its owner a message, and ignores this).
-    pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
-        if let Launched::Bridged(bridge) = &self.launched {
-            bridge.connect(move |output| match output {
-                SliderOutput::Changed(value) => callback(value),
-            });
+            controller,
         }
     }
 
@@ -516,12 +474,7 @@ impl Slider {
     /// Queues `input`; once the slider has shut down there is nobody to
     /// tell.
     fn send(&self, input: SliderInput) {
-        match &self.launched {
-            Launched::Forwarded(controller) => {
-                let _ = controller.sender().send(input);
-            }
-            Launched::Bridged(bridge) => bridge.send(input),
-        }
+        let _ = self.controller.sender().send(input);
     }
 
     /// Moves it, without calling back.
@@ -552,19 +505,13 @@ impl Slider {
     /// The model as of the last handled message: for the getters, never
     /// from the slider's own handlers (rule 8).
     fn model(&self) -> Ref<'_, SliderComponent> {
-        match &self.launched {
-            Launched::Forwarded(controller) => controller.model(),
-            Launched::Bridged(bridge) => bridge.model(),
-        }
+        self.controller.model()
     }
 
     /// The component's input sender, to watch it close in tests.
     #[cfg(test)]
     fn sender(&self) -> &relm4::Sender<SliderInput> {
-        match &self.launched {
-            Launched::Forwarded(controller) => controller.sender(),
-            Launched::Bridged(bridge) => bridge.sender(),
-        }
+        self.controller.sender()
     }
 }
 

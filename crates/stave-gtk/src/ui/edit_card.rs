@@ -1976,16 +1976,11 @@ row.stave-option-search-hit.refused .stave-option-search-hint { opacity: 0.55; }
 .stave-edit-card .stave-edit-origin { font-size: 0.784rem; }
 "#;
 
-/// Puts the menu's and the card's stylesheet on the display, once.
+/// Puts the menu's and the card's stylesheet on the display, once for
+/// the process (Stave uses only the default display).
 pub(super) fn install_style(display: &gdk::Display) {
-    thread_local! {
-        static INSTALLED: std::cell::RefCell<Vec<gdk::Display>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-    INSTALLED.with(|installed| {
-        let mut installed = installed.borrow_mut();
-        if installed.contains(display) {
-            return;
-        }
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
         let provider = gtk::CssProvider::new();
         provider.load_from_string(STYLE);
         gtk::style_context_add_provider_for_display(
@@ -1993,7 +1988,6 @@ pub(super) fn install_style(display: &gdk::Display) {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
-        installed.push(display.clone());
     });
 }
 
