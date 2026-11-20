@@ -20,9 +20,31 @@ use std::hash::{BuildHasher as _, Hasher as _, RandomState};
 use std::ops::Range;
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result, bail};
 use stave_geom::{Geometry, Vertex};
 use stave_scene::Node;
+
+/// Why the meshes couldn't be put in the shared buffers.
+#[derive(Debug, thiserror::Error)]
+enum MeshError {
+    /// One buffer would be larger than the GPU allows.
+    #[error(
+        "the design's {label} need {needed} MB of graphics memory in one piece, and this GPU allows {allowed} MB"
+    )]
+    Oversized {
+        /// What the buffer holds.
+        label: &'static str,
+        /// Megabytes needed.
+        needed: u64,
+        /// Megabytes allowed.
+        allowed: u64,
+    },
+    /// More elements than a 32-bit position can reach.
+    #[error("too many {0} for one buffer")]
+    Overflow(&'static str),
+    /// A mesh's indices, moved past those before it, overflow 32 bits.
+    #[error("too many vertices for 32-bit indices")]
+    IndexOverflow,
+}
 
 /// The fewest elements a shared buffer is made for.
 const MINIMUM_CAPACITY: u64 = 4096;
@@ -151,15 +173,14 @@ impl Arena {
     /// Empties it, with room for at least `live` elements and as many
     /// again to grow into, made anew only when its size changes: it grows
     /// by doubling and shrinks once it is eight times what is needed.
-    fn reset(&mut self, device: &wgpu::Device, live: u64) -> Result<()> {
+    fn reset(&mut self, device: &wgpu::Device, live: u64) -> Result<(), MeshError> {
         let limit = device.limits().max_buffer_size / self.stride;
         if live > limit {
-            bail!(
-                "the design's {} need {} MB of graphics memory in one piece, and this GPU allows {} MB",
-                self.label,
-                live.saturating_mul(self.stride) >> 20,
-                device.limits().max_buffer_size >> 20,
-            );
+            return Err(MeshError::Oversized {
+                label: self.label,
+                needed: live.saturating_mul(self.stride) >> 20,
+                allowed: device.limits().max_buffer_size >> 20,
+            });
         }
         let wanted = live
             .saturating_mul(2)
@@ -180,15 +201,16 @@ impl Arena {
 
     /// Adds `bytes` (whole elements) after those written, returning where
     /// they start. They reach the GPU at [`Arena::flush`], in one write.
-    fn write(&mut self, bytes: &[u8]) -> Result<u32> {
+    fn write(&mut self, bytes: &[u8]) -> Result<u32, MeshError> {
         let start = self.used;
-        let count = u64::try_from(bytes.len())? / self.stride;
+        let count =
+            u64::try_from(bytes.len()).map_err(|_| MeshError::Overflow(self.label))? / self.stride;
         if self.staged.is_empty() {
             self.staged_from = start;
         }
         self.staged.extend_from_slice(bytes);
         self.used = start.saturating_add(count);
-        u32::try_from(start).with_context(|| format!("too many {} for one buffer", self.label))
+        u32::try_from(start).map_err(|_| MeshError::Overflow(self.label))
     }
 
     /// Sends what [`Arena::write`] added to the GPU.
@@ -334,7 +356,7 @@ impl MeshStore {
                     arena.used = 0;
                     arena.staged.clear();
                 }
-                self.failed = Some(format!("{error:#}"));
+                self.failed = Some(error.to_string());
             }
         }
         true
@@ -346,7 +368,7 @@ impl MeshStore {
         queue: &wgpu::Queue,
         nodes: &[Node],
         keys: &[MeshKey],
-    ) -> Result<Vec<MeshRange>> {
+    ) -> Result<Vec<MeshRange>, MeshError> {
         let mut fresh = Sizes::default();
         let mut live = Sizes::default();
         let mut counted = HashSet::new();
@@ -378,11 +400,7 @@ impl MeshStore {
             let base = self.vertices.write(bytemuck::cast_slice(&mesh.vertices))?;
             rebased.clear();
             for index in &mesh.indices {
-                rebased.push(
-                    index
-                        .checked_add(base)
-                        .context("too many vertices for 32-bit indices")?,
-                );
+                rebased.push(index.checked_add(base).ok_or(MeshError::IndexOverflow)?);
             }
             let first_index = self.indices.write(bytemuck::cast_slice(&rebased))?;
             let first_edge_point = self
@@ -390,9 +408,11 @@ impl MeshStore {
                 .write(bytemuck::cast_slice(&node.local.edges.segments))?;
             let range = MeshRange {
                 first_index,
-                index_count: u32::try_from(key.indices)?,
+                index_count: u32::try_from(key.indices)
+                    .map_err(|_| MeshError::Overflow("indices"))?,
                 first_edge_point,
-                edge_point_count: u32::try_from(key.edge_points)?,
+                edge_point_count: u32::try_from(key.edge_points)
+                    .map_err(|_| MeshError::Overflow("outline points"))?,
             };
             self.held.insert(*key, range);
             ranges.push(range);
