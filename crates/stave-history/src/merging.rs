@@ -51,11 +51,11 @@ impl History {
     ) -> Result<RevisionId, HistoryError> {
         let _lock = self.lock_main()?;
         let new_main = block_on(async {
-            let repo = self.head().await?;
+            let repo = self.head_with_git().await?;
             let store = repo.store().clone();
             let main = store::commit(&store, &store::main_id(&repo)?).await?;
             let base = store::commit(&store, &store::window_id(&repo)?).await?;
-            let tree = store::tree_from_files(&store, files).await?;
+            let tree = store::tree_over(&store, &base.tree(), files).await?;
             if base.id() == main.id() && tree.tree_ids() == main.tree_ids() {
                 return Ok(main.id().clone());
             }
@@ -94,6 +94,7 @@ impl History {
             };
             store::set_bookmark(transaction.repo_mut(), MAIN, Some(&new_main));
             store::set_bookmark(transaction.repo_mut(), WINDOW, Some(&window));
+            self.export_main(&repo, &mut transaction)?;
             transaction
                 .commit(format!("save: {message}"))
                 .await
@@ -117,14 +118,15 @@ impl History {
     pub fn catch_up(&mut self, folder_files: &ProjectFiles) -> Result<CatchUp, HistoryError> {
         let _lock = self.lock_main()?;
         block_on(async {
-            let repo = self.head().await?;
+            let repo = self.head_with_git().await?;
             let store = repo.store().clone();
             let main = store::commit(&store, &store::main_id(&repo)?).await?;
             let window = store::commit(&store, &store::window_id(&repo)?).await?;
             if window.id() == main.id() {
                 return Ok(CatchUp::UpToDate);
             }
-            let folder_tree = store::tree_from_files(&store, folder_files).await?;
+            let window_tree = window.tree();
+            let folder_tree = store::tree_over(&store, &window_tree, folder_files).await?;
             let merged = store::merge_trees(window.tree(), folder_tree, main.tree()).await?;
             let (merged_files, conflicted) = store::files_of(&merged).await?;
 
@@ -140,10 +142,20 @@ impl History {
                 .filter(|path| !merged_files.contains(path))
                 .cloned()
                 .collect();
-            let files: ProjectFiles = merged_files
-                .into_iter()
-                .filter(|(path, contents)| folder_files.get(path) != Some(contents.as_slice()))
-                .collect();
+            let mut files = ProjectFiles::new();
+            for (path, contents) in merged_files {
+                if folder_files.get(&path) == Some(contents.as_slice()) {
+                    continue;
+                }
+                // A file the folder doesn't show (one `.gitignore` excludes,
+                // tracked all the same) is written only when main changed it.
+                if !folder_files.contains(&path)
+                    && store::same_value(&window_tree, &merged, &path).await?
+                {
+                    continue;
+                }
+                files.insert(path, contents);
+            }
             if files.is_empty() && removed.is_empty() {
                 return Ok(CatchUp::UpToDate);
             }
@@ -158,25 +170,30 @@ impl History {
     /// Applies a suggestion to main: records `merged` as a revision on main,
     /// made by `actor`, and removes the suggestion.
     ///
-    /// The caller has replayed the suggestion's patches on main and checked
-    /// the result clean; `merged` is that result, built on the main this
-    /// handle last reported ([`History::main`]). If main moved since, the
-    /// change from that main to `merged` is merged onto main as it is now.
+    /// The caller has replayed the suggestion's patches on the files of
+    /// `base` (main as [`History::main`] reported it when the caller read
+    /// them) and checked the result clean; `merged` is that result. If main
+    /// moved since `base`, the change from `base` to `merged` is merged onto
+    /// main as it is now, so nothing recorded after `base` is lost.
     ///
     /// # Errors
     ///
-    /// [`HistoryError::UnknownSuggestion`]; [`HistoryError::SuggestionConflicted`]
+    /// [`HistoryError::UnknownSuggestion`]; [`HistoryError::UnknownRevision`]
+    /// when `base` names no revision; [`HistoryError::SuggestionConflicted`]
     /// when the suggestion still holds clashes; [`HistoryError::MainMoved`]
-    /// when main moved and the changes clash.
+    /// when main moved and the changes clash;
+    /// [`HistoryError::SettingsProtected`] when `merged` changes a file in
+    /// `.stave/`.
     pub fn apply(
         &mut self,
         id: &SuggestionId,
         actor: &Actor,
+        base: &RevisionId,
         merged: &ProjectFiles,
     ) -> Result<RevisionId, HistoryError> {
         let _lock = self.lock_main()?;
         let new_main = block_on(async {
-            let repo = self.head().await?;
+            let repo = self.head_with_git().await?;
             let store = repo.store().clone();
             let line = suggestions::line(&repo, id).await?;
             let conflicted = store::conflicted_paths(&line.tip.tree()).await?;
@@ -187,12 +204,11 @@ impl History {
                 });
             }
             let main = store::commit(&store, &store::main_id(&repo)?).await?;
-            let mut tree = store::tree_from_files(&store, merged).await?;
-            if let Some(observed) = self.observed_main()
-                && &observed != main.id()
-            {
-                let observed = store::commit(&store, &observed).await?;
-                tree = store::merge_trees(observed.tree(), tree, main.tree()).await?;
+            let base = store::commit(&store, &self.resolve(&repo, base)?).await?;
+            let mut tree = store::tree_over(&store, &base.tree(), merged).await?;
+            store::refuse_settings_changes(&base.tree(), &tree).await?;
+            if base.id() != main.id() {
+                tree = store::merge_trees(base.tree(), tree, main.tree()).await?;
                 let clashes = store::conflicted_paths(&tree).await?;
                 if !clashes.is_empty() {
                     return Err(HistoryError::MainMoved { files: clashes });
@@ -212,13 +228,13 @@ impl History {
                 store::record(transaction.repo_mut(), main.id(), tree, &description, actor).await?;
             store::set_bookmark(transaction.repo_mut(), MAIN, Some(applied.id()));
             store::set_bookmark(transaction.repo_mut(), &suggestion_bookmark(id), None);
+            self.export_main(&repo, &mut transaction)?;
             transaction
                 .commit(action)
                 .await
                 .map_err(HistoryError::store)?;
             Ok(applied.id().clone())
         })?;
-        self.observe_main(new_main.clone());
         Ok(RevisionId(store::hex(&new_main)))
     }
 }

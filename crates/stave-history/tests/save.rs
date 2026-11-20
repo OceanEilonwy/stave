@@ -24,7 +24,9 @@ fn agent_widens(folder: &std::path::Path) {
             "Widen the dresser",
         )
         .expect("suggest");
-    history.apply(&id, &agent(), &changed).expect("apply");
+    history
+        .apply(&id, &agent(), &main, &changed)
+        .expect("apply");
 }
 
 #[test]

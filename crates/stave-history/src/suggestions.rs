@@ -102,7 +102,9 @@ impl History {
     ///
     /// # Errors
     ///
-    /// [`HistoryError::UnknownSuggestion`] when `onto` names none.
+    /// [`HistoryError::UnknownSuggestion`] when `onto` names none;
+    /// [`HistoryError::SettingsProtected`] when `files` change a file in
+    /// `.stave/` (the project's settings, which only the person changes).
     pub fn suggest(
         &mut self,
         agent: &Actor,
@@ -111,6 +113,7 @@ impl History {
         patch: &str,
         title: &str,
     ) -> Result<SuggestionId, HistoryError> {
+        let _lock = self.lock_main()?;
         block_on(async {
             let repo = self.head().await?;
             let store = repo.store().clone();
@@ -125,7 +128,9 @@ impl History {
                     (id, store::main_id(&repo)?)
                 }
             };
-            let tree = store::tree_from_files(&store, files).await?;
+            let parent_tree = store::commit(&store, &parent).await?.tree();
+            let tree = store::tree_over(&store, &parent_tree, files).await?;
+            store::refuse_settings_changes(&parent_tree, &tree).await?;
             let description = Description {
                 message: title.to_owned(),
                 actor: Some(agent.clone()),
@@ -176,6 +181,10 @@ impl History {
             let ids: Vec<SuggestionId> = repo
                 .view()
                 .local_bookmarks()
+                // A bookmark moved two ways at once (outside Stave; Stave
+                // moves them under the lock) names no single line, so that
+                // suggestion is left out rather than hiding the others.
+                .filter(|(_name, target)| target.as_normal().is_some())
                 .filter_map(|(name, _target)| {
                     name.as_str()
                         .strip_prefix(SUGGESTION_PREFIX)
@@ -217,6 +226,7 @@ impl History {
         &mut self,
         id: &SuggestionId,
     ) -> Result<Vec<RelativePath>, HistoryError> {
+        let _lock = self.lock_main()?;
         block_on(async {
             let repo = self.head().await?;
             let line = line(&repo, id).await?;
@@ -258,11 +268,14 @@ impl History {
         id: &SuggestionId,
         files: &ProjectFiles,
     ) -> Result<(), HistoryError> {
+        let _lock = self.lock_main()?;
         block_on(async {
             let repo = self.head().await?;
             let line = line(&repo, id).await?;
             let store = repo.store().clone();
-            let tree = store::tree_from_files(&store, files).await?;
+            let tip_tree = line.tip.tree();
+            let tree = store::tree_over(&store, &tip_tree, files).await?;
+            store::refuse_settings_changes(&tip_tree, &tree).await?;
             let action = format!("resolve suggestion: {}", line.title);
             let mut transaction = Self::transaction(&repo, None, &action);
             let resolved = transaction
@@ -297,6 +310,7 @@ impl History {
     ///
     /// [`HistoryError::UnknownSuggestion`] when there is none.
     pub fn discard(&mut self, id: &SuggestionId, actor: &Actor) -> Result<(), HistoryError> {
+        let _lock = self.lock_main()?;
         block_on(async {
             let repo = self.head().await?;
             let line = line(&repo, id).await?;

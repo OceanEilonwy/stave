@@ -82,7 +82,7 @@ impl History {
     pub fn suggest(&mut self, agent: &Actor, onto: Option<&SuggestionId>, files: &ProjectFiles, patch: &str, title: &str) -> Result<SuggestionId, HistoryError>;
     pub fn suggestions(&self) -> Result<Vec<Suggestion>, HistoryError>;
     pub fn suggestion_files(&self, id: &SuggestionId) -> Result<ProjectFiles, HistoryError>;
-    pub fn apply(&mut self, id: &SuggestionId, actor: &Actor, merged: &ProjectFiles) -> Result<RevisionId, HistoryError>; // caller replayed & checked
+    pub fn apply(&mut self, id: &SuggestionId, actor: &Actor, base: &RevisionId, merged: &ProjectFiles) -> Result<RevisionId, HistoryError>; // caller replayed & checked on `base` (the main it read); base→merged is 3-way merged onto main if main moved
     pub fn rebase_suggestion(&mut self, id: &SuggestionId) -> Result<Vec<RelativePath>, HistoryError>; // conflicted files, empty = clean
     pub fn write_suggestion_files(&mut self, id: &SuggestionId, files: &ProjectFiles) -> Result<(), HistoryError>; // resolution
     pub fn discard(&mut self, id: &SuggestionId, actor: &Actor) -> Result<(), HistoryError>;
@@ -203,7 +203,7 @@ Merge lanes A–E into `worktree-ai-integration`; resolve `Cargo.toml` members a
 
 **Files:** `crates/stave-mcp/src/tools/revisions.rs`, registration line in `tools/mod.rs`, `crates/stave-mcp/src/agent_line.rs`; modify `changing.rs` so `try_patch` runs on the agent's line (`History::suggestion_files` or main via `MemoryFiles`).
 
-**Tools:** `suggest(patch, title)`, `list_suggestions`, `list_versions`, `apply_suggestion(id)` (annotation `destructiveHint: true`; policy `off` → refused "Only the person using Stave can apply suggestions in this project."; replay every patch on main via `EditBase` over `MemoryFiles`, require 0 errors, then `History::apply`; patch no longer fits → `rebase_suggestion`, report conflicts), `discard_suggestion(id)`, `undo` (`UndoScope::Own`). `open_project` starts versions when off (the host shows the question through the tool's text: the first call returns "Versions are off for this project. Call open_project again with start_versions: true to turn them on." *(my call: the ask goes through the AI app, as the window isn't involved)*).
+**Tools:** `suggest(patch, title)`, `list_suggestions`, `list_versions`, `apply_suggestion(id)` (annotation `destructiveHint: true`; policy `off` → refused "Only the person using Stave can apply suggestions in this project."; read `base = History::main()` and its files, replay every patch on them via `EditBase` over `MemoryFiles`, require 0 errors, then `History::apply(id, actor, &base, &merged)`; patch no longer fits → `rebase_suggestion`, report conflicts), `discard_suggestion(id)`, `undo` (`UndoScope::Own`). `open_project` starts versions when off (the host shows the question through the tool's text: the first call returns "Versions are off for this project. Call open_project again with start_versions: true to turn them on." *(my call: the ask goes through the AI app, as the window isn't involved)*).
 
 `new_project` (Lane D) now follows the merge policy (global default from `merge_policy(folder, config_dir)`): under `off` it is refused; otherwise it writes the folder, starts versions and records the first revision as the agent.
 

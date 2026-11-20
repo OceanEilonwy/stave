@@ -21,6 +21,42 @@ pub enum PathError {
     /// The path holds letters that are not text.
     #[error("\"{0}\" holds letters Stave cannot read; rename the file")]
     NotText(PathBuf),
+    /// The path is inside a folder that holds a repository (`.git`, or
+    /// Stave's own `.stave/history`), not the project's files.
+    #[error("\"{0}\" is inside a repository's own folder, not one of the project's files")]
+    Reserved(PathBuf),
+}
+
+/// One part of a path as Windows and macOS compare it: trailing dots and
+/// spaces dropped (`.git.` is `.git` on Windows), case ignored by callers.
+fn trimmed(part: &str) -> &str {
+    part.trim_end_matches(['.', ' '])
+}
+
+/// Whether one part of a path names a git folder: `.git` in any case.
+fn is_git_part(part: &str) -> bool {
+    trimmed(part).eq_ignore_ascii_case(".git")
+}
+
+/// Whether `parts`, a relative path's parts in order, lead into a folder
+/// that holds a repository rather than project files: any `.git` (git
+/// itself refuses those in a tree), or `.stave/history`.
+pub(crate) fn is_reserved<'a>(parts: impl IntoIterator<Item = &'a str>) -> bool {
+    let mut parts = parts.into_iter();
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if is_git_part(first) {
+        return true;
+    }
+    if let Some(second) = parts.next()
+        && (is_git_part(second)
+            || (trimmed(first).eq_ignore_ascii_case(".stave")
+                && trimmed(second).eq_ignore_ascii_case("history")))
+    {
+        return true;
+    }
+    parts.any(is_git_part)
 }
 
 /// A path to a file inside a project folder, relative to the folder.
@@ -28,7 +64,9 @@ pub enum PathError {
 /// It is never empty, never absolute and never climbs out with `..`, so a
 /// `RelativePath` joined to the project folder always stays inside it (a
 /// symbolic link aside: those are never read or written, see
-/// [`History::read_folder`](crate::History::read_folder)).
+/// [`History::read_folder`](crate::History::read_folder)). It never leads
+/// into a `.git` folder or `.stave/history`, so no revision can carry a
+/// file into a repository's own folder.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelativePath(PathBuf);
 
@@ -37,8 +75,8 @@ impl RelativePath {
     ///
     /// # Errors
     ///
-    /// [`PathError`] when the path is empty, absolute, climbs out with `..`
-    /// or is not valid UTF-8.
+    /// [`PathError`] when the path is empty, absolute, climbs out with `..`,
+    /// is not valid UTF-8 or leads into `.git` or `.stave/history`.
     pub fn new(path: &Path) -> Result<Self, PathError> {
         let mut clean = PathBuf::new();
         for component in path.components() {
@@ -59,7 +97,22 @@ impl RelativePath {
         if clean.as_os_str().is_empty() {
             return Err(PathError::Empty);
         }
+        // Every part was checked to be UTF-8 above.
+        if is_reserved(clean.iter().filter_map(|part| part.to_str())) {
+            return Err(PathError::Reserved(path.to_owned()));
+        }
         Ok(Self(clean))
+    }
+
+    /// Whether the path is inside the project's `.stave` folder (its
+    /// settings, such as `.stave/agents.toml`), which only the person using
+    /// Stave may change.
+    pub(crate) fn is_settings(&self) -> bool {
+        self.0
+            .iter()
+            .next()
+            .and_then(|part| part.to_str())
+            .is_some_and(|part| trimmed(part).eq_ignore_ascii_case(".stave"))
     }
 
     /// The path, relative to the project folder.
@@ -179,5 +232,43 @@ mod tests {
     fn empty_and_dot_are_refused() {
         assert_eq!(RelativePath::new(Path::new("")), Err(PathError::Empty));
         assert_eq!(RelativePath::new(Path::new(".")), Err(PathError::Empty));
+    }
+
+    #[test]
+    fn repository_folders_are_refused() {
+        for text in [
+            ".git/hooks/pre-commit",
+            ".git",
+            ".GIT/config",
+            ".Git./config",
+            ".git /config",
+            "drawers/.git/config",
+            "a/b/.git/config",
+            ".stave/history/repo/store",
+            ".Stave/History/x",
+        ] {
+            assert_eq!(
+                RelativePath::new(Path::new(text)),
+                Err(PathError::Reserved(PathBuf::from(text))),
+                "{text}"
+            );
+        }
+        for text in [
+            ".gitignore",
+            ".github/workflows/ci.yml",
+            ".stave/agents.toml",
+            "history/.stave",
+            "drawers/history/x",
+        ] {
+            assert!(RelativePath::new(Path::new(text)).is_ok(), "{text}");
+        }
+    }
+
+    #[test]
+    fn settings_are_inside_stave_folder() {
+        let settings = RelativePath::new(Path::new(".stave/agents.toml")).expect("valid");
+        assert!(settings.is_settings());
+        let design = RelativePath::new(Path::new("dresser.stave")).expect("valid");
+        assert!(!design.is_settings());
     }
 }

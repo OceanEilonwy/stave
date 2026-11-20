@@ -2,10 +2,12 @@
 //! out of trees, commits and bookmarks. Nothing here is public; no jj type
 //! leaves the crate.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::StreamExt as _;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jj_lib::backend::{CommitId, CopyId, MillisSinceEpoch, Signature, Timestamp, TreeValue};
 use jj_lib::commit::Commit;
 use jj_lib::config::StackedConfig;
@@ -13,6 +15,7 @@ use jj_lib::conflicts::{
     ConflictMarkerStyle, ConflictMaterializeOptions, MaterializedTreeValue,
     materialize_merge_result_to_bytes, materialize_tree_value,
 };
+use jj_lib::matchers::EverythingMatcher;
 use jj_lib::merge::Merge;
 use jj_lib::merged_tree::MergedTree;
 use jj_lib::merged_tree_builder::MergedTreeBuilder;
@@ -54,6 +57,16 @@ pub(crate) fn settings() -> Result<UserSettings, HistoryError> {
 
 /// A bookmark's commit, when it points at exactly one.
 pub(crate) fn bookmark(repo: &ReadonlyRepo, name: &str) -> Option<CommitId> {
+    let name = RefNameBuf::from(name);
+    repo.view()
+        .get_local_bookmark(name.as_ref())
+        .as_normal()
+        .cloned()
+}
+
+/// A bookmark's commit in a transaction's repository, when it points at
+/// exactly one.
+pub(crate) fn bookmark_in(repo: &MutableRepo, name: &str) -> Option<CommitId> {
     let name = RefNameBuf::from(name);
     repo.view()
         .get_local_bookmark(name.as_ref())
@@ -108,14 +121,88 @@ fn repo_path(path: &RelativePath) -> Result<RepoPathBuf, HistoryError> {
     RepoPathBuf::from_internal_string(path.to_slash_string()).map_err(HistoryError::store)
 }
 
-/// Writes `files` as a tree.
-pub(crate) async fn tree_from_files(
+/// The `.gitignore` files among a project's files, each with the folder it
+/// sits in, deepest folders first, as git consults them.
+fn gitignores(files: &ProjectFiles) -> Vec<(PathBuf, Gitignore)> {
+    let mut found: Vec<(PathBuf, Gitignore)> = files
+        .iter()
+        .filter(|(path, _contents)| path.as_path().file_name() == Some(".gitignore".as_ref()))
+        .map(|(path, contents)| {
+            let folder = path
+                .as_path()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default();
+            let mut builder = GitignoreBuilder::new("");
+            for line in String::from_utf8_lossy(contents).lines() {
+                // A line git couldn't read is passed over, as git does.
+                let _ignored = builder.add_line(None, line);
+            }
+            let matcher = builder.build().unwrap_or_else(|_| Gitignore::empty());
+            (folder, matcher)
+        })
+        .collect();
+    found.sort_by_key(|(folder, _matcher)| std::cmp::Reverse(folder.components().count()));
+    found
+}
+
+/// Whether the `.gitignore` files in `ignores` exclude `path`.
+fn is_ignored(ignores: &[(PathBuf, Gitignore)], path: &RelativePath) -> bool {
+    for (folder, matcher) in ignores {
+        let Ok(inside) = path.as_path().strip_prefix(folder) else {
+            continue;
+        };
+        match matcher.matched_path_or_any_parents(inside, false) {
+            ignore::Match::Ignore(_) => return true,
+            ignore::Match::Whitelist(_) => return false,
+            ignore::Match::None => {}
+        }
+    }
+    false
+}
+
+/// Writes `files`, the project's files as Stave reads them, as a tree built
+/// over `base`, the revision they were made from.
+///
+/// Files only change where `files` say so: each keeps `base`'s executable
+/// bit, and what `files` never holds is kept from `base` as it was:
+/// symbolic links, submodules, files `.gitignore` excludes (tracked in git
+/// all the same) and anything under a path Stave doesn't read. Every other
+/// file of `base` missing from `files` was deleted.
+pub(crate) async fn tree_over(
     store: &Arc<Store>,
+    base: &MergedTree,
     files: &ProjectFiles,
 ) -> Result<MergedTree, HistoryError> {
-    let mut builder = MergedTreeBuilder::new(store.empty_merged_tree());
-    for (path, contents) in files.iter() {
-        let path = repo_path(path)?;
+    let ignores = gitignores(files);
+    let mut executable = BTreeSet::new();
+    let mut builder = MergedTreeBuilder::new(base.clone());
+    let mut entries = base.entries();
+    while let Some((path, value)) = entries.next().await {
+        let value = value.map_err(HistoryError::store)?;
+        let Ok(relative) = RelativePath::new(Path::new(path.as_internal_file_string())) else {
+            continue;
+        };
+        let is_file = match value.as_resolved() {
+            Some(Some(TreeValue::File {
+                executable: true, ..
+            })) => {
+                executable.insert(relative.clone());
+                true
+            }
+            Some(Some(TreeValue::File { .. })) => true,
+            // Not project files: Stave neither reads nor writes them.
+            Some(Some(TreeValue::Symlink(_) | TreeValue::GitSubmodule(_) | TreeValue::Tree(_)))
+            | Some(None) => false,
+            // A clash is handed out as a file with conflict markers.
+            None => true,
+        };
+        if is_file && !files.contains(&relative) && !is_ignored(&ignores, &relative) {
+            builder.set_or_remove(path, None);
+        }
+    }
+    for (relative, contents) in files.iter() {
+        let path = repo_path(relative)?;
         let mut reader = contents;
         let id = store
             .write_file(&path, &mut reader)
@@ -125,7 +212,7 @@ pub(crate) async fn tree_from_files(
             path,
             Some(TreeValue::File {
                 id,
-                executable: false,
+                executable: executable.contains(relative),
                 copy_id: CopyId::placeholder(),
             }),
         );
@@ -133,9 +220,44 @@ pub(crate) async fn tree_from_files(
     builder.write_tree().await.map_err(HistoryError::store)
 }
 
+/// Whether `left` and `right` hold the same thing at `path`.
+pub(crate) async fn same_value(
+    left: &MergedTree,
+    right: &MergedTree,
+    path: &RelativePath,
+) -> Result<bool, HistoryError> {
+    let path = repo_path(path)?;
+    let left = left.path_value(&path).await.map_err(HistoryError::store)?;
+    let right = right.path_value(&path).await.map_err(HistoryError::store)?;
+    Ok(left == right)
+}
+
+/// Refuses a change from `base` to `changed` that touches the project's
+/// settings in `.stave/`, which only the person using Stave may change
+/// (an agent setting `merge_policy = "auto"` would raise its own rights).
+pub(crate) async fn refuse_settings_changes(
+    base: &MergedTree,
+    changed: &MergedTree,
+) -> Result<(), HistoryError> {
+    let mut differences = base.diff(changed, &EverythingMatcher);
+    while let Some(entry) = differences.next().await {
+        let Ok(relative) = RelativePath::new(Path::new(entry.path.as_internal_file_string()))
+        else {
+            continue;
+        };
+        if relative.is_settings() {
+            return Err(HistoryError::SettingsProtected { path: relative });
+        }
+    }
+    Ok(())
+}
+
 /// A tree's files, with clashing files written out with snapshot-style
 /// conflict markers (every side in full), and the list of those files.
-/// Symbolic links and submodules are not project files and are left out.
+/// Symbolic links and submodules are not project files and are left out,
+/// and so is any path that is not a [`RelativePath`] (inside `.git` or
+/// `.stave/history`, or not text), so nothing handed out can be written
+/// into a repository's own folder.
 pub(crate) async fn files_of(
     tree: &MergedTree,
 ) -> Result<(ProjectFiles, Vec<RelativePath>), HistoryError> {
@@ -150,7 +272,9 @@ pub(crate) async fn files_of(
     let mut entries = tree.entries();
     while let Some((path, value)) = entries.next().await {
         let value = value.map_err(HistoryError::store)?;
-        let relative = RelativePath::new(Path::new(path.as_internal_file_string()))?;
+        let Ok(relative) = RelativePath::new(Path::new(path.as_internal_file_string())) else {
+            continue;
+        };
         let materialized = materialize_tree_value(store, &path, value, tree.labels())
             .await
             .map_err(HistoryError::store)?;
@@ -179,15 +303,16 @@ pub(crate) async fn files_of(
     Ok((files, conflicted))
 }
 
-/// The files of a tree whose values clash.
+/// The project files of a tree whose values clash (paths that are not
+/// project files, as in [`files_of`], are left out).
 pub(crate) async fn conflicted_paths(tree: &MergedTree) -> Result<Vec<RelativePath>, HistoryError> {
     let mut paths = Vec::new();
     let mut conflicts = tree.conflicts();
     while let Some((path, value)) = conflicts.next().await {
         value.map_err(HistoryError::store)?;
-        paths.push(RelativePath::new(Path::new(
-            path.as_internal_file_string(),
-        ))?);
+        if let Ok(relative) = RelativePath::new(Path::new(path.as_internal_file_string())) {
+            paths.push(relative);
+        }
     }
     Ok(paths)
 }

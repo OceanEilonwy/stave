@@ -63,6 +63,21 @@ pub enum HistoryError {
         /// The files where the changes clash.
         files: Vec<RelativePath>,
     },
+    /// A suggestion would change the project's settings in `.stave/`, which
+    /// only the person using Stave may change.
+    #[error(
+        "a suggestion can't change {path}: the project's settings are changed only by the person using Stave"
+    )]
+    SettingsProtected {
+        /// The settings file the suggestion changed.
+        path: RelativePath,
+    },
+    /// The folder's git branch moved while Stave was moving main.
+    #[error("the project's git branch {branch} changed while this was being recorded; try again")]
+    BranchMoved {
+        /// The branch, as `main`.
+        branch: String,
+    },
     /// There is nothing to undo.
     #[error("there is nothing to undo")]
     NothingToUndo,

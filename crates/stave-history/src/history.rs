@@ -1,7 +1,7 @@
 //! [`History`]: one project's repository, opened from its folder.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use jj_lib::backend::{Backend, BackendInitError, CommitId};
 use jj_lib::default_backend_factories::{
@@ -13,17 +13,18 @@ use jj_lib::file_util::relative_path;
 use jj_lib::git_backend::GitBackend;
 use jj_lib::lock::FileLock;
 use jj_lib::object_id::ObjectId as _;
-use jj_lib::ref_name::RefNameBuf;
+use jj_lib::ref_name::{GitRefNameBuf, RefNameBuf};
 use jj_lib::repo::{ReadonlyRepo, Repo as _, RepoLoader};
 use jj_lib::settings::UserSettings;
 use jj_lib::signing_factory::signer_from_settings;
 use jj_lib::transaction::Transaction;
 
 use crate::actor::{Actor, ActorKind, Description};
+use crate::branch;
 use crate::error::HistoryError;
 use crate::folder::{self, HISTORY_DIRECTORY, VersionsStatus};
 use crate::paths::ProjectFiles;
-use crate::store::{self, ACTION_ATTRIBUTE, ACTOR_ATTRIBUTE, MAIN};
+use crate::store::{self, ACTION_ATTRIBUTE, ACTOR_ATTRIBUTE, MAIN, WINDOW};
 use crate::{RevisionId, Version};
 
 /// One project's versions, opened from its folder.
@@ -35,10 +36,9 @@ pub struct History {
     pub(crate) folder: PathBuf,
     pub(crate) settings: UserSettings,
     pub(crate) loader: RepoLoader,
-    /// Main as this handle last reported it (through [`History::main`] or
-    /// [`History::files_at`] on main): the base files given to
-    /// [`History::apply`] were built on.
-    pub(crate) observed_main: Mutex<Option<CommitId>>,
+    /// The folder's git branch main follows, when the folder is the root of
+    /// a git repository whose `HEAD` was on a branch.
+    pub(crate) branch: Option<GitRefNameBuf>,
 }
 
 impl std::fmt::Debug for History {
@@ -71,8 +71,11 @@ impl History {
     /// A folder that isn't a repository gets `.stave/history/` with the
     /// repository's git data inside it. A folder that is the root of a git
     /// repository keeps its `.git`: the repository uses it as its store and
-    /// main starts at the commit the folder is on. Nothing else is written
-    /// to the folder.
+    /// main is the branch the folder is on. Main starts where the branch
+    /// is; every step that moves main moves the branch (and, while git's
+    /// `HEAD` is on it, git's index) with it, and commits made to the
+    /// branch with git become main's latest when versions are next opened
+    /// or main next moves. Nothing else is written to the folder.
     ///
     /// # Errors
     ///
@@ -145,6 +148,8 @@ impl History {
         .map_err(HistoryError::store)?;
 
         if external_git {
+            let git = jj_lib::git::get_git_repo(repo.store()).map_err(HistoryError::store)?;
+            let branch = branch::record(history_directory, &git)?;
             block_on(async {
                 let mut transaction = repo.start_transaction();
                 let head = jj_lib::git::import_head_commit(transaction.repo_mut())
@@ -155,6 +160,11 @@ impl History {
                         RefNameBuf::from(MAIN).as_ref(),
                         store::target(head.id()),
                     );
+                    // The folder holds the files of the commit it is on.
+                    store::set_bookmark(transaction.repo_mut(), WINDOW, Some(head.id()));
+                    if let Some(branch) = &branch {
+                        branch::remember(transaction.repo_mut(), branch, head.id());
+                    }
                 }
                 transaction
                     .set_attribute(ACTION_ATTRIBUTE.to_owned(), "turn on versions".to_owned());
@@ -180,18 +190,25 @@ impl History {
             return Err(HistoryError::Off);
         }
         let settings = store::settings()?;
+        let history_directory = folder.join(HISTORY_DIRECTORY);
         let loader = RepoLoader::init_from_file_system(
             &settings,
-            &folder.join(HISTORY_DIRECTORY).join("repo"),
+            &history_directory.join("repo"),
             &default_backend_factories(),
         )
         .map_err(HistoryError::store)?;
-        Ok(Self {
+        let history = Self {
             folder,
             settings,
             loader,
-            observed_main: Mutex::new(None),
-        })
+            branch: branch::read(&history_directory),
+        };
+        if history.branch.is_some() {
+            // Take in what was committed to the branch with git meanwhile.
+            let _lock = history.lock_main()?;
+            block_on(history.head_with_git())?;
+        }
+        Ok(history)
     }
 
     /// The project folder, absolute.
@@ -222,9 +239,6 @@ impl History {
             let id = self.resolve(&repo, revision)?;
             let commit = store::commit(repo.store(), &id).await?;
             let (files, _conflicted) = store::files_of(&commit.tree()).await?;
-            if id == store::main_id(&repo)? {
-                self.observe_main(id);
-            }
             Ok(files)
         })
     }
@@ -238,9 +252,7 @@ impl History {
         block_on(async {
             let repo = self.head().await?;
             let main = store::main_id(&repo)?;
-            let revision = RevisionId(store::hex(&main));
-            self.observe_main(main);
-            Ok(revision)
+            Ok(RevisionId(store::hex(&main)))
         })
     }
 
@@ -278,21 +290,29 @@ impl History {
         })
     }
 
-    /// Remembers `main` as the main this handle last reported.
-    pub(crate) fn observe_main(&self, main: CommitId) {
-        let mut observed = self
-            .observed_main
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *observed = Some(main);
+    /// The repository as it is on disk now, with any commits made to the
+    /// folder's git branch since Stave last moved it taken in as main. The
+    /// caller holds the main lock.
+    pub(crate) async fn head_with_git(&self) -> Result<Arc<ReadonlyRepo>, HistoryError> {
+        let repo = self.head().await?;
+        match &self.branch {
+            Some(branch) => Ok(branch::import(&repo, branch).await?.unwrap_or(repo)),
+            None => Ok(repo),
+        }
     }
 
-    /// The main this handle last reported, if any.
-    pub(crate) fn observed_main(&self) -> Option<CommitId> {
-        self.observed_main
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    /// Moves the folder's git branch (if main follows one) to main as it is
+    /// in `transaction`, which started from `before`. Call it just before
+    /// committing a transaction that moved main.
+    pub(crate) fn export_main(
+        &self,
+        before: &ReadonlyRepo,
+        transaction: &mut Transaction,
+    ) -> Result<(), HistoryError> {
+        match &self.branch {
+            Some(branch) => branch::export(before, transaction.repo_mut(), branch),
+            None => Ok(()),
+        }
     }
 
     /// Takes the lock that guards moving main, waiting for it. It is let go
@@ -325,7 +345,7 @@ impl History {
     }
 
     /// The commit id for a revision id, checked to exist.
-    fn resolve(
+    pub(crate) fn resolve(
         &self,
         repo: &ReadonlyRepo,
         revision: &RevisionId,

@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 mod actor;
+mod branch;
 mod error;
 mod folder;
 mod history;

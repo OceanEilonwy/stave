@@ -64,7 +64,7 @@ impl History {
     pub fn undo(&mut self, actor: &Actor, scope: UndoScope) -> Result<String, HistoryError> {
         let _lock = self.lock_main()?;
         block_on(async {
-            let repo = self.head().await?;
+            let repo = self.head_with_git().await?;
             let mut undone = BTreeSet::new();
             let mut later_by_others: Vec<Operation> = Vec::new();
             let mut ancestors = Box::pin(walk_ancestors(std::slice::from_ref(repo.operation())));
@@ -135,6 +135,9 @@ impl History {
             // The window's folder still holds what it held; keeping its base
             // where it was lets the next catch-up write the undone files.
             store::set_bookmark(transaction.repo_mut(), WINDOW, window.as_ref());
+            if moved_main(&target) {
+                self.export_main(&repo, &mut transaction)?;
+            }
             transaction
                 .commit(description)
                 .await

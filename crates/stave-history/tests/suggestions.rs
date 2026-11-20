@@ -93,7 +93,7 @@ fn apply_moves_main() {
         )
         .expect("suggest");
 
-    let applied = history.apply(&id, &agent(), &wider).expect("apply");
+    let applied = history.apply(&id, &agent(), &main, &wider).expect("apply");
 
     assert_eq!(history.main().expect("main"), applied);
     assert_eq!(
@@ -105,7 +105,9 @@ fn apply_moves_main() {
     assert_eq!(versions[0].actor, agent());
     assert_eq!(versions[0].message, "Widen the dresser");
     assert!(history.suggestions().expect("suggestions").is_empty());
-    let again = history.apply(&id, &agent(), &wider).expect_err("gone");
+    let again = history
+        .apply(&id, &agent(), &main, &wider)
+        .expect_err("gone");
     assert!(
         matches!(again, HistoryError::UnknownSuggestion(_)),
         "{again:?}"
@@ -146,7 +148,9 @@ fn apply_refused_while_suggestion_has_clashes() {
     );
     assert!(clashing.contains("<<<<<<<"), "{clashing}");
 
-    let refused = history.apply(&id, &agent(), &wider).expect_err("refused");
+    let refused = history
+        .apply(&id, &agent(), &main, &wider)
+        .expect_err("refused");
     assert!(
         matches!(refused, HistoryError::SuggestionConflicted { .. }),
         "{refused:?}"
@@ -162,8 +166,10 @@ fn apply_refused_while_suggestion_has_clashes() {
             .conflicted
             .is_empty()
     );
-    history.main().expect("main");
-    history.apply(&id, &agent(), &resolved).expect("apply");
+    let main = history.main().expect("main");
+    history
+        .apply(&id, &agent(), &main, &resolved)
+        .expect("apply");
 }
 
 #[test]
@@ -200,7 +206,7 @@ fn concurrent_save_and_apply_both_land() {
                 )
                 .expect("suggest");
             agent_barrier.wait();
-            history.apply(&id, &agent(), &wider).expect("apply");
+            history.apply(&id, &agent(), &main, &wider).expect("apply");
         });
 
         window.join().expect("window thread");
@@ -242,7 +248,7 @@ fn agent_undo_only_reverts_own() {
             "Widen the dresser",
         )
         .expect("suggest");
-    history.apply(&id, &agent(), &wider).expect("apply");
+    history.apply(&id, &agent(), &first, &wider).expect("apply");
 
     // Another agent can't undo it: it isn't theirs.
     let mut other = History::open(folder.path()).expect("other opens");
@@ -283,7 +289,7 @@ fn undo_reverts_own_apply_and_window_catches_up() {
             "Widen the dresser",
         )
         .expect("suggest");
-    history.apply(&id, &agent(), &wider).expect("apply");
+    history.apply(&id, &agent(), &first, &wider).expect("apply");
     // The window caught up with the apply and wrote it.
     let folder_files = window.read_folder().expect("read folder");
     let CatchUp::Write { files: written, .. } = window.catch_up(&folder_files).expect("catch up")

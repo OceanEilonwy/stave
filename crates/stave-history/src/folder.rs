@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::HistoryError;
-use crate::paths::{ProjectFiles, RelativePath};
+use crate::paths::{self, ProjectFiles, RelativePath};
 
 /// Where the repository lives, relative to the project folder.
 pub(crate) const HISTORY_DIRECTORY: &str = ".stave/history";
@@ -45,12 +45,11 @@ pub(crate) fn status(folder: &Path) -> VersionsStatus {
     }
 }
 
-/// Every file in `folder` that counts: all but `.stave/history`, `.git` and
+/// Every file in `folder` that counts: all but `.stave/history`, any `.git` and
 /// what `.gitignore` excludes. Symbolic links are skipped, so nothing
 /// outside the folder is read.
 pub(crate) fn read(folder: &Path) -> Result<ProjectFiles, HistoryError> {
-    let history = folder.join(HISTORY_DIRECTORY);
-    let git = folder.join(".git");
+    let root = folder.to_owned();
     let walk = ignore::WalkBuilder::new(folder)
         .hidden(false)
         .parents(false)
@@ -60,7 +59,13 @@ pub(crate) fn read(folder: &Path) -> Result<ProjectFiles, HistoryError> {
         .git_ignore(true)
         .require_git(false)
         .follow_links(false)
-        .filter_entry(move |entry| entry.path() != history && entry.path() != git)
+        // `.git` folders (at any depth, in any case) and `.stave/history`
+        // hold repositories, not project files.
+        .filter_entry(move |entry| {
+            entry.path().strip_prefix(&root).is_ok_and(|relative| {
+                !paths::is_reserved(relative.iter().filter_map(|part| part.to_str()))
+            })
+        })
         .build();
     let mut files = ProjectFiles::new();
     for entry in walk {

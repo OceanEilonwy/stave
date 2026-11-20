@@ -94,6 +94,49 @@ pub fn git(folder: &Path, arguments: &[&str]) {
     assert!(status.success(), "git {arguments:?} failed");
 }
 
+/// Runs git in `folder` with `input` on its standard input, failing the test
+/// on error, and returns what it printed, trimmed.
+pub fn git_output(folder: &Path, arguments: &[&str], input: &str) -> String {
+    use std::io::Write as _;
+    let mut child = Command::new("git")
+        .current_dir(folder)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args([
+            "-c",
+            "user.name=Tester",
+            "-c",
+            "user.email=tester@example.com",
+        ])
+        .args(arguments)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("run git");
+    child
+        .stdin
+        .take()
+        .expect("standard input")
+        .write_all(input.as_bytes())
+        .expect("write to git");
+    let output = child.wait_with_output().expect("git finishes");
+    assert!(output.status.success(), "git {arguments:?} failed");
+    String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned()
+}
+
+/// A folder that is the root of a git repository on branch `main`, with
+/// `dresser.stave` committed.
+pub fn git_dresser_folder() -> tempfile::TempDir {
+    let folder = dresser_folder();
+    git(folder.path(), &["init", "-q", "-b", "main"]);
+    git(folder.path(), &["add", "dresser.stave"]);
+    git(folder.path(), &["commit", "-q", "-m", "First cut"]);
+    folder
+}
+
 /// The canonical form of a path, as the library reports paths.
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonical path")
