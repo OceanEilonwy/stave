@@ -1,6 +1,6 @@
 # A drawer chosen for the space above the divider, its settings typed;
-# then the count handle dragged until it says x 3: the ghost shows every
-# copy, and the card's stepper says 3.
+# then the count set to 3: the ghost shows every copy, and the card's
+# stepper says 3.
 select region divider.above
 choose casework.Drawer
 set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)

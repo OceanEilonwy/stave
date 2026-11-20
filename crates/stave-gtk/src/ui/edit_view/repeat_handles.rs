@@ -1,26 +1,14 @@
-//! Repeat by dragging (`docs/gui.md`, "Changing what is there"): on the
-//! card of a candidate that fills a space, the count stepper and which way
-//! the pieces split; in the 3D view, a handle at the top (or side) of the
-//! first piece, which, dragged toward the start of the space, makes more
-//! pieces (each the size the handle marks) and, dragged back, fewer; its
-//! label says how many. The ghost shows every copy once the session has
-//! tried the repeat. Between two neighbouring pieces of a split, a
-//! boundary handle moves the boundary (`EditCommand::MoveShares`),
-//! snapping to an even division and to round sizes.
-//!
-//! ```text
-//!   ┌──────────┐ ← ⇕ × 1   drag down ─▶ × 2, × 3 …
-//!   │  space   │
-//!   └──────────┘
-//!   piece a ══ ⇕ 180 mm ══ piece b   (a boundary handle)
-//! ```
-
-use stave_app::i18n::tr;
+//! Repeats (`docs/gui.md`, "Changing what is there"): on the card of a
+//! candidate that fills a space, the count stepper and which way the
+//! pieces split. The ghost shows every copy once the session has tried the
+//! repeat. Nothing is dragged on the model: the boundaries between the
+//! pieces of a split are rows of the Edit panel's Sizes card
+//! (`sizes.rs`); here a script moves one (`EditCommand::MoveShares`),
+//! settling where the session's boundary says.
 
 use adw::prelude::*;
 use glam::Vec3;
 use relm4::{Component, ComponentController, Controller};
-use stave_app::edit::PlaceSlot;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::item_offer::{RepeatFold, candidate_repeat_fold};
 use stave_app::spaces::{SplitBoundary, filled_spaces, split_boundaries};
@@ -31,7 +19,7 @@ use stave_scene::Aabb;
 
 use super::super::Window;
 use super::item_tools::{
-    MOST, RepeatFoldComponent, RepeatFoldInit, RepeatFoldInput, RepeatFoldOutput, RepeatFoldShown,
+    RepeatFoldComponent, RepeatFoldInit, RepeatFoldInput, RepeatFoldOutput, RepeatFoldShown,
     RepeatFoldSlots,
 };
 use crate::ui::WindowInput;
@@ -56,42 +44,6 @@ pub(in crate::ui) fn axis_ends(volume: &Aabb, axis: Axis) -> (Vec3, Vec3) {
     let half = (volume.max - volume.min) * 0.5;
     let reach = half.dot(direction.abs());
     (centre - direction * reach, centre + direction * reach)
-}
-
-/// A point moved to a box's left edge (or, for a split across, its
-/// bottom edge), at its front: where a handle on it reads clear of the
-/// card, which stands to the right.
-pub(in crate::ui) fn at_edge(point: Vec3, volume: &Aabb, axis: Axis) -> Vec3 {
-    let mut moved = point;
-    match axis {
-        Axis::Across => moved.y = volume.min.y,
-        Axis::Up | Axis::Deep => moved.x = volume.min.x,
-    }
-    moved.z = volume.max.z;
-    moved
-}
-
-/// How far along a segment of the screen a point is: 0 at its start, 1 at
-/// its end (not clamped).
-pub(in crate::ui) fn fraction_along(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
-    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-    let length = dx * dx + dy * dy;
-    if length <= f32::EPSILON {
-        return 0.0;
-    }
-    ((point.0 - start.0) * dx + (point.1 - start.1) * dy) / length
-}
-
-/// The count a count handle dragged to `fraction` of the space asks for:
-/// the first piece reaches the handle, and the copies fill the rest.
-pub(in crate::ui) fn count_at(fraction: f32) -> usize {
-    // The count whose first piece ends nearest the handle.
-    (1..=MOST)
-        .min_by(|a, b| {
-            let off = |count: usize| (1.0 / crate::convert::f32_of_index(count) - fraction).abs();
-            off(*a).total_cmp(&off(*b))
-        })
-        .unwrap_or(1)
 }
 
 /// A rectangle of the 3D view, in its pixels.
@@ -198,60 +150,7 @@ fn drawn(split: SplitBoundary, low: &Aabb, high: &Aabb) -> Boundary {
     }
 }
 
-/// A handle floating over the 3D view, dragged with the pointer.
-pub(in crate::ui) struct Handle {
-    /// The pill.
-    pub(in crate::ui) root: gtk::Box,
-    label: gtk::Label,
-    /// How far it was moved off its point to keep clear of the panels;
-    /// a drag subtracts it, so the handle still measures from its point.
-    nudge: (f32, f32),
-}
-
-impl Handle {
-    fn new(tooltip: &str) -> Handle {
-        let label = gtk::Label::new(None);
-        let root = gtk::Box::builder()
-            .spacing(4)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .css_classes(["stave-repeat-handle"])
-            .tooltip_text(tooltip)
-            .visible(false)
-            .build();
-        root.append(&gtk::Image::from_icon_name("view-more-horizontal-symbolic"));
-        root.append(&label);
-        root.set_cursor_from_name(Some("grab"));
-        Handle {
-            root,
-            label,
-            nudge: (0.0, 0.0),
-        }
-    }
-
-    /// Where a drag that began `at` (in the handle) began, measured from
-    /// the handle's point rather than where it was moved to.
-    fn origin(&self, (x, y): (f64, f64)) -> (f32, f32) {
-        let (dx, dy) = self.nudge;
-        (
-            crate::convert::f32_of_int(self.root.margin_start()) + crate::convert::f32_of(x) - dx,
-            crate::convert::f32_of_int(self.root.margin_top()) + crate::convert::f32_of(y) - dy,
-        )
-    }
-}
-
-/// What a drag on a handle started from.
-#[derive(Debug, Clone, Copy)]
-struct DragFrom {
-    /// The screen points the handle's fraction is measured between.
-    start: (f32, f32),
-    end: (f32, f32),
-    /// Where the drag began, in the 3D view.
-    origin: (f32, f32),
-}
-
-/// The repeat controls: the candidate card's stepper, the count handle and
-/// the boundary handles.
+/// The repeat controls: the candidate card's stepper.
 pub(in crate::ui) struct Repeats {
     /// On the chosen candidate's card, folded until asked for; its
     /// outputs come to the window as [`EditingInput::CardRepeatUnfolded`]
@@ -260,18 +159,6 @@ pub(in crate::ui) struct Repeats {
     /// What the window last showed on it (and people last chose), read at
     /// once by the count handle and scripts.
     pub(in crate::ui) shown: RepeatFoldShown,
-    count: Handle,
-    boundaries: Vec<(Handle, Option<Boundary>)>,
-    /// What the count handle is on: the space's box and the axis, while
-    /// it shows.
-    count_on: Option<(Aabb, Axis, usize)>,
-    /// What the drag under way started from; set and read only by the
-    /// window's handlers of the handles' gesture messages.
-    drag: Option<DragFrom>,
-    /// The count a drag on the count handle has reached.
-    dragged_count: Option<usize>,
-    /// A boundary drag: which handle, and the boundary it has reached.
-    dragged_boundary: Option<(usize, Length)>,
 }
 
 impl Repeats {
@@ -299,14 +186,6 @@ impl Repeats {
         Repeats {
             row,
             shown: RepeatFoldShown::new(1),
-            count: Handle::new(&tr(
-                "Drag toward the start of the space for more pieces, back for fewer",
-            )),
-            boundaries: Vec::new(),
-            count_on: None,
-            drag: None,
-            dragged_count: None,
-            dragged_boundary: None,
         }
     }
 }
@@ -383,43 +262,6 @@ impl Window {
         clear_of(rect, &self.floating_panels(), view)
     }
 
-    /// Places a handle's pill at a point of the screen, moved clear of
-    /// the panels; the move made, for the handle's `nudge`.
-    fn place_handle(&self, root: &gtk::Box, (x, y): (f32, f32)) -> (f32, f32) {
-        // A hidden widget measures nothing.
-        root.set_visible(true);
-        let size = natural_size(root.upcast_ref());
-        let wanted = ((x - 30.0).max(0.0), (y - 14.0).max(0.0));
-        let nudge = self.clear_spot(wanted, size).unwrap_or((0.0, 0.0));
-        root.set_margin_start(crate::convert::int_of_f32(
-            (wanted.0 + nudge.0).max(0.0).round(),
-        ));
-        root.set_margin_top(crate::convert::int_of_f32(
-            (wanted.1 + nudge.1).max(0.0).round(),
-        ));
-        root.set_visible(true);
-        nudge
-    }
-
-    /// Puts the count handle over the 3D view (the stepper went on the
-    /// card when it was launched, its outputs forwarded).
-    pub(in crate::ui) fn connect_repeats(&self) {
-        let repeats = &self.editing.repeats;
-        self.widgets.design.add_overlay(&repeats.count.root);
-        let drag = gtk::GestureDrag::new();
-        let input = self.input();
-        drag.connect_drag_begin(move |_, x, y| {
-            input.emit(EditingInput::CountDragBegun { x, y }.into());
-        });
-        let input = self.input();
-        drag.connect_drag_update(move |_, x, y| {
-            input.emit(EditingInput::CountDragged { x, y }.into());
-        });
-        let input = self.input();
-        drag.connect_drag_end(move |_, _, _| input.emit(EditingInput::CountDragEnded.into()));
-        repeats.count.root.add_controller(drag);
-    }
-
     /// Shows the candidate card's repeat controls as the rule says
     /// ([`candidate_repeat_fold`]): hidden unless the candidate fills a
     /// space; folded behind "Repeat…" until asked for or already more than
@@ -473,160 +315,18 @@ impl Window {
         self.editing.repeats.shown.forget();
     }
 
-    /// The space the count handle stands on, the axis and the count: the
-    /// candidate's space while its card shows the stepper; the space the
-    /// selected item fills while its card offers a first repeat.
-    fn count_handle_on(&self) -> Option<(Aabb, Axis, usize)> {
-        let item = {
-            let session = &self.session;
-            let state = &self.state;
-            let (_, graph) = session.drawable()?;
-            let posed = state.posed.as_ref()?;
-            if let Some(chosen) = session.edit().and_then(|edit| edit.chosen()) {
-                // Only while the repeat controls are open: folded, they
-                // take no room on the model either.
-                if !self.editing.repeats.shown.is_open() {
-                    return None;
-                }
-                let region =
-                    chosen
-                        .candidate()
-                        .place
-                        .iter()
-                        .find_map(|param| match param.slot {
-                            PlaceSlot::Region(Some(region)) => Some(region),
-                            PlaceSlot::Region(None)
-                            | PlaceSlot::Anchor(_)
-                            | PlaceSlot::Part(_)
-                            | PlaceSlot::Parts(_) => None,
-                        })?;
-                let volume = graph.region_volume(posed, region)?;
-                let repeats = &self.editing.repeats;
-                let count = repeats
-                    .dragged_count
-                    .unwrap_or_else(|| repeats.shown.count());
-                return Some((volume, repeats.shown.axis(), count));
-            }
-            if session.edit().is_some() || session.change().is_some() {
-                return None;
-            }
-            if !self.editing.tools.root.is_visible() || !self.editing.tools.repeat_fold().is_open()
-            {
-                return None;
-            }
-            let (design, _) = session.drawable()?;
-            let item = super::item_tools::selected_item(design, session.selection()?)?;
-            if super::item_tools::piece_count(design, &item) > 1 {
-                return None;
-            }
-            item
-        };
-        // The one space it fills, as the model binds it.
-        let [space] = self.spaces_of(&item)[..] else {
-            return None;
-        };
-        let session = &self.session;
-        let state = &self.state;
-        let (_, graph) = session.drawable()?;
-        let volume = graph.region_volume(state.posed.as_ref()?, space)?;
-        let count = self.editing.repeats.dragged_count.unwrap_or(1);
-        Some((volume, self.editing.tools.repeat_row().axis(), count))
-    }
-
-    /// Places the repeat handles after a frame is drawn.
-    pub(in crate::ui) fn place_repeat_handles(&mut self) {
-        let focus = self.state.focus.is_some();
-        let on = (!focus && self.gestures_allowed())
-            .then(|| self.count_handle_on())
-            .flatten();
-        self.editing.repeats.count_on = on;
-        let count_root = self.editing.repeats.count.root.clone();
-        match on {
-            Some((volume, axis, count)) => {
-                let (start, end) = axis_ends(&volume, axis);
-                let (start, end) = (at_edge(start, &volume, axis), at_edge(end, &volume, axis));
-                let at = start + (end - start) / crate::convert::f32_of_index(count.max(1));
-                let point = {
-                    let state = &self.state;
-                    self.project(state, at)
-                };
-                match point {
-                    Some(point) => {
-                        self.editing
-                            .repeats
-                            .count
-                            .label
-                            .set_label(&format!("× {count}"));
-                        let nudge = self.place_handle(&count_root, point);
-                        self.editing.repeats.count.nudge = nudge;
-                    }
-                    None => count_root.set_visible(false),
-                }
-            }
-            None => count_root.set_visible(false),
-        }
-        self.place_boundary_handles(focus);
-    }
-
-    /// The count handle was pressed at `(x, y)` in it: the drag starts.
-    pub(in crate::ui) fn count_drag_begin(&mut self, x: f64, y: f64) {
-        let Some((volume, axis, _)) = self.editing.repeats.count_on else {
-            return;
-        };
-        let (start, end) = axis_ends(&volume, axis);
-        let (start, end) = (at_edge(start, &volume, axis), at_edge(end, &volume, axis));
-        let state = &self.state;
-        let (Some(start), Some(end)) = (self.project(state, start), self.project(state, end))
-        else {
-            return;
-        };
-        let repeats = &mut self.editing.repeats;
-        let origin = repeats.count.origin((x, y));
-        repeats.drag = Some(DragFrom { start, end, origin });
-    }
-
-    /// The count handle moved `(x, y)` from where its drag began.
-    pub(in crate::ui) fn count_drag_update(&mut self, x: f64, y: f64) {
-        let repeats = &mut self.editing.repeats;
-        let Some(from) = repeats.drag else {
-            return;
-        };
-        let point = (
-            from.origin.0 + crate::convert::f32_of(x),
-            from.origin.1 + crate::convert::f32_of(y),
-        );
-        let count = count_at(fraction_along(point, from.start, from.end));
-        if repeats.dragged_count != Some(count) {
-            repeats.dragged_count = Some(count);
-            repeats.count.label.set_label(&format!("× {count}"));
-            self.request_render();
-        }
-    }
-
-    /// The count handle was let go: the selection is repeated to the
-    /// count it reached.
-    pub(in crate::ui) fn count_drag_end(&mut self) {
-        let repeats = &mut self.editing.repeats;
-        repeats.drag = None;
-        let Some(count) = repeats.dragged_count.take() else {
-            return;
-        };
-        let axis = repeats.count_on.map(|(_, axis, _)| axis);
-        self.repeat_selected(count, axis);
-    }
-
-    /// Drags the count handle to `count` pieces, as a drag that ends there
-    /// does (scripts).
+    /// Sets the count to `count` pieces on the stepper, "Repeat…" pressed
+    /// first when it is folded, as a person would (scripts).
     pub(in crate::ui) fn drag_count_to(&mut self, count: usize) -> Result<(), String> {
-        // The handle shows once the repeat controls are open: "Repeat…"
-        // is pressed first, as a person would.
         self.unfold_repeat();
-        let Some((_, axis, _)) = self.count_handle_on() else {
-            return Err("no count handle shows: choose something that fills a space".to_owned());
+        let chosen = self.session.edit().and_then(|edit| edit.chosen()).is_some();
+        let axis = if chosen {
+            self.editing.repeats.shown.axis()
+        } else if self.editing.tools.root.is_visible() {
+            self.editing.tools.repeat_row().axis()
+        } else {
+            return Err("nothing to repeat: choose something that fills a space".to_owned());
         };
-        self.editing.repeats.dragged_count = Some(count);
-        self.place_repeat_handles();
-        self.editing.repeats.dragged_count = None;
         self.repeat_selected(count, Some(axis));
         Ok(())
     }
@@ -684,139 +384,6 @@ impl Window {
                 Some(drawn(split, &low, &high))
             })
             .collect()
-    }
-
-    fn place_boundary_handles(&mut self, focus: bool) {
-        let shown = if focus || !self.gestures_allowed() {
-            Vec::new()
-        } else {
-            self.shown_boundaries()
-        };
-        let dragging = self.editing.repeats.dragged_boundary;
-        // Handles to hide once they are placed: hiding the dragged handle
-        // ends its drag (a queued message).
-        let mut to_hide: Vec<gtk::Box> = Vec::new();
-        // Taken out while the window places them, and put back after.
-        let mut handles = std::mem::take(&mut self.editing.repeats.boundaries);
-        while handles.len() < shown.len() {
-            let handle = Handle::new(&tr(
-                "Drag to move the boundary: only these two pieces change size",
-            ));
-            handle.root.add_css_class("boundary");
-            self.widgets.design.add_overlay(&handle.root);
-            let index = handles.len();
-            self.connect_boundary_drag(&handle.root, index);
-            handles.push((handle, None));
-        }
-        for (index, (handle, boundary)) in handles.iter_mut().enumerate() {
-            let Some(found) = shown.get(index) else {
-                to_hide.push(handle.root.clone());
-                *boundary = None;
-                continue;
-            };
-            *boundary = Some(found.clone());
-            let lower = match dragging {
-                Some((dragged, length)) if dragged == index => length,
-                _ => found.split.sizes.0,
-            };
-            let total = found.split.pair();
-            let fraction = if total.nm() > 0 {
-                lower.to_mm_f64() / total.to_mm_f64()
-            } else {
-                0.5
-            };
-            let (start, _, end) = found.points;
-            let at = start + (end - start) * crate::convert::f32_of(fraction);
-            let point = {
-                let state = &self.state;
-                self.project(state, at)
-            };
-            handle
-                .label
-                .set_label(&super::hold::length_text(lower).replace("mm", " mm"));
-            match point {
-                Some(point) => handle.nudge = self.place_handle(&handle.root, point),
-                None => to_hide.push(handle.root.clone()),
-            }
-        }
-        self.editing.repeats.boundaries = handles;
-        for root in to_hide {
-            root.set_visible(false);
-        }
-    }
-
-    /// The boundary the handle at `index` is on.
-    fn boundary_of_handle(&self, index: usize) -> Option<Boundary> {
-        self.editing
-            .repeats
-            .boundaries
-            .get(index)
-            .and_then(|(_, boundary)| boundary.clone())
-    }
-
-    fn connect_boundary_drag(&self, root: &gtk::Box, index: usize) {
-        let drag = gtk::GestureDrag::new();
-        let input = self.input();
-        drag.connect_drag_begin(move |_, x, y| {
-            input.emit(EditingInput::BoundaryDragBegun { index, x, y }.into());
-        });
-        let input = self.input();
-        drag.connect_drag_update(move |_, x, y| {
-            input.emit(EditingInput::BoundaryDragged { index, x, y }.into());
-        });
-        let input = self.input();
-        drag.connect_drag_end(move |_, _, _| input.emit(EditingInput::BoundaryDragEnded.into()));
-        root.add_controller(drag);
-    }
-
-    /// A boundary's handle was pressed: the drag starts from where it is.
-    pub(in crate::ui) fn boundary_drag_begun(&mut self, index: usize, x: f64, y: f64) {
-        let Some(boundary) = self.boundary_of_handle(index) else {
-            return;
-        };
-        let state = &self.state;
-        let (start, _, end) = boundary.points;
-        let (Some(start), Some(end)) = (self.project(state, start), self.project(state, end))
-        else {
-            return;
-        };
-        let repeats = &mut self.editing.repeats;
-        let origin = repeats
-            .boundaries
-            .get(index)
-            .map(|(handle, _)| handle.origin((x, y)));
-        if let Some(origin) = origin {
-            repeats.drag = Some(DragFrom { start, end, origin });
-        }
-    }
-
-    /// A boundary's handle moved this far from where its drag began.
-    pub(in crate::ui) fn boundary_dragged(&mut self, index: usize, x: f64, y: f64) {
-        let Some(from) = self.editing.repeats.drag else {
-            return;
-        };
-        let Some(boundary) = self.boundary_of_handle(index) else {
-            return;
-        };
-        let point = (
-            from.origin.0 + crate::convert::f32_of(x),
-            from.origin.1 + crate::convert::f32_of(y),
-        );
-        let length = boundary_at(&boundary, fraction_along(point, from.start, from.end));
-        self.editing.repeats.dragged_boundary = Some((index, length));
-        self.request_render();
-    }
-
-    /// A boundary's drag ended: the boundary moves where it was let go.
-    pub(in crate::ui) fn boundary_drag_ended(&mut self) {
-        let repeats = &mut self.editing.repeats;
-        repeats.drag = None;
-        let Some((dragged, length)) = repeats.dragged_boundary.take() else {
-            return;
-        };
-        if let Some(boundary) = self.boundary_of_handle(dragged) {
-            self.move_boundary(&boundary, length);
-        }
     }
 
     /// Moves a boundary between two pieces so the lower is `length` long.
@@ -877,45 +444,9 @@ pub(in crate::ui) fn natural_size(widget: &gtk::Widget) -> (f32, f32) {
     )
 }
 
-/// The lower piece's size for a boundary dragged to `fraction` of the
-/// two pieces, settled where the session's boundary says
-/// ([`SplitBoundary::settle`]).
-pub(in crate::ui) fn boundary_at(boundary: &Boundary, fraction: f32) -> Length {
-    let total = boundary.split.pair();
-    // In millionths of the two pieces, so the size is worked out exactly.
-    let millionths = i64::from(crate::convert::int_of_f32(
-        (fraction.clamp(0.0, 1.0) * 1_000_000.0).round(),
-    ));
-    let raw = Length::from_nm(
-        total
-            .nm()
-            .checked_mul(millionths)
-            .map_or(total.nm() / 2, |nm| nm / 1_000_000),
-    );
-    boundary.split.settle(raw)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_drag_toward_the_start_makes_more_pieces() {
-        assert_eq!(count_at(1.0), 1);
-        assert_eq!(count_at(0.55), 2);
-        assert_eq!(count_at(0.34), 3);
-        assert_eq!(count_at(0.26), 4);
-        assert_eq!(count_at(0.0), MOST);
-        assert_eq!(count_at(-0.4), MOST);
-        assert_eq!(count_at(3.0), 1);
-    }
-
-    #[test]
-    fn a_point_is_measured_along_the_screen_segment() {
-        assert!((fraction_along((5.0, 0.0), (0.0, 0.0), (10.0, 0.0)) - 0.5).abs() < 1e-6);
-        assert!((fraction_along((0.0, 15.0), (0.0, 0.0), (0.0, 10.0)) - 1.5).abs() < 1e-6);
-        assert_eq!(fraction_along((1.0, 1.0), (2.0, 2.0), (2.0, 2.0)), 0.0);
-    }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
         Rect {

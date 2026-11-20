@@ -1,5 +1,5 @@
-# The divider selected: its grips on the model (its height as a
-# dimension from the case's bottom, with a round handle and its value),
-# every grip's stops found.
+# The divider selected: its sizes in the Edit panel's Sizes card (its
+# height, its depth locked by the stock, its panel's sizes), every size's
+# stops found.
 grips assembly divider
 stops

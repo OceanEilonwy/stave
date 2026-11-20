@@ -1,8 +1,9 @@
 //! The Edit panel of the docked window (`docs/gui.md`, "Editing in the 3D
-//! view"): the card for a chosen candidate, the card for a change of the
-//! design (with a grip's size section), or the hold card, whichever is in
-//! progress, each drawn as the Inspector is, with Cancel (Esc) and Apply
-//! (Enter) at its foot, docked as any other
+//! view"): the Sizes card of the selection, over the card for a chosen
+//! candidate, the card for a change of the design (with a size's
+//! section), or the hold card, whichever is in progress, each drawn as
+//! the Inspector is, with Cancel (Esc) and Apply (Enter) at its foot,
+//! docked as any other
 //! panel is (a tab, dragged to any area, resized by the splitters, its
 //! place remembered with the rest of the layout). While nothing is in
 //! progress it stays where it is and says how to start.
@@ -51,8 +52,15 @@ impl EditPanel {
         }
     }
 
-    /// Shows the card in progress, or how to start when none is. `true`
-    /// when a card shows.
+    /// Puts the Sizes card at the top of the panel, above the cards in
+    /// progress, as tall as its rows.
+    pub fn set_sizes(&self, sizes: &gtk::Widget) {
+        sizes.set_vexpand(false);
+        self.cards.prepend(sizes);
+    }
+
+    /// Shows the cards that show (the Sizes card, the card in progress),
+    /// or how to start when none does. `true` when a card shows.
     pub fn update(&self) -> bool {
         let mut child = self.cards.first_child();
         let mut any = false;
