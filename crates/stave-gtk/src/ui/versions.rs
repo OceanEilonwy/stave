@@ -511,6 +511,214 @@ impl VersionsPanel {
 }
 
 // ---------------------------------------------------------------------------
+// The Resolve dialog
+// ---------------------------------------------------------------------------
+
+/// The Resolve dialog's state: the suggestion's files as read, and the
+/// buffer each clashing file is edited in (its own widgets' buffers).
+pub(in crate::ui) struct ResolveDialogComponent {
+    /// The suggestion's files as read.
+    resolving: history::ToResolve,
+    /// Each clashing file and the buffer it is edited in, in tab order.
+    editors: Vec<(history::RelativePath, gtk::TextBuffer)>,
+}
+
+/// What the Resolve dialog is told: only what people did.
+#[derive(Debug)]
+pub(in crate::ui) enum ResolveInput {
+    /// People pressed Save to Suggestion.
+    Save,
+    /// The dialog has closed.
+    Closed,
+}
+
+/// What the Resolve dialog tells its owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::ui) enum ResolveOutput {
+    /// Save these files to the suggestion (the dialog has closed itself).
+    Save(history::ToResolve),
+    /// The dialog has closed, saved or not.
+    Closed,
+}
+
+/// The dialog's title: the suggestion it resolves.
+fn resolve_title(resolving: &history::ToResolve) -> String {
+    fill_in(&tr("Resolve “{title}”"), &[("title", &resolving.title)])
+}
+
+/// Puts a page in `notebook` for each clashing file of `resolving`, its
+/// text to edit: the files with the buffers they are edited in.
+fn resolve_pages(
+    notebook: &gtk::Notebook,
+    resolving: &history::ToResolve,
+) -> Vec<(history::RelativePath, gtk::TextBuffer)> {
+    let mut editors = Vec::new();
+    for relative in &resolving.conflicted {
+        let text = resolving
+            .files
+            .get(relative)
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .unwrap_or_default();
+        let view = gtk::TextView::builder()
+            .monospace(true)
+            .top_margin(6)
+            .bottom_margin(6)
+            .left_margin(6)
+            .right_margin(6)
+            .build();
+        view.buffer().set_text(&text);
+        let scrolled = gtk::ScrolledWindow::builder()
+            .child(&view)
+            .vexpand(true)
+            .build();
+        notebook.append_page(
+            &scrolled,
+            Some(&gtk::Label::new(Some(&relative.to_string()))),
+        );
+        editors.push((relative.clone(), view.buffer()));
+    }
+    editors
+}
+
+#[relm4::component(pub(in crate::ui))]
+impl Component for ResolveDialogComponent {
+    type Init = history::ToResolve;
+    type Input = ResolveInput;
+    type Output = ResolveOutput;
+    type CommandOutput = ();
+
+    view! {
+        adw::Dialog {
+            set_title: &resolve_title(&model.resolving),
+            set_content_width: 720,
+            set_content_height: 560,
+            connect_closed[sender] => move |_| {
+                sender.input_sender().emit(ResolveInput::Closed);
+            },
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    pack_end = &gtk::Button {
+                        set_label: &tr("_Save to Suggestion"),
+                        set_use_underline: true,
+                        // After the label, which adds GTK's `text-button`:
+                        // this replaces it, as before.
+                        set_css_classes: &["suggested-action"],
+                        connect_clicked[sender] => move |_| {
+                            sender.input_sender().emit(ResolveInput::Save);
+                        },
+                    },
+                },
+
+                #[wrap(Some)]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+
+                    gtk::Label {
+                        set_label: &tr(
+                            "Each file holds both changes between marker lines. Keep what the design should have, take the marker lines out, and save: the suggestion is changed, the project isn't.",
+                        ),
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        set_margin_start: 12,
+                        set_margin_end: 12,
+                        set_margin_top: 6,
+                        set_margin_bottom: 6,
+                    },
+                    #[name = "notebook"]
+                    gtk::Notebook {
+                        set_vexpand: true,
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        resolving: history::ToResolve,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let mut model = ResolveDialogComponent {
+            resolving,
+            editors: Vec::new(),
+        };
+        let widgets = view_output!();
+        model.editors = resolve_pages(&widgets.notebook, &model.resolving);
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: ResolveInput, sender: ComponentSender<Self>, root: &Self::Root) {
+        match message {
+            ResolveInput::Save => {
+                let mut resolved = self.resolving.clone();
+                for (relative, buffer) in &self.editors {
+                    let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+                    resolved
+                        .files
+                        .insert(relative.clone(), text.as_bytes().to_vec());
+                }
+                root.close();
+                // Nobody listening is not a mistake.
+                let _ = sender.output(ResolveOutput::Save(resolved));
+            }
+            ResolveInput::Closed => {
+                let _ = sender.output(ResolveOutput::Closed);
+            }
+        }
+    }
+}
+
+/// The Resolve dialog as the window holds it while it shows: the one
+/// owner of the component's controller (dropping it shuts the component
+/// down), its outputs forwarded at launch. The window lets it go when it
+/// hears [`ResolveOutput::Closed`], and the dialog is freed.
+pub(in crate::ui) struct ResolveDialog {
+    /// The dialog.
+    dialog: adw::Dialog,
+    /// Held so the component lives while the dialog shows (tests reach
+    /// its input).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only held: dropping it shuts the dialog down")
+    )]
+    controller: Controller<ResolveDialogComponent>,
+}
+
+impl std::fmt::Debug for ResolveDialog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolveDialog")
+            .field("dialog", &self.dialog)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ResolveDialog {
+    /// The dialog for a suggestion's files; what it says is made the
+    /// owner's message by `map` and sent to `to`.
+    pub(in crate::ui) fn new<X: 'static>(
+        resolving: history::ToResolve,
+        to: &relm4::Sender<X>,
+        map: impl Fn(ResolveOutput) -> X + 'static,
+    ) -> ResolveDialog {
+        let controller = ResolveDialogComponent::builder()
+            .launch(resolving)
+            .forward(to, map);
+        ResolveDialog {
+            dialog: controller.widget().clone(),
+            controller,
+        }
+    }
+
+    /// Shows the dialog over `parent`.
+    pub(in crate::ui) fn present(&self, parent: &impl IsA<gtk::Widget>) {
+        self.dialog.present(Some(parent));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The window's side
 // ---------------------------------------------------------------------------
 
@@ -536,6 +744,9 @@ pub(in crate::ui) struct WindowVersions {
     /// Which reading of the versions is the latest asked for: an older
     /// one arriving late is not shown.
     reading: u64,
+    /// The Resolve dialog, while it shows: let go when it says it closed
+    /// ([`VersionsInput::ResolveClosed`]).
+    resolving: Option<ResolveDialog>,
 }
 
 /// What the window is told about versions.
@@ -555,6 +766,8 @@ pub(in crate::ui) enum VersionsInput {
     Answered(TurnOnAnswer),
     /// People saved a suggestion's files from the Resolve dialog.
     SaveResolved(history::ToResolve),
+    /// The Resolve dialog has closed (saved or not).
+    ResolveClosed,
     /// Work done off the main thread for this folder came back.
     Done {
         /// The folder it was done for.
@@ -626,6 +839,31 @@ fn person() -> Actor {
         real
     };
     history::user_actor(&name)
+}
+
+/// "Turn on versions for this project?": a plain alert dialog of the
+/// window (docs/relm4-migration.md, "The window's own plain widgets").
+/// Its one handler only sends people's answer to `input`, and nothing
+/// else holds it: the window it is presented over keeps it while it
+/// shows, and it is freed once it closes.
+fn turn_on_question(input: relm4::Sender<WindowInput>) -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::builder()
+        .heading(tr("Turn on versions for this project?"))
+        .body(tr(
+            "Stave then keeps every saved version of the project in its folder, so any change can be undone, and shows suggestions from AI apps in the Versions panel.",
+        ))
+        .close_response("later")
+        .build();
+    dialog.add_responses(&[
+        ("not-now", tr("_Not Now").as_str()),
+        ("turn-on", tr("_Turn On").as_str()),
+    ]);
+    dialog.set_response_appearance("turn-on", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("turn-on"));
+    dialog.connect_response(None, move |_, response| {
+        input.emit(VersionsInput::Answered(TurnOnAnswer::from_response(response)).into());
+    });
+    dialog
 }
 
 /// Where "Not Now" is remembered.
@@ -719,6 +957,7 @@ impl Window {
                     Done::Resolved,
                 );
             }
+            VersionsInput::ResolveClosed => self.versions.resolving = None,
             VersionsInput::Saved(files) => self.versions_saved(files),
             VersionsInput::Changed => self.read_versions(),
             VersionsInput::Focused => {
@@ -857,24 +1096,7 @@ impl Window {
             return;
         }
         self.versions.asking = true;
-        let dialog = adw::AlertDialog::builder()
-            .heading(tr("Turn on versions for this project?"))
-            .body(tr(
-                "Stave then keeps every saved version of the project in its folder, so any change can be undone, and shows suggestions from AI apps in the Versions panel.",
-            ))
-            .close_response("later")
-            .build();
-        dialog.add_responses(&[
-            ("not-now", tr("_Not Now").as_str()),
-            ("turn-on", tr("_Turn On").as_str()),
-        ]);
-        dialog.set_response_appearance("turn-on", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("turn-on"));
-        let input = self.input();
-        dialog.connect_response(None, move |_, response| {
-            input.emit(VersionsInput::Answered(TurnOnAnswer::from_response(response)).into());
-        });
-        dialog.present(Some(&self.widgets.window));
+        turn_on_question(self.input()).present(Some(&self.widgets.window));
     }
 
     /// Turns versions on, recording the project as it is.
@@ -1015,84 +1237,21 @@ impl Window {
         self.read_versions();
     }
 
-    /// The Resolve dialog: each clashing file of the suggestion, with its
-    /// marker lines, to edit; Save writes them back to the suggestion
-    /// (never to the project's folder).
-    fn resolve_dialog(&self, resolving: history::ToResolve) {
-        let dialog = adw::Dialog::builder()
-            .title(fill_in(
-                &tr("Resolve “{title}”"),
-                &[("title", &resolving.title)],
-            ))
-            .content_width(720)
-            .content_height(560)
-            .build();
-        let notebook = gtk::Notebook::new();
-        notebook.set_vexpand(true);
-        let mut editors = Vec::new();
-        for relative in &resolving.conflicted {
-            let text = resolving
-                .files
-                .get(relative)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-                .unwrap_or_default();
-            let view = gtk::TextView::builder()
-                .monospace(true)
-                .top_margin(6)
-                .bottom_margin(6)
-                .left_margin(6)
-                .right_margin(6)
-                .build();
-            view.buffer().set_text(&text);
-            let scrolled = gtk::ScrolledWindow::builder()
-                .child(&view)
-                .vexpand(true)
-                .build();
-            notebook.append_page(
-                &scrolled,
-                Some(&gtk::Label::new(Some(&relative.to_string()))),
-            );
-            editors.push((relative.clone(), view.buffer()));
+    /// Shows the Resolve dialog for a suggestion's files, held while it
+    /// shows. One at a time: the dialog showing is the one people answer.
+    fn resolve_dialog(&mut self, resolving: history::ToResolve) {
+        if self.versions.resolving.is_some() {
+            return;
         }
-        let explain = gtk::Label::builder()
-            .label(tr(
-                "Each file holds both changes between marker lines. Keep what the design should have, take the marker lines out, and save: the suggestion is changed, the project isn't.",
-            ))
-            .wrap(true)
-            .xalign(0.0)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(6)
-            .margin_bottom(6)
-            .build();
-        let save = gtk::Button::builder()
-            .label(tr("_Save to Suggestion"))
-            .use_underline(true)
-            .css_classes(["suggested-action"])
-            .build();
-        let header = adw::HeaderBar::new();
-        header.pack_end(&save);
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.append(&explain);
-        content.append(&notebook);
-        let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
-        toolbar.set_content(Some(&content));
-        dialog.set_child(Some(&toolbar));
-        let input = self.input();
-        let shown = dialog.clone();
-        save.connect_clicked(move |_| {
-            let mut resolved = resolving.clone();
-            for (relative, buffer) in &editors {
-                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-                resolved
-                    .files
-                    .insert(relative.clone(), text.as_bytes().to_vec());
+        let dialog = ResolveDialog::new(resolving, self.sender.input_sender(), |output| {
+            match output {
+                ResolveOutput::Save(resolved) => VersionsInput::SaveResolved(resolved),
+                ResolveOutput::Closed => VersionsInput::ResolveClosed,
             }
-            input.emit(VersionsInput::SaveResolved(resolved).into());
-            shown.close();
+            .into()
         });
-        dialog.present(Some(&self.widgets.window));
+        dialog.present(&self.widgets.window);
+        self.versions.resolving = Some(dialog);
     }
 
     /// Takes in what catching up wrote: the design is checked again, which
@@ -1320,6 +1479,157 @@ mod tests {
         assert!(callback.upgrade().is_none(), "the callback is freed");
     }
 
+    /// A suggestion with one clashing file.
+    fn to_resolve() -> history::ToResolve {
+        let notes = history::RelativePath::new(Path::new("notes.txt")).unwrap();
+        let mut files = history::ProjectFiles::new();
+        files.insert(
+            notes.clone(),
+            b"<<<<<<< a\nmine\n=======\ntheirs\n>>>>>>> b\n".to_vec(),
+        );
+        history::ToResolve {
+            id: SuggestionId::new("cccc"),
+            title: "Add notes".to_owned(),
+            tip: history::RevisionId::new("0123"),
+            files,
+            conflicted: vec![notes],
+        }
+    }
+
+    /// The dialog's buffers, in tab order (a dialog not yet presented
+    /// holds its content apart).
+    fn buffers(dialog: &adw::Dialog) -> Vec<gtk::TextBuffer> {
+        let mut found = Vec::new();
+        let mut pending: Vec<gtk::Widget> = dialog.child().into_iter().collect();
+        while let Some(widget) = pending.pop() {
+            if let Ok(view) = widget.clone().downcast::<gtk::TextView>() {
+                found.push(view.buffer());
+            }
+            let mut child = widget.last_child();
+            while let Some(current) = child {
+                child = current.prev_sibling();
+                pending.push(current);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_dropped_resolve_dialog_is_freed() {
+        on_gtk_thread(resolve_dialog_is_freed);
+    }
+
+    /// Dropping the Resolve dialog shuts its component down when the main
+    /// loop next runs: the dialog, its buffers and the model's runtime go.
+    fn resolve_dialog_is_freed() {
+        let (to, _heard) = recorder::<ResolveOutput>();
+        let dialog = ResolveDialog::new(to_resolve(), &to, |output| output);
+        let shown = dialog.dialog.downgrade();
+        let buffer = buffers(&dialog.dialog)
+            .first()
+            .map(glib::object::ObjectExt::downgrade)
+            .expect("a page per clashing file");
+        let input = dialog.controller.sender().clone();
+        settle();
+        assert!(shown.upgrade().is_some(), "the dialog lives while held");
+        drop(dialog);
+        settle();
+        assert!(shown.upgrade().is_none(), "the dialog is freed");
+        assert!(buffer.upgrade().is_none(), "its buffers are freed");
+        assert!(
+            input.send(ResolveInput::Save).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+    }
+
+    #[test]
+    fn the_resolve_dialog_saves_by_message_and_is_freed_once_closed() {
+        on_gtk_thread(resolve_dialog_saves_and_is_freed);
+    }
+
+    /// Save to Suggestion only queues a message: the dialog then says what
+    /// the files hold and closes itself; the owner, as the window does,
+    /// lets it go when it says it closed, and it is freed.
+    fn resolve_dialog_saves_and_is_freed() {
+        let window = adw::Window::new();
+        let heard: std::rc::Rc<std::cell::RefCell<Vec<ResolveOutput>>> = std::rc::Rc::default();
+        let owned: std::rc::Rc<std::cell::RefCell<Option<ResolveDialog>>> = std::rc::Rc::default();
+        let (record, owner) = (std::rc::Rc::clone(&heard), std::rc::Rc::clone(&owned));
+        let to = crate::ui::gtk_test::listener(move |output: ResolveOutput| {
+            if output == ResolveOutput::Closed {
+                owner.replace(None);
+            }
+            record.borrow_mut().push(output);
+        });
+        let dialog = ResolveDialog::new(to_resolve(), &to, |output| output);
+        drop(to);
+        if let Some(buffer) = buffers(&dialog.dialog).first() {
+            buffer.set_text("theirs\n");
+        }
+        let root = dialog.dialog.clone().upcast::<gtk::Widget>();
+        dialog.present(&window);
+        owned.replace(Some(dialog));
+        let shown = root.downgrade();
+        let save = labelled(&root, "_Save to Suggestion");
+        drop(root);
+        assert_eq!(save.len(), 1);
+        for button in &save {
+            button.emit_clicked();
+        }
+        drop(save);
+        assert!(heard.borrow().is_empty(), "only queued");
+        let mut resolved = to_resolve();
+        if let Some(notes) = resolved.conflicted.first().cloned() {
+            resolved.files.insert(notes, b"theirs\n".to_vec());
+        }
+        // A dialog over a shown window fades out on its frame clock.
+        assert!(
+            crate::ui::gtk_test::settle_until(std::time::Duration::from_secs(10), || {
+                heard.borrow().len() == 2 && shown.upgrade().is_none()
+            }),
+            "the dialog said what to save, closed and is freed"
+        );
+        assert_eq!(
+            *heard.borrow(),
+            vec![ResolveOutput::Save(resolved), ResolveOutput::Closed]
+        );
+        assert!(owned.borrow().is_none(), "the owner let it go");
+        window.destroy();
+    }
+
+    #[test]
+    fn the_turn_on_question_answers_by_message_and_is_freed_once_closed() {
+        on_gtk_thread(turn_on_question_is_freed);
+    }
+
+    /// The question's one handler only sends people's answer; nothing but
+    /// the window it shows over holds it, so it is freed once it closes.
+    fn turn_on_question_is_freed() {
+        let window = adw::Window::new();
+        let (to, heard) = recorder::<WindowInput>();
+        let dialog = turn_on_question(to);
+        dialog.present(Some(&window));
+        let shown = dialog.downgrade();
+        dialog.emit_by_name::<()>("response", &[&"not-now"]);
+        dialog.force_close();
+        drop(dialog);
+        assert!(
+            crate::ui::gtk_test::settle_until(std::time::Duration::from_secs(10), || shown
+                .upgrade()
+                .is_none()),
+            "the question is freed once closed"
+        );
+        // People's answer, then (forced closed) the close response.
+        assert!(matches!(
+            heard.borrow().as_slice(),
+            [
+                WindowInput::Versions(VersionsInput::Answered(TurnOnAnswer::NotNow)),
+                WindowInput::Versions(VersionsInput::Answered(TurnOnAnswer::Later)),
+            ]
+        ));
+        window.destroy();
+    }
+
     #[test]
     fn answers_are_read_from_the_dialog_s_responses() {
         assert_eq!(TurnOnAnswer::from_response("turn-on"), TurnOnAnswer::TurnOn);
@@ -1367,8 +1677,7 @@ mod tests {
         };
         let builder = Window::builder();
         let root = builder.widget().clone();
-        let widgets =
-            build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+        let widgets = build_widgets(&root, &application, &folder, &options).unwrap();
         let controller = builder
             .launch(WindowInit {
                 widgets,

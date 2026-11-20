@@ -65,7 +65,9 @@ use stave_ide::{
 use stave_lang::Severity;
 use stave_lang::ast::Span;
 
-use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run, SearchEvent};
+use super::editor::{
+    ConflictSettle, Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run, SearchEvent,
+};
 use super::tab_strip::PageTab;
 
 /// How long typing must pause before the names are worked out again.
@@ -308,6 +310,8 @@ pub enum FilesInput<Then> {
     ListUses(SymbolId),
     /// A lens's "show in 3D" was clicked.
     ShowIn3d(SymbolId),
+    /// A link above a conflict was clicked: the editor settles it.
+    SettleConflict(ConflictSettle),
     /// The uses panel's × was clicked.
     CloseUses,
     /// Escape in the text: closes what is open over it.
@@ -716,6 +720,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             clicks.forward(sender.input_sender().clone(), |click| match click {
                 LensClick::Uses(symbol) => FilesInput::ListUses(symbol),
                 LensClick::Show(symbol) => FilesInput::ShowIn3d(symbol),
+                LensClick::Settle(settle) => FilesInput::SettleConflict(settle),
             }),
         );
         // So does what the editor's search hears (its bar's outputs and
@@ -985,6 +990,9 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 self.show_hover(self.cursor());
             }
             FilesInput::ListUses(symbol) => self.list_uses(symbol),
+            FilesInput::SettleConflict(settle) => {
+                self.editor.settle_conflict(&settle);
+            }
             FilesInput::ShowIn3d(symbol) => {
                 if let Some(analysis) = self.analysis.clone() {
                     self.tell(FilesOutput::ShowIn3d { analysis, symbol });

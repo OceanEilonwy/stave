@@ -36,6 +36,15 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_im_module(Some("gtk-im-context-simple"));
             }
+            // One font at 96 dpi, whatever the display's settings: tests
+            // that lay widgets out at a width in sp, or measure text, read
+            // the same on the desktop the tests were written on (whose
+            // interface font this is) and on a private Broadway display,
+            // which has none of its own.
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_font_name(Some("Noto Sans 10"));
+                settings.set_gtk_xft_dpi(96 * 1024);
+            }
             // What the application puts on the display at startup that
             // the windows tests build rely on: the grips' sizes.
             if let Some(display) = gtk::gdk::Display::default() {
