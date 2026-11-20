@@ -989,6 +989,12 @@ impl Window {
                 )
             })
         };
+        // A size's change is shown by its editor in the Sizes card
+        // (`sizes.rs`), which has its own verdict, Cancel and Apply.
+        let in_sizes = self
+            .session
+            .change()
+            .is_some_and(|change| matches!(change.request(), ChangeRequest::Grip { .. }));
         let card = &self.editing.changes.card;
         let Some((words, item)) = words else {
             card.root.set_visible(false);
@@ -996,6 +1002,10 @@ impl Window {
             self.close_change_dialog();
             return false;
         };
+        if in_sizes {
+            card.root.set_visible(false);
+            return true;
+        }
         card.root.set_visible(true);
         // Gone only once the window is: nobody to tell.
         let _ = card

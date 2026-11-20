@@ -1,7 +1,6 @@
-# The divider's height dragged down past its stop: the handle is held at
-# 180mm, the range's low end is a hard red end, and the size section of
-# the Edit panel names the rule that stops it (the bottom drawer's box
-# would be too shallow).
+# The divider's height dragged down past its stop: its field is held at
+# 180mm, and the size section of the Edit panel names the rule that
+# stops it (the bottom drawer's box would be too shallow).
 grips assembly divider
 stops
 drag 1 100mm

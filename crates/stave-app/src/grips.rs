@@ -511,6 +511,18 @@ impl Lister<'_, '_, '_> {
                 });
             }
         }
+        // A top-level assembly that fills a piece of a split: the
+        // boundaries between the pieces, after its own sizes (a drawer's
+        // `drawer_bay[bottom|top]`).
+        if inst.parent.is_none()
+            && let Some(def) = model.defs.assembly(inst.def)
+            && let Some(space) = crate::spaces::filled_spaces(model, def.decl.name.as_str())
+                .first()
+                .copied()
+            && let Ok(boundaries) = split_grips(model, self.design, space)
+        {
+            out.extend(boundaries);
+        }
         Ok(out)
     }
 

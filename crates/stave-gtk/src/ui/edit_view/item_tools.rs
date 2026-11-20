@@ -33,8 +33,8 @@ use relm4::{Component, ComponentController, ComponentParts, ComponentSender};
 use stave_app::change::ChangeRequest;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::hold::Measured;
+pub(in crate::ui) use stave_app::item_offer::selected_item;
 use stave_app::item_offer::{ItemOffer, MirrorGesture, RepeatFold};
-pub(in crate::ui) use stave_app::item_offer::{piece_count, selected_item};
 use stave_app::naming::RepeatCount;
 use stave_app::session::Selection;
 use stave_lang::placement::Axis;
@@ -606,12 +606,14 @@ impl RepeatFoldShown {
         self.asked
     }
 
-    /// `true` while the count and the direction show.
+    /// `true` while the count and the direction show, for a test.
+    #[cfg(test)]
     pub(in crate::ui) fn is_open(&self) -> bool {
         self.fold == RepeatFold::Open
     }
 
-    /// The count shown.
+    /// The count shown, for a test.
+    #[cfg(test)]
     pub(in crate::ui) fn count(&self) -> usize {
         self.count
     }
@@ -905,11 +907,6 @@ impl ItemTools {
 
     /// What its count stepper shows.
     pub(in crate::ui) fn repeat_row(&self) -> &RepeatFoldShown {
-        &self.repeat_shown
-    }
-
-    /// What its repeat controls show, folded or open.
-    pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldShown {
         &self.repeat_shown
     }
 

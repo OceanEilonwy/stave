@@ -285,10 +285,10 @@ from_box() {
     cp -r "examples/$1" "$scratch/from_box"
     echo "$scratch/from_box"
 }
-# The divider's grips (its height with a round handle and its value, the
-# panel's sizes saying what they follow), the height dragged to 700mm and
-# held (ghost, verdict, range with its red stop, the panel), dragged past
-# its stop, and a value typed that doesn't fit.
+# The divider's sizes in the Edit panel (its height's field, its depth
+# locked, the panel's sizes saying what they follow), the height dragged
+# to 700mm and held (ghost, verdict, the size section), dragged past its
+# stop, and a value typed that doesn't fit.
 shot $window/grip_divider.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_divider.edit
 shot $window/grip_drag.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_drag.edit
 shot $window/grip_stop.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_stop.edit
@@ -297,7 +297,7 @@ shot $window/grip_typed_refused.png "$(from_box clothing_cabinet_from_box)" --th
 # apron's, which follows two, listing both to pick from.
 shot $window/grip_follows.png "$(from_box side_table_from_box)" --theme light --select top --edit-script $edits/grip_follows.edit
 shot $window/grip_follows_pick.png "$(from_box side_table_from_box)" --theme light --select apron_front --edit-script $edits/grip_follows_pick.edit
-# A click in the envelope: the menu and its three sizes as grips; the
+# A click in the envelope: the menu and its three sizes in the Sizes card; the
 # height made solved within a range, waiting for Apply.
 shot $window/grip_envelope.png "$(from_box clothing_cabinet_from_box)" --theme light --edit-script $edits/grip_envelope.edit
 shot $window/grip_solver.png "$(from_box clothing_cabinet_from_box)" --theme light --edit-script $edits/grip_solver.edit
