@@ -1,0 +1,5 @@
+stave 1
+
+hardware door_knob : knob(door, projection: $0
+// label: knob(piece, diameter = 30mm, projection = 28mm)
+// active: projection

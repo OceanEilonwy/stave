@@ -1,0 +1,4 @@
+stave 1
+
+param width = 1.5m$0
+// expect: mm, m

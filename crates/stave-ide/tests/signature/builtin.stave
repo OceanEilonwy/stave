@@ -1,0 +1,5 @@
+stave 1
+
+let middle = mid(base, $0)
+// label: mid(item, axis)
+// active: axis

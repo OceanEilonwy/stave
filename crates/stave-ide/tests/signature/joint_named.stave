@@ -1,0 +1,9 @@
+stave 1
+
+kind housing : joint {
+  param depth = into.thickness / 3
+}
+
+joint shelf_housing : housing(shelf, into: side, depth: $0)
+// label: housing(piece, into, depth = into.thickness / 3, glue:, methods:)
+// active: depth

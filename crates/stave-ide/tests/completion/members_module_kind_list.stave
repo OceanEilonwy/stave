@@ -1,0 +1,15 @@
+stave 1
+
+import "./shop"
+
+joint shelf_dados : dado(shelf, into: [side_l, side_r], depth: 9mm)
+hardware knob : shop.b$0
+//- shop/library.stave
+stave 1
+
+library "Shop" { }
+
+kind brass_knob : pull { }
+kind bar_handle : pull { }
+kind cup_hinge : hinge { }
+// expect: bar_handle, brass_knob

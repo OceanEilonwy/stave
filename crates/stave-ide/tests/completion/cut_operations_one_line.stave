@@ -1,0 +1,6 @@
+stave 1
+
+kind knob : pull {
+  cut hole: crossing(piece, screw) { $0 }
+}
+// expect: notch, slot, pocket, tenon, round, drill, dovetail_socket, dovetail_tail, diagonal

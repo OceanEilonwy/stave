@@ -1,0 +1,4 @@
+stave 1
+
+private kind catch : s$0
+// expect: slide, support
