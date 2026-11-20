@@ -20,13 +20,13 @@
 //! `stave_modules`, the tools from the standard library's tool kinds.
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
-use std::cell::Cell;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::gio;
-use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
+use relm4::{
+    Component, ComponentController, ComponentParts, ComponentSender, Controller, RelmWidgetExt,
+};
 use stave_app::candidates::new_project::{BoardForm, NewProject, NewStock, StockCut};
 use stave_app::change::new_project_file;
 use stave_app::editing::{parse_name, write_all};
@@ -39,7 +39,7 @@ use stave_modules::{PRELUDE_MODULES, STD_MODULES, std_files};
 use stave_schema::species::Species;
 
 use super::Window;
-use super::relm4_shim::Bridge;
+use super::update::project::ProjectInput;
 
 /// A tool kind of the standard library: its name and its title.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,22 +574,36 @@ impl Component for NewProjectComponent {
     }
 }
 
-/// The New Project dialog, behind the API its callers still use: it owns
-/// the component (dropping it shuts the component down).
+/// The New Project dialog as its owner holds it: the one owner of the
+/// component's controller (dropping it shuts the component down), its
+/// outputs forwarded at launch to where the owner said. The owner keeps
+/// it while it shows and lets it go when it hears
+/// [`NewProjectOutput::Closed`].
 pub(super) struct NewProjectDialog {
     /// The dialog.
     pub(super) dialog: adw::Dialog,
-    bridge: Bridge<NewProjectComponent>,
+    controller: Controller<NewProjectComponent>,
 }
 
 impl NewProjectDialog {
-    /// The dialog, filled with a small table's sizes and oak.
-    pub(super) fn new() -> NewProjectDialog {
-        let bridge = Bridge::<NewProjectComponent>::launch(Form::new());
+    /// The dialog, filled with a small table's sizes and oak; what it
+    /// says is made the owner's message by `map` and sent to `to`.
+    pub(super) fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(NewProjectOutput) -> X + 'static,
+    ) -> NewProjectDialog {
+        let controller = NewProjectComponent::builder()
+            .launch(Form::new())
+            .forward(to, map);
         NewProjectDialog {
-            dialog: bridge.widget().clone(),
-            bridge,
+            dialog: controller.widget().clone(),
+            controller,
         }
+    }
+
+    /// Shows the dialog over `parent`.
+    pub(super) fn present(&self, parent: &impl IsA<gtk::Widget>) {
+        self.dialog.present(Some(parent));
     }
 
     /// What the fields hold.
@@ -601,7 +615,7 @@ impl NewProjectDialog {
         )
     )]
     pub(super) fn answers(&self) -> Answers {
-        self.bridge.model().form.answers()
+        self.controller.model().form.answers()
     }
 }
 
@@ -626,10 +640,19 @@ impl Window {
     /// Asks for a new project and, once it is written, opens it in this
     /// window (once unsaved changes are dealt with).
     pub(super) fn ask_new_project(&mut self) {
-        let input = self.input();
-        ask(self.widgets.window.upcast_ref(), move |folder| {
-            input.emit(super::update::project::ProjectInput::NewProjectWritten(folder).into());
+        // One at a time: the dialog showing is the one people answer.
+        if self.state.new_project.is_some() {
+            return;
+        }
+        let dialog = NewProjectDialog::new(self.sender.input_sender(), |output| {
+            match output {
+                NewProjectOutput::Created(folder) => ProjectInput::NewProjectWritten(folder),
+                NewProjectOutput::Closed => ProjectInput::NewProjectClosed,
+            }
+            .into()
         });
+        dialog.present(&self.widgets.window);
+        self.state.new_project = Some(dialog);
     }
 
     /// A project just made: the envelope lit as the first space to click.
@@ -639,28 +662,13 @@ impl Window {
     }
 }
 
-/// Asks for a new project over `parent` and writes it; `created` gets the
-/// folder it was written into.
-pub(super) fn ask(parent: &gtk::Window, created: impl Fn(PathBuf) + 'static) {
-    let form = NewProjectDialog::new();
-    let dialog = form.dialog.clone();
-    // Nothing else owns the dialog while it shows, so its own output
-    // callback keeps it until it says it has closed, and then lets it go
-    // (which shuts the component down).
-    let open: Rc<Cell<Option<NewProjectDialog>>> = Rc::default();
-    let keep = Rc::clone(&open);
-    form.bridge.connect(move |output| match output {
-        NewProjectOutput::Created(folder) => created(folder),
-        NewProjectOutput::Closed => drop(keep.take()),
-    });
-    open.set(Some(form));
-    dialog.present(Some(parent));
-}
-
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle};
 
     /// The dialog's buttons, by their words.
     fn button(widget: &gtk::Widget, words: &str) -> Option<gtk::Button> {
@@ -688,10 +696,11 @@ mod tests {
     /// next runs: the dialog, its fields and the model's runtime are
     /// freed.
     fn dialog_is_freed() {
-        let form = NewProjectDialog::new();
+        let (to, _heard) = recorder();
+        let form = NewProjectDialog::new(&to, |output| output);
         let dialog = form.dialog.downgrade();
-        let title = form.bridge.model().form.title.downgrade();
-        let input = form.bridge.sender().clone();
+        let title = form.controller.model().form.title.downgrade();
+        let input = form.controller.sender().clone();
         settle();
         assert!(dialog.upgrade().is_some(), "the dialog lives while held");
         drop(form);
@@ -709,11 +718,22 @@ mod tests {
         on_gtk_thread(asked_dialog_is_freed_once_closed);
     }
 
-    /// Nothing else owns the dialog `ask` shows: it keeps itself while it
-    /// shows, and lets itself go once it has closed.
+    /// The owner keeps the dialog while it shows and lets it go when the
+    /// dialog says it has closed (as the window and the start page do):
+    /// then it is freed.
     fn asked_dialog_is_freed_once_closed() {
         let window = adw::Window::new();
-        ask(window.upcast_ref(), |_| {});
+        let owned: Rc<RefCell<Option<NewProjectDialog>>> = Rc::default();
+        let owner = Rc::clone(&owned);
+        let to = listener(move |output| {
+            if output == NewProjectOutput::Closed {
+                owner.replace(None);
+            }
+        });
+        let form = NewProjectDialog::new(&to, |output| output);
+        drop(to);
+        form.present(&window);
+        owned.replace(Some(form));
         let Some(dialog) = window.visible_dialog() else {
             panic!("the dialog shows over the window");
         };
@@ -738,10 +758,8 @@ mod tests {
     /// the main loop runs, and a choice of folder made meanwhile (as the
     /// file chooser's answer would be) is handled in order after it.
     fn create_is_queued() {
-        let form = NewProjectDialog::new();
-        let heard = Rc::new(Cell::new(0));
-        let count = Rc::clone(&heard);
-        form.bridge.connect(move |_| count.set(count.get() + 1));
+        let (to, heard) = recorder();
+        let form = NewProjectDialog::new(&to, |output| output);
         // A dialog not yet presented holds its content apart.
         let Some(create) = form
             .dialog
@@ -751,28 +769,34 @@ mod tests {
             panic!("the dialog has a Create button");
         };
         create.emit_clicked();
-        assert_eq!(form.bridge.model().error, None, "the press is only queued");
+        assert_eq!(
+            form.controller.model().error,
+            None,
+            "the press is only queued"
+        );
         settle();
         assert_eq!(
-            form.bridge.model().error.as_deref(),
+            form.controller.model().error.as_deref(),
             Some("Choose a folder to write the project into")
         );
         // Copied out first: no borrow is held while GTK runs.
-        let title = form.bridge.model().form.title.clone();
+        let title = form.controller.model().form.title.clone();
         title.set_text("  ");
         create.emit_clicked();
-        form.bridge
+        let _ = form
+            .controller
+            .sender()
             .send(NewProjectInput::FolderChosen(PathBuf::from("/nowhere")));
         settle();
         assert_eq!(
-            form.bridge.model().error.as_deref(),
+            form.controller.model().error.as_deref(),
             Some("Give the project a name"),
             "Create was handled before the folder came"
         );
         assert_eq!(
-            form.bridge.model().folder.as_deref(),
+            form.controller.model().folder.as_deref(),
             Some(std::path::Path::new("/nowhere"))
         );
-        assert_eq!(heard.get(), 0, "nothing was created or closed");
+        assert!(heard.borrow().is_empty(), "nothing was created or closed");
     }
 }

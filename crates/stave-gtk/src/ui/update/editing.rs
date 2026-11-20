@@ -4,12 +4,11 @@
 //! `edit_view` files; this group turns their widgets' outputs into
 //! [`EditingInput`]s and hands each to its handler.
 
-use super::Unprinted;
 use crate::ui::edit_card::CardAction;
 use crate::ui::edit_view::changes::ChangeAction;
 use crate::ui::edit_view::grip_panel::PanelAction;
 use crate::ui::edit_view::hold::HoldCardOutput;
-use crate::ui::edit_view::item_tools::ItemToolsOutput;
+use crate::ui::edit_view::item_tools::{ItemToolsOutput, RepeatFoldOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 use stave_app::edit::Declaration;
@@ -54,7 +53,7 @@ pub(in crate::ui) enum EditingInput {
         budget: Duration,
     },
     /// An option's fit was found on the worker thread.
-    OptionFitFound(Unprinted<Box<FoundFit>>),
+    OptionFitFound(Box<FoundFit>),
     /// An option was chosen in the search dialog.
     OptionChosen {
         /// The setting.
@@ -78,16 +77,19 @@ pub(in crate::ui) enum EditingInput {
     HoldCard(HoldCardOutput),
     /// The item's tools asked for something.
     ItemTools(ItemToolsOutput),
-    /// The item's repeat row was unfolded.
-    ItemRepeatUnfolded,
+    /// The item's repeat controls said something.
+    ItemRepeat(RepeatFoldOutput),
     /// The card's repeat row was unfolded.
     CardRepeatUnfolded,
-    /// A repeat count or direction changed.
-    RepeatChanged {
+    /// People changed the count or direction on the candidate's card.
+    CardRepeatChanged {
         /// How many.
         count: usize,
         /// Along which axis.
         axis: Axis,
+        /// How many counts the window had shown the stepper when people
+        /// changed it (a later one replaces the change).
+        shows: u64,
     },
     /// The repeat count's handle was pressed here.
     CountDragBegun {
@@ -136,7 +138,7 @@ pub(in crate::ui) enum EditingInput {
     /// Lists the grips shown again.
     RelistGrips,
     /// A grip's stops were found on the worker thread.
-    GripStopsFound(Unprinted<Box<FoundStops>>),
+    GripStopsFound(Box<FoundStops>),
     /// A grip's number was clicked: it turns into an entry.
     OpenGripEntry(usize),
     /// A value was typed into a grip's entry.
@@ -200,11 +202,11 @@ impl From<EditingInput> for WindowInput {
     }
 }
 
-/// Puts the editing widgets over the 3D view and wires them (and the
-/// Details panel's links) to [`EditingInput`]s.
+/// Puts the editing widgets over the 3D view and wires them to
+/// [`EditingInput`]s. The Details panel's links come as the inspector's
+/// outputs (`update/selection.rs`).
 pub(in crate::ui) fn wire(window: &mut Window) {
     window.connect_editing();
-    window.connect_links(&window.widgets.inspector.links);
 }
 
 impl Window {
@@ -227,7 +229,7 @@ impl Window {
             EditingInput::CheckMenuStep { generation, budget } => {
                 self.check_menu_step(generation, budget);
             }
-            EditingInput::OptionFitFound(Unprinted(found)) => {
+            EditingInput::OptionFitFound(found) => {
                 let events = self.session.option_fit_found(*found);
                 self.handle(events);
             }
@@ -240,13 +242,10 @@ impl Window {
             EditingInput::HoldFromSpace => self.hold_from_space(),
             EditingInput::HoldCard(output) => self.hold_card_asked(output),
             EditingInput::ItemTools(output) => self.item_tools_asked(output),
-            EditingInput::ItemRepeatUnfolded => self.update_item_tools(),
-            EditingInput::CardRepeatUnfolded => {
-                self.update_repeat_row();
-                self.request_render();
-            }
-            EditingInput::RepeatChanged { count, axis } => {
-                self.repeat_selected(count, Some(axis));
+            EditingInput::ItemRepeat(output) => self.item_repeat_heard(output),
+            EditingInput::CardRepeatUnfolded => self.card_repeat_unfolded(),
+            EditingInput::CardRepeatChanged { count, axis, shows } => {
+                self.card_repeat_changed(count, axis, shows);
             }
             EditingInput::CountDragBegun { x, y } => self.count_drag_begin(x, y),
             EditingInput::CountDragged { x, y } => self.count_drag_update(x, y),
@@ -264,7 +263,7 @@ impl Window {
             EditingInput::GripPanel(action) => self.grip_panel_asked(action),
             EditingInput::ShowGrips(wanted) => self.show_grips(wanted),
             EditingInput::RelistGrips => self.relist_grips(),
-            EditingInput::GripStopsFound(Unprinted(found)) => {
+            EditingInput::GripStopsFound(found) => {
                 let events = self.session.grip_stops_found(*found);
                 self.handle(events);
             }

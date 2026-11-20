@@ -13,13 +13,12 @@
 //! people's presses as [`FocusPanelOutput`]s.
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::focus::{self, Focus};
 use stave_app::i18n::{fill_in, tr};
 use stave_app::session::SourceLocation;
 
 use super::icons::{self, PathIcon};
-use super::relm4_shim::Bridge;
 use super::style::CODE;
 
 fn label(classes: &[&str]) -> gtk::Label {
@@ -469,9 +468,9 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
     }
 }
 
-/// Focus mode's side panel. It owns the component: dropping it shuts the
-/// component down. Setters are queued; the window hears people's presses
-/// as [`FocusPanelOutput`]s.
+/// Focus mode's side panel. It owns the component's controller: dropping
+/// it shuts the component down. Setters are queued; people's presses go
+/// to the owner as [`FocusPanelOutput`]s, forwarded at launch.
 pub struct FocusPanel {
     /// The panel, ready to put in the side panel.
     pub root: gtk::Box,
@@ -487,12 +486,16 @@ pub struct FocusPanel {
     /// Fades the other parts.
     #[cfg(test)]
     pub(in crate::ui) fade: gtk::CheckButton,
-    bridge: Bridge<FocusPanelComponent>,
+    controller: Controller<FocusPanelComponent>,
 }
 
 impl FocusPanel {
-    /// An empty, hidden panel.
-    pub fn new() -> FocusPanel {
+    /// An empty, hidden panel, people's presses made the owner's messages
+    /// by `map` and sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(FocusPanelOutput) -> X + 'static,
+    ) -> FocusPanel {
         let done = gtk::Button::builder()
             .child(&PathIcon::new(icons::CLOSE, 12))
             .tooltip_text(tr("Leave focus mode (Esc)"))
@@ -505,14 +508,16 @@ impl FocusPanel {
             check(&tr("Tint cut faces")),
             check(&tr("Fade other parts")),
         );
-        let bridge = Bridge::<FocusPanelComponent>::launch(FocusPanelInit {
-            done: done.clone(),
-            xray: xray.clone(),
-            tint: tint.clone(),
-            fade: fade.clone(),
-        });
+        let controller = FocusPanelComponent::builder()
+            .launch(FocusPanelInit {
+                done: done.clone(),
+                xray: xray.clone(),
+                tint: tint.clone(),
+                fade: fade.clone(),
+            })
+            .forward(to, map);
         FocusPanel {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             #[cfg(test)]
             done,
             #[cfg(test)]
@@ -521,26 +526,24 @@ impl FocusPanel {
             tint,
             #[cfg(test)]
             fade,
-            bridge,
+            controller,
         }
     }
 
-    /// Calls `callback` with each of people's presses from now on, instead
-    /// of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(FocusPanelOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the panel has gone there is nothing to show.
+    fn send(&self, input: FocusPanelInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Shows a focus, or hides the panel (`None`).
     pub fn show(&self, focus: Option<&Focus>) {
-        self.bridge
-            .send(FocusPanelInput::Show(focus.cloned().map(Box::new)));
+        self.send(FocusPanelInput::Show(focus.cloned().map(Box::new)));
     }
 
     /// Shows focus mode's options on the X-ray, Tint and Fade checks,
     /// without calling back.
     pub fn show_options(&self, options: focus::Options) {
-        self.bridge.send(FocusPanelInput::ShowOptions(options));
+        self.send(FocusPanelInput::ShowOptions(options));
     }
 }
 
@@ -583,7 +586,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle};
 
     /// Focus on the stool's rung sockets, as the window opens it.
     fn socket_focus() -> Focus {
@@ -613,7 +616,21 @@ mod tests {
     /// click handler; now the click is a message, the model knows the
     /// place, and the window hears it after the update.
     fn panel_link() {
-        let panel = Rc::new(FocusPanel::new());
+        let shared: Rc<RefCell<Option<std::rc::Weak<FocusPanel>>>> = Rc::default();
+        let heard: Rc<RefCell<Vec<SourceLocation>>> = Rc::default();
+        let (log, weak) = (Rc::clone(&heard), Rc::clone(&shared));
+        let to = listener(move |output| {
+            let FocusPanelOutput::Source(location) = output else {
+                return;
+            };
+            log.borrow_mut().push(location);
+            if let Some(panel) = weak.borrow().as_ref().and_then(std::rc::Weak::upgrade) {
+                // The window leaving focus from inside its handler.
+                panel.show(None);
+            }
+        });
+        let panel = Rc::new(FocusPanel::new(&to, |output| output));
+        shared.replace(Some(Rc::downgrade(&panel)));
         let focus = socket_focus();
         let Some(location) = focus
             .insert
@@ -622,24 +639,11 @@ mod tests {
         else {
             panic!("a socket's kind is written somewhere");
         };
-        let heard: Rc<RefCell<Vec<SourceLocation>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&panel);
-        panel.connect_outputs(move |output| {
-            let FocusPanelOutput::Source(location) = output else {
-                return;
-            };
-            log.borrow_mut().push(location);
-            if let Some(panel) = weak.upgrade() {
-                // The window leaving focus from inside its callback.
-                panel.show(None);
-            }
-        });
         panel.show(Some(&focus));
         assert!(!panel.root.is_visible(), "show is queued");
         settle();
         assert!(panel.root.is_visible());
-        let link = panel.bridge.model().insert_location.clone();
+        let link = panel.controller.model().insert_location.clone();
         assert_eq!(link.as_ref(), Some(&location));
         // The link button is the last child of the insert section's head.
         let Some(button) = std::iter::successors(panel.root.first_child(), |widget| {
@@ -678,15 +682,16 @@ mod tests {
     }
 
     fn panel_controls() {
-        let panel = FocusPanel::new();
         let heard: Rc<RefCell<Vec<FocusPanelOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        panel.connect_outputs(move |output| {
+        let to = listener(move |output| {
             let _ = &held;
             log.borrow_mut().push(output);
         });
+        let panel = FocusPanel::new(&to, |output| output);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         panel.done.emit_clicked();
@@ -706,7 +711,7 @@ mod tests {
         );
         let root = panel.root.downgrade();
         let done = panel.done.downgrade();
-        let input = panel.bridge.sender().clone();
+        let input = panel.controller.sender().clone();
         drop(panel);
         settle();
         assert!(root.upgrade().is_none(), "the panel is freed");
@@ -724,10 +729,8 @@ mod tests {
     /// blocked, so it never hears its own setting as people's change; the
     /// last of several in one turn wins.
     fn show_options_sets_checks() {
-        let panel = FocusPanel::new();
-        let heard: Rc<RefCell<Vec<FocusPanelOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        panel.connect_outputs(move |output| log.borrow_mut().push(output));
+        let (to, heard) = recorder();
+        let panel = FocusPanel::new(&to, |output| output);
         panel.xray.set_active(false);
         panel.fade.set_active(false);
         settle();

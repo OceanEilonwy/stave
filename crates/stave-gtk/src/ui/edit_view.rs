@@ -58,7 +58,6 @@ use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearc
 use super::update::editing::EditingInput;
 use super::{EDGE, Window, WindowInput};
 use crate::render::{Backdrop, Frame, Ticket};
-use crate::ui::update::Unprinted;
 use relm4::{Component, ComponentController, Controller};
 
 /// How long one step of the menu's check runs before the window draws
@@ -155,8 +154,9 @@ struct GhostView {
 }
 
 impl EditView {
-    /// The widgets, hidden until an edit starts. The menu's and the
-    /// card's outputs go to the window's input as [`EditingInput`]s.
+    /// The widgets, hidden until an edit starts. The outputs of the menu,
+    /// the card, the change's card and dialog, the hold card and the
+    /// item's tools go to the window's input as [`EditingInput`]s.
     pub(super) fn new(input: &relm4::Sender<WindowInput>) -> EditView {
         let menu = EditMenuComponent::builder()
             .launch(())
@@ -177,13 +177,14 @@ impl EditView {
             .margin_bottom(16)
             .visible(false)
             .build();
-        let changes = changes::Changes::new();
-        let hold = hold::Hold::new();
+        let changes = changes::Changes::new(input);
+        let hold = hold::Hold::new(input);
         let panel = EditPanel::new(&[
             card.widget().upcast_ref(),
             changes.card.root.upcast_ref(),
-            hold.card.root.upcast_ref(),
+            hold.card.widget().upcast_ref(),
         ]);
+        let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
             card,
@@ -197,12 +198,12 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            grips: grips::GripView::new(),
+            grips: grips::GripView::new(input),
             state: EditState::default(),
             changes,
-            tools: item_tools::ItemTools::new(),
+            tools: item_tools::ItemTools::new(input),
             hold,
-            repeats: repeat_handles::Repeats::new(),
+            repeats,
             pending: editor_link::PendingPanel::new(),
             pending_marked: None,
             verbs: Vec::new(),
@@ -527,7 +528,6 @@ impl Window {
         self.connect_item_tools();
         self.connect_hold();
         self.connect_repeats();
-        self.connect_editor_link();
 
         // The menu's and the card's outputs were forwarded to the window
         // when they were launched (`EditView::new`).
@@ -913,7 +913,7 @@ impl Window {
         match event {
             EditEvent::Started => {
                 self.stop_options_check();
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 let generation = {
                     let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
@@ -930,7 +930,7 @@ impl Window {
             EditEvent::MenuChanged => self.refresh_edit(),
             EditEvent::Chosen => {
                 // Another candidate: "Repeat…" is asked for again.
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 self.update_ghost();
                 self.refresh_edit();
                 self.start_options_check();
@@ -1223,7 +1223,7 @@ impl Window {
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
                 if input
-                    .send(EditingInput::OptionFitFound(Unprinted(Box::new(found))).into())
+                    .send(EditingInput::OptionFitFound(Box::new(found)).into())
                     .is_err()
                 {
                     return;

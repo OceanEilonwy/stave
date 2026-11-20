@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::empty::Note;
 use stave_app::focus::Target;
 use stave_app::i18n::{fill_in, ntr, tr};
@@ -46,9 +46,8 @@ use stave_app::inspect::{
 use stave_app::session::{Selection, SourceLocation};
 use stave_lang::Severity;
 
-use super::focus_panel::FocusPanel;
+use super::focus_panel::{FocusPanel, FocusPanelOutput};
 use super::icons;
-use super::relm4_shim::Bridge;
 use super::sections::{self, LinkHandlers};
 use super::style::CODE;
 
@@ -87,9 +86,9 @@ impl Page {
 
 /// The inspector's state.
 pub struct InspectorComponent {
-    /// Where the name links it draws report clicks and hovers. The links
-    /// are built by `sections`, which isn't a component yet.
-    links: LinkHandlers,
+    /// Where the name links it draws report clicks and hovers: its own
+    /// input.
+    links: LinkHandlers<InspectorInput>,
     /// The page showing.
     page: Page,
     /// What to say when there is nothing to select.
@@ -103,8 +102,6 @@ pub struct InspectorComponent {
 pub struct InspectorInit {
     /// Focus mode's panel, shown on the focus page.
     pub focus: gtk::Box,
-    /// Where the name links it draws report clicks and hovers.
-    pub links: LinkHandlers,
 }
 
 /// What the inspector is told.
@@ -126,6 +123,8 @@ pub enum InspectorInput {
     SourceClicked(SourceLocation),
     /// People clicked something that selects or lights a target.
     Click(LinkTarget),
+    /// The pointer entered a name link (`Some`) or left it.
+    Hover(Option<LinkTarget>),
 }
 
 /// What the inspector tells its owner.
@@ -137,6 +136,9 @@ pub enum InspectorOutput {
     Source(SourceLocation),
     /// Select or light this target, as a link does.
     Link(LinkTarget),
+    /// The pointer is on a name link that names this (`Some`), or left
+    /// it: light what it names.
+    Hover(Option<LinkTarget>),
 }
 
 #[relm4::component(pub)]
@@ -202,12 +204,16 @@ impl Component for InspectorComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         sections::install_style();
-        let InspectorInit { focus, links } = init;
+        let InspectorInit { focus } = init;
         let model = InspectorComponent {
-            links,
+            links: LinkHandlers::new(
+                sender.input_sender().clone(),
+                InspectorInput::Click,
+                InspectorInput::Hover,
+            ),
             page: Page::Empty,
             idle: None,
             unsaved: BTreeSet::new(),
@@ -260,6 +266,7 @@ impl Component for InspectorComponent {
             InspectorInput::FocusAsked(target) => Some(InspectorOutput::Focus(target)),
             InspectorInput::SourceClicked(location) => Some(InspectorOutput::Source(location)),
             InspectorInput::Click(target) => Some(InspectorOutput::Link(target)),
+            InspectorInput::Hover(target) => Some(InspectorOutput::Hover(target)),
         };
         if let Some(output) = output {
             // Nobody listening is not a mistake: the owner may not want
@@ -330,9 +337,9 @@ fn fill_note(container: &gtk::Box, note: &Note) {
 }
 
 /// Draws an inspection's details. Its buttons only send the inspector
-/// messages; its name links report to the link handlers.
+/// messages, and so do its name links.
 struct Drawer<'a> {
-    links: &'a LinkHandlers,
+    links: &'a LinkHandlers<InspectorInput>,
     sender: &'a ComponentSender<InspectorComponent>,
     unsaved: &'a BTreeSet<PathBuf>,
 }
@@ -616,10 +623,10 @@ fn clear(container: &gtk::Box) {
     }
 }
 
-/// The inspector panel: it owns the component (dropping it shuts the
-/// component down), passes its setters on as [`InspectorInput`] messages
-/// and its [`InspectorOutput`]s to the callback connected with
-/// [`Inspector::connect_outputs`].
+/// The inspector panel: it owns the component's controller and focus
+/// mode's panel (dropping it shuts both down) and passes its setters on as
+/// [`InspectorInput`] messages; its [`InspectorOutput`]s and the focus
+/// panel's [`FocusPanelOutput`]s go where the owner said when it made it.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
@@ -628,57 +635,58 @@ pub struct Inspector {
     pub root: gtk::Stack,
     /// Focus mode's panel.
     pub focus: FocusPanel,
-    /// Where the links it draws report clicks and hovers.
-    pub links: LinkHandlers,
-    bridge: Bridge<InspectorComponent>,
+    controller: Controller<InspectorComponent>,
 }
 
 impl Inspector {
-    /// An empty inspector.
-    pub fn new() -> Inspector {
-        let focus = FocusPanel::new();
-        let links = LinkHandlers::default();
-        let bridge = Bridge::<InspectorComponent>::launch(InspectorInit {
-            focus: focus.root.clone(),
-            links: links.clone(),
-        });
+    /// An empty inspector. People's clicks (a row asking for focus mode,
+    /// the file:line link, a problem's link, a name link and the pointer on
+    /// one) are made the owner's messages by `map`, focus mode's panel's
+    /// presses by `focus_map`, and sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(InspectorOutput) -> X + 'static,
+        focus_map: impl Fn(FocusPanelOutput) -> X + 'static,
+    ) -> Inspector {
+        let focus = FocusPanel::new(to, focus_map);
+        let controller = InspectorComponent::builder()
+            .launch(InspectorInit {
+                focus: focus.root.clone(),
+            })
+            .forward(to, map);
         Inspector {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             focus,
-            links,
-            bridge,
+            controller,
         }
     }
 
-    /// Calls `callback` with each of people's clicks from now on (a row
-    /// asking for focus mode, the file:line link, a problem's link),
-    /// instead of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(InspectorOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the panel has gone there is nothing to show.
+    fn send(&self, input: InspectorInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// The files with changes that aren't saved, for the ● after the
     /// file:line link of the inspections shown from now on.
     pub fn show_unsaved(&self, unsaved: BTreeSet<PathBuf>) {
-        self.bridge.send(InspectorInput::Unsaved(unsaved));
+        self.send(InspectorInput::Unsaved(unsaved));
     }
 
     /// Shows focus mode's panel (it fills itself).
     pub fn show_focus(&self) {
-        self.bridge.send(InspectorInput::ShowFocus);
+        self.send(InspectorInput::ShowFocus);
     }
 
     /// Sets what to say when nothing is selected because there is nothing
     /// to select (`None`: the usual "Nothing selected" hint), and shows it
     /// if nothing is shown.
     pub fn show_idle(&self, note: Option<Note>) {
-        self.bridge.send(InspectorInput::ShowIdle(note));
+        self.send(InspectorInput::ShowIdle(note));
     }
 
     /// Shows an inspection, or the hint when nothing is selected.
     pub fn show(&self, inspection: Option<&Inspection>) {
-        self.bridge
-            .send(InspectorInput::Show(inspection.cloned().map(Box::new)));
+        self.send(InspectorInput::Show(inspection.cloned().map(Box::new)));
     }
 }
 
@@ -690,7 +698,13 @@ mod tests {
     use stave_app::session::LineNumber;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle};
+
+    /// An inspector whose outputs go to `to` (focus mode's panel's are
+    /// dropped), as the window's go to its input.
+    fn inspector_to(to: &relm4::Sender<InspectorOutput>) -> Inspector {
+        Inspector::new(to, |output| output, |_| InspectorOutput::Hover(None))
+    }
 
     #[test]
     fn problems_are_counted_in_words() {
@@ -748,17 +762,18 @@ mod tests {
     /// loop next runs: the panel, the model (and its runtime) and the
     /// callbacks are all freed.
     fn inspector_is_freed() {
-        let inspector = Inspector::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        inspector.connect_outputs(move |_| {
+        let to = listener(move |_: InspectorOutput| {
             let _ = &held;
         });
+        let inspector = inspector_to(&to);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         inspector.show(inspection().as_ref());
         let root = inspector.root.downgrade();
-        let input = inspector.bridge.sender().clone();
+        let input = inspector.controller.sender().clone();
         settle();
         assert!(root.upgrade().is_some(), "the panel lives while held");
         drop(inspector);
@@ -777,10 +792,8 @@ mod tests {
     }
 
     fn setters_do_not_call_back() {
-        let inspector = Inspector::new();
-        let calls = Rc::new(RefCell::new(0));
-        let counted = Rc::clone(&calls);
-        inspector.connect_outputs(move |_| *counted.borrow_mut() += 1);
+        let (to, heard) = recorder();
+        let inspector = inspector_to(&to);
         let page = |inspector: &Inspector| inspector.root.visible_child_name();
 
         inspector.show(inspection().as_ref());
@@ -801,7 +814,7 @@ mod tests {
         }));
         settle();
         assert_eq!(page(&inspector).as_deref(), Some("note"));
-        assert_eq!(*calls.borrow(), 0, "setters never call back");
+        assert!(heard.borrow().is_empty(), "setters never call back");
     }
 
     #[test]
@@ -815,7 +828,34 @@ mod tests {
     /// returned, and a click fired from inside the callback is queued
     /// too. The ● comes from the unsaved files the window sent.
     fn clicks_are_queued() {
-        let inspector = Rc::new(Inspector::new());
+        let shared: Rc<RefCell<std::rc::Weak<Inspector>>> = Rc::default();
+        let link_shared: Rc<RefCell<Option<gtk::Button>>> = Rc::default();
+        let heard: Rc<RefCell<Vec<(u32, bool)>>> = Rc::default();
+        let (log, weak, inner) = (
+            Rc::clone(&heard),
+            Rc::clone(&shared),
+            Rc::clone(&link_shared),
+        );
+        let to = listener(move |output| {
+            let InspectorOutput::Source(location) = output else {
+                return;
+            };
+            let Some(inspector) = weak.borrow().upgrade() else {
+                return;
+            };
+            let first = log.borrow().is_empty();
+            if first {
+                // A click from in here is only queued, as is a setter.
+                if let Some(link) = inner.borrow().as_ref() {
+                    link.emit_clicked();
+                }
+                inspector.show_focus();
+            }
+            let focus = inspector.root.visible_child_name().as_deref() == Some("focus");
+            log.borrow_mut().push((location.line.get(), focus));
+        });
+        let inspector = Rc::new(inspector_to(&to));
+        shared.replace(Rc::downgrade(&inspector));
         inspector.show_unsaved(BTreeSet::from([PathBuf::from("doors.stave")]));
         inspector.show(inspection().as_ref());
         settle();
@@ -828,33 +868,14 @@ mod tests {
         };
         assert!(
             inspector
-                .bridge
+                .controller
                 .model()
                 .unsaved
                 .contains(Path::new("doors.stave")),
             "the unsaved files the window sent are kept"
         );
 
-        let heard: Rc<RefCell<Vec<(u32, bool)>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&inspector);
-        let inner = link.clone();
-        inspector.connect_outputs(move |output| {
-            let InspectorOutput::Source(location) = output else {
-                return;
-            };
-            let Some(inspector) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            if first {
-                // A click from in here is only queued, as is a setter.
-                inner.emit_clicked();
-                inspector.show_focus();
-            }
-            let focus = inspector.root.visible_child_name().as_deref() == Some("focus");
-            log.borrow_mut().push((location.line.get(), focus));
-        });
+        link_shared.replace(Some(link.clone()));
 
         link.emit_clicked();
         assert!(heard.borrow().is_empty(), "the click is only queued");
@@ -863,6 +884,59 @@ mod tests {
             *heard.borrow(),
             vec![(9, false), (9, true)],
             "each output after its update, the inner click after the first"
+        );
+    }
+
+    #[test]
+    fn a_name_links_click_and_hover_are_the_inspectors_outputs() {
+        on_gtk_thread(name_links_report);
+    }
+
+    /// A name link the inspector draws sends its click and the pointer's
+    /// entering and leaving to the inspector, which tells its owner:
+    /// `Link` for the click, `Hover` for the pointer.
+    fn name_links_report() {
+        let (to, heard) = recorder();
+        let inspector = inspector_to(&to);
+        let target = LinkTarget::Select(Selection::Problem(stave_app::session::ProblemIndex(0)));
+        let mut shown = inspection().expect("an inspection");
+        shown.rows.push(Field {
+            label: "Joined to",
+            value: "rail[top]".to_owned(),
+            links: vec![stave_app::inspect::NameLink {
+                name: "rail[top]".to_owned(),
+                target: target.clone(),
+            }],
+        });
+        inspector.show(Some(&shown));
+        settle();
+        let details = inspector.root.upcast_ref::<gtk::Widget>().clone();
+        let Some(link) = buttons(&details)
+            .into_iter()
+            .find(|button| button.has_css_class("stave-name-link"))
+        else {
+            panic!("the row's value is a name link");
+        };
+        let Some(motion) = link
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|controller| controller.downcast::<gtk::EventControllerMotion>().ok())
+        else {
+            panic!("the link watches the pointer");
+        };
+        motion.emit_by_name::<()>("enter", &[&1.0_f64, &1.0_f64]);
+        link.emit_clicked();
+        motion.emit_by_name::<()>("leave", &[]);
+        assert!(heard.borrow().is_empty(), "only queued");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                InspectorOutput::Hover(Some(target.clone())),
+                InspectorOutput::Link(target),
+                InspectorOutput::Hover(None),
+            ]
         );
     }
 }

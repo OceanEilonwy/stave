@@ -306,14 +306,12 @@ pub(in crate::ui) fn wire(window: &mut Window) {
 
     // Delete anywhere in the window but a text field. Whether there is
     // something to remove is decided at once, as before relm4: from the
-    // copy the window keeps after each message, and from the editor's
-    // analysis (while the text doesn't read Delete says so), so a Delete
-    // with nothing to remove is passed on to other widgets.
+    // window's `remove-selected` action, which the window enables after
+    // each message while there is something to remove or the text doesn't
+    // read (Delete then says why), so a Delete with nothing to do is
+    // passed on to other widgets.
     let keys = gtk::EventControllerKey::new();
     keys.set_name(Some(DELETE_KEYS));
-    let sender = input.clone();
-    let removable = Rc::clone(&window.state.removable);
-    let analysis = widgets.files.latest_analysis();
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
         let Some(root) = controller
             .widget()
@@ -330,11 +328,12 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         match key {
             // Delete removes the selection, saying first what goes.
             gdk::Key::Delete | gdk::Key::KP_Delete => {
-                let blocked = analysis
-                    .get()
-                    .is_some_and(|analysis| edit_view::block_line(&analysis).is_some());
-                if removable.get() || blocked {
-                    sender.emit(EditingInput::RemoveSelected.into());
+                let action = root
+                    .downcast_ref::<gtk::ApplicationWindow>()
+                    .and_then(|window| window.lookup_action(crate::ui::REMOVE_SELECTED))
+                    .filter(|action| action.is_enabled());
+                if let Some(action) = action {
+                    action.activate(None);
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed

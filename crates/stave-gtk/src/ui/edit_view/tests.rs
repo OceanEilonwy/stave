@@ -446,7 +446,8 @@ fn menu_and_card_on_the_session() {
     );
 
     // The New Project dialog reads its fields as a project that writes.
-    let dialog = NewProjectDialog::new();
+    let (nobody, _) = relm4::channel::<crate::ui::new_project::NewProjectOutput>();
+    let dialog = NewProjectDialog::new(&nobody, |output| output);
     let project = dialog.answers().project().unwrap();
     assert_eq!(project.title, "Hall table");
     assert_eq!(project.imports, ["std:casework", "std:frames"]);
@@ -1053,20 +1054,32 @@ fn case_card_fits() {
     assert!(!panel.update());
     assert!(panel.is_empty(), "nothing in progress: how to start");
     // The repeat controls as the window puts them: folded.
-    let fold = item_tools::RepeatFoldRow::new(1);
-    fold.place_apart(
-        &editing.slots.repeat_button_slot,
-        &editing.slots.repeat_slot,
-    );
+    let fold = item_tools::RepeatFoldComponent::builder()
+        .launch(item_tools::RepeatFoldInit {
+            least: 1,
+            apart: Some(item_tools::RepeatFoldSlots {
+                button: editing.slots.repeat_button_slot.clone(),
+                row: editing.slots.repeat_slot.clone(),
+            }),
+        })
+        .detach();
+    let mut shown = item_tools::RepeatFoldShown::new(1);
     {
         let chosen = session.edit().unwrap().chosen().unwrap();
-        fold.show(stave_app::item_offer::candidate_repeat_fold(
-            chosen.candidate(),
-            chosen.repeat(),
-            fold.asked(),
-        ));
+        let _ = fold
+            .sender()
+            .send(shown.show(stave_app::item_offer::candidate_repeat_fold(
+                chosen.candidate(),
+                chosen.repeat(),
+                shown.asked(),
+            )));
     }
+    // Drawing settles the main loop, so the fold has shown too.
     editing.draw(&session, false);
+    assert!(
+        fold.widgets().unfold_button().is_visible(),
+        "folded: Repeat… sits beside the buttons"
+    );
     assert!(panel.update());
     assert!(!panel.is_empty());
     let window = shown_in_window(panel.root.upcast_ref(), PANEL_ROOM.0, PANEL_ROOM.1);
@@ -1103,8 +1116,12 @@ fn case_card_fits() {
     assert!(add.is_mapped() && cancel.is_mapped());
     // "Repeat…" pressed: the count and the direction open above the
     // buttons, still within the panel's width.
-    assert!(fold.press());
-    fold.show(stave_app::item_offer::RepeatFold::Open);
+    assert!(shown.press());
+    let _ = fold
+        .sender()
+        .send(shown.show(stave_app::item_offer::RepeatFold::Open));
+    settle();
+    assert!(fold.widgets().row().is_visible());
     let (least, _, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
     assert!(
         least <= PANEL_ROOM.0,
@@ -1120,24 +1137,45 @@ fn repeat_is_folded_until_asked_for() {
 
 fn repeat_fold_row() {
     use stave_app::item_offer::RepeatFold;
-    let fold = item_tools::RepeatFoldRow::new(1);
     let unfolded = Rc::new(std::cell::Cell::new(0));
-    {
-        let unfolded = unfolded.clone();
-        fold.connect_unfold(move || unfolded.set(unfolded.get() + 1));
-    }
-    fold.show(RepeatFold::Hidden);
-    assert!(!fold.root.is_visible());
-    assert!(!fold.press(), "hidden: nothing to press");
-    fold.show(RepeatFold::Folded);
-    assert!(fold.unfold_button().is_visible() && !fold.row.root.is_visible());
-    assert!(!fold.asked());
-    assert!(fold.press());
-    assert!(fold.asked());
+    let heard = Rc::clone(&unfolded);
+    let fold = item_tools::RepeatFoldComponent::builder()
+        .launch(item_tools::RepeatFoldInit {
+            least: 1,
+            apart: None,
+        })
+        .connect_receiver(move |_, output| {
+            if output == item_tools::RepeatFoldOutput::Unfold {
+                heard.set(heard.get() + 1);
+            }
+        });
+    let mut shown = item_tools::RepeatFoldShown::new(1);
+    let show = |shown: &mut item_tools::RepeatFoldShown, rule| {
+        let _ = fold.sender().send(shown.show(rule));
+        settle();
+    };
+    let unfold = fold.widgets().unfold_button().clone();
+    let row = fold.widgets().row().clone();
+    show(&mut shown, RepeatFold::Hidden);
+    assert!(!fold.widget().is_visible());
+    assert!(!shown.press(), "hidden: nothing to press");
+    show(&mut shown, RepeatFold::Folded);
+    assert!(unfold.is_visible() && !row.is_visible());
+    assert!(!shown.asked());
+    // People press it: the owner hears it and marks it asked.
+    unfold.emit_clicked();
+    settle();
     assert_eq!(unfolded.get(), 1);
-    fold.show(RepeatFold::Open);
-    assert!(!fold.unfold_button().is_visible() && fold.row.root.is_visible());
-    assert!(fold.is_open());
-    fold.forget();
-    assert!(!fold.asked());
+    shown.unfolded();
+    assert!(shown.asked());
+    // A script presses it: marked at once (the owner then does what it
+    // does for a click).
+    shown.forget();
+    assert!(shown.press());
+    assert!(shown.asked());
+    show(&mut shown, RepeatFold::Open);
+    assert!(!unfold.is_visible() && row.is_visible());
+    assert!(shown.is_open());
+    shown.forget();
+    assert!(!shown.asked());
 }

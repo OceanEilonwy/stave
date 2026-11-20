@@ -27,32 +27,35 @@
 //! `pixels-above-lines` / `pixels-below-lines` makes for them.
 //!
 //! The search bar is a relm4 component, [`EditorSearch`]
-//! (docs/relm4-migration.md), owned by the editor through a `Bridge`: what
-//! it is told is queued, and its widgets only send messages. The rest of
+//! (docs/relm4-migration.md), whose controller the editor owns: what it
+//! is told is queued, and its widgets only send messages. The rest of
 //! the editor is the view of the Files page's component
 //! (`files::FilesComponent`): its model owns the [`Editor`] and only its
 //! `update` calls it, so [`Editor::show_buffer`] and [`Editor::go_to`]
 //! take effect at once inside that update, which reads the cursor straight
 //! after. The editor's own widgets only send: a lens's links call the one
 //! function given to [`Editor::new`], which sends the component a message
-//! ([`LensClick`]); Escape asks an [`EscapeProbe`] (widgets only) whether
-//! anything is open to close. Its cells are fields of that one owner,
-//! never shared out across a GTK call.
+//! ([`LensClick`]), each lens's handlers made again for the declaration it
+//! shows; Escape asks an [`EscapeProbe`] (widgets only) whether anything
+//! is open to close. Its state is plain fields of that one owner, changed
+//! only through `&mut self`; the two GObject subclasses that draw in the
+//! light or dark style read it from their own CSS class.
 
 use stave_app::i18n::{fill_in, ntr, tr};
-use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
 use gtk::subclass::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use sourceview5::prelude::*;
 use sourceview5::subclass::prelude::*;
 use stave_ide::{SymbolId, SymbolKind, TokenClass};
 use stave_lang::Severity;
 
-use super::relm4_shim::Bridge;
+/// The CSS class the text view and its gutter's marks carry in the dark
+/// style: they read it when they draw.
+const DARK_CLASS: &str = "stave-code-dark";
 
 /// The text's own spacing above and below each line: 13 px type on
 /// 23 px lines, as the design has it.
@@ -220,16 +223,16 @@ fn line_text(buffer: &gtk::TextBuffer, line: i32) -> Option<String> {
 /// brackets (`stave-light` and `stave-dark`, derived from
 /// Adwaita and Adwaita-dark), or Adwaita's own if those can't be loaded.
 fn style_scheme(dark: bool) -> Option<sourceview5::StyleScheme> {
-    thread_local! {
-        static LOADED: Cell<bool> = const { Cell::new(false) };
-    }
+    // The schemes are written and their folder searched once a process.
+    static LOADED: std::sync::Once = std::sync::Once::new();
     let manager = sourceview5::StyleSchemeManager::default();
-    if !LOADED.replace(true)
-        && let Some(folder) = write_style_schemes()
-        && let Some(folder) = folder.to_str()
-    {
-        manager.append_search_path(folder);
-    }
+    LOADED.call_once(|| {
+        if let Some(folder) = write_style_schemes()
+            && let Some(folder) = folder.to_str()
+        {
+            manager.append_search_path(folder);
+        }
+    });
     let (ours, adwaita) = if dark {
         ("stave-dark", "Adwaita-dark")
     } else {
@@ -420,9 +423,7 @@ mod imp {
     /// The strip of the gutter left of the line numbers: the accent bar of
     /// the cursor's line and a bar beside each line with a problem.
     #[derive(Default)]
-    pub struct Marks {
-        pub dark: Cell<bool>,
-    }
+    pub struct Marks;
 
     #[glib::object_subclass]
     impl ObjectSubclass for Marks {
@@ -452,7 +453,7 @@ mod imp {
             let (y, height) =
                 lines.line_yrange(line, sourceview5::GutterRendererAlignmentMode::Cell);
             let view = lines.view();
-            let dark = self.dark.get();
+            let dark = self.obj().has_css_class(DARK_CLASS);
             if lines.is_cursor(line) {
                 let accent = gtk::gdk::RGBA::parse(if dark { "#78aeed" } else { "#1c71d8" })
                     .unwrap_or(gtk::gdk::RGBA::BLUE);
@@ -487,9 +488,7 @@ mod imp {
     /// underlines itself, thicker than Pango's, in libadwaita's error and
     /// warning colours.
     #[derive(Default)]
-    pub struct CodeView {
-        pub dark: Cell<bool>,
-    }
+    pub struct CodeView;
 
     #[glib::object_subclass]
     impl ObjectSubclass for CodeView {
@@ -511,7 +510,7 @@ mod imp {
             let view = self.obj();
             let view: &gtk::TextView = view.upcast_ref();
             let table = view.buffer().tag_table();
-            let dark = self.dark.get();
+            let dark = view.has_css_class(DARK_CLASS);
             for (name, severity) in [("warning", Severity::Warning), ("error", Severity::Error)] {
                 let Some(tag) = table.lookup(name) else {
                     continue;
@@ -1158,29 +1157,27 @@ pub struct Editor {
     table: gtk::TextTagTable,
     tags: Tags,
     marks: Marks,
-    /// The search bar: it owns the component (dropping the editor shuts
-    /// it down).
-    search: Bridge<EditorSearch>,
-    dark: Cell<bool>,
+    /// The search bar: the editor owns its controller (dropping the
+    /// editor shuts it down).
+    search: Controller<EditorSearch>,
+    dark: bool,
     /// The lens rows, made as needed and kept (GTK can't take an overlay
-    /// back out of a text view, so they are hidden when not used). Shared
-    /// out (see [`Editor::lens_slots`]) rather than borrowed, so nothing
-    /// is borrowed while the rows are changed.
-    lenses: Cell<Rc<[Rc<LensSlot>]>>,
+    /// back out of a text view, so they are hidden when not used).
+    lenses: Vec<LensSlot>,
     /// How many of the lens rows are in use.
-    lenses_used: Cell<usize>,
+    lenses_used: usize,
     /// Where the peek goes, and the line it sits under while it shows.
     peek_box: gtk::Box,
-    peek_line: Cell<Option<i32>>,
+    peek_line: Option<i32>,
     /// The line and room the peek's tag was last applied for: applied
     /// again only when they change, since every change lays the text out
     /// again.
-    peek_tagged: Cell<Option<(i32, i32)>>,
+    peek_tagged: Option<(i32, i32)>,
     /// Where the hover card goes.
     card_box: gtk::Box,
-    /// Counts go-tos, so a scroll still waiting for the text's size gives
-    /// way to a newer one.
-    scroll_ticket: Rc<Cell<u64>>,
+    /// The frame callback of a go-to's scroll still waiting for the
+    /// text's size: a newer go-to removes it.
+    scroll: Option<gtk::TickCallbackId>,
     /// What a lens's links call: it sends the owner a message.
     lens: Rc<dyn Fn(LensClick)>,
 }
@@ -1232,16 +1229,6 @@ pub fn new_buffer(table: &gtk::TextTagTable, text: &str) -> gtk::TextBuffer {
     buffer.upcast()
 }
 
-/// What is in a cell, cloned out (and left there): a callback, so it may
-/// replace itself while it runs, or rows shared out rather than borrowed.
-/// Nothing is borrowed, so nothing can be borrowed twice when GTK calls
-/// back in. (Used by the finder and the option search too.)
-pub(super) fn current<T: Clone + Default>(cell: &Cell<T>) -> T {
-    let value = cell.take();
-    cell.set(value.clone());
-    value
-}
-
 /// What a lens says: "2 uses · show in 3D" above a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LensLine {
@@ -1263,8 +1250,14 @@ struct LensSlot {
     uses: gtk::Button,
     dot: gtk::Label,
     show: gtk::Button,
-    symbol: Rc<Cell<Option<SymbolId>>>,
-    line: Cell<i32>,
+    /// The gestures that claim a press on each link (`uses`, `show`).
+    presses: [gtk::GestureClick; 2],
+    /// The handlers that call the links for the declaration the row shows
+    /// now, made again each time it shows another (each captures the
+    /// declaration it calls with).
+    links: Vec<(glib::Object, glib::SignalHandlerId)>,
+    /// The line it sits above, from 0.
+    line: i32,
 }
 
 impl Editor {
@@ -1339,7 +1332,8 @@ impl Editor {
             .visible(false)
             .build();
         view.add_overlay(&card_box, 0, 0);
-        let search = Bridge::<EditorSearch>::launch(view.clone());
+        // It tells nobody anything.
+        let search = EditorSearch::builder().launch(view.clone()).detach();
         let root = gtk::Overlay::builder().child(&scrolled).build();
         root.add_overlay(search.widget());
         let editor = Editor {
@@ -1351,16 +1345,17 @@ impl Editor {
             tags,
             marks,
             search,
-            dark: Cell::new(false),
-            lenses: Cell::new(Rc::from([])),
-            lenses_used: Cell::new(0),
+            dark: false,
+            lenses: Vec::new(),
+            lenses_used: 0,
             peek_box,
-            peek_line: Cell::new(None),
-            peek_tagged: Cell::new(None),
+            peek_line: None,
+            peek_tagged: None,
             card_box,
-            scroll_ticket: Rc::new(Cell::new(0)),
+            scroll: None,
             lens: Rc::new(lens),
         };
+        let mut editor = editor;
         editor.colour(adw::StyleManager::default().is_dark());
         editor
     }
@@ -1386,29 +1381,42 @@ impl Editor {
     }
 
     /// Shows a buffer; read-only documents can't be typed in.
-    pub fn show_buffer(&self, buffer: &gtk::TextBuffer, editable: bool) {
+    pub fn show_buffer(&mut self, buffer: &gtk::TextBuffer, editable: bool) {
         self.clear_overlays();
         if let Some(source) = buffer.downcast_ref::<sourceview5::Buffer>() {
-            source.set_style_scheme(style_scheme(self.dark.get()).as_ref());
+            source.set_style_scheme(style_scheme(self.dark).as_ref());
         }
         self.view.set_buffer(Some(buffer));
         self.view.set_editable(editable);
         self.view.set_cursor_visible(true);
-        self.search.send(EditorSearchInput::BufferShown);
+        self.tell_search(EditorSearchInput::BufferShown);
         self.marks.queue_draw();
     }
 
     /// Follows the light or dark style.
-    pub fn colour(&self, dark: bool) {
-        self.dark.set(dark);
+    pub fn colour(&mut self, dark: bool) {
+        self.dark = dark;
         self.tags.colour(dark);
         if let Ok(source) = self.view.buffer().downcast::<sourceview5::Buffer>() {
             source.set_style_scheme(style_scheme(dark).as_ref());
         }
-        self.code.imp().dark.set(dark);
-        self.view.queue_draw();
-        self.marks.imp().dark.set(dark);
-        self.marks.queue_draw();
+        for widget in [
+            self.code.upcast_ref::<gtk::Widget>(),
+            self.marks.upcast_ref(),
+        ] {
+            if dark {
+                widget.add_css_class(DARK_CLASS);
+            } else {
+                widget.remove_css_class(DARK_CLASS);
+            }
+            widget.queue_draw();
+        }
+    }
+
+    /// Queues `input` for the search bar; once it has gone there is
+    /// nothing to tell.
+    fn tell_search(&self, input: EditorSearchInput) {
+        let _ = self.search.sender().send(input);
     }
 
     /// Colours a buffer by its tokens.
@@ -1504,7 +1512,7 @@ impl Editor {
     /// Opens the search bar (Ctrl+F in the text), when the main loop next
     /// runs.
     pub fn start_search(&self) {
-        self.search.send(EditorSearchInput::StartSearch);
+        self.tell_search(EditorSearchInput::StartSearch);
     }
 
     /// Finds `text` from the cursor and selects it at once, as before, so
@@ -1524,7 +1532,7 @@ impl Editor {
             context.set_highlight(false);
             select_match(&self.view, &context, true, true);
         }
-        self.search.send(EditorSearchInput::Find(text.to_owned()));
+        self.tell_search(EditorSearchInput::Find(text.to_owned()));
     }
 
     /// `true` while the search bar is open (as of the last message it
@@ -1536,18 +1544,13 @@ impl Editor {
     /// Closes the search bar and its highlights, when the main loop next
     /// runs.
     pub fn close_search(&self) {
-        self.search.send(EditorSearchInput::CloseSearch);
+        self.tell_search(EditorSearchInput::CloseSearch);
     }
 
-    fn clear_overlays(&self) {
+    fn clear_overlays(&mut self) {
         self.set_lenses(&[]);
         self.set_peek(None);
         self.hide_card();
-    }
-
-    /// The lens rows made so far, shared out of their cell.
-    fn lens_slots(&self) -> Rc<[Rc<LensSlot>]> {
-        current(&self.lenses)
     }
 
     fn lens_slot(&self) -> LensSlot {
@@ -1572,26 +1575,11 @@ impl Editor {
         root.append(&uses);
         root.append(&dot);
         root.append(&show);
-        let symbol: Rc<Cell<Option<SymbolId>>> = Rc::new(Cell::new(None));
-        let links: [(&gtk::Button, LensLink); 2] =
-            [(&uses, LensClick::Uses), (&show, LensClick::Show)];
-        for (button, click) in links {
-            let call = {
-                let symbol = symbol.clone();
-                let lens = Rc::clone(&self.lens);
-                Rc::new(move || {
-                    if let Some(symbol) = symbol.get() {
-                        lens(click(symbol));
-                    }
-                })
-            };
-            // From the keyboard.
-            let keyboard = call.clone();
-            button.connect_clicked(move |_| keyboard());
-            // A button doesn't claim the press, so the text view under the
-            // lens would take it too and start selecting text. This claims
-            // it first (which also keeps the button's own click from
-            // firing) and calls on release.
+        // A button doesn't claim the press, so the text view under the
+        // lens would take it too and start selecting text. This claims it
+        // first (which also keeps the button's own click from firing);
+        // the link is called on release ([`Editor::link_lens`]).
+        let presses = [&uses, &show].map(|button| {
             let mouse = gtk::GestureClick::builder()
                 .button(gtk::gdk::BUTTON_PRIMARY)
                 .propagation_phase(gtk::PropagationPhase::Capture)
@@ -1599,32 +1587,56 @@ impl Editor {
             mouse.connect_pressed(|gesture, _, _, _| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             });
-            mouse.connect_released(move |_, _, _, _| call());
-            button.add_controller(mouse);
-        }
+            button.add_controller(mouse.clone());
+            mouse
+        });
         self.view.add_overlay(&root, 0, 0);
         LensSlot {
             root,
             uses,
             dot,
             show,
-            symbol,
-            line: Cell::new(0),
+            presses,
+            links: Vec::new(),
+            line: 0,
+        }
+    }
+
+    /// Makes a lens row's links call for `symbol` (or nothing, `None`),
+    /// replacing the handlers it had.
+    fn link_lens(lens: &Rc<dyn Fn(LensClick)>, slot: &mut LensSlot, symbol: Option<SymbolId>) {
+        for (object, handler) in slot.links.drain(..) {
+            object.disconnect(handler);
+        }
+        let Some(symbol) = symbol else {
+            return;
+        };
+        let links: [(&gtk::Button, &gtk::GestureClick, LensLink); 2] = [
+            (&slot.uses, &slot.presses[0], LensClick::Uses),
+            (&slot.show, &slot.presses[1], LensClick::Show),
+        ];
+        for (button, press, click) in links {
+            // From the keyboard.
+            let call = Rc::clone(lens);
+            let keyboard = button.connect_clicked(move |_| call(click(symbol)));
+            slot.links.push((button.clone().upcast(), keyboard));
+            // From the mouse, on release.
+            let call = Rc::clone(lens);
+            let mouse = press.connect_released(move |_, _, _, _| call(click(symbol)));
+            slot.links.push((press.clone().upcast(), mouse));
         }
     }
 
     /// Puts a lens above each of these lines, replacing the ones there.
-    pub fn set_lenses(&self, lenses: &[LensLine]) {
+    pub fn set_lenses(&mut self, lenses: &[LensLine]) {
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.lens, &start, &end);
-        let mut slots = self.lens_slots();
-        if slots.len() < lenses.len() {
-            let made = (slots.len()..lenses.len()).map(|_| Rc::new(self.lens_slot()));
-            slots = slots.iter().cloned().chain(made).collect();
-            self.lenses.set(Rc::clone(&slots));
+        while self.lenses.len() < lenses.len() {
+            let slot = self.lens_slot();
+            self.lenses.push(slot);
         }
-        for (index, slot) in slots.iter().enumerate() {
+        for (index, slot) in self.lenses.iter_mut().enumerate() {
             match lenses.get(index) {
                 Some(lens) => {
                     slot.uses.set_label(&lens.uses);
@@ -1638,8 +1650,8 @@ impl Editor {
                     )));
                     slot.dot.set_visible(lens.shows_in_3d);
                     slot.show.set_visible(lens.shows_in_3d);
-                    slot.symbol.set(Some(lens.symbol));
-                    slot.line.set(lens.line);
+                    Self::link_lens(&self.lens, slot, Some(lens.symbol));
+                    slot.line = lens.line;
                     slot.root.set_visible(true);
                     if let Some(from) = buffer.iter_at_line(lens.line) {
                         let mut to = from;
@@ -1649,32 +1661,32 @@ impl Editor {
                 }
                 None => {
                     slot.root.set_visible(false);
-                    slot.symbol.set(None);
+                    Self::link_lens(&self.lens, slot, None);
                 }
             }
         }
-        self.lenses_used.set(lenses.len());
+        self.lenses_used = lenses.len();
         self.place_overlays();
     }
 
     /// Shows a peek under a line (from 0), or none.
-    pub fn set_peek(&self, peek: Option<(gtk::Widget, i32)>) {
+    pub fn set_peek(&mut self, peek: Option<(gtk::Widget, i32)>) {
         while let Some(child) = self.peek_box.first_child() {
             self.peek_box.remove(&child);
         }
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.peek, &start, &end);
-        self.peek_tagged.set(None);
+        self.peek_tagged = None;
         match peek {
             Some((widget, line)) => {
                 self.peek_box.append(&widget);
                 self.peek_box.set_visible(true);
-                self.peek_line.set(Some(line));
+                self.peek_line = Some(line);
             }
             None => {
                 self.peek_box.set_visible(false);
-                self.peek_line.set(None);
+                self.peek_line = None;
             }
         }
         self.size_peek();
@@ -1683,7 +1695,7 @@ impl Editor {
 
     /// `true` while a peek is open.
     pub fn has_peek(&self) -> bool {
-        self.peek_line.get().is_some()
+        self.peek_line.is_some()
     }
 
     /// Shows a card (the hover card) at a point of the text, in buffer
@@ -1712,8 +1724,8 @@ impl Editor {
 
     /// Fits the peek to the editor's width and makes room for it above the
     /// next line, so the cursor's line keeps its own tint.
-    fn size_peek(&self) {
-        let Some(line) = self.peek_line.get() else {
+    fn size_peek(&mut self) {
+        let Some(line) = self.peek_line else {
             return;
         };
         let gutter = sourceview5::prelude::ViewExt::gutter(&self.code, gtk::TextWindowType::Left);
@@ -1728,20 +1740,19 @@ impl Editor {
         }
         let (_, natural, _, _) = self.peek_box.measure(gtk::Orientation::Vertical, width);
         let next = line.saturating_add(1);
-        let used = self.lenses_used.get();
         let lens_below = self
-            .lens_slots()
+            .lenses
             .iter()
-            .take(used)
-            .any(|slot| slot.line.get() == next);
+            .take(self.lenses_used)
+            .any(|slot| slot.line == next);
         let mut room = LINE_SPACING.saturating_add(natural).saturating_add(10);
         if lens_below {
             room = room.saturating_add(LENS_HEIGHT);
         }
-        if self.peek_tagged.get() == Some((line, room)) {
+        if self.peek_tagged == Some((line, room)) {
             return;
         }
-        self.peek_tagged.set(Some((line, room)));
+        self.peek_tagged = Some((line, room));
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.peek, &start, &end);
@@ -1771,12 +1782,11 @@ impl Editor {
     }
 
     /// Moves the lenses and the peek to their lines, after the text moved.
-    pub fn place_overlays(&self) {
+    pub fn place_overlays(&mut self) {
         self.size_peek();
         let buffer = self.view.buffer();
-        let used = self.lenses_used.get();
-        for slot in self.lens_slots().iter().take(used) {
-            if let Some(iter) = buffer.iter_at_line(slot.line.get()) {
+        for slot in self.lenses.iter().take(self.lenses_used) {
+            if let Some(iter) = buffer.iter_at_line(slot.line) {
                 // Just above the line's text, whatever room is above it.
                 let text_top = self.view.iter_location(&iter).y();
                 let y = text_top
@@ -1786,7 +1796,7 @@ impl Editor {
                 self.view.move_overlay(&slot.root, 2, y);
             }
         }
-        if let Some(line) = self.peek_line.get()
+        if let Some(line) = self.peek_line
             && let Some(iter) = buffer.iter_at_line(line)
         {
             let location = self.view.iter_location(&iter);
@@ -1806,26 +1816,31 @@ impl Editor {
     /// opened into a panel that was showing "No file open" (or one behind
     /// another tab) has no height yet and its lines have no real places,
     /// so a scroll worked out then lands anywhere.
-    pub fn go_to(&self, lines: &LineStarts, offset: u32) {
+    pub fn go_to(&mut self, lines: &LineStarts, offset: u32) {
         let buffer = self.view.buffer();
         let iter = iter_at(&buffer, lines, offset);
         buffer.place_cursor(&iter);
         let mark = buffer.get_insert();
         // A newer go-to replaces one still waiting.
-        let ticket = self.scroll_ticket.get().wrapping_add(1);
-        self.scroll_ticket.set(ticket);
-        let tickets = Rc::clone(&self.scroll_ticket);
+        if let Some(older) = self.scroll.take() {
+            older.remove();
+        }
         let scrolled = self.scrolled.downgrade();
-        let frames = Cell::new(0u32);
+        // The frame it was asked at, to give up after a while: the view's
+        // frame counter, once it has a frame clock (until then no tick
+        // comes).
+        let asked_at = self.view.frame_clock().map(|clock| clock.frame_counter());
         // Ticks come once a frame, and not while the view is off screen.
-        self.view.add_tick_callback(move |view, _| {
+        let callback = self.view.add_tick_callback(move |view, clock| {
             let Some(scrolled) = scrolled.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if tickets.get() != ticket || mark.buffer().as_ref() != Some(&view.buffer()) {
+            if mark.buffer().as_ref() != Some(&view.buffer()) {
                 return glib::ControlFlow::Break;
             }
-            frames.set(frames.get().saturating_add(1));
+            let frames = asked_at.map_or(1, |asked_at| {
+                clock.frame_counter().saturating_sub(asked_at).max(1)
+            });
             let vertical = scrolled.vadjustment();
             let page = Page {
                 value: vertical.value(),
@@ -1834,7 +1849,7 @@ impl Editor {
                 upper: vertical.upper(),
             };
             if !page.is_laid_out() || view.height() <= 1 {
-                return if frames.get() < SCROLL_WAIT_FRAMES {
+                return if frames < i64::from(SCROLL_WAIT_FRAMES) {
                     glib::ControlFlow::Continue
                 } else {
                     glib::ControlFlow::Break
@@ -1858,6 +1873,7 @@ impl Editor {
             }
             glib::ControlFlow::Break
         });
+        self.scroll = Some(callback);
     }
 
     /// The cursor's byte offset.
@@ -1896,7 +1912,7 @@ mod tests {
     /// model (with the search and the input channel the runtime held) and
     /// the editor's widgets are all freed.
     fn search_bar_is_freed() {
-        let editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
         let buffer = editor.new_buffer("door\nshelf\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");
@@ -1927,7 +1943,7 @@ mod tests {
     /// is at the cursor: the match must be selected before `find` returns.
     /// The bar opening when the main loop runs leaves the match selected.
     fn find_selects_at_once() {
-        let editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
         let text = "shelf\npart side\nshelf\n";
         let lines = LineStarts::new(text);
         let buffer = editor.new_buffer(text);
@@ -1962,6 +1978,66 @@ mod tests {
     }
 
     #[test]
+    fn a_lens_row_calls_for_the_declaration_it_shows_now() {
+        on_gtk_thread(lens_rows_call_for_what_they_show);
+    }
+
+    /// A lens row is kept and shown again for another declaration: its
+    /// links call for the one it shows at the click (each handler made
+    /// again with it), and a hidden row calls for nothing.
+    fn lens_rows_call_for_what_they_show() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/wall_shelf")
+            .canonicalize()
+            .unwrap_or_default();
+        let analysis = stave_ide::Analysis::load(&folder, &stave_ide::Overlay::new())
+            .unwrap_or_else(|_| panic!("the wall shelf loads"));
+        let symbols: Vec<SymbolId> = analysis
+            .project_files()
+            .into_iter()
+            .flat_map(|(file, _)| analysis.lenses(file))
+            .map(|lens| lens.symbol)
+            .collect();
+        let [first, second, ..] = symbols.as_slice() else {
+            panic!("the wall shelf declares two things");
+        };
+        let heard: Rc<RefCell<Vec<LensClick>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), move |click| {
+            log.borrow_mut().push(click);
+        });
+        let buffer = editor.new_buffer("a\nb\n");
+        editor.show_buffer(&buffer, true);
+        let lens = |symbol: SymbolId| LensLine {
+            line: 0,
+            uses: "1 use".to_owned(),
+            shows_in_3d: true,
+            symbol,
+            name: "a".to_owned(),
+        };
+        editor.set_lenses(&[lens(*first)]);
+        let (uses, show) = {
+            let slot = editor.lenses.first().expect("a lens row");
+            (slot.uses.clone(), slot.show.clone())
+        };
+        uses.emit_clicked();
+        editor.set_lenses(&[lens(*second)]);
+        uses.emit_clicked();
+        show.emit_clicked();
+        editor.set_lenses(&[]);
+        uses.emit_clicked();
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                LensClick::Uses(*first),
+                LensClick::Uses(*second),
+                LensClick::Show(*second),
+            ]
+        );
+        assert_eq!(editor.lenses.len(), 1, "the row was kept");
+    }
+
+    #[test]
     fn closing_the_search_from_inside_its_own_step_is_queued_not_re_entered() {
         on_gtk_thread(search_is_queued);
     }
@@ -1972,9 +2048,10 @@ mod tests {
     /// the keyboard mid-step. Now what the bar is told is queued, and a
     /// close asked for from inside its step waits until the step is done.
     fn search_is_queued() {
-        let editor = Rc::new(Editor::new(&gtk::TextTagTable::new(), |_| {}));
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
         let buffer = editor.new_buffer("door\nshelf\ndoor\n");
         editor.show_buffer(&buffer, true);
+        let editor = Rc::new(editor);
         editor.find("door");
         assert!(!editor.has_search(), "opening the bar is only queued");
         settle();
@@ -2001,7 +2078,7 @@ mod tests {
             }
         });
         // Enter in the bar: the next match.
-        editor.search.send(EditorSearchInput::Next);
+        editor.tell_search(EditorSearchInput::Next);
         assert!(open.borrow().is_empty(), "the step is only queued");
         settle();
         assert!(!open.borrow().is_empty(), "the step moved the cursor");

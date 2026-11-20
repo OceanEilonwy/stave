@@ -639,7 +639,7 @@ fn build_body(
     frame: &CardFrame,
     view: &CardView,
     open: Option<&str>,
-    links: &LinkHandlers,
+    links: &LinkHandlers<EditCardInput>,
     report: &impl Report,
 ) -> Built {
     let body = &frame.body;
@@ -1310,7 +1310,7 @@ pub struct EditCardComponent {
     /// What the last show drew that the card keeps.
     built: Built,
     /// Where the links in "Placed in" report: to the card's own input.
-    links: LinkHandlers,
+    links: LinkHandlers<EditCardInput>,
     /// A row to bring into sight once the layout has room for it.
     scroll_target: Option<gtk::Widget>,
 }
@@ -1530,15 +1530,7 @@ impl Component for EditCardComponent {
                 .vadjustment()
                 .connect_changed(move |_| input.emit(EditCardInput::LaidOut));
         }
-        let links = LinkHandlers::default();
-        {
-            let input = input.clone();
-            links.connect_click(move |target| input.emit(EditCardInput::Link(target)));
-        }
-        {
-            let input = input.clone();
-            links.connect_hover(move |target| input.emit(EditCardInput::Hover(target)));
-        }
+        let links = LinkHandlers::new(input.clone(), EditCardInput::Link, EditCardInput::Hover);
         ComponentParts {
             model: EditCardComponent {
                 open_options: None,
@@ -1711,7 +1703,11 @@ fn focused_choice(list: &ChoiceList) -> Option<String> {
 
 /// A place param's row: what fills it (each name a link to what it
 /// names), or the prompt to point at it.
-fn place_row(param: &PlaceParam, words: &PlaceWords, handlers: &LinkHandlers) -> gtk::Box {
+fn place_row(
+    param: &PlaceParam,
+    words: &PlaceWords,
+    handlers: &LinkHandlers<EditCardInput>,
+) -> gtk::Box {
     let row = row_box();
     row.append(&key_label(param.name.as_str(), &param.prompt));
     match &words.value {
@@ -1980,16 +1976,11 @@ row.stave-option-search-hit.refused .stave-option-search-hint { opacity: 0.55; }
 .stave-edit-card .stave-edit-origin { font-size: 0.784rem; }
 "#;
 
-/// Puts the menu's and the card's stylesheet on the display, once.
+/// Puts the menu's and the card's stylesheet on the display, once for
+/// the process (Stave uses only the default display).
 pub(super) fn install_style(display: &gdk::Display) {
-    thread_local! {
-        static INSTALLED: std::cell::RefCell<Vec<gdk::Display>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-    INSTALLED.with(|installed| {
-        let mut installed = installed.borrow_mut();
-        if installed.contains(display) {
-            return;
-        }
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
         let provider = gtk::CssProvider::new();
         provider.load_from_string(STYLE);
         gtk::style_context_add_provider_for_display(
@@ -1997,7 +1988,6 @@ pub(super) fn install_style(display: &gdk::Display) {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
-        installed.push(display.clone());
     });
 }
 

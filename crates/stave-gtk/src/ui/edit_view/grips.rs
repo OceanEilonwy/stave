@@ -24,10 +24,8 @@
 //! along the handle's direction on screen becomes a value to send, and
 //! what the session holds is drawn.
 
-use relm4::ComponentController;
+use relm4::{Component, ComponentController, Controller};
 use stave_app::i18n::{fill_in, tr};
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -50,15 +48,16 @@ use stave_model::trace::Amount;
 use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
 
 use super::grip_layer::GripLayer;
-use super::grip_panel::{GripPanel, PanelAction, Readout, install_style};
+use super::grip_panel::{
+    GripPanelOutput, GripSection, PanelAction, ReadoutComponent, ReadoutInput, install_style,
+};
 use super::grip_text::{
     GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
     grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
     suggested_range, typed_check, typed_refusal,
 };
-use crate::ui::update::Unprinted;
 use crate::ui::update::editing::EditingInput;
-use crate::ui::{EDGE, Window};
+use crate::ui::{EDGE, Window, WindowInput};
 
 /// The handle's size, in pixels (8 inside a 2 px ring).
 const HANDLE: f64 = 12.0;
@@ -75,12 +74,11 @@ pub(in crate::ui) struct GripView {
     area: gtk::DrawingArea,
     /// The handles and labels, under the window's floating cards.
     layer: GripLayer,
-    /// The size a drag moves, as a section of the change's card.
-    panel: GripPanel,
+    /// The size a drag moves, as a section of the change's card; its
+    /// actions come to the window as [`EditingInput::GripPanel`].
+    panel: GripSection,
     /// The one line at the top of the view while a drag is open.
-    readout: Readout,
-    /// What the area draws, worked out after each frame.
-    drawing: Rc<RefCell<Vec<Drawn>>>,
+    readout: Controller<ReadoutComponent>,
     state: GripState,
 }
 
@@ -191,26 +189,31 @@ struct DrawnRange {
 }
 
 impl GripView {
-    /// The widgets, hidden until grips are listed.
-    pub(in crate::ui) fn new() -> GripView {
+    /// The widgets, hidden until grips are listed; the size section's
+    /// actions go to `input`. The area's draw function is given a copy of
+    /// what it draws each time the grips are placed.
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> GripView {
         let area = gtk::DrawingArea::builder()
             .can_target(false)
             .css_classes(["stave-grip-lines"])
             .visible(false)
             .build();
-        let drawing: Rc<RefCell<Vec<Drawn>>> = Rc::default();
-        let shown = drawing.clone();
-        area.set_draw_func(move |area, context, _, _| {
-            draw(area, context, &shown.borrow());
-        });
         GripView {
             area,
             layer: GripLayer::new(),
-            panel: GripPanel::new(),
-            readout: Readout::new(),
-            drawing,
+            panel: GripSection::new(input, |output| match output {
+                GripPanelOutput::Action(action) => EditingInput::GripPanel(action).into(),
+            }),
+            readout: ReadoutComponent::builder().launch(()).detach(),
             state: GripState::default(),
         }
+    }
+
+    /// Shows `line` in the readout, or hides it for `None`, when the main
+    /// loop next runs.
+    fn show_readout(&self, line: Option<(String, String)>) {
+        // After shutdown there is nothing to show.
+        let _ = self.readout.sender().send(ReadoutInput::Show(line));
     }
 }
 
@@ -597,15 +600,15 @@ fn draw_range(
 }
 
 impl Window {
-    /// Puts the grips' lines and panel over the 3D view and connects the
-    /// panel.
+    /// Puts the grips' lines and readout over the 3D view (the size
+    /// section's actions were forwarded when it was launched).
     pub(in crate::ui) fn connect_grips(&mut self) {
         let grips = &self.editing.grips;
         install_style(&self.widgets.design.display());
         let design = &self.widgets.design;
         design.add_overlay(&grips.area);
         design.add_overlay(&grips.layer);
-        design.add_overlay(&grips.readout.root);
+        design.add_overlay(grips.readout.widget());
         // The window's floating cards stay above the grips: put back on
         // top in the order they were laid (nothing has the keyboard yet).
         let widgets = &self.widgets;
@@ -621,10 +624,6 @@ impl Window {
                 design.add_overlay(floating);
             }
         }
-        let input = self.input();
-        grips
-            .panel
-            .connect_action(move |action| input.emit(EditingInput::GripPanel(action).into()));
     }
 
     /// The grips' panel asked for something.
@@ -937,7 +936,7 @@ impl Window {
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
                 if input
-                    .send(EditingInput::GripStopsFound(Unprinted(Box::new(found))).into())
+                    .send(EditingInput::GripStopsFound(Box::new(found)).into())
                     .is_err()
                 {
                     return;
@@ -1691,7 +1690,7 @@ impl Window {
         let grips = &self.editing.grips;
         if hidden {
             grips.area.set_visible(false);
-            grips.readout.show(None);
+            grips.show_readout(None);
             // Hidden with nothing borrowed: hiding a handle mid-drag ends
             // its drag, and the drag's end borrows the grips' state.
             let marks: Vec<(gtk::Widget, gtk::Box)> = grips
@@ -1857,7 +1856,10 @@ impl Window {
             taken.push(rect);
         }
         grips.area.set_visible(true);
-        *grips.drawing.borrow_mut() = drawing;
+        // The draw function gets its own copy of what to draw.
+        grips.area.set_draw_func(move |area, context, _, _| {
+            draw(area, context, &drawing);
+        });
         grips.area.queue_draw();
         for handle in to_hide {
             handle.set_visible(false);
@@ -1890,7 +1892,7 @@ impl Window {
         });
         let Some(model) = model else {
             grips.panel.root.set_visible(false);
-            grips.readout.show(None);
+            grips.show_readout(None);
             return;
         };
         let slot = &self.editing.changes.card.grip_slot;
@@ -1902,7 +1904,7 @@ impl Window {
         }
         grips.panel.show(&model);
         grips.panel.root.set_visible(true);
-        grips.readout.show(model.readout.as_ref());
+        grips.show_readout(model.readout.clone());
         // The grip's options (⋮), made again only for another grip.
         let wanted = open.filter(|index| {
             session
@@ -2098,6 +2100,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::ui::edit_view::grip_panel::{panel_radios, panel_words, readout_words};
     use crate::ui::edit_view::grip_text::{PanelChoice, PanelModel};
     use crate::ui::gtk_test::on_gtk_thread;
     use stave_app::session::Session;
@@ -2307,8 +2310,11 @@ mod tests {
     #[test]
     fn the_size_section_lists_the_sizes_as_radios_and_the_readout_is_one_line() {
         on_gtk_thread(|| {
-            let panel = GripPanel::new();
-            let readout = Readout::new();
+            let (sender, _receiver) = relm4::channel::<PanelAction>();
+            let section = GripSection::new(&sender, |output| match output {
+                GripPanelOutput::Action(action) => action,
+            });
+            let readout = ReadoutComponent::builder().launch(()).detach();
             let choice = |name: &str, value: &str, picked: bool| PanelChoice {
                 param: ParamId::from_index(usize::from(picked)).unwrap(),
                 words: format!("{name} {value}"),
@@ -2338,9 +2344,9 @@ mod tests {
                 can_apply: true,
                 readout: Some(("overall_width".to_owned(), "940 → 1040 mm".to_owned())),
             };
-            panel.show(&model);
+            section.show(&model);
             assert_eq!(
-                panel.words(),
+                panel_words(&section.panel),
                 [
                     "case.base.length",
                     "1000mm",
@@ -2350,19 +2356,21 @@ mod tests {
                 ]
             );
             assert_eq!(
-                panel.radios(),
+                panel_radios(&section.panel),
                 [
                     ("overall_width".to_owned(), true),
                     ("case.overhang".to_owned(), false)
                 ]
             );
-            readout.show(model.readout.as_ref());
+            let _ = readout
+                .sender()
+                .send(ReadoutInput::Show(model.readout.clone()));
             assert_eq!(
-                readout.words().as_deref(),
+                readout_words(&readout).as_deref(),
                 Some("overall_width 940 → 1040 mm")
             );
-            readout.show(None);
-            assert_eq!(readout.words(), None);
+            let _ = readout.sender().send(ReadoutInput::Show(None));
+            assert_eq!(readout_words(&readout), None);
         });
     }
 

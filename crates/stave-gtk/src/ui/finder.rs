@@ -17,12 +17,10 @@
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::finder::{Hit, Kind};
 use stave_app::i18n::{fill_in, tr};
 use stave_lang::Severity;
-
-use super::relm4_shim::Bridge;
 
 /// Something the finder can do rather than go to: a verb typed in the
 /// field ("add shelf", "remove", "rename door_left"), listed first under
@@ -86,10 +84,6 @@ pub struct FinderComponent {
     filter: Option<Kind>,
     rows: Vec<Row>,
     waiting: Waiting,
-    /// Whether the owner listens for chosen hits
-    /// ([`FinderInput::ListenForHits`]): until it does, choosing a hit
-    /// does nothing and the finder stays open.
-    hits_heard: bool,
 }
 
 /// A filter's toggle and the kind it shows (`None`: all of them).
@@ -129,10 +123,6 @@ pub enum FinderInput {
     RowSelected(gtk::ListBoxRow),
     /// People pressed Escape.
     Close,
-    /// The owner now listens for [`FinderOutput::Hit`]. Until it does,
-    /// choosing a hit does nothing: the finder neither closes nor tells
-    /// anyone.
-    ListenForHits,
 }
 
 /// What the finder tells its owner.
@@ -317,7 +307,7 @@ impl FinderComponent {
                 }
             },
             Row::Hit(index) => {
-                let Some(hit) = self.hits.get(index).cloned().filter(|_| self.hits_heard) else {
+                let Some(hit) = self.hits.get(index).cloned() else {
                     return;
                 };
                 match choice {
@@ -559,16 +549,15 @@ impl Component for FinderComponent {
             FinderInput::Close => {
                 root.close();
             }
-            FinderInput::ListenForHits => self.hits_heard = true,
         }
         self.update_view(widgets, sender);
     }
 }
 
-/// The finder dialog: it owns the component (dropping it shuts the
-/// component down), passes [`Finder::present`] on as
-/// [`FinderInput::Present`] and its [`FinderOutput`]s to the callback
-/// connected with [`Finder::connect_outputs`]. The owner answers the
+/// The finder dialog: it owns the component's controller (dropping it
+/// shuts the component down) and passes [`Finder::present`] on as
+/// [`FinderInput::Present`]; its [`FinderOutput`]s go where the owner said
+/// when it made the finder. The owner answers the
 /// finder's searches from its own update with [`Finder::show_hits`] and
 /// [`Finder::show_actions`] (docs/relm4-migration.md, rule 9).
 ///
@@ -577,42 +566,43 @@ impl Component for FinderComponent {
 pub struct Finder {
     /// The dialog.
     pub dialog: adw::Dialog,
-    bridge: Bridge<FinderComponent>,
+    controller: Controller<FinderComponent>,
 }
 
 impl Finder {
-    /// A closed finder.
-    pub fn new() -> Finder {
-        let bridge = Bridge::<FinderComponent>::launch(());
+    /// A closed finder, each request and choice made the owner's message
+    /// by `map` and sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(FinderOutput) -> X + 'static,
+    ) -> Finder {
+        let controller = FinderComponent::builder().launch(()).forward(to, map);
         Finder {
-            dialog: bridge.widget().clone(),
-            bridge,
+            dialog: controller.widget().clone(),
+            controller,
         }
     }
 
-    /// Calls `callback` with each request and choice from now on, instead
-    /// of the one connected before. Until one is connected, choosing a
-    /// hit leaves the finder open, as it always did.
-    pub fn connect_outputs(&self, callback: impl Fn(FinderOutput) + 'static) {
-        self.bridge.connect(callback);
-        self.bridge.send(FinderInput::ListenForHits);
+    /// Queues `input`; once the finder has gone there is nobody to tell.
+    fn send(&self, input: FinderInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Lists `hits`: the answer to the last [`FinderOutput::Search`].
     pub fn show_hits(&self, hits: Vec<Hit>) {
-        self.bridge.send(FinderInput::Hits(hits));
+        self.send(FinderInput::Hits(hits));
     }
 
     /// Lists `actions`: the answer to the last
     /// [`FinderOutput::SearchActions`].
     pub fn show_actions(&self, actions: Vec<Action>) {
-        self.bridge.send(FinderInput::Actions(actions));
+        self.send(FinderInput::Actions(actions));
     }
 
     /// Opens the finder over `parent`, with `query` typed (empty to start
     /// afresh).
     pub fn present(&self, parent: &impl IsA<gtk::Widget>, query: &str) {
-        self.bridge.send(FinderInput::Present {
+        self.send(FinderInput::Present {
             parent: parent.clone().upcast(),
             query: query.to_owned(),
         });
@@ -748,33 +738,29 @@ mod tests {
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 
-    /// Answers the finder's searches at once with `search` and `actions`,
-    /// as the window does from its update, and passes its choices to
-    /// `chosen`. Without `hits_heard`, the finder is not told anyone
-    /// listens for hits.
-    fn answer(
-        finder: &Rc<Finder>,
+    /// A finder whose searches are answered at once with `search` and
+    /// `actions`, as the window does from its update, and whose choices go
+    /// to `chosen` with the finder itself.
+    fn answering(
         search: impl Fn(&str) -> Vec<Hit> + 'static,
         actions: impl Fn(&str) -> Vec<Action> + 'static,
-        chosen: impl Fn(FinderOutput) + 'static,
-        hits_heard: bool,
-    ) {
-        let weak = Rc::downgrade(finder);
-        let callback = move |output| {
-            let Some(finder) = weak.upgrade() else {
+        chosen: impl Fn(&Finder, FinderOutput) + 'static,
+    ) -> Rc<Finder> {
+        let shared: Rc<RefCell<std::rc::Weak<Finder>>> = Rc::default();
+        let weak = Rc::clone(&shared);
+        let to = crate::ui::gtk_test::listener(move |output| {
+            let Some(finder) = weak.borrow().upgrade() else {
                 return;
             };
             match output {
                 FinderOutput::Search(query) => finder.show_hits(search(&query)),
                 FinderOutput::SearchActions(query) => finder.show_actions(actions(&query)),
-                FinderOutput::Hit { .. } | FinderOutput::Action(_) => chosen(output),
+                FinderOutput::Hit { .. } | FinderOutput::Action(_) => chosen(&finder, output),
             }
-        };
-        if hits_heard {
-            finder.connect_outputs(callback);
-        } else {
-            finder.bridge.connect(callback);
-        }
+        });
+        let finder = Rc::new(Finder::new(&to, |output| output));
+        shared.replace(Rc::downgrade(&finder));
+        finder
     }
 
     /// The hit and its choice in a [`FinderOutput::Hit`].
@@ -840,16 +826,17 @@ mod tests {
     /// model (with the input channel the runtime held) and the window's
     /// callbacks are all freed.
     fn finder_is_freed() {
-        let finder = Finder::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        finder.connect_outputs(move |_| {
+        let to = crate::ui::gtk_test::listener(move |_: FinderOutput| {
             let _ = &held;
         });
+        let finder = Finder::new(&to, |output| output);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         let dialog = finder.dialog.downgrade();
-        let input = finder.bridge.sender().clone();
+        let input = finder.controller.sender().clone();
         settle();
         assert!(dialog.upgrade().is_some(), "the dialog lives while held");
         drop(finder);
@@ -872,14 +859,12 @@ mod tests {
     /// heading, verbs first, and selects the first verb without telling
     /// anyone. Enter runs it once the finder has closed.
     fn query_is_asked_then_listed() {
-        let finder = Rc::new(Finder::new());
         let asked: Rc<RefCell<Vec<String>>> = Rc::default();
         let log = Rc::clone(&asked);
         let heard: Rc<RefCell<Vec<(String, Choice)>>> = Rc::default();
         let ran: Rc<RefCell<Vec<usize>>> = Rc::default();
         let (hits, actions) = (Rc::clone(&heard), Rc::clone(&ran));
-        answer(
-            &finder,
+        let finder = answering(
             move |query| {
                 log.borrow_mut().push(query.to_owned());
                 vec![file("doors"), file("drawers")]
@@ -890,11 +875,10 @@ mod tests {
                     detail: "in this space".to_owned(),
                 }]
             },
-            move |output| match output {
+            move |_, output| match output {
                 FinderOutput::Action(index) => actions.borrow_mut().push(index),
                 other => hits.borrow_mut().extend(hit_of(other)),
             },
-            true,
         );
         let (window, parent) = window();
         let list: gtk::ListBox = find(&finder);
@@ -916,11 +900,11 @@ mod tests {
 
         // ↓ rests on doors, which previews it.
         let entry: gtk::SearchEntry = find(&finder);
-        finder.bridge.send(FinderInput::Step(Direction::Down));
+        finder.send(FinderInput::Step(Direction::Down));
         settle();
         assert_eq!(*heard.borrow(), [("doors".to_owned(), Choice::Preview)]);
         // ↑ and Enter run the verb.
-        finder.bridge.send(FinderInput::Step(Direction::Up));
+        finder.send(FinderInput::Step(Direction::Up));
         entry.emit_activate();
         settle();
         assert_eq!(*ran.borrow(), [0]);
@@ -932,21 +916,18 @@ mod tests {
     }
 
     #[test]
-    fn with_nobody_listening_for_hits_a_hit_leaves_the_finder_open() {
-        on_gtk_thread(unheard_hit_stays_open);
+    fn enter_on_a_hit_closes_the_finder_and_goes_there() {
+        on_gtk_thread(enter_on_a_hit_goes_there);
     }
 
-    /// As before the finder was a component: Enter on a hit with no hit
-    /// callback connected does nothing, and the finder stays open. Once a
-    /// callback is connected, Enter closes it and goes there.
-    fn unheard_hit_stays_open() {
-        let finder = Rc::new(Finder::new());
-        answer(
-            &finder,
+    /// Enter on a hit tells the owner to go there, and closes the finder.
+    fn enter_on_a_hit_goes_there() {
+        let heard: Rc<RefCell<Vec<(String, Choice)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let finder = answering(
             |_| vec![file("doors")],
             |_| Vec::new(),
-            |_| {},
-            false,
+            move |_, output| log.borrow_mut().extend(hit_of(output)),
         );
         let closed = Rc::new(Cell::new(0_u32));
         let count = Rc::clone(&closed);
@@ -965,21 +946,8 @@ mod tests {
         list.select_row(Some(&doors));
         entry.emit_activate();
         settle();
-        assert_eq!(closed.get(), 0, "the finder stays open");
-
-        let heard: Rc<RefCell<Vec<(String, Choice)>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        answer(
-            &finder,
-            |_| vec![file("doors")],
-            |_| Vec::new(),
-            move |output| log.borrow_mut().extend(hit_of(output)),
-            true,
-        );
-        entry.emit_activate();
-        settle();
         assert_eq!(*heard.borrow(), [("doors".to_owned(), Choice::Go)]);
-        assert_eq!(closed.get(), 1, "and now Enter closes it");
+        assert_eq!(closed.get(), 1, "Enter closes it");
 
         window.destroy();
         settle();
@@ -997,50 +965,33 @@ mod tests {
     /// model there would panic if it had not), and Enter pressed from
     /// inside the callback is queued too.
     fn choices_are_queued() {
-        let finder = Rc::new(Finder::new());
-        answer(
-            &finder,
-            |_| vec![file("doors"), file("drawers")],
-            |_| Vec::new(),
-            |_| {},
-            false,
-        );
-        let (window, parent) = window();
-        finder.present(&parent, "d");
-        settle();
-        let list: gtk::ListBox = find(&finder);
-        let entry: gtk::SearchEntry = find(&finder);
-
         // (what was chosen, how, how many rows the model had then, and
         // how many choices were heard once Enter had been pressed)
         type Heard = (String, Choice, usize, usize);
         let heard: Rc<RefCell<Vec<Heard>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&finder);
-        let inner = entry.clone();
-        let chosen = move |output| {
-            let Some((label, choice)) = hit_of(output) else {
-                return;
-            };
-            let Some(finder) = weak.upgrade() else {
-                return;
-            };
-            let rows = finder.bridge.model().rows.len();
-            let first = log.borrow().is_empty();
-            if first {
-                // Enter from in here is only queued.
-                inner.emit_activate();
-            }
-            let count = log.borrow().len();
-            log.borrow_mut().push((label, choice, rows, count));
-        };
-        answer(
-            &finder,
+        let finder = answering(
             |_| vec![file("doors"), file("drawers")],
             |_| Vec::new(),
-            chosen,
-            true,
+            move |finder, output| {
+                let Some((label, choice)) = hit_of(output) else {
+                    return;
+                };
+                let rows = finder.controller.model().rows.len();
+                let first = log.borrow().is_empty();
+                if first {
+                    // Enter from in here is only queued.
+                    let entry: gtk::SearchEntry = find(finder);
+                    entry.emit_activate();
+                }
+                let count = log.borrow().len();
+                log.borrow_mut().push((label, choice, rows, count));
+            },
         );
+        let (window, parent) = window();
+        finder.present(&parent, "d");
+        settle();
+        let list: gtk::ListBox = find(&finder);
 
         // FILES, doors, drawers: rest on drawers.
         let Some(drawers) = list.row_at_index(2) else {
