@@ -200,6 +200,21 @@ every new behaviour has tests, and the gate is green.
 
 # Next: language server, completion and richer colouring
 
+Status (2026-11-20, audited on `worktree-lsp-roadmap`): steps 1 to 6 are
+in, and every item of the definition of done holds: 60 completion and 10
+signature fixtures with exact lists (`stave-ide/tests/completion/`),
+token snapshots over all 16 examples with units and modifiers
+(`stave-ide/tests/snapshots/tokens__*`), the protocol session test
+(`stave-lsp/tests/server.rs`), screenshots of the cabinet, the box and the
+chest of drawers (`docs/screenshots/editor-colouring/`), and a green gate.
+Left from the grammar's "What an editor gets" table: code actions from AI
+(no suggestion patches are offered through `stave-lsp` or the GTK
+editor), inlay hints in the GTK editor, a fix that creates a file, and
+incremental `stave-check` layers. Seen in the screenshots: the GTK
+editor's code lenses are drawn lower than their line, further down the
+file the further they drift (`box_lid_light.png`, already so in
+`cabinet_carcass_light_before.png`).
+
 Goal: editing a `.stave` file feels like editing Rust in a good IDE, in the
 GTK app and in any LSP editor. Completion offers the right words for the
 cursor's position, units and name references stand out from the code
