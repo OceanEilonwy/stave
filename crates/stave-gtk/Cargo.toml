@@ -31,6 +31,7 @@ stave-app = { path = "../stave-app" }
 stave-geom = { path = "../stave-geom" }
 stave-ide = { path = "../stave-ide" }
 stave-lang = { path = "../stave-lang" }
+stave-link = { path = "../stave-link" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
 stave-scene = { path = "../stave-scene" }

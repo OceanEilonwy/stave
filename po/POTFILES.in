@@ -27,6 +27,7 @@ crates/stave-app/src/session.rs
 crates/stave-app/src/solve_edit.rs
 crates/stave-app/src/stops.rs
 crates/stave-app/src/view.rs
+crates/stave-gtk/src/ui/ai_link.rs
 crates/stave-gtk/src/ui/app.rs
 crates/stave-gtk/src/ui/chrome.rs
 crates/stave-gtk/src/ui/dock.rs

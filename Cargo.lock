@@ -2384,6 +2384,7 @@ dependencies = [
  "stave-geom",
  "stave-ide",
  "stave-lang",
+ "stave-link",
  "stave-model",
  "stave-modules",
  "stave-scene",

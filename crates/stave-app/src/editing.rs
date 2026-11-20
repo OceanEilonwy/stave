@@ -269,6 +269,10 @@ pub enum EditCommand {
     /// Start a change: make a solved param of the project plain again,
     /// keeping its range.
     MakePlain(Ident),
+    /// Start a change from a whole patch file's text (`stave 1` and one
+    /// or more `patch` blocks), as an AI app's suggestion is shown: tried
+    /// and ghosted like any change, written only on `Add`.
+    ShowPatch(String),
     /// Write the candidate, or the change, into the text (only when it
     /// fits).
     Add,
@@ -946,7 +950,8 @@ impl Edit {
             | EditCommand::PickParam(_)
             | EditCommand::TypeGripValue { .. }
             | EditCommand::MakeSolved { .. }
-            | EditCommand::MakePlain(_) => {
+            | EditCommand::MakePlain(_)
+            | EditCommand::ShowPatch(_) => {
                 events.push(EditEvent::Rejected(Rejection::NoEdit));
             }
         }

@@ -272,6 +272,30 @@ window options apply to the first window of a Stave that was not
 running. `--window-screenshot` always runs on its own (`NON_UNIQUE`) and
 needs one folder.
 
+**AI apps** reach the running Stave through the application action
+`app.show-project` (`ui/ai_link.rs`), parameter `(ss)`: a project folder
+(an absolute path; anything else is ignored) and a patch file's text, or
+an empty string. GApplication answers it on the session bus as
+`org.freedesktop.Application.ActivateAction` at
+`/io/github/OceanEilonwy/Stave`, which is what the MCP server's
+`show_in_stave` calls (`stave_link::show_in_stave`; it asks only when the
+name `io.github.OceanEilonwy.Stave` has an owner, so the bus never starts
+Stave for it). The folder opens as Open does (or its window comes
+forward); a patch is then started in that window as a change of the
+design (`EditCommand::ShowPatch`, see [`docs/editing.md`](editing.md),
+"Changes of the design"): tried on a scratch copy and shown as a ghost
+with its card, its words "a suggested change", written only if the user
+presses Add. Nothing an AI app sends is ever written by itself.
+
+Help's **Use with an AI App…** (`app.use-with-ai-app`, also on the start
+page's menu) sets Stave up in every AI app found on the computer
+(Claude Desktop, Claude Code, Codex: `stave_link::install`, the same as
+`stave mcp install`), off the main thread, then says in a dialog what was
+done in each ("Claude Desktop: ready. Start Claude Desktop again to use
+Stave there.") or why not. The apps run the `stave` program found beside
+`stave-gtk` or on `PATH`; with none found, or no app found, the dialog
+says so and what to install. The window's words never name the protocol.
+
 Started with no folder (from the app grid or the dock), Stave shows the
 **start page** (`ui/start_page.rs`): an `AdwStatusPage` with Open
 Folder… and New Project… and, under them, the recent projects
@@ -481,8 +505,9 @@ first launch's three panels back, the tool groups in their usual spots.
   with Project (New Project…, Open Project…, Save, Check Again, Build
   Plan, Export 3D Model…), Edit (Find…, Find in the Text, Format the
   Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
-  Frame Everything, the panels, Reset Layout, the style) and Help (About
-  Stave), all from `main_menu`; then the project's name in small grey
+  Frame Everything, the panels, Reset Layout, the style) and Help (Use
+  with an AI App…, Keyboard Shortcuts, About Stave), all from
+  `main_menu`; then the project's name in small grey
   words (`Session::title()`, its folder in the tooltip). The Design | Cut
   list switcher sits in the middle. On the right: a find button (a
   magnifier; "Find a part, file, line or problem (Ctrl+K)", `win.find`),
@@ -514,8 +539,9 @@ first launch's three panels back, the tool groups in their usual spots.
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes); the View menu frames everything, brings back closed panels and
   sets the style (follow system, light, dark: `app.style`, remembered);
-  Help has "Keyboard Shortcuts" (`app.shortcuts`, Ctrl+?) and "About
-  Stave" (`app.about`).
+  Help has "Use with an AI App…" (`app.use-with-ai-app`, see
+  [Starting Stave](#starting-stave)), "Keyboard Shortcuts"
+  (`app.shortcuts`, Ctrl+?) and "About Stave" (`app.about`).
 - **Parts panel, "joint chips"** (`TreeSidebar`, top left; rows from
   `inspect::parts_tree`, joints from `part_joints::PartJoints`): a flat
   list grouped by assembly instead of a deep tree. Each group has a slim

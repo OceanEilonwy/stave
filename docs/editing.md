@@ -363,6 +363,14 @@ design places and has no more errors than before. What a commit writes
 is, per file, the one edit from the text the change began from to the
 final text.
 
+A patch can also come whole, written elsewhere: `ChangeRequest::Patch`
+(`EditCommand::ShowPatch`) takes a patch file's text (`stave 1` and one
+or more `patch` blocks) as an AI app's suggestion sends it to the window
+(`docs/gui.md`, "Starting Stave"). It can't start when the text doesn't
+read as a patch file or holds no patch; otherwise it is tried as it is,
+its summary is its patches' summaries joined by "; ", and it is written
+only on Add, like any change.
+
 `Change::summary` says what it does ("Make 3 of drawer"),
 `Change::detail` what it found (`ChangeDetail::Mirror { renamed, image,
 about }`, `Hold { name, condition }`, `Remove { removal, dependants }`,

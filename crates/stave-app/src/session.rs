@@ -1342,6 +1342,9 @@ impl Session {
                 },
                 events,
             ),
+            EditCommand::ShowPatch(text) => {
+                self.start_change(ChangeRequest::Patch { text }, events);
+            }
             EditCommand::ListGrips(selection) => {
                 let ticket = GripsTicket(self.next_grips);
                 self.next_grips = self.next_grips.saturating_add(1);

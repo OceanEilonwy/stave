@@ -31,6 +31,12 @@ mod claude_code;
 mod claude_desktop;
 mod codex;
 mod files;
+mod show;
+
+pub use show::{
+    APPLICATION_ID, OBJECT_PATH, SHOW_PROJECT_ACTION, SHOW_PROJECT_PARAMETER, Shown,
+    show_in_application, show_in_stave,
+};
 
 /// The server's name in every app's settings.
 pub const SERVER_NAME: &str = "stave";
@@ -222,7 +228,7 @@ impl Places {
 
     /// Where a command is found: the first executable file of that name
     /// in the search path.
-    fn find_program(&self, name: &str) -> Option<PathBuf> {
+    pub fn find_program(&self, name: &str) -> Option<PathBuf> {
         self.search_path
             .iter()
             .map(|folder| folder.join(name))
