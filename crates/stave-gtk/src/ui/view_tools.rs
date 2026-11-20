@@ -9,20 +9,21 @@
 //! model is the only state, only its `update` changes it, and its
 //! widgets' handlers only send it messages. The structs named after them
 //! ([`ViewToolbar`], [`CameraToolbar`], [`PlanSwitch`], [`EmptyView`])
-//! keep the older API in front of the components until the window moves
-//! to relm4 too.
+//! own their controllers and keep the setters as plain methods.
 //!
-//! The window hears each group only through its outputs, which come from
+//! The window hears each group only through its outputs, forwarded to
+//! its input when the group is made, which come from
 //! people's presses alone: the Pull apart toggle and the plan switch's
 //! buttons are set from the model with their handlers blocked
 //! (`#[block_signal]`), so the window showing them is never heard back.
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
+use relm4::{
+    Component, ComponentController, ComponentParts, ComponentSender, Controller, RelmWidgetExt,
+};
 use stave_app::i18n::{fill_in, tr};
 
 use super::icons::{self, PathIcon};
-use super::relm4_shim::Bridge;
 use super::slider::Slider;
 
 /// A button holding one icon, with a tooltip and an accessible name.
@@ -230,9 +231,14 @@ impl Component for ViewToolbarComponent {
             play_icon,
         } = init;
         let (section, xray, pull, play, play_icon) = (&section, &xray, &pull, &play, &play_icon);
-        let slider = Slider::new(&tr("How far apart"), 24, 12.0, 1.5);
-        let input = sender.input_sender().clone();
-        slider.connect_changed(move |value| input.emit(ViewToolbarInput::Moved(value)));
+        let slider = Slider::launch(
+            &tr("How far apart"),
+            24,
+            12.0,
+            1.5,
+            sender.input_sender(),
+            ViewToolbarInput::Moved,
+        );
         let slider_area = &slider.root.clone();
         let model = ViewToolbarComponent {
             on: false,
@@ -310,12 +316,16 @@ pub struct ViewToolbar {
     section: gtk::Box,
     /// The line above X-ray, turned crosswise to the column.
     line: gtk::Separator,
-    bridge: Bridge<ViewToolbarComponent>,
+    controller: Controller<ViewToolbarComponent>,
 }
 
 impl ViewToolbar {
-    /// The tools, off.
-    pub fn new() -> ViewToolbar {
+    /// The tools, off; people's presses and slides go to `owner` as
+    /// `message(output)`.
+    pub fn new<M: 'static>(
+        owner: &relm4::Sender<M>,
+        message: impl Fn(ViewToolbarOutput) -> M + 'static,
+    ) -> ViewToolbar {
         let xray = icon_toggle(
             icons::XRAY,
             &tr("X-ray"),
@@ -345,34 +355,36 @@ impl ViewToolbar {
         section.append(&line);
         section.append(&xray);
         section.append(&pull);
-        let bridge = Bridge::<ViewToolbarComponent>::launch(ViewToolbarInit {
-            section: section.clone(),
-            xray: xray.clone(),
-            pull: pull.clone(),
-            play: play.clone(),
-            play_icon,
-        });
+        let controller = ViewToolbarComponent::builder()
+            .launch(ViewToolbarInit {
+                section: section.clone(),
+                xray: xray.clone(),
+                pull: pull.clone(),
+                play: play.clone(),
+                play_icon,
+            })
+            .forward(owner, message);
         ViewToolbar {
             xray,
             pull,
-            popout: bridge.widget().clone(),
+            popout: controller.widget().clone(),
             play,
             section,
             line,
-            bridge,
+            controller,
         }
     }
 
-    /// Calls `callback` with each of people's presses and slides from now
-    /// on, instead of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(ViewToolbarOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the tools have shut down there is nobody to
+    /// tell.
+    fn send(&self, input: ViewToolbarInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Shows Pull apart on (with its slider at `amount`) or off, without
     /// calling back.
     pub fn show(&self, on: bool, amount: f32, playing: bool) {
-        self.bridge.send(ViewToolbarInput::Show {
+        self.send(ViewToolbarInput::Show {
             on,
             amount,
             playing,
@@ -382,7 +394,7 @@ impl ViewToolbar {
     /// Offers the tools, or takes them away while a problem is posed or
     /// a joint is in focus.
     pub fn offer(&self, offered: bool) {
-        self.bridge.send(ViewToolbarInput::Offer(offered));
+        self.send(ViewToolbarInput::Offer(offered));
     }
 }
 
@@ -577,12 +589,17 @@ pub struct CameraToolbar {
         expect(dead_code, reason = "tests press it; the window hears its output")
     )]
     turn: gtk::Button,
-    bridge: Bridge<CameraComponent>,
+    controller: Controller<CameraComponent>,
 }
 
 impl CameraToolbar {
-    /// The buttons, with the view's own tools at the foot.
-    pub fn new(tools: &ViewToolbar) -> CameraToolbar {
+    /// The buttons, with the view's own tools at the foot; people's
+    /// presses go to `owner` as `message(output)`.
+    pub fn new<M: 'static>(
+        tools: &ViewToolbar,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(CameraOutput) -> M + 'static,
+    ) -> CameraToolbar {
         let fit = icon_button(
             icons::FIT,
             &tr("Fit to view (F)"),
@@ -598,33 +615,33 @@ impl CameraToolbar {
             &tr("Turn to the back"),
             &["stave-camera-button", "flat"],
         );
-        let bridge = Bridge::<CameraComponent>::launch(CameraInit {
-            fit: fit.clone(),
-            front: front.clone(),
-            turn: turn.clone(),
-            section: tools.section.clone(),
-            line: tools.line.clone(),
-            popout: tools.popout.clone(),
-        });
+        let controller = CameraComponent::builder()
+            .launch(CameraInit {
+                fit: fit.clone(),
+                front: front.clone(),
+                turn: turn.clone(),
+                section: tools.section.clone(),
+                line: tools.line.clone(),
+                popout: tools.popout.clone(),
+            })
+            .forward(owner, message);
         CameraToolbar {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             fit,
             front,
             turn,
-            bridge,
+            controller,
         }
-    }
-
-    /// Calls `callback` with each of people's presses from now on, instead
-    /// of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(CameraOutput) + 'static) {
-        self.bridge.connect(callback);
     }
 
     /// Lays the buttons out in a column (docked on the right edge) or a
     /// row (docked in a corner), X-ray and Pull apart with them.
     pub fn set_orientation(&self, orientation: gtk::Orientation) {
-        self.bridge.send(CameraInput::SetOrientation(orientation));
+        // Once the column has shut down there is nobody to tell.
+        let _ = self
+            .controller
+            .sender()
+            .send(CameraInput::SetOrientation(orientation));
     }
 }
 
@@ -784,12 +801,16 @@ pub struct PlanSwitch {
         expect(dead_code, reason = "tests press it; the window hears its output")
     )]
     in_3d: gtk::ToggleButton,
-    bridge: Bridge<PlanSwitchComponent>,
+    controller: Controller<PlanSwitchComponent>,
 }
 
 impl PlanSwitch {
-    /// The switch, in 3D.
-    pub fn new() -> PlanSwitch {
+    /// The switch, in 3D; people's choices go to `owner` as
+    /// `message(output)`.
+    pub fn new<M: 'static>(
+        owner: &relm4::Sender<M>,
+        message: impl Fn(PlanSwitchOutput) -> M + 'static,
+    ) -> PlanSwitch {
         let toggle = |shape: icons::Shape, label: &str| {
             let button = gtk::ToggleButton::builder()
                 .child(&PathIcon::new(shape, 17))
@@ -802,27 +823,27 @@ impl PlanSwitch {
         let from_above = toggle(icons::FROM_ABOVE, &tr("From above"));
         let in_3d = toggle(icons::PARTS, &tr("In 3D"));
         in_3d.set_group(Some(&from_above));
-        let bridge = Bridge::<PlanSwitchComponent>::launch(PlanSwitchInit {
-            from_above: from_above.clone(),
-            in_3d: in_3d.clone(),
-        });
+        let controller = PlanSwitchComponent::builder()
+            .launch(PlanSwitchInit {
+                from_above: from_above.clone(),
+                in_3d: in_3d.clone(),
+            })
+            .forward(owner, message);
         PlanSwitch {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             from_above,
             in_3d,
-            bridge,
+            controller,
         }
-    }
-
-    /// Calls `callback` with each of people's choices from now on,
-    /// instead of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(PlanSwitchOutput) + 'static) {
-        self.bridge.connect(callback);
     }
 
     /// Shows which view is on, without calling back.
     pub fn show(&self, plan: bool) {
-        self.bridge.send(PlanSwitchInput::Show { plan });
+        // Once the switch has shut down there is nobody to tell.
+        let _ = self
+            .controller
+            .sender()
+            .send(PlanSwitchInput::Show { plan });
     }
 }
 
@@ -946,7 +967,7 @@ pub struct EmptyView {
         expect(dead_code, reason = "kept for the page's API; only tests read it now")
     )]
     pub open: gtk::Button,
-    bridge: Bridge<EmptyViewComponent>,
+    controller: Controller<EmptyViewComponent>,
 }
 
 impl EmptyView {
@@ -958,17 +979,19 @@ impl EmptyView {
             .halign(gtk::Align::Center)
             .css_classes(["pill", "suggested-action"])
             .build();
-        let bridge = Bridge::<EmptyViewComponent>::launch(open.clone());
+        // It tells nobody anything: its button uses the window's action.
+        let controller = EmptyViewComponent::builder().launch(open.clone()).detach();
         EmptyView {
-            root: bridge.widget().clone(),
+            root: controller.widget().clone(),
             open,
-            bridge,
+            controller,
         }
     }
 
     /// Says why there is nothing to draw.
     pub fn show(&self, title: &str, description: &str, offers_open: bool) {
-        self.bridge.send(EmptyViewInput::Show {
+        // Once the page has shut down there is nobody to tell.
+        let _ = self.controller.sender().send(EmptyViewInput::Show {
             title: title.to_owned(),
             description: description.to_owned(),
             offers_open,
@@ -982,7 +1005,13 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
+
+    /// View tools whose outputs nobody hears.
+    fn view_tools() -> ViewToolbar {
+        let (owner, _) = recorder();
+        ViewToolbar::new(&owner, std::convert::identity)
+    }
 
     #[test]
     fn a_dropped_view_toolbar_is_freed() {
@@ -990,20 +1019,21 @@ mod tests {
     }
 
     /// Dropping the toolbar shuts its component down: its widgets, its
-    /// slider and the window's callback are freed.
+    /// slider and the window's message maker are freed.
     fn view_toolbar_is_freed() {
-        let tools = ViewToolbar::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        tools.connect_outputs(move |_| {
+        let (owner, _) = recorder();
+        let tools = ViewToolbar::new(&owner, move |output| {
             let _ = &held;
+            output
         });
         let callback = Rc::downgrade(&token);
         drop(token);
         let popout = tools.popout.downgrade();
         let pull = tools.pull.downgrade();
-        let slider = tools.bridge.model().slider.root.downgrade();
-        let input = tools.bridge.sender().clone();
+        let slider = tools.controller.model().slider.root.downgrade();
+        let input = tools.controller.sender().clone();
         settle();
         assert!(popout.upgrade().is_some(), "the tools live while held");
         drop(tools);
@@ -1012,7 +1042,7 @@ mod tests {
         assert!(pull.upgrade().is_none(), "Pull apart is freed");
         assert!(slider.upgrade().is_none(), "the slider is freed");
         assert!(input.send(ViewToolbarInput::Offer(true)).is_err());
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the message maker is freed");
     }
 
     #[test]
@@ -1023,18 +1053,14 @@ mod tests {
     /// `show` sets the toggle from the model with its handler blocked:
     /// `show` and `offer` never send an output.
     fn show_does_not_call_back() {
-        let tools = ViewToolbar::new();
-        let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        tools
-            .bridge
-            .connect(move |output| log.borrow_mut().push(output));
+        let (owner, heard) = recorder();
+        let tools = ViewToolbar::new(&owner, std::convert::identity);
         tools.show(true, 0.4, true);
         assert!(!tools.pull.is_active(), "show is queued");
         settle();
         assert!(tools.pull.is_active());
         assert!(tools.popout.is_visible(), "the slider pops out");
-        assert_eq!(tools.bridge.model().slider.value(), f64::from(0.4_f32));
+        assert_eq!(tools.controller.model().slider.value(), f64::from(0.4_f32));
         assert_eq!(tools.play.tooltip_text().as_deref(), Some("Pause"));
         tools.offer(false);
         settle();
@@ -1061,16 +1087,14 @@ mod tests {
     /// applied in order with the toggle's handler blocked, so none reads
     /// as people pressing it and the last one wins.
     fn several_shows_never_call_back() {
-        let tools = ViewToolbar::new();
-        let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
-        let outputs = Rc::clone(&heard);
-        tools.connect_outputs(move |output| outputs.borrow_mut().push(output));
+        let (owner, heard) = recorder();
+        let tools = ViewToolbar::new(&owner, std::convert::identity);
         tools.show(true, 0.0, false);
         tools.show(false, 0.0, false);
         tools.show(true, 0.0, false);
         settle();
         assert!(tools.pull.is_active());
-        assert!(tools.bridge.model().on, "the model agrees");
+        assert!(tools.controller.model().on, "the model agrees");
         tools.show(false, 0.0, false);
         settle();
         assert!(!tools.pull.is_active());
@@ -1083,20 +1107,21 @@ mod tests {
     }
 
     /// People pressing Pull apart only queues a message; the output comes
-    /// after the update. The window showing it off from inside that
-    /// callback is queued too, and is not heard back as people's input.
+    /// after the update. The window showing it off while it handles that
+    /// output is queued too, and is not heard back as people's input.
     fn toggles_are_queued() {
-        let tools = Rc::new(ViewToolbar::new());
+        let (owner, outputs) = relm4::channel();
+        let tools = Rc::new(ViewToolbar::new(&owner, std::convert::identity));
         let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&tools);
-        tools.bridge.connect(move |output| {
+        handle_each(outputs, move |output| {
             let Some(tools) = weak.upgrade() else {
                 return;
             };
             // Reading the model here would panic if the toolbar were
             // still in its update.
-            let on = tools.bridge.model().on;
+            let on = tools.controller.model().on;
             log.borrow_mut().push(output);
             if output == ViewToolbarOutput::Pull(true) {
                 assert!(on, "the toolbar follows people's toggle");
@@ -1126,8 +1151,9 @@ mod tests {
     }
 
     fn camera_column() {
-        let tools = ViewToolbar::new();
-        let camera = CameraToolbar::new(&tools);
+        let tools = view_tools();
+        let (owner, _) = recorder();
+        let camera = CameraToolbar::new(&tools, &owner, std::convert::identity);
         camera.set_orientation(gtk::Orientation::Horizontal);
         assert_eq!(
             camera.root.orientation(),
@@ -1156,13 +1182,9 @@ mod tests {
     }
 
     fn camera_presses() {
-        let tools = ViewToolbar::new();
-        let camera = CameraToolbar::new(&tools);
-        let heard: Rc<RefCell<Vec<CameraOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        camera
-            .bridge
-            .connect(move |output| log.borrow_mut().push(output));
+        let tools = view_tools();
+        let (owner, heard) = recorder();
+        let camera = CameraToolbar::new(&tools, &owner, std::convert::identity);
         camera.front.emit_clicked();
         camera.turn.emit_clicked();
         assert!(heard.borrow().is_empty(), "queued");
@@ -1172,7 +1194,7 @@ mod tests {
             vec![CameraOutput::Front, CameraOutput::Turn]
         );
         let root = camera.root.downgrade();
-        let input = camera.bridge.sender().clone();
+        let input = camera.controller.sender().clone();
         drop(camera);
         settle();
         assert!(root.upgrade().is_none(), "the column is freed");
@@ -1192,16 +1214,17 @@ mod tests {
     /// Showing the view from above sets the buttons with the handler
     /// blocked: only people's presses are heard, each after its update.
     fn plan_switch() {
-        let switch = Rc::new(PlanSwitch::new());
+        let (owner, outputs) = relm4::channel();
+        let switch = Rc::new(PlanSwitch::new(&owner, std::convert::identity));
         settle();
         assert!(switch.in_3d.is_active(), "it opens in 3D");
         let heard: Rc<RefCell<Vec<PlanSwitchOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&switch);
-        switch.bridge.connect(move |output| {
+        handle_each(outputs, move |output| {
             log.borrow_mut().push(output);
             if let Some(switch) = weak.upgrade() {
-                // The window shows it back from inside its callback.
+                // The window shows it back while it handles the output.
                 switch.show(true);
             }
         });
@@ -1242,22 +1265,20 @@ mod tests {
     /// handler blocked, so the first never writes a stale plan back and
     /// the last one wins.
     fn several_plan_shows_never_call_back() {
-        let switch = PlanSwitch::new();
+        let (owner, heard) = recorder();
+        let switch = PlanSwitch::new(&owner, std::convert::identity);
         settle();
-        let heard: Rc<RefCell<Vec<PlanSwitchOutput>>> = Rc::default();
-        let outputs = Rc::clone(&heard);
-        switch.connect_outputs(move |output| outputs.borrow_mut().push(output));
         switch.show(true);
         assert!(!switch.from_above.is_active(), "show is queued");
         switch.show(false);
         switch.show(true);
         settle();
         assert!(switch.from_above.is_active());
-        assert!(switch.bridge.model().plan, "the model agrees");
+        assert!(switch.controller.model().plan, "the model agrees");
         switch.show(false);
         settle();
         assert!(switch.in_3d.is_active());
-        assert!(!switch.bridge.model().plan);
+        assert!(!switch.controller.model().plan);
         assert!(heard.borrow().is_empty(), "the component never called back");
     }
 
@@ -1269,14 +1290,14 @@ mod tests {
     fn empty_view() {
         let empty = EmptyView::new();
         settle();
-        assert_eq!(empty.bridge.model().title, "Checking…");
+        assert_eq!(empty.controller.model().title, "Checking…");
         assert!(!empty.open.is_visible());
         empty.show("A library folder", "Open a project to see it.", true);
         settle();
-        assert_eq!(empty.bridge.model().title, "A library folder");
+        assert_eq!(empty.controller.model().title, "A library folder");
         assert!(empty.open.is_visible());
         let root = empty.root.downgrade();
-        let input = empty.bridge.sender().clone();
+        let input = empty.controller.sender().clone();
         drop(empty);
         settle();
         assert!(root.upgrade().is_none(), "the page is freed");
