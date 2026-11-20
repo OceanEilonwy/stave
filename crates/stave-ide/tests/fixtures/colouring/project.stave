@@ -27,3 +27,12 @@ part shelf : oak_19 {
 }
 
 joint housing : dado(side_l, shelf)
+
+// A part whose name is also a feature word (`floor` of a recess) is
+// still a part where it is named.
+part floor : oak_19 {
+  length: half
+  width:  overall_depth
+}
+
+joint floor_housing : dado(side_l, floor)

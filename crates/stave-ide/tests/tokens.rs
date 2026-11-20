@@ -97,12 +97,19 @@ fn render_file(text: &str, tokens: &[SemanticToken]) -> String {
 /// Every project file of a folder's analysis, rendered, with its path.
 fn render_project(folder: &Path) -> String {
     let analysis = load(folder);
+    let repository = examples().join("..").canonicalize().unwrap();
     let mut out = String::new();
     for (file, document) in analysis.project_files() {
         let Document::File(path) = &document else {
             continue;
         };
-        let label = path.strip_prefix(folder).unwrap_or(path);
+        // Relative to the folder, or to the repository for a file it
+        // imports from elsewhere, so the snapshot is the same in every
+        // checkout.
+        let label = path
+            .strip_prefix(folder)
+            .or_else(|_| path.strip_prefix(&repository))
+            .unwrap_or(path);
         let text = analysis.text(file).unwrap();
         writeln!(out, "== {} ==", label.display()).unwrap();
         out.push_str(&render_file(text, &analysis.tokens(file)));
@@ -329,6 +336,15 @@ fn each_modifier_where_it_belongs() {
             "side_l".to_owned(),
             TokenClass::Item(SymbolKind::Part),
             modifiers(&[Declaration])
+        )
+    );
+    // A name that is also a feature word still names its item.
+    assert_eq!(
+        tokens_of("dado(side_l, floor)")[2],
+        (
+            "floor".to_owned(),
+            TokenClass::Item(SymbolKind::Part),
+            modifiers(&[Reference])
         )
     );
     // Enum words and built-in calls are words of the language, not

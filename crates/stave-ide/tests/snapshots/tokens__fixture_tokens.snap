@@ -37,3 +37,11 @@ expression: "render_project(&fixture(\"colouring\"))"
      = width:field  overall_depth:param+ref
   29 | joint housing : dado(side_l, shelf)
      = joint:keyword  housing:joint+decl  dado:type+ref+std  side_l:part+ref  shelf:part+ref
+  33 | part floor : oak_19 {
+     = part:keyword  floor:part+decl  oak_19:stock+ref
+  34 |   length: half
+     = length:field  half:let+ref
+  35 |   width:  overall_depth
+     = width:field  overall_depth:param+ref
+  38 | joint floor_housing : dado(side_l, floor)
+     = joint:keyword  floor_housing:joint+decl  dado:type+ref+std  side_l:part+ref  floor:part+ref

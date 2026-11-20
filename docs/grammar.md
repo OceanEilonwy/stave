@@ -3821,7 +3821,7 @@ diagnostic with a "fetch" code action.
 | Inlay hints | computed values next to their source: `length: fit` shows `= 844mm`, `between(base, top)` its value, every size its cut length |
 | Go to definition, references, rename | every name resolves to exactly one declaration (including names inside strings and qualified names across modules) |
 | Document symbols, folding | items, and the blocks inside them |
-| Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, units |
+| Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, and a quantity's unit apart from its number (`18` and `mm`); on each name, whether it declares or names an item, comes from the standard library, resolves to nothing, or is a `solved param` |
 | Formatting | `stave fmt`, applied to the lossless tree (see "Layout" below) |
 | Code actions from AI | a checked patch from an AI or the suggestion engine is offered as a workspace edit |
 | Code lens | "show in 3D" on parts and assemblies, "show work card" on parts |

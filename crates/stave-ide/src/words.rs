@@ -14,11 +14,18 @@ use stave_schema::{CutOperation, Operation};
 /// `units: mm`, `form: plywood`, `species: oak`, `measure: diameter`.
 pub(crate) const WORD_FIELDS: [&str; 5] = ["grain", "units", "form", "species", "measure"];
 
-/// `true` if `word` is in one of the closed word lists, or names a
-/// feature a recipe step works on (`waste`, `cheeks`).
+/// `true` if `word` is in one of the closed word lists.
 pub fn is_enum_word(word: &str) -> bool {
     WordSet::ALL.iter().any(|set| set.contains(word))
-        || stave_schema::operations::Feature::from_word(word).is_some()
+}
+
+/// `true` if `word` names a feature a recipe step works on (`waste`,
+/// `cheeks`, `floor`). Unlike [`is_enum_word`], a feature word may also
+/// be an item's name (a part called `floor`), so it never stops a name
+/// from resolving or being chosen in a rename: it only colours a word
+/// that resolves to nothing.
+pub fn is_feature_word(word: &str) -> bool {
+    stave_schema::operations::Feature::from_word(word).is_some()
 }
 
 /// `true` if `word` is the head of a call whose meaning is fixed by its
@@ -76,6 +83,8 @@ mod tests {
         assert!(is_enum_word("across"));
         assert!(is_enum_word("plywood"));
         assert!(!is_enum_word("door_l"));
+        assert!(is_feature_word("cheeks"));
+        assert!(!is_enum_word("floor"), "a part may be called floor");
         assert!(is_fixed_call("flush"));
         assert!(is_fixed_call("tenon"));
         assert!(!is_fixed_call("overlay"));

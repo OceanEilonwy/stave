@@ -2,7 +2,7 @@
 source: crates/stave-ide/tests/tokens.rs
 expression: "render_project(& examples().join(\"joint_samples\"))"
 ---
-== /home/henry/Downloads/stave/.claude/worktrees/wf_1a1adeb9-909-1/examples/japanese_joinery/ari_tsugi.stave ==
+== examples/japanese_joinery/ari_tsugi.stave ==
    1 | stave 1
      = stave:keyword  1:number
    5 | kind ari_tsugi : joint {
@@ -39,7 +39,7 @@ expression: "render_project(& examples().join(\"joint_samples\"))"
      = dovetail_tail:function  neck:field  neck:param+ref  depth:field  depth:param+ref  angle:field  angle:param+ref
   32 |   note: "Set a sliding bevel to {angle} for the tail; trace the finished tail onto {into} to mark the socket"
      = note:field  ":text  Set a sliding bevel to :text  angle:param+ref   for the tail; trace the finished tail onto :text  into:role+ref   to mark the socket:text  ":text
-== /home/henry/Downloads/stave/.claude/worktrees/wf_1a1adeb9-909-1/examples/japanese_joinery/chidori.stave ==
+== examples/japanese_joinery/chidori.stave ==
    1 | stave 1
      = stave:keyword  1:number
   17 | kind chidori : joint {
@@ -102,7 +102,7 @@ expression: "render_project(& examples().join(\"joint_samples\"))"
      = rotate:function  lock:role+ref  by:field  90:number  deg:unit  about:field  length:word
   69 |   note: "Halve {first} and {second} together, slide {lock} in along the slots with its flats facing them, then give it a quarter turn"
      = note:field  ":text  Halve :text  first:role+ref   and :text  second:role+ref   together, slide :text  lock:role+ref   in along the slots with its flats facing them, then give it a quarter turn:text  ":text
-== /home/henry/Downloads/stave/.claude/worktrees/wf_1a1adeb9-909-1/examples/japanese_joinery/library.stave ==
+== examples/japanese_joinery/library.stave ==
    1 | stave 1
      = stave:keyword  1:number
   17 | library "Japanese joinery samples" {

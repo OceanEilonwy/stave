@@ -328,6 +328,7 @@ pub(crate) fn names_nothing(token: &SyntaxToken) -> bool {
     match parent.kind() {
         SyntaxKind::NAME_REF => {
             !(words::is_enum_word(text)
+                || words::is_feature_word(text)
                 || words::is_fixed_call(text)
                 || words::builtin_signature(text).is_some()
                 || text == "same")
@@ -400,7 +401,7 @@ fn classify(token: &SyntaxToken) -> TokenClass {
                 && parent.prev_sibling().is_none();
             if called && (words::builtin_signature(text).is_some() || words::is_fixed_call(text)) {
                 TokenClass::Function
-            } else if words::is_enum_word(text) {
+            } else if words::is_enum_word(text) || words::is_feature_word(text) {
                 TokenClass::EnumWord
             } else {
                 TokenClass::Plain
