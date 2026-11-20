@@ -285,23 +285,23 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 
 | File | Type | Callback slot → Output | Setter → Input | Notes |
 |---|---|---|---|---|
-| `slider.rs` | `Slider` | `connect_changed(f64)` → `SliderOutput::Changed(f64)` | `set_value` → `SetValue(f64)`; `set_range` → `SetRange { lower, upper }`; `set_blocked_from` → `SetBlockedFrom(Option<f64>)`; `set_value_text` → `SetValueText(String)` | **Done** (Phase 0). People's input: `PointedAt { x, width }`, `Stepped(Step)`. `value()` reads the model. |
-| `chrome.rs` | `MotionBar` | (mod.rs) `scale.connect_value_changed` → `MotionBarOutput::Moved(f64)` | `show(Option<(&str, &str, &str, f64, f64)>)` → `Show(Option<MotionShown>)`; `orientation_setter()` → `SetOrientation(gtk::Orientation)` | `#[block_signal]` on the scale's value when `Show` moves it. |
-| `dock.rs` | `Dock` | `connect_move(AssemblyId)` → `DockOutput::Move(AssemblyId)` | `offer(bool)` → `Offer(bool)`; `moves_orientation_setter()` → `SetMovesOrientation(gtk::Orientation)` | Built from the header's scene button and the `MotionBar`: launch after them, or own both. |
+| `slider.rs` | `Slider` | `SliderOutput::Changed(f64)`, forwarded at launch: `Slider::launch(.., owner, changed)` sends `changed(value)` to the owner | `set_value` → `SetValue(f64)`; `set_range` → `SetRange { lower, upper }`; `set_blocked` → `SetBlocked(Option<(f64, String)>)`; `set_value_text` → `SetValueText(String)` | **Done**. People's input: `PointedAt { x, width }`, `Stepped(Step)`, `Scrolled`. `value()` reads the model. The callback form (`Slider::new` + `connect_changed`) stays only for `focus_stage.rs`'s three cards, until that file launches them with `Slider::launch` (one line each); then it goes. |
+| `chrome.rs` | `MotionBar` | `MotionBarOutput::Moved(f64)`, forwarded at launch (`MotionBar::new(owner, message)`) → `SelectionInput::MotionMoved` | `show(Option<MotionShown>)` → `Show(Option<MotionShown>)`; `set_orientation` → `SetOrientation(gtk::Orientation)` | **Done**. `block_signal` on the scale's value when `Show` moves it. |
+| `dock.rs` | `Dock` | `DockOutput::Move(AssemblyId)`, forwarded at launch (`Dock::new(scene, motion, owner, message)`) → `SelectionInput::Select` | `offer(bool)` → `Offer(bool)`; `set_moves_orientation` → `SetMovesOrientation(gtk::Orientation)`; `show_moves` → `ShowMoves { chips, current }` | **Done**. No longer in an `Rc`: `Widgets` owns it. |
 | `edit_card.rs` | `EditCardComponent` | `connect_action(CardAction)` → `EditCardOutput::Action(CardAction)`; its links → `Link(LinkTarget)`, `Hover(Option<LinkTarget>)`; the open short list → `OptionsOpen(Option<String>)` | `show(&CardModel, &dyn Words)` → `Show(Box<CardView>)` (owned); `update_options(&Candidate)` → `UpdateOptions(Box<Candidate>)`; `open_options(&str) -> bool` → `OpenOptions(String)` (the bool is the window's own `CardOffers`); `scroll_to_open_options_now()` → `ScrollToOpenOptions` | **Done**: the shim is gone; the window owns the `Controller` (see "Edit card and menu: answers by message"). `Init` is `CardSlots` (the repeat and Pending boxes the window fills). Test getters on the model (`entries`, `option_lists`, `fix_buttons`, `put_back_button`) and the widgets (`buttons`, `name_field`, `scrolled`). |
 | `edit_menu.rs` | `EditMenuComponent` | `connect_chosen(Declaration)` → `EditMenuOutput::Chosen(Declaration)`; `EditMenuOutput::Drawn` after each `Show` | `show(Heading, &[MenuItem])` → `Show { heading, items: Vec<MenuEntry> }` (owned) | **Done**: the shim is gone; the window owns the `Controller`. Test getter `rows()` on the model. |
 | `edit_panel.rs` | `EditPanel` | — | `update() -> bool` → `Update`, the bool becomes `EditPanelOutput::Shown(bool)` | *query* `is_empty()`. Built from other cards' widgets: becomes part of its owner's view. |
 | `editor.rs` | `Editor` | a lens's links → the one `Fn(LensClick)` given to `Editor::new`, which sends `FilesInput::ListUses` / `ShowIn3d` | — (called by its owner's `update`) | **Done** (with `files.rs`): the view of `FilesComponent`, owned by its model and called only from its `update`, so `show_buffer`, `go_to` and the cursor queries take effect at once inside that update; its search bar is the component `EditorSearch`. GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. `EscapeProbe` answers "is anything open over the text?" from the widgets alone, for the Escape key handler. `new_buffer(table, text)` makes a buffer sharing the tags. |
 | `files.rs` | `FilesPage` (shim) / `FilesComponent<Then>` | `FilesOutput::Link(CursorName)`, `Go { from, to }`, `Check`, `ShowIn3d { analysis, symbol }`, `Open`, `Notice(String)`; replies `Saved { ok, then }`, `UnsavedCounted { count, then }`; publications `Documents(Vec<(Document, TextBuffer)>)`, `Analysed(Rc<Analysis>)`, `Unsaved(BTreeSet<PathBuf>)`, `Tabs(Vec<PageTab>)`; `NotInText` | `FocusText`, `SetFolder(PathBuf)`, `Save`, `Format`, `SaveAll { then }`, `CountUnsaved { then }`, `ForgetUnsaved`, `Search`, `ShowMarks`, `ShowResult`, `ShowLocation`, `Reveal`, `Wish`, `Restyle { dark }`, `OpenDocument`, `ShowTab(usize)`, `Adopt { document, buffer }` | **Done**. No `RefCell`, no `Rc<Self>`, no `Weak`: timers and the worker thread send messages with tickets (a stale timer's message is ignored, so no fired timer is ever removed), programmatic cursor moves block the buffer's cursor handler. The window's synchronous reads (`edit_files`, `overlay_for_check`, `buffer_for`, `analysis`) are answered by the shim from what the component published; see "Request and reply". |
 | `finder.rs` | `Finder` | `connect_search(&str) -> Vec<Hit>` → request `FinderOutput::Search(String)` / reply `FinderInput::Hits(Vec<Hit>)`; `connect_actions(&str) -> Vec<Action>` → `FinderOutput::SearchActions(String)` / `FinderInput::Actions(Vec<Action>)`; `connect_hit(Hit, Choice)` → `FinderOutput::Hit { hit, choice }`; `connect_action(usize)` → `FinderOutput::Action(usize)` | `present(&impl IsA<Widget>, &str)` → `Present { parent: gtk::Widget, query: String }` | Rule 9 for the two searches: the shim's `connect_search_request` / `show_hits` and `connect_actions_request` / `show_actions` are that request and reply, and the window uses them. `FinderInput::ListenForHits`: until it arrives, choosing a hit does nothing (`connect_hit` sends it); a parent that forwards `FinderOutput::Hit` itself sends it once at launch. Root is an `adw::Dialog`. |
-| `floating.rs` | `Floats` | constructor `orient: Orient` → `FloatsOutput::Orient { group, orientation }`; constructor `on_dock: OnDock` → `FloatsOutput::Docked { group, spot }` | `refresh()` → `Refresh` | Shares `Rc<RefCell<Spots>>` with `Workbench`: rule 11. Takes the view's overlay and the floating widgets at launch (`Init`). |
+| `floating.rs` | `Floats` | `FloatsOutput::Orient { group, orientation }`, `Docked { group, spot }`, forwarded at launch (`Floats::new(.., owner, message)`) → `RenderingInput::ToolOriented`, `ToolDocked` | `refresh(Spots)` → `Refresh(Spots)` | **Done**. Rule 11: the tool groups' spots have one keeper, the workbench; the floats start from a copy and hear each move as `Refresh` (the window passes on `WorkbenchOutput::ToolsChanged`). Takes the view's overlay and the floating widgets at launch (`Init`); the overlay's `get-child-position` handler gets a copy (`Placer`) after every update. |
 | `focus_panel.rs` | `FocusPanel` | `connect_source(SourceLocation)` → `FocusPanelOutput::Source(SourceLocation)`; (mod.rs) `done.connect_clicked` → `Done`; `xray`, `tint`, `fade` `connect_active_notify` → `Xray(bool)`, `Tint(bool)`, `Fade(bool)` | `show(Option<&Focus>)` → `Show(Option<Focus>)` | `#[block_signal]` on the three checks when `Show` sets them. Owned by `Inspector`. |
 | `focus_stage.rs` | `StepCard` | (mod.rs) `play.connect_clicked` → `StepCardOutput::Play`; `scrub` `Changed` → `StepCardOutput::Scrubbed(f64)` | `show_frame(Option<&str>, &str)` → `ShowFrame { step: Option<String>, status: String }`; (mod.rs) `scrub.set_value` → `SetProgress(f64)` | Owns a slider: forward `SliderOutput::Changed`. |
 | `focus_stage.rs` | `SwingCard` | (mod.rs) `play.connect_clicked` → `SwingCardOutput::Play`; `scrub` `Changed` → `Scrubbed(f64)` | `show_name(&str, bool)` → `ShowName { name, turns }`; `show_value(&str)` → `ShowValue(String)`; (mod.rs) `scrub.set_value` → `SetProgress(f64)` | Owns a slider. |
 | `focus_stage.rs` | `Caption` | — | `show(&str, &str)` → `CaptionInput::Show { text, hint }` | |
 | `focus_stage.rs` | `Pictures` | `connect_resized()` → `PicturesOutput::Resized`; the `on_choose` closure given to `show` → `PicturesOutput::Chosen(usize)` | `show(&[String], on_choose)` → `Show(Vec<String>)`; `show_textures(Vec<gdk::Texture>)` → `ShowTextures(Vec<gdk::Texture>)`; `show_current(Option<usize>)` → `ShowCurrent(Option<usize>)` | *query* `device_size()`. |
 | `focus_stage.rs` | `ProblemCard` | `scrub` `Changed` (mod.rs) → `ProblemCardOutput::Moved(f64)` | `show(Option<&MotionCard>, f32)` → `Show { card: Option<MotionCard>, amount: f32 }`; `show_value(&MotionCard, f32)` → `ShowValue { card, amount }` | Owns a slider. |
-| `header.rs` | `Header` | (mod.rs) `switcher.connect_active_name_notify` → `HeaderOutput::View(View)`; `scenes.connect_row_activated` → `HeaderOutput::Scene(usize)` | `show_title(&str, &str)` → `ShowTitle { title, folder }`; `show_view(View)` → `ShowView(View)`; `show_scenes(&[String], usize)` → `ShowScenes { titles, current }`; `show_pill(&Pill, usize, &str)` → `ShowPill { pill, problems, line }`; `show_build(Build, &str)` → `ShowBuild { build, tooltip }` | `#[block_signal]` on the switcher in `ShowView`. Pill, back, forward and build use window actions: keep them. Test getter `switcher_labels()`. |
+| `header.rs` | `Header` | `HeaderOutput::View(View)`, `Scene(usize)`, forwarded at launch (`Header::new(.., owner, message)`) → `RenderingInput::ShowView`, `SceneChosen` | `show_title(&str, &str)` → `ShowTitle { title, folder }`; `show_view(View)` → `ShowView(View)`; `show_scenes(&[String], usize)` → `ShowScenes(ScenesShown)`; `show_pill(&Pill, usize, &str)` → `ShowPill(PillShown)`; `show_build(Build, &str)` → `ShowBuild { build, tooltip }` | **Done**. `block_signal` on the switcher in `ShowView`. Pill, back, forward and build use window actions. Test getter `switcher_labels()`. |
 | `icons.rs` | `PathIcon` | — | `set_shape(Shape)` (widget method) | A GObject subclass: stays a widget, used inside components' views. |
 | `inspector.rs` | `Inspector` | `connect_focus(Target)` → `InspectorOutput::Focus(Target)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; its name links' clicks and hovers → `Link(LinkTarget)`, `Hover(Option<LinkTarget>)` (the window's `connect_links` is gone); `connect_unsaved` is gone: the window sends `show_unsaved(set)` → `InspectorInput::Unsaved(BTreeSet<PathBuf>)` when `FilesOutput::Unsaved` says the set changed | `show_focus()` → `ShowFocus`; `show_idle(Option<Note>)` → `ShowIdle(Option<Note>)`; `show(Option<&Inspection>)` → `Show(Option<Inspection>)` | Owns `FocusPanel` and `LinkHandlers` (their outputs forwarded). |
 | `new_project.rs` | `NewProjectDialog` | `cancel`, `form.folder_button`, `form.create` `connect_clicked` and `form.dialog.connect_closed` → `NewProjectOutput::Cancel`, `ChooseFolder`, `Create(NewProject)`, `Closed` | — | *queries* `answers()`, `ToolChoice::project()`. `ask_new_project` / `welcome_new_project` are `impl Shell` (coordinator). |
@@ -311,14 +311,14 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `panels.rs` | `FilesList` | `connect_open(PathBuf)` → `FilesListOutput::Open(PathBuf)` | `set_folder(&Path)` → `SetFolder(PathBuf)` | |
 | `sections.rs` | `LinkHandlers<Message>` | the old `connect_click` / `connect_hover` slots are gone: a link sends its owner's own input (`LinkHandlers::new(input, click, hover)`, two message constructors), and the owner tells its owner `<Owner>Output::Link(LinkTarget)` / `Hover(Option<LinkTarget>)` | — | **Done**. Not a component: its widget builders (`link`, `links`, `set_button_words`) are used inside `Inspector`'s and `EditCard`'s views. No `Cell`: the handlers are a sender and two `fn`s, cloned into each link. The stylesheet goes on the display once per process (`std::sync::Once`). |
 | `start_page.rs` | `StartPage` | `open` / `create` actions, recent `row.connect_activated`, `window.connect_close_request` → `StartPageOutput::Open`, `Create`, `OpenRecent(PathBuf)`, `CloseRequest` | `ask_new_project()` → `AskNewProject` | Owned by `Shell`; a window component of its own. |
-| `tab_strip.rs` | `TabStrip`, `set_page_tabs`, `show_page_tabs` | `TabStripOutput::Show { page: glib::WeakRef<panel::Widget>, index }` (a frame can hold several panels with tabs of their own) goes to the route the panel's owner registered once with `set_page_tabs(panel, Fn(usize))` (it only sends a message) | the owner hands its tabs over as data (`show_page_tabs(panel, Vec<PageTab>)`, from `FilesOutput::Tabs`); every strip gathers them into `TabStripInput::SetTabs(Vec<PageTabLabel>)` when the main loop next runs; the frame's `page_changed` → `PageChanged` (restyle in place); Ctrl+Page Up/Down on the frame → `Step(Step)` | A GObject subclass holding closures: rules 2 and 9. |
+| `tab_strip.rs` | `TabStrip`, `TabStripComponent` | `TabStripOutput::Show { panel: PanelId, index }`, forwarded at launch (`TabStrip::new(own, owner, message)`) to the workbench → `WorkbenchInput::OwnTabChosen` → `WorkbenchOutput::ShowOwnTab` → `ProjectInput::ShowOwnTab` | the panels' own tabs as data, from the workbench (`TabStrip::show_own_tabs(OwnTabs)` → `SetOwnTabs(OwnTabs)`); the frame's pages coming or going → `Gather` (the pages' handler only sends); the frame's `page_changed` → `PageChanged` (restyle in place); Ctrl+Page Up/Down on the frame → `Step(Step)` | **Done**. No thread-local registry, no list of strips, no closures: the window's `Workbench` keeps the own tabs (`OwnTabs`, by `PanelId`, read from each page's id) for its dock, gives every frame its strip with a copy (at the end of the update that made the frame) and hands every strip a new copy when they change (`Workbench::show_own_tabs`, from `FilesOutput::Tabs`). The GObject subclass owns the component's controller. |
 | `tree.rs` | `TreeSidebar` | `connect_select(Selection)` → `TreeOutput::Select(Selection)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_focus(Target)` → `Focus(Target)`; `connect_hover(Vec<Item>)` → `Hover(Vec<Item>)` | `show_tree(PartsTree, PartJoints)` → `ShowTree { tree, joints }`; `show_empty(EmptyState)` → `ShowEmpty(EmptyState)`; `set_placeholder(Option<&str>)` → `SetPlaceholder(Option<String>)`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_selection(Option<&Selection>)` → `ShowSelection(Option<Selection>)` | Its `syncing` flag and `try_borrow_mut` go: `#[block_signal]` on row selection while filling and syncing. |
-| `viewport.rs` | `Viewport` | `connect_resized(u32, u32)` → `ViewportOutput::Resized { width, height }` | `show_frame(gdk::Texture)` → `ShowFrame(gdk::Texture)`; `show_live(LiveFrame) -> bool` → `ShowLive(LiveFrame)` | A GObject subclass (the wgpu surface): stays a widget, wrapped by the view's component. *queries* `scale()`, `device_size()`. Frame timing is sensitive: measure before and after. |
-| `view_tools.rs` | `ViewToolbar` | (mod.rs) `xray.connect_toggled` → `ViewToolbarOutput::Xray(bool)`; `pull.connect_toggled` → `Pull(bool)`; `play.connect_clicked` → `Play`; `slider` `Changed` → `Apart(f64)` | `show(bool, f32, bool)` → `Show { on, amount, playing }`; `offer(bool)` → `Offer(bool)` | `#[block_signal]` on Pull apart and X-ray (replaces `updating_controls`). Owns a slider. |
-| `view_tools.rs` | `CameraToolbar` | (mod.rs) `front.connect_clicked` → `CameraOutput::Front`; `turn.connect_clicked` → `Turn` | `orientation_setter(&ViewToolbar)` → `SetOrientation(gtk::Orientation)` | `fit` uses the `win.frame` action: keep it. |
-| `view_tools.rs` | `PlanSwitch` | (mod.rs) `from_above.connect_toggled` → `PlanSwitchOutput::FromAbove(bool)` | `show(bool)` → `Show { plan }` | `#[block_signal]` on the toggle. |
-| `view_tools.rs` | `EmptyView` | — (its `open` button uses the `win.open` action: keep it) | `show(&str, &str, bool)` → `EmptyViewInput::Show { title, description, offers_open }` | |
-| `workbench.rs` | `Workbench` | `connect_tools()` → `WorkbenchOutput::ToolsChanged`; `connect_save_failed(&str)` → `SaveFailed(String)` | `apply(Layout)` → `Apply(Layout)`; `narrow_edges(&adw::Breakpoint, f64)` → `NarrowEdges { breakpoint, width }`, whose breakpoint's apply/unapply send `Fold(Vec<Side>)`/`Unfold(Vec<Side>)`; `dock_tool(Group, Spot)` → `DockTool { group, spot }`; `show_problem_count(usize)` → `ShowProblemCount(usize)`; `save()` → `Save`; `reset()` → `Reset`; `present(PanelId)` → `Present(PanelId)`; `bring_forward_beside_view(PanelId)` → `BringForwardBesideView(PanelId)`; `move_to(PanelId, Side)` → `MoveTo { panel, side }` | libpanel dock. *queries* `layout()`, `panel(PanelId)`, `is_open`, `is_shown`, `share_a_frame`; `tools()` hands out the shared `Rc<RefCell<Spots>>`: rule 11. |
+| `viewport.rs` | `Viewport` | the GObject signal `resized(u32, u32)` (`connect_resized`, a signal handler like `unmap`'s, which only sends `RenderingInput::Resized`) | `show_frame(gdk::Texture)`; `show_live(LiveFrame) -> Shown` | **Done**. A GObject subclass (the wgpu surface): stays a widget. The Rust callback slot (`on_resize`) is gone. *queries* `scale()`, `device_size()`. Its instance state is an accepted exception (below). |
+| `view_tools.rs` | `ViewToolbar` | `ViewToolbarOutput::Xray(bool)`, `Pull(bool)`, `Play`, `Apart(f64)`, forwarded at launch (`ViewToolbar::new(owner, message)`) → `RenderingInput::Xray`, `PullApart`, `PlayExplode`, `ExplodeSlid` | `show(bool, f32, bool)` → `Show { on, amount, playing }`; `offer(bool)` → `Offer(bool)` | **Done**. `block_signal` on Pull apart. Its slider is launched with `Slider::launch`, forwarded to `ViewToolbarInput::Moved`. |
+| `view_tools.rs` | `CameraToolbar` | `CameraOutput::Front`, `Turn`, forwarded at launch (`CameraToolbar::new(tools, owner, message)`) → `RenderingInput::LookFront`, `TurnAround` | `set_orientation` → `SetOrientation(gtk::Orientation)` | **Done**. `fit` uses the `win.frame` action. |
+| `view_tools.rs` | `PlanSwitch` | `PlanSwitchOutput::FromAbove(bool)`, forwarded at launch (`PlanSwitch::new(owner, message)`) → `SelectionInput::FocusPlan` | `show(bool)` → `Show { plan }` | **Done**. `block_signal` on the toggle. |
+| `view_tools.rs` | `EmptyView` | — (its `open` button uses the `win.open` action) | `show(&str, &str, bool)` → `EmptyViewInput::Show { title, description, offers_open }` | **Done**. |
+| `workbench.rs` | `Workbench` | `WorkbenchOutput::ToolsChanged(Spots)`, `SaveFailed(String)`, `ShowOwnTab { panel, index }`, forwarded at launch (`Workbench::new(.., owner, message)`) → `RenderingInput::ToolsMoved`, `ProjectInput::Notice`, `ProjectInput::ShowOwnTab` | `apply(Layout)` → `Apply(Layout)`; `narrow_edges(&adw::Breakpoint, f64)` → `NarrowEdges { breakpoint, width }` (its apply/unapply send `Fold`/`Unfold`); `dock_tool(Group, Spot)` → `DockTool { group, spot }`; `show_problem_count(usize)` → `ShowProblemCount(usize)`; `show_own_tabs(PanelId, Vec<PageTab>)` → `ShowOwnTabs { panel, tabs }`; `save()` → `Saved { layout, failure }`; `reset()` → `Reset`; `present(PanelId)` → `Present(PanelId)`; `bring_forward_beside_view(PanelId)` → `BringForwardBesideView(PanelId)`; `move_to(PanelId, Side)` → `MoveTo { panel, side }`; a strip's chosen own tab → `OwnTabChosen { panel, index }` | **Done**. libpanel dock. The one keeper of the tool groups' spots and of the panels' own tabs (see `floating.rs`, `tab_strip.rs`). *queries* `layout()`, `is_open`, `is_shown`, `share_a_frame`, `tool_spots()` (a copy, read once by `build_widgets`). |
 | `edit_view/grip_panel.rs` | `GripPanel` | `connect_action(PanelAction)` → `GripPanelOutput::Action(PanelAction)`; (`grips.rs`) `panel.value.connect_activate` → folds into `Action` | `show(&PanelModel)` → `Show(PanelModel)` | Test getters `words()`, `radios()`. |
 | `edit_view/grip_panel.rs` | `Readout` | — | `show(Option<&(String, String)>)` → `ReadoutInput::Show(Option<(String, String)>)` | Test getter `words()`. |
 | `edit_view/changes.rs` | `ChangeCard` | `connect_action(ChangeAction)` → `ChangeCardOutput::Action(ChangeAction)` | `show(&ChangeWords)` → `Show(ChangeWords)` | |
@@ -405,6 +405,18 @@ them.
   through `connect_outputs(impl Fn(<Leaf>Output))` (the shim's
   `Bridge::connect`), and `wire` maps each variant to a group's input.
   There are no per-output callback slots in front of them any more.
+- The window's own chrome (the header, the motion bar, the view tools,
+  the camera column, the plan switch, the dock's chips, the floating
+  controls and the workbench) is launched by `build_widgets` with its
+  outputs forwarded (rule 6), each variant mapped there to a group's
+  input. They are launched before the window, so they forward into a
+  channel of the window's own (`Widgets::leaf_outputs`), which
+  `Window::init` passes on to the window's input, in order; the mapping
+  functions live in each group's file (`update::rendering::header_said`,
+  `view_tools_said`, `camera_said`, `floats_said`;
+  `update::selection::motion_said`, `plan_switch_said`, `dock_said`;
+  `update::project::workbench_said`). Nothing in front of them takes a
+  callback.
 - Controls the window also sets (Pull apart, From above, focus mode's
   checks, the motion slider) are set by their own components with the
   handler blocked (`#[block_signal]`, or `block_signal` in
@@ -553,10 +565,11 @@ for later conversions, in this order of preference.
    inside its own drawing becomes a message sent when the answer changes:
    `FilesOutput::Unsaved(set)` → `Inspector::show_unsaved` →
    `InspectorInput::Unsaved`; `FilesOutput::Tabs(tabs)` →
-   `tab_strip::show_page_tabs`, the strips gathering them when the main
-   loop next runs. The strip's "show this tab" goes to a route registered
-   once (`set_page_tabs(panel, Fn(usize))`), which only sends
-   `ProjectInput::ShowFileTab`.
+   `Workbench::show_own_tabs(PanelId::Code, tabs)`, which hands every
+   strip of the window's dock a copy, each gathering its tabs in its own
+   update. A strip's "show this tab" is its output, forwarded to the
+   workbench, which tells the window (`WorkbenchOutput::ShowOwnTab` →
+   `ProjectInput::ShowOwnTab`).
 
 Never call `bridge.model()` from the owner's handlers to answer one of
 these (rule 8), and never put a `RefCell` round the shared answer.
@@ -608,6 +621,22 @@ these (rule 8), and never put a `RefCell` round the shared answer.
   messages that the breakpoint's `apply`/`unapply` send, so they move
   when the main loop next runs rather than inside the breakpoint's
   signal; `layout()` still reports a folded edge as it was before.
+- The window's chrome (header, view tools, camera column, plan switch,
+  motion bar, dock, floating controls, workbench) reaches the window
+  through `Widgets::leaf_outputs`, one more step on the main loop than
+  a callback that sent the window a message; the order is kept. An
+  output sent before the window is launched waits there rather than
+  being dropped.
+- A tab strip gathers its tabs in its own update, at the main loop's
+  default priority (still before GTK lays out and draws), instead of in
+  a high-priority idle shared by every strip; the panels' own tabs are
+  kept per window, by the window's workbench, rather than in one
+  registry for the process. A frame the workbench makes gets its strip
+  at the end of the update that made it, as frames libpanel makes did
+  already.
+- `Viewport::connect_resized` connects a handler to the `resized`
+  signal instead of replacing the one handler; each caller connects
+  once.
 
 ### Done by the group lanes and the integration
 
@@ -651,12 +680,36 @@ All three were on `main` before the move, not caused by it.
   lets them off. A draft upstream report is in
   `docs/reviews/upstream-adw-toggle-leak.md`.
 
+### Accepted exceptions
+
+State that stays outside a component's model, each for a reason the
+rules can't remove:
+
+- `viewport.rs`, `imp::Viewport`'s `frame`, `sizing`, `reported` and
+  `settling` (`Cell`s): the instance state of a GObject subclass. GTK
+  calls `snapshot`, `measure` and `size_allocate` with the instance
+  shared (`&self`), and the 3D view must be a widget that draws in
+  `snapshot`, so its state lives in the instance, read and written only
+  by the widget's own methods and its own settle timer (which holds the
+  widget weakly). Nothing else shares it, and nothing is borrowed while
+  it emits `resized`.
+- `tab_strip.rs`, `imp::TabStrip::tabs` (a `OnceCell` holding the
+  strip's `Controller<TabStripComponent>`): libpanel takes a frame's
+  header as a GObject implementing `PanelFrameHeader`, whose methods
+  (`page_changed`, the `frame` property) take the instance shared. The
+  cell is set once, by `TabStrip::new`, and only read to send the
+  component a message. The component holds its frame and its pages as
+  `glib::WeakRef`s (GObject widgets, not Rust structs): the frame owns
+  the strip, which owns the component, so a strong reference would be a
+  cycle.
+
 ### Still to do
 
-- The tab strip still keeps its registry of panels' own tabs and its
-  strips in thread-local `RefCell`s (borrowed only to copy in or out,
-  never across a call); they hold data and a message-sending route now,
-  not closures that read the Code panel.
+- `focus_stage.rs`'s three cards still give their sliders a callback
+  (`Slider::new` + `connect_changed`); each becomes
+  `Slider::launch(.., sender.input_sender(), <Card>Input::<Variant>)`,
+  and then `Slider::new`, `connect_changed` and the slider's `Bridge`
+  go.
 - The editing leaves `ChangeCard`, `GripPanel`, `RepeatRow`, `ItemTools`
   and `HoldCard` still take per-output callbacks.
 - `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an

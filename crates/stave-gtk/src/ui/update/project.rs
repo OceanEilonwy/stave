@@ -109,8 +109,14 @@ pub(in crate::ui) enum ProjectInput {
     /// The Code panel's open files as tabs, for the strip beside the
     /// Model.
     FileTabs(Vec<tab_strip::PageTab>),
-    /// People chose the open file at this place in the tab strip.
-    ShowFileTab(usize),
+    /// People chose one of a panel's own tabs in a tab strip (the Code
+    /// panel's open file at this place).
+    ShowOwnTab {
+        /// The panel.
+        panel: workbench::PanelId,
+        /// Where the tab is among the panel's own tabs.
+        index: usize,
+    },
     /// Ctrl+F with the keyboard outside the text: the finder.
     SearchElsewhere,
     /// People answered the question about unsaved changes.
@@ -270,27 +276,9 @@ pub(in crate::ui) fn wire(window: &Window) {
             .into(),
         );
     });
-    // The open files as tabs beside the Model, wherever the Code panel is
-    // docked: choosing one is a message.
-    if let Some(code) = widgets.workbench.panel(workbench::PanelId::Code) {
-        let sender = input.clone();
-        tab_strip::set_page_tabs(code, move |index| {
-            sender.emit(ProjectInput::ShowFileTab(index).into());
-        });
-    }
-    // The workbench says when the layout can't be saved, and where the
-    // view's tool groups went (the floating controls follow).
-    let sender = input.clone();
-    widgets.workbench.connect_outputs(move |output| {
-        sender.emit(match output {
-            workbench::WorkbenchOutput::SaveFailed(text) => {
-                ProjectInput::Notice { text, seconds: 5 }.into()
-            }
-            workbench::WorkbenchOutput::ToolsChanged(spots) => {
-                super::rendering::RenderingInput::ToolsMoved(spots).into()
-            }
-        });
-    });
+    // The workbench's outputs (the layout not saved, the tool groups
+    // moved, one of the Code panel's tabs chosen) were forwarded when
+    // `build_widgets` launched it.
     // Closing the window is a message: the window remembers its size and
     // the layout and asks about unsaved changes in its own update, never
     // inside the signal. Once the window has shut down nobody can ask, so
@@ -303,6 +291,23 @@ pub(in crate::ui) fn wire(window: &Window) {
             glib::Propagation::Proceed
         }
     });
+}
+
+/// The workbench's outputs as the window's messages (forwarded at
+/// launch): the layout not saved, the tool groups moved (the floating
+/// controls follow), one of a panel's own tabs chosen.
+pub(in crate::ui) fn workbench_said(output: workbench::WorkbenchOutput) -> WindowInput {
+    match output {
+        workbench::WorkbenchOutput::SaveFailed(text) => {
+            ProjectInput::Notice { text, seconds: 5 }.into()
+        }
+        workbench::WorkbenchOutput::ToolsChanged(spots) => {
+            super::rendering::RenderingInput::ToolsMoved(spots).into()
+        }
+        workbench::WorkbenchOutput::ShowOwnTab { panel, index } => {
+            ProjectInput::ShowOwnTab { panel, index }.into()
+        }
+    }
 }
 
 impl Window {
@@ -423,13 +428,25 @@ impl Window {
             ProjectInput::FilesOpened(documents) => self.widgets.files.set_documents(documents),
             ProjectInput::Unsaved(unsaved) => self.widgets.inspector.show_unsaved(unsaved),
             ProjectInput::FileTabs(tabs) => {
-                if let Some(code) = self.widgets.workbench.panel(workbench::PanelId::Code) {
-                    tab_strip::show_page_tabs(code, tabs);
+                // The open files as tabs beside the Model, wherever the
+                // Code panel is docked.
+                self.widgets
+                    .workbench
+                    .show_own_tabs(workbench::PanelId::Code, tabs);
+            }
+            ProjectInput::ShowOwnTab { panel, index } => match panel {
+                workbench::PanelId::Code => {
+                    self.widgets.files.send(files::FilesInput::ShowTab(index));
                 }
-            }
-            ProjectInput::ShowFileTab(index) => {
-                self.widgets.files.send(files::FilesInput::ShowTab(index));
-            }
+                // No other panel has tabs of its own.
+                workbench::PanelId::View
+                | workbench::PanelId::Parts
+                | workbench::PanelId::Files
+                | workbench::PanelId::Details
+                | workbench::PanelId::Edit
+                | workbench::PanelId::Problems
+                | workbench::PanelId::Output => {}
+            },
             ProjectInput::CaptureTick(capture) => self.capture_tick(capture),
         }
     }
