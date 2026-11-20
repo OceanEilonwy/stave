@@ -102,7 +102,9 @@ part cleat_front : oak_19 {
 part cleat_back = mirror(cleat_front, about: mid(top, deep))
 
 // ---- joints ----
-joint apron_tenons : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: [leg_front_left, leg_front_right, leg_back_left, leg_back_right], length: 20mm)
+// 15mm shoulders leave each tenon 80mm wide: glued cheeks any wider would
+// hold the apron still across its grain and split it with the seasons.
+joint apron_tenons : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: [leg_front_left, leg_front_right, leg_back_left, leg_back_right], length: 20mm, shoulder: 15mm)
 joint top_screws   : slotted_screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
 joint cleat_glue   : glued_face([cleat_front, cleat_back], into: [apron_front, apron_back])
 

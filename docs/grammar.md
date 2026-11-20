@@ -3982,9 +3982,17 @@ no limit: it doesn't move that way.
 Glue is **on the patch** when a glued pair's
 kind cuts nothing, places no member and no `uses:` fastener, makes no
 part and adds nothing (std's `glued_face`): all its glue is spread where
-the parts touch (`contact(a, b)`, on their drawn boxes). Glue in a
-joint's cuts (a tenon's cheeks, a panel in its groove) is not measured,
-except as below for a part a joint extends into a housing.
+the parts touch (`contact(a, b)`, on their drawn boxes). Glue is **in
+the cuts** of every other glued pair, where one part houses the other
+(a tenon's cheeks in its mortise, a panel's edge in its groove, a
+shelf's end in its dado): where the two parts' cut boxes overlap. Across
+the grain of a solid board it reaches as far as that overlap does, or,
+when narrower, as far as a `tenon` or `spigot` cut on the board for the
+pair, or a `pocket` cut for it in the other part (a mortise's width lies
+along the entering part's width, its thickness along its thickness).
+Glue in a member's hole (a `drill`, or any cut on `crossing(p,
+member)`) belongs to the member, measured where the member is (rule 4).
+Parts that only touch, overlapping nowhere, have no glue in a cut.
 
 1. **End grain glued.** A pair glued on the patch where one part, of
    `solid` or `dowel` stock, meets the other with its end (its grain runs
@@ -4003,6 +4011,23 @@ except as below for a part a joint extends into a housing.
    <top> (the max_held_width of <oak>), or hold it with fasteners that
    let it move`. A cleat glued along an apron, with its grain the same
    way, is not warned.
+
+   Glue in the cuts is measured the same way, against the same limit:
+   `<joint>: <apron> is glued across its grain to <leg> over <130mm> in
+   the <mortise>, and wood held that wide splits as it moves with the
+   seasons`, at the joint's call, with the help `leave the glue out of
+   <joint> (glue: false) so <apron> can move in the <mortise>, or make the
+   <mortise> no wider than <80mm> across the grain of <apron> (the
+   max_held_width of <oak>)`, the cut named as in the other part (or, if
+   it has none, on the board). A tenon on a wide rail glued into a leg,
+   and a solid panel glued into grooves in the frame pieces at its ends,
+   are warned; a narrow tenon, a shelf in a dado in a side whose grain
+   runs up and down (both move front to back together), and a plywood
+   panel glued in its grooves are not. A solid panel floats in its
+   grooves: `glue: false`. Glue in the cuts is not a fixing for rule 4,
+   except at an edge a joint extends into a housing (below): a round
+   tenon glued into a seat flexes with the legs and rungs it joins, as a
+   chair's do.
 3. **Short grain.** A `tenon` or `spigot` cut on the end of a part of
    `solid` stock (`end(p, facing: q)`) whose grain runs along its width,
    across the tenon: its fibres are only as long as the tenon is wide,
@@ -4059,9 +4084,9 @@ warning[grain]: top is held fast at places 372mm apart across its grain, so it c
    = help: hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain (the max_held_width of oak)
 ```
 
-**Not measured yet.** Glue in a joint's cuts (a wide tenon glued across a
-leg's grain, a solid panel glued in a groove that doesn't extend it), a
-slot that is long the wrong way, and movement in a part's thickness.
+**Not measured yet.** A slot that is long the wrong way, whether a solid
+panel has room to swell at the bottom of its groove (std's `groove` has a
+`clearance`), and movement in a part's thickness.
 
 ### Diagnostics
 

@@ -30,8 +30,8 @@ use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::Length;
 use stave_lang::{Code, Severity};
 use stave_model::solved::{
-    BodyOwner, BodyRef, Contact as PairContact, CutKind, CutPlace, CutSource, End, JointId, Part,
-    PartId, PartOrigin, RoleValue, Shape, Size3, WorldBox,
+    BodyOwner, BodyRef, Contact as PairContact, Cut, CutKind, CutPlace, CutSource, End, JointId,
+    Part, PartId, PartOrigin, RoleValue, Shape, Size3, WorldBox,
 };
 use stave_schema::fields::DEFAULT_MAX_HELD_WIDTH_NM;
 use stave_schema::words::{Grain, StockForm};
@@ -172,7 +172,180 @@ struct Fixing {
     by: String,
 }
 
+/// A glued joint pair whose glue is in its cuts, as [`Checker::glue_in_cuts`]
+/// measures it.
+struct InCut<'a> {
+    /// The joint.
+    joint: JointId,
+    /// The pair's index in it.
+    pair: usize,
+    /// The joint's name, for messages.
+    name: &'a str,
+}
+
+impl InCut<'_> {
+    /// The cuts of this pair in `part` that house or shape wood (not a
+    /// member's hole: glue in a hole is the member's, and a member is
+    /// measured where it is).
+    fn cuts<'p>(&self, part: &'p Part) -> impl Iterator<Item = &'p Cut> {
+        part.cuts.iter().filter(move |cut| {
+            let ours = matches!(
+                cut.source,
+                CutSource::Joint { joint, pair } if joint == self.joint && pair.index() == self.pair
+            );
+            let hole = matches!(cut.place, CutPlace::Member { .. })
+                || matches!(cut.kind, CutKind::Drill { .. });
+            ours && !hole
+        })
+    }
+}
+
+/// How wide a tenon or round tenon cut on `part` is along `axis` (a world
+/// axis): the wood left in the housing. `None` for any other cut.
+fn shaped_along(part: &Part, cut: &Cut, axis: Axis) -> Option<Length> {
+    let local = part.pose.orientation.part_axis(axis);
+    match &cut.kind {
+        CutKind::Tenon {
+            length,
+            width,
+            thickness,
+        } => {
+            // On an end, the tenon's width and thickness are across the
+            // part's; on an edge (a tongue), its width runs along the
+            // part's length (as the geometry cuts it).
+            let (width_axis, thickness_axis) = match cut.face.axis {
+                PartAxis::Length => (PartAxis::Width, PartAxis::Thickness),
+                PartAxis::Width => (PartAxis::Length, PartAxis::Thickness),
+                PartAxis::Thickness => (PartAxis::Length, PartAxis::Width),
+            };
+            Some(if local == width_axis {
+                *width
+            } else if local == thickness_axis {
+                *thickness
+            } else {
+                *length
+            })
+        }
+        CutKind::Spigot { length, diameter } => Some(if local == cut.face.axis {
+            *length
+        } else {
+            *diameter
+        }),
+        CutKind::Notch { .. }
+        | CutKind::Slot { .. }
+        | CutKind::Pocket { .. }
+        | CutKind::Round { .. }
+        | CutKind::Drill { .. }
+        | CutKind::DovetailSocket { .. }
+        | CutKind::DovetailTail { .. }
+        | CutKind::Outline { .. }
+        | CutKind::Diagonal
+        | CutKind::Chamfer { .. }
+        | CutKind::Roundover { .. } => None,
+    }
+}
+
+/// How wide a mortise (a `pocket`) cut in another part for `entering` is
+/// along `axis` (a world axis): its width lies along the entering part's
+/// width, its thickness along its thickness. `None` for any other cut,
+/// or along the entering part's length.
+fn housed_along(entering: &Part, cut: &Cut, axis: Axis) -> Option<Length> {
+    let CutKind::Pocket {
+        width, thickness, ..
+    } = &cut.kind
+    else {
+        return None;
+    };
+    match entering.pose.orientation.part_axis(axis) {
+        PartAxis::Width => Some(*width),
+        PartAxis::Thickness => Some(*thickness),
+        PartAxis::Length => None,
+    }
+}
+
 impl Checker<'_> {
+    /// Glue in the cuts of a glued pair (a tenon's cheeks in its mortise,
+    /// a panel's edge in its groove, a shelf's end in its dado): where the
+    /// two parts' cut boxes overlap, narrowed to a tenon or a mortise cut
+    /// for the pair, measured across the grain of each solid board, and
+    /// warned like glue on the patch when the other part holds still that
+    /// way over more than the board's limit. It is not taken as a fixing
+    /// for "held fast" (grammar, "Grain and wood movement"): a round tenon
+    /// glued in its hole flexes with the legs it joins, as a chair's do.
+    fn glue_in_cuts(
+        &mut self,
+        glued: &InCut<'_>,
+        a: &Part,
+        b: &Part,
+        warned: &mut BTreeSet<PartId>,
+    ) {
+        let design = self.design;
+        let Some(overlap) = shared_box(&a.cut_box(), &b.cut_box()) else {
+            return;
+        };
+        // Parts that only touch house nothing.
+        if Axis::ALL
+            .into_iter()
+            .any(|axis| overlap.size(axis) == Length::ZERO)
+        {
+            return;
+        }
+        for (part, other) in [(a, b), (b, a)] {
+            if !moves(part) {
+                continue;
+            }
+            // What messages call the housing: the cut in the other part,
+            // or else the cut on this one.
+            let Some(housing) = glued.cuts(other).next().or_else(|| glued.cuts(part).next()) else {
+                continue;
+            };
+            let axis = movement_axis(part);
+            let mut across = overlap.size(axis);
+            for size in glued
+                .cuts(part)
+                .filter_map(|cut| shaped_along(part, cut, axis))
+                .chain(
+                    glued
+                        .cuts(other)
+                        .filter_map(|cut| housed_along(part, cut, axis)),
+                )
+            {
+                across = across.min(size);
+            }
+            if !holds_still(other, axis) || across <= limit(part) || warned.contains(&part.id) {
+                continue;
+            }
+            let noun = cut_noun(housing);
+            self.next_contact = Some(Contact::of(
+                design,
+                &[Item::Part(part.id), Item::Part(other.id)],
+                &[],
+            ));
+            self.report(
+                Severity::Warning,
+                Code::Grain,
+                format!(
+                    "{}: {} is glued across its grain to {} over {} in the {noun}, and wood held that wide splits as it moves with the seasons",
+                    glued.name,
+                    self.part_name(part.id),
+                    self.part_name(other.id),
+                    length_text(across)
+                ),
+                self.joint_place(glued.joint),
+                Vec::new(),
+                Some(format!(
+                    "leave the glue out of {} (glue: false) so {} can move in the {noun}, or make the {noun} no wider than {} across the grain of {} ({})",
+                    glued.name,
+                    self.part_name(part.id),
+                    length_text(limit(part)),
+                    self.part_name(part.id),
+                    limit_source(part)
+                )),
+            );
+            warned.insert(part.id);
+        }
+    }
+
     pub(crate) fn grain(&mut self) {
         let design = self.design;
         let cut_pairs: BTreeSet<(JointId, usize)> = design
@@ -240,20 +413,26 @@ impl Checker<'_> {
                         by: joint.name.clone(),
                     });
                 }
-                // The rest is for glue spread on the patch where the
-                // parts touch: a joint that cuts, places, makes or adds
-                // something has its glue in that, which isn't measured.
+                // Glue spread on the patch where the parts touch, or, for
+                // a joint that cuts, places, makes or adds something, in
+                // that: in the cuts where one part houses the other.
                 let on_patch = pair.members.is_empty()
                     && pair.made_parts.is_empty()
                     && pair.extensions.is_empty()
                     && !fastened.contains(&joint.id)
                     && !cut_pairs.contains(&(joint.id, index.index()));
+                if !on_patch {
+                    let glued = InCut {
+                        joint: joint.id,
+                        pair: index.index(),
+                        name: &joint.name,
+                    };
+                    self.glue_in_cuts(&glued, a, b, &mut warned);
+                    continue;
+                }
                 let PairContact::Butt { axis: normal } = pair.contact else {
                     continue;
                 };
-                if !on_patch {
-                    continue;
-                }
                 let Some(patch) = shared_box(&a.drawn_box(), &b.drawn_box()) else {
                     continue;
                 };

@@ -594,3 +594,128 @@ fn a_sheet_has_no_limit() {
         ]
     );
 }
+
+// ---- Glue in a joint's cuts ----
+
+/// An apron `width` wide tenoned into a leg, its tenon glued or not.
+fn wide_tenon(width: &str, glue: &str) -> String {
+    tenoned("length")
+        .replace(
+            "  width:  90mm\n  grain:  length\n",
+            &format!("  width:  {width}\n  grain:  length\n"),
+        )
+        .replace(
+            "mortise_tenon(apron, into: leg, thickness: 8mm, length: 20mm)",
+            &format!("mortise_tenon(apron, into: leg, thickness: 8mm, length: 20mm{glue})"),
+        )
+}
+
+#[test]
+fn a_wide_tenon_glued_across_the_legs_grain_is_warned() {
+    // A 150mm apron with 10mm shoulders: a tenon 130mm wide, its cheeks
+    // glued to the leg, whose grain runs up and down, the way the apron
+    // moves.
+    let checked = check(&wide_tenon("150mm", ""));
+    assert_eq!(
+        grain(&checked),
+        [(
+            "tenons: apron is glued across its grain to leg over 130mm in the mortise, and wood held that wide splits as it moves with the seasons".to_owned(),
+            "leave the glue out of tenons (glue: false) so apron can move in the mortise, or make the mortise no wider than 80mm across the grain of apron (the max_held_width of oak)".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn a_narrow_glued_tenon_is_sound() {
+    // A 90mm apron: its tenon is 70mm wide.
+    let checked = check(&wide_tenon("90mm", ""));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+#[test]
+fn a_wide_tenon_left_dry_is_sound() {
+    let checked = check(&wide_tenon("150mm", ", glue: false"));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+/// A panel lying on a plywood base between two stiles at its ends, in
+/// their grooves: the stiles' grain runs front to back, the way the
+/// panel moves. `stock` is the panel's stock, `glue` added to the groove.
+fn panel_between_stiles(stock: &str, glue: &str) -> String {
+    format!(
+        r#"stave 1
+
+project "Panel" {{
+  units: mm
+}}
+
+stock oak    {{ species: white_oak, form: solid, thickness: 19mm, max_width: 500mm, max_length: 2400mm }}
+stock oak_12 {{ species: white_oak, form: solid, thickness: 12mm, max_width: 500mm, max_length: 2400mm }}
+stock ply    {{ species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }}
+stock ply_12 {{ species: birch, form: plywood, thickness: 12mm, max_width: 1220mm, max_length: 2440mm }}
+
+part base : ply {{
+  length: 600mm
+  width:  300mm
+  place {{
+    ground
+  }}
+}}
+part stile_left : oak {{
+  length: 300mm
+  width:  30mm
+  place {{
+    orient(length: back, width: right)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }}
+}}
+part stile_right : oak {{
+  length: 300mm
+  width:  30mm
+  place {{
+    orient(length: back, width: right)
+    against(base.top)
+    flush(base.right)
+    flush(base.front)
+  }}
+}}
+part panel : {stock} {{
+  length: fit
+  width:  300mm
+  place {{
+    against(base.top)
+    flush(base.front)
+    against(stile_left.right)
+  }}
+}}
+joint stiles : screw([stile_left, stile_right], into: base, count: 3, glue: false)
+joint housed : groove(panel, into: [stile_left, stile_right]{glue})
+joint rests  : glued_face(panel, into: base, glue: false)"#
+    )
+}
+
+#[test]
+fn a_solid_panel_glued_into_grooves_at_its_ends_is_warned() {
+    let checked = check(&panel_between_stiles("oak_12", ""));
+    assert_eq!(
+        grain(&checked),
+        [(
+            "housed: panel is glued across its grain to stile_left over 300mm in the groove, and wood held that wide splits as it moves with the seasons".to_owned(),
+            "leave the glue out of housed (glue: false) so panel can move in the groove, or make the groove no wider than 80mm across the grain of panel (the max_held_width of oak_12)".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn a_solid_panel_floating_in_grooves_at_its_ends_is_sound() {
+    let checked = check(&panel_between_stiles("oak_12", ", glue: false"));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+#[test]
+fn plywood_glued_into_its_grooves_is_sound() {
+    let checked = check(&panel_between_stiles("ply_12", ""));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}

@@ -83,4 +83,7 @@ part shelf[3] : ply_18 {
 }
 
 // ---- joints ----
-joint shelf_dados : dado(shelf[*], into: [side_l, side_r], depth: dado_depth)
+// The dados are left dry. The oak sides swell and shrink front to back with
+// the seasons and the plywood shelves don't, so glue along the whole 280mm
+// of each dado would hold a side still across its grain until it split.
+joint shelf_dados : dado(shelf[*], into: [side_l, side_r], depth: dado_depth, glue: false)
