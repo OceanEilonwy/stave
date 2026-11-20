@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-20 13:04+0800\n"
+"POT-Creation-Date: 2026-11-20 14:28+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -169,6 +169,16 @@ msgstr ""
 #: crates/stave-app/src/conflicts.rs:124
 #, rust-format
 msgid "Keep side {number}"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:257
+#, rust-format
+msgid "in side {number} of the conflicts:"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:262
+#, rust-format
+msgid "in side {number} of the conflicts ('{label}'):"
 msgstr ""
 
 #: crates/stave-app/src/edit.rs:65
@@ -1039,7 +1049,7 @@ msgstr ""
 
 #: crates/stave-app/src/inspect.rs:1237
 #: crates/stave-gtk/src/ui/edit_view/grip_text.rs:406
-#: crates/stave-gtk/src/ui/files.rs:1994
+#: crates/stave-gtk/src/ui/files.rs:2044
 msgid "Note"
 msgstr ""
 
@@ -1683,7 +1693,7 @@ msgid ""
 "File: {file}"
 msgstr ""
 
-#: crates/stave-app/src/scratch.rs:645 crates/stave-app/src/versions.rs:767
+#: crates/stave-app/src/scratch.rs:645 crates/stave-app/src/versions.rs:1022
 msgid "the edit was refused, so nothing was written"
 msgstr ""
 
@@ -1832,55 +1842,123 @@ msgstr ""
 msgid "the search was cancelled"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:401
+#: crates/stave-app/src/versions.rs:119
+#, rust-format
+msgid "this project is inside another project's versions (at {folder}); versions can't be turned on here, but a copy of the project in a folder of its own can have them"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:123
+msgid "versions are off for this project; turn them on first"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:125
+#, rust-format
+msgid "couldn't use {file}: {reason}"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:128
+msgid "a file's name isn't a name inside the project"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:129
+msgid "the project's versions couldn't be read or written"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:131
+#, rust-format
+msgid "there is no version {id}"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:134
+#, rust-format
+msgid "there is no suggestion {id}; it may have been applied or discarded already"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:138
+#, rust-format
+msgid "the suggestion has clashing changes in {files}; resolve them before applying it"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:143
+#, rust-format
+msgid "the project changed while this was being prepared, and the changes clash in {files}; try again"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:148
+msgid "the project changed while this was being checked; try again"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:151
+msgid "the suggestion changed while this was being prepared; try again"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:154
+#, rust-format
+msgid "a suggestion can't change {file}: the project's settings are changed only by you"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:158
+msgid "the project's folder changed while this was being recorded; try again"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:160
+msgid "there is nothing to undo"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:162
+#, rust-format
+msgid "can't undo “{undone}”: {later} came after it and builds on it"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:564
 msgid "Saved"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:402 crates/stave-gtk/src/ui/files.rs:1066
+#: crates/stave-app/src/versions.rs:565 crates/stave-gtk/src/ui/files.rs:1116
 #, rust-format
 msgid "Saved {file}"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:404
+#: crates/stave-app/src/versions.rs:567
 #, rust-format
 msgid "Saved {count} file"
 msgid_plural "Saved {count} files"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/stave-app/src/versions.rs:447
+#: crates/stave-app/src/versions.rs:610
 msgid "Turned on versions"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:638
+#: crates/stave-app/src/versions.rs:893
 #, rust-format
 msgid "Undid “{change}”"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:640
+#: crates/stave-app/src/versions.rs:895
 #, rust-format
 msgid "Undid applying “{title}”"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:643
+#: crates/stave-app/src/versions.rs:898
 #, rust-format
 msgid "Brought back the suggestion “{title}”"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:647
+#: crates/stave-app/src/versions.rs:902
 #, rust-format
 msgid "Took back the suggestion “{title}”"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:650
+#: crates/stave-app/src/versions.rs:905
 msgid "Undid the last change"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:726
+#: crates/stave-app/src/versions.rs:981
 msgid "the patch couldn't be read"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:735
+#: crates/stave-app/src/versions.rs:990
 msgid "checking it was stopped"
 msgstr ""
 
@@ -1963,36 +2041,40 @@ msgid "Stave is installed in a folder whose name can't be written into the app's
 msgstr ""
 
 #: crates/stave-gtk/src/ui/ai_link.rs:179
+msgid "Stave couldn't find the full path to its own program to give the app."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/ai_link.rs:182
 #, rust-format
 msgid "Its settings file couldn't be read ({path})."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:183
+#: crates/stave-gtk/src/ui/ai_link.rs:186
 #, rust-format
 msgid "Its settings file couldn't be written ({path})."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:188
+#: crates/stave-gtk/src/ui/ai_link.rs:191
 #, rust-format
 msgid "Its settings file isn't laid out the way {app} writes it, so it was left as it is ({path})."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:193
+#: crates/stave-gtk/src/ui/ai_link.rs:196
 #, rust-format
 msgid "Its command, {program}, wasn't found. Is {app} installed?"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:197
+#: crates/stave-gtk/src/ui/ai_link.rs:200
 #, rust-format
 msgid "{app}'s own setup command failed."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:200
+#: crates/stave-gtk/src/ui/ai_link.rs:203
 #, rust-format
 msgid "Stave couldn't reach {app}."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/ai_link.rs:208
+#: crates/stave-gtk/src/ui/ai_link.rs:211
 msgid "OK"
 msgstr ""
 
@@ -2129,7 +2211,7 @@ msgstr ""
 msgid "Remove the selected piece"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/app.rs:318 crates/stave-gtk/src/ui/versions.rs:321
+#: crates/stave-gtk/src/ui/app.rs:318 crates/stave-gtk/src/ui/versions.rs:333
 msgid "Undo"
 msgstr ""
 
@@ -3355,92 +3437,102 @@ msgstr ""
 msgid "Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:842
+#: crates/stave-gtk/src/ui/files.rs:847
 #, rust-format
 msgid "Saved a copy as {file}; the open file still has unsaved changes"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:851
+#: crates/stave-gtk/src/ui/files.rs:856
 msgid "_Close"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1005
+#: crates/stave-gtk/src/ui/files.rs:1010
 #, rust-format
 msgid "{file} is part of the standard library and can't be changed"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1040
+#: crates/stave-gtk/src/ui/files.rs:1036
+#, rust-format
+msgid "{file} changed on disk while you edited it; both changes are saved, and where they touch the same lines both are kept, between marker lines"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1039
+#, rust-format
+msgid "{file} changed on disk while you edited it; both changes are saved"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/files.rs:1085
 #: crates/stave-gtk/src/ui/update/project.rs:995
 #: crates/stave-gtk/src/ui/update/rendering.rs:792
 msgid "_Cancel"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1043
+#: crates/stave-gtk/src/ui/files.rs:1088
 msgid "_Try Again"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1044
+#: crates/stave-gtk/src/ui/files.rs:1089
 msgid "Save a _Copy…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1081
+#: crates/stave-gtk/src/ui/files.rs:1131
 msgid "Save a Copy"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1121
+#: crates/stave-gtk/src/ui/files.rs:1171
 msgid "The file is already laid out"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1595
+#: crates/stave-gtk/src/ui/files.rs:1645
 #, rust-format
 msgid "Line {line}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1744
+#: crates/stave-gtk/src/ui/files.rs:1794
 msgid "This word isn't declared anywhere: it is part of the language"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1778
+#: crates/stave-gtk/src/ui/files.rs:1828
 msgid "no uses"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1781
+#: crates/stave-gtk/src/ui/files.rs:1831
 #, rust-format
 msgid "{count} use"
 msgid_plural "{count} uses"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/stave-gtk/src/ui/files.rs:1867
+#: crates/stave-gtk/src/ui/files.rs:1917
 msgctxt "verb"
 msgid "Open"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1869
+#: crates/stave-gtk/src/ui/files.rs:1919
 msgid "Open the definition (F12)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1992
+#: crates/stave-gtk/src/ui/files.rs:2042
 msgid "Error"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:1993
+#: crates/stave-gtk/src/ui/files.rs:2043
 msgid "Warning"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:2003
+#: crates/stave-gtk/src/ui/files.rs:2053
 #, rust-format
 msgid "Help: {help}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:2031
+#: crates/stave-gtk/src/ui/files.rs:2081
 #, rust-format
 msgid "Defined in {place}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/files.rs:2082
+#: crates/stave-gtk/src/ui/files.rs:2119
 #, rust-format
-msgid "{file} changed on disk; your unsaved changes are kept"
+msgid "{file} changed on disk; your unsaved changes are kept, and saving merges the two"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/finder.rs:170 crates/stave-gtk/src/ui/finder.rs:456
@@ -3548,7 +3640,7 @@ msgid "Fade other parts"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/focus_panel.rs:245
-#: crates/stave-gtk/src/ui/versions.rs:230
+#: crates/stave-gtk/src/ui/versions.rs:234
 msgid "Show"
 msgstr ""
 
@@ -4123,7 +4215,7 @@ msgid "Enter"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/sections.rs:316
-#: crates/stave-gtk/src/ui/versions.rs:236
+#: crates/stave-gtk/src/ui/versions.rs:240
 msgid "Apply"
 msgstr ""
 
@@ -4320,124 +4412,154 @@ msgstr ""
 msgid "Posed at contact"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:222
+#: crates/stave-gtk/src/ui/versions.rs:226
 #, rust-format
 msgid "From {app}. Its changes clash with the project as it is now."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:226
+#: crates/stave-gtk/src/ui/versions.rs:230
 #, rust-format
 msgid "From {app}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:231
+#: crates/stave-gtk/src/ui/versions.rs:235
 msgid "Show the suggestion on the model, without changing anything"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:237
+#: crates/stave-gtk/src/ui/versions.rs:241
 msgid "Make the suggestion part of the project"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:244
+#: crates/stave-gtk/src/ui/versions.rs:248
+msgid "Resolve"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:249
+msgid "Settle the clashing changes in the suggestion, so it can be applied"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:256
 msgid "Discard"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:245
+#: crates/stave-gtk/src/ui/versions.rs:257
 msgid "Throw the suggestion away"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:258
+#: crates/stave-gtk/src/ui/versions.rs:270
 #, rust-format
 msgid "{who}, {when}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:276
+#: crates/stave-gtk/src/ui/versions.rs:288
 msgid "Versions are off"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:278
+#: crates/stave-gtk/src/ui/versions.rs:290
 msgid "Turn them on to keep every saved version of the project, undo any change, and see suggestions from AI apps here."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:283
+#: crates/stave-gtk/src/ui/versions.rs:295
 msgid "Turn On"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:294
+#: crates/stave-gtk/src/ui/versions.rs:306
 msgid "Versions can't be turned on here"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:314
+#: crates/stave-gtk/src/ui/versions.rs:326
 msgid "Suggestions"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:322
+#: crates/stave-gtk/src/ui/versions.rs:334
 msgid "Undo the last change to the project, by anyone"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:335
+#: crates/stave-gtk/src/ui/versions.rs:347
 msgid "No suggestions. Ask an AI app for a change and it shows here."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:341
+#: crates/stave-gtk/src/ui/versions.rs:353
 #: crates/stave-gtk/src/ui/workbench.rs:131
 msgid "Versions"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:415
+#: crates/stave-gtk/src/ui/versions.rs:432
 #, rust-format
 msgid "This project is inside another project's history, at {folder}. A copy of the project in a folder of its own can have versions."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:819
+#: crates/stave-gtk/src/ui/versions.rs:861
 msgid "Turn on versions for this project?"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:821
+#: crates/stave-gtk/src/ui/versions.rs:863
 msgid "Stave then keeps every saved version of the project in its folder, so any change can be undone, and shows suggestions from AI apps in the Versions panel."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:826
+#: crates/stave-gtk/src/ui/versions.rs:868
 msgid "_Not Now"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:827
+#: crates/stave-gtk/src/ui/versions.rs:869
 msgid "_Turn On"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:869
+#: crates/stave-gtk/src/ui/versions.rs:911
 msgid "the work on the project's versions stopped"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:914
+#: crates/stave-gtk/src/ui/versions.rs:956
 #, rust-format
 msgid "The save wasn't recorded in the project's versions: {reason}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:920
+#: crates/stave-gtk/src/ui/versions.rs:962
 msgid "Versions are on for this project"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/versions.rs:924
-#, rust-format
-msgid "Versions couldn't be turned on: {reason}"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/versions.rs:930
-#, rust-format
-msgid "Applied “{title}”"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/versions.rs:936
-msgid "Discarded the suggestion"
 msgstr ""
 
 #: crates/stave-gtk/src/ui/versions.rs:966
 #, rust-format
+msgid "Versions couldn't be turned on: {reason}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:972
+#, rust-format
+msgid "Applied “{title}”"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:978
+msgid "Discarded the suggestion"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:997
+msgid "The suggestion's clashes are settled; it can be applied now"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:1000
+#, rust-format
+msgid "Saved to the suggestion; its changes still clash in {files}"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:1024
+#, rust-format
+msgid "Resolve “{title}”"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:1059
+msgid "Each file holds both changes between marker lines. Keep what the design should have, take the marker lines out, and save: the suggestion is changed, the project isn't."
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:1069
+msgid "_Save to Suggestion"
+msgstr ""
+
+#: crates/stave-gtk/src/ui/versions.rs:1112
+#, rust-format
 msgid "Your changes and another change to the same lines clash in {files}: both are kept, between marker lines"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:979
+#: crates/stave-gtk/src/ui/versions.rs:1125
 #, rust-format
 msgid "{files} changed in the project; your unsaved changes are kept, and the two meet when you save"
 msgstr ""

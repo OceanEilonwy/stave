@@ -152,6 +152,8 @@ pub enum VersionsPanelInput {
     Apply(usize),
     /// People pressed a suggestion's Discard.
     Discard(usize),
+    /// People pressed a clashing suggestion's Resolve.
+    Resolve(usize),
 }
 
 /// What the Versions panel tells the window: only what people did.
@@ -167,6 +169,8 @@ pub enum VersionsPanelOutput {
     Apply(SuggestionId),
     /// Discard a suggestion.
     Discard(SuggestionId),
+    /// Settle a suggestion's clashing changes.
+    Resolve(SuggestionId),
 }
 
 /// A row's text: a title above a dimmed line.
@@ -239,6 +243,14 @@ fn suggestion_row(
         move || VersionsPanelInput::Apply(index),
     );
     apply.set_sensitive(!suggestion.clashing);
+    if suggestion.clashing {
+        row.append(&row_button(
+            &tr("Resolve"),
+            &tr("Settle the clashing changes in the suggestion, so it can be applied"),
+            input,
+            move || VersionsPanelInput::Resolve(index),
+        ));
+    }
     row.append(&apply);
     row.append(&row_button(
         &tr("Discard"),
@@ -393,6 +405,11 @@ impl Component for VersionsPanelComponent {
                     let _ = sender.output(VersionsPanelOutput::Discard(suggestion.id.clone()));
                 }
             }
+            VersionsPanelInput::Resolve(index) => {
+                if let Some(suggestion) = self.suggestion(index) {
+                    let _ = sender.output(VersionsPanelOutput::Resolve(suggestion.id.clone()));
+                }
+            }
         }
         self.update_view(widgets, sender);
     }
@@ -536,6 +553,8 @@ pub(in crate::ui) enum VersionsInput {
     Focused,
     /// People answered "Turn on versions for this project?".
     Answered(TurnOnAnswer),
+    /// People saved a suggestion's files from the Resolve dialog.
+    SaveResolved(history::ToResolve),
     /// Work done off the main thread for this folder came back.
     Done {
         /// The folder it was done for.
@@ -590,6 +609,11 @@ pub(in crate::ui) enum Done {
     Discarded(Result<(), String>),
     /// The last change was undone: what it was.
     Undone(Result<(UndoneChange, CaughtUp), String>),
+    /// A suggestion's files were read, to resolve.
+    ToResolve(Result<history::ToResolve, String>),
+    /// Resolved files were saved to the suggestion: the files still
+    /// clashing.
+    Resolved(Result<Vec<history::RelativePath>, String>),
 }
 
 /// The person using the window, as their versions name them: their full
@@ -678,6 +702,21 @@ impl Window {
                 self.in_background(
                     move |folder| history::discard(folder, &id, &person()),
                     Done::Discarded,
+                );
+            }
+            VersionsInput::Panel(VersionsPanelOutput::Resolve(id)) => {
+                self.in_background(
+                    move |folder| history::to_resolve(folder, &id),
+                    Done::ToResolve,
+                );
+            }
+            VersionsInput::SaveResolved(resolving) => {
+                self.in_background(
+                    move |folder| {
+                        history::save_resolved(folder, &resolving, &person())
+                            .map(|resolved| resolved.conflicted)
+                    },
+                    Done::Resolved,
                 );
             }
             VersionsInput::Saved(files) => self.versions_saved(files),
@@ -946,10 +985,114 @@ impl Window {
                 }
                 Err(error) => self.toast(&error),
             },
+            Done::ToResolve(result) => {
+                match result {
+                    Ok(resolving) => self.resolve_dialog(resolving),
+                    Err(error) => self.toast(&error),
+                }
+                return;
+            }
+            Done::Resolved(result) => match result {
+                Ok(left) if left.is_empty() => self.toast(&tr(
+                    "The suggestion's clashes are settled; it can be applied now",
+                )),
+                Ok(left) => self.toast(&fill_in(
+                    &tr("Saved to the suggestion; its changes still clash in {files}"),
+                    &[(
+                        "files",
+                        &left
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )],
+                )),
+                Err(error) => self.toast(&error),
+            },
         }
         // Read again; the watcher would too, a moment later, but a window
         // whose versions were just turned on had no watcher yet.
         self.read_versions();
+    }
+
+    /// The Resolve dialog: each clashing file of the suggestion, with its
+    /// marker lines, to edit; Save writes them back to the suggestion
+    /// (never to the project's folder).
+    fn resolve_dialog(&self, resolving: history::ToResolve) {
+        let dialog = adw::Dialog::builder()
+            .title(fill_in(
+                &tr("Resolve “{title}”"),
+                &[("title", &resolving.title)],
+            ))
+            .content_width(720)
+            .content_height(560)
+            .build();
+        let notebook = gtk::Notebook::new();
+        notebook.set_vexpand(true);
+        let mut editors = Vec::new();
+        for relative in &resolving.conflicted {
+            let text = resolving
+                .files
+                .get(relative)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                .unwrap_or_default();
+            let view = gtk::TextView::builder()
+                .monospace(true)
+                .top_margin(6)
+                .bottom_margin(6)
+                .left_margin(6)
+                .right_margin(6)
+                .build();
+            view.buffer().set_text(&text);
+            let scrolled = gtk::ScrolledWindow::builder()
+                .child(&view)
+                .vexpand(true)
+                .build();
+            notebook.append_page(
+                &scrolled,
+                Some(&gtk::Label::new(Some(&relative.to_string()))),
+            );
+            editors.push((relative.clone(), view.buffer()));
+        }
+        let explain = gtk::Label::builder()
+            .label(tr(
+                "Each file holds both changes between marker lines. Keep what the design should have, take the marker lines out, and save: the suggestion is changed, the project isn't.",
+            ))
+            .wrap(true)
+            .xalign(0.0)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_top(6)
+            .margin_bottom(6)
+            .build();
+        let save = gtk::Button::builder()
+            .label(tr("_Save to Suggestion"))
+            .use_underline(true)
+            .css_classes(["suggested-action"])
+            .build();
+        let header = adw::HeaderBar::new();
+        header.pack_end(&save);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&explain);
+        content.append(&notebook);
+        let toolbar = adw::ToolbarView::new();
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&content));
+        dialog.set_child(Some(&toolbar));
+        let input = self.input();
+        let shown = dialog.clone();
+        save.connect_clicked(move |_| {
+            let mut resolved = resolving.clone();
+            for (relative, buffer) in &editors {
+                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+                resolved
+                    .files
+                    .insert(relative.clone(), text.as_bytes().to_vec());
+            }
+            input.emit(VersionsInput::SaveResolved(resolved).into());
+            shown.close();
+        });
+        dialog.present(Some(&self.widgets.window));
     }
 
     /// Takes in what catching up wrote: the design is checked again, which
@@ -1069,7 +1212,8 @@ mod tests {
     }
 
     /// Shown, the panel lists each suggestion with Show, Apply and
-    /// Discard (Apply not offered while it clashes) and each version; its
+    /// Discard (Apply not offered while it clashes, Resolve offered
+    /// instead) and each version; its
     /// buttons tell the owner what people pressed, by suggestion id.
     fn lists_and_presses() {
         let (to, heard) = recorder::<VersionsPanelOutput>();
@@ -1103,6 +1247,12 @@ mod tests {
         if let Some(button) = labelled(&root, "Discard").get(1) {
             button.emit_clicked();
         }
+        // Only the clashing suggestion offers Resolve.
+        let resolves = labelled(&root, "Resolve");
+        assert_eq!(resolves.len(), 1);
+        if let Some(button) = resolves.first() {
+            button.emit_clicked();
+        }
         for button in labelled(&root, "Undo") {
             button.emit_clicked();
         }
@@ -1114,6 +1264,7 @@ mod tests {
                 VersionsPanelOutput::Show("set drawer.width = 500mm\n".to_owned()),
                 VersionsPanelOutput::Apply(SuggestionId::new("aaaa")),
                 VersionsPanelOutput::Discard(SuggestionId::new("bbbb")),
+                VersionsPanelOutput::Resolve(SuggestionId::new("bbbb")),
                 VersionsPanelOutput::Undo,
             ]
         );

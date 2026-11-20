@@ -42,7 +42,7 @@ pub mod pipeline;
 mod space;
 
 pub use cache::{CacheUse, MeshCache};
-pub use camera::{Orbit, Projection, Ray};
+pub use camera::{CameraError, Orbit, Projection, Ray};
 pub use cover::Subject;
 pub use focus::{
     Anchor, GapMark, Label, LineKind, Look, MotionPlay, Note, Overlay, OverlayLine, Plan, Play,

@@ -336,6 +336,18 @@ fn check(path: &Path) -> Result<bool> {
             "{}",
             render_diagnostics(&opened.sources, &opened.diagnostics)
         )?;
+        // A file with conflicts is checked once per side too.
+        let sides = stave_app::conflicts::side_problems(folder, &DiskFiles, &opened)
+            .with_context(|| format!("can't open '{}'", folder.display()))?;
+        for side in &sides {
+            errors += side.error_count();
+            warnings += side
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Warning)
+                .count();
+            write!(stderr, "{}", side.render())?;
+        }
     }
     writeln!(
         stderr,

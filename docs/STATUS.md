@@ -570,7 +570,11 @@ guide, and the design is
   hints. (Patches, rename and smart edits exist for the 3D editor and
   `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).
-  For AI apps: no `cut_list` tool (there is no cut list yet); a clash
-  inside a suggestion can be settled only by an AI app
-  (`resolve_conflict`), not yet from the window's Versions panel; the
-  viewer needs WebGPU, with no fallback; Linux only.
+  For AI apps: no `cut_list` tool (there is no cut list yet); the
+  viewer needs WebGPU (without it the page asks for `render_view`'s
+  pictures instead); Linux only. In the window, the Versions panel's
+  Resolve dialog edits a suggestion's clashing files as plain text
+  (without the editor's conflict links), the 3D view can't yet show one
+  side of a conflict as a ghost, and the Problems panel doesn't check
+  each side of a conflict on its own (`stave check` and the AI apps'
+  `check` do).

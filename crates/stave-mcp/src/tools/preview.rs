@@ -257,46 +257,13 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// The steepest pitch, in degrees.
-    const STEEPEST: f32 = 89.0;
-
-    /// This camera, when every value it sets is one a camera can take.
-    fn checked(self) -> Result<Self, McpError> {
-        if self.yaw.is_some_and(|yaw| !yaw.is_finite()) {
-            return Err(McpError::Camera(
-                "yaw must be a number of degrees".to_owned(),
-            ));
-        }
-        if let Some(pitch) = self.pitch
-            && !(-Self::STEEPEST..=Self::STEEPEST).contains(&pitch)
-        {
-            return Err(McpError::Camera(format!(
-                "pitch must be between -{steep} and {steep} degrees, not {pitch}",
-                steep = Self::STEEPEST
-            )));
-        }
-        if let Some(distance) = self.distance
-            && !(distance.is_finite() && distance > 0.0)
-        {
-            return Err(McpError::Camera(format!(
-                "distance must be more than 0 millimetres, not {distance}"
-            )));
-        }
-        Ok(self)
-    }
-
-    /// `orbit` moved where this (checked) camera says.
-    fn place(self, mut orbit: Orbit) -> Orbit {
-        if let Some(yaw) = self.yaw {
-            orbit.yaw = yaw.to_radians();
-        }
-        if let Some(pitch) = self.pitch {
-            orbit.pitch = pitch.to_radians();
-        }
-        if let Some(distance) = self.distance {
-            orbit.distance = distance;
-        }
+    /// `orbit` moved where this camera says; the values are checked and
+    /// turned into the camera's own at the rendering boundary
+    /// ([`Orbit::placed`]).
+    fn place(self, orbit: Orbit) -> Result<Orbit, McpError> {
         orbit
+            .placed(self.yaw, self.pitch, self.distance)
+            .map_err(|error| McpError::Camera(error.to_string()))
     }
 }
 
@@ -463,7 +430,6 @@ impl StaveServer {
 
     async fn picture(&self, camera: Camera) -> Result<CallToolResult, McpError> {
         let project = self.require_project().await?;
-        let camera = camera.checked()?;
         let (png, orbit) = blocking(move || {
             let opened = open(&project.folder)?;
             let design = opened.design.as_ref().ok_or(McpError::NotPlaced)?;
@@ -472,7 +438,7 @@ impl StaveServer {
             let bounds = scene.bounds(&posed).ok_or(McpError::NothingToDraw)?;
             let framed =
                 Orbit::framing(bounds, stave_render::aspect(PICTURE_WIDTH, PICTURE_HEIGHT));
-            let orbit = camera.place(framed);
+            let orbit = camera.place(framed)?;
             let mut renderer = pollster::block_on(Renderer::headless()).map_err(render_error)?;
             renderer.upload(&scene);
             let image = renderer
@@ -769,32 +735,12 @@ mod tests {
             target: glam::Vec3::ZERO,
             projection: stave_scene::Projection::default(),
         };
-        let placed = Camera {
-            yaw: Some(90.0),
-            pitch: None,
-            distance: Some(1000.0),
-        }
-        .checked()
-        .unwrap()
-        .place(orbit);
-        assert!((placed.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
-        assert!((placed.pitch - 0.25).abs() < 1e-6, "left as framed");
-        assert!((placed.distance - 1000.0).abs() < 1e-3);
-        for bad in [
-            Camera {
-                pitch: Some(90.5),
-                ..Camera::default()
-            },
-            Camera {
-                distance: Some(0.0),
-                ..Camera::default()
-            },
-            Camera {
-                yaw: Some(f32::NAN),
-                ..Camera::default()
-            },
-        ] {
-            assert!(bad.checked().is_err(), "{bad:?}");
-        }
+        let bad = Camera {
+            pitch: Some(90.5),
+            ..Camera::default()
+        };
+        let error = bad.place(orbit).unwrap_err();
+        assert!(error.to_string().contains("pitch"), "{error}");
+        assert!(Camera::default().place(orbit).is_ok());
     }
 }

@@ -834,8 +834,14 @@ window's line is the folder.
   Code panel's clean files, as for any file changed on disk. If the window
   holds unsaved changes in a file main changed, nothing is written: a
   toast says "shelf.stave changed in the project; your unsaved changes are
-  kept, and the two meet when you save", and the next save merges both
-  (`stave_app::versions::when_to_catch_up`). Where both changed the same
+  kept, and the two meet when you save", and the next save merges both.
+  The decision and the writing happen under the versions' lock, so main
+  can't move between them, and the unsaved files are read again just
+  before writing (from the set the Code panel keeps up to date, not a
+  copy taken when the work was queued): a file saved, or made unsaved,
+  since the folder was read holds the whole catch-up back, and the window
+  is recorded as in step with main only once every file is written.
+  Where both changed the same
   lines, the file is written with both kept between conflict marker lines
   (`docs/grammar.md`, "Conflicts"), and a toast says so. Opening a project
   catches it up too, and so does the window coming to the front while its
@@ -1785,7 +1791,11 @@ step and changes nothing in the interface.
   files or views; closing the window or opening another folder with
   unsaved changes asks: Save, Don't Save or Cancel. A file changed on disk
   by something else reloads when its buffer is clean and keeps unsaved
-  changes otherwise (with a toast).
+  changes otherwise (with a toast); saving such a buffer then merges the
+  two changes from the text they were both made from
+  (`stave_app::versions::merge_for_save`), both kept between conflict
+  marker lines where they touch the same lines, so a change written by an
+  AI app or a catch-up is never just written over.
 - **Conflicts** (grammar, "Conflicts"): where a file holds two versions
   of the same lines (the window caught up with a change someone else
   applied and the two clash, or the user's own work outside Stave), the
@@ -1805,11 +1815,19 @@ step and changes nothing in the interface.
   Deleting the marker lines by hand and saving settles it too.
   `error[conflict]` is underlined at the opening marker line as any
   problem is. The window never names jj or git.
-  *Not yet:* a clash in a suggestion can be settled only by an AI app
-  (`resolve_conflict`). A "Resolve" action on a conflicted suggestion in
-  the Versions panel, opening its files (`History::suggestion_files`) in
-  the editor and saving back through `History::write_suggestion_files`,
-  comes with that panel (Lane H).
+  A suggestion with a clash shows **Resolve** in the Versions panel: a
+  dialog opens each clashing file of the suggestion
+  (`stave_app::versions::to_resolve`), marker lines and all, to edit by
+  hand, and *Save to Suggestion* writes them back to the suggestion
+  (`stave_app::versions::save_resolved`), never to the project's folder.
+  Saving is refused when the suggestion moved on since it was read
+  (an AI app added to it or resolved it meanwhile).
+  *Not yet:* the Resolve dialog is a plain text view, without the
+  editor's conflict links; and the 3D view can't yet show one side of a
+  conflict as a ghost (the spec's "the 3D view can show either side as
+  a ghost"): only a suggestion's patches are shown that way. In the
+  Problems panel, a conflict reads as `error[conflict]` only; `stave
+  check` and the AI apps' `check` also check each side on its own.
 
 **Highlighting stays single-sourced.** The buffer's own syntax
 highlighting is off and there is no `.lang` file: a GtkSourceView

@@ -60,3 +60,66 @@ async fn tools_that_apply_are_marked_as_changing_the_project() {
         assert_eq!(annotations.destructive_hint, Some(true), "{name}");
     }
 }
+
+/// A host that shares one folder with Stave, as Claude Code or Codex
+/// started inside a project folder does.
+struct SharingHost {
+    root: String,
+}
+
+#[expect(
+    deprecated,
+    reason = "roots are deprecated by SEP-2577; the hosts still use them"
+)]
+impl rmcp::ClientHandler for SharingHost {
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        let mut capabilities = rmcp::model::ClientCapabilities::default();
+        capabilities.roots = Some(rmcp::model::RootsCapabilities::default());
+        rmcp::model::ClientInfo::new(
+            capabilities,
+            rmcp::model::Implementation::new("Sharing Host", "1.0"),
+        )
+    }
+
+    async fn list_roots(
+        &self,
+        _context: rmcp::service::RequestContext<rmcp::RoleClient>,
+    ) -> Result<rmcp::model::ListRootsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListRootsResult::new(vec![
+            rmcp::model::Root::new(self.root.clone()),
+        ]))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_projects_lists_a_folder_the_host_shares() {
+    use rmcp::ServiceExt as _;
+    let folder = common::example_copy("box", "list_projects_lists_a_shared_folder");
+    let options = common::options("list_projects_lists_a_shared_folder");
+    let (server_transport, client_transport) = tokio::io::duplex(1 << 16);
+    tokio::spawn(async move {
+        if let Ok(running) = stave_mcp::StaveServer::new(options)
+            .serve(server_transport)
+            .await
+        {
+            let _ = running.waiting().await;
+        }
+    });
+    let client = SharingHost {
+        root: format!("file://{}", folder.display()),
+    }
+    .serve(client_transport)
+    .await
+    .unwrap();
+    let result = client
+        .call_tool(rmcp::model::CallToolRequestParams::new("list_projects"))
+        .await
+        .unwrap();
+    let text: String = result
+        .content
+        .iter()
+        .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+        .collect();
+    assert!(text.contains("Folders this app shares"), "{text}");
+    assert!(text.contains(&folder.display().to_string()), "{text}");
+}

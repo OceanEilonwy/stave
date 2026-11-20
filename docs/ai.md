@@ -242,7 +242,7 @@ own, plus structured content.
 
 | Tool | What it does | Changes anything |
 |---|---|---|
-| `list_projects` | projects opened lately in the Stave window | no |
+| `list_projects` | projects opened lately in the Stave window, then folders the app shares (its roots) that hold a project | no |
 | `open_project(path, start_versions?)` | opens a project for this session: parts, problems, versions, suggestions | turns versions on, when asked |
 | `new_project(folder, steps)` | makes a new project in an empty folder | yes (refused under `off`) |
 | `check` | the problems, with fixes | no |

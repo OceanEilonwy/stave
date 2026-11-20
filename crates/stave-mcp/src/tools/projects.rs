@@ -82,23 +82,39 @@ pub struct RecentProject {
 
 #[tool_router(router = projects_router, vis = "pub(crate)")]
 impl StaveServer {
-    /// The projects opened lately in the Stave window.
+    /// The projects opened lately in the Stave window, and the folders
+    /// the app shares that hold a project.
     #[tool(
-        description = "List the Stave projects opened lately in the Stave window, newest first. \
-                       Open one with open_project.",
+        description = "List the Stave projects opened lately in the Stave window, newest first, \
+                       then any folder this app shares with Stave that holds a project. Open \
+                       one with open_project.",
         annotations(read_only_hint = true)
     )]
-    async fn list_projects(&self) -> CallToolResult {
-        let projects = recent_projects(&self.options().recent_projects);
+    async fn list_projects(&self, peer: Peer<RoleServer>) -> CallToolResult {
+        let mut projects = recent_projects(&self.options().recent_projects);
+        let recent = projects.len();
+        for project in shared_projects(&peer).await {
+            if !projects.iter().any(|known| known.folder == project.folder) {
+                projects.push(project);
+            }
+        }
+        let (opened, shared) = projects.split_at(recent);
         let mut text = String::new();
         if projects.is_empty() {
             text.push_str(
                 "No Stave projects were opened lately. Ask for the project's folder and call \
                  open_project with its full path.",
             );
-        } else {
+        }
+        if !opened.is_empty() {
             text.push_str("Stave projects opened lately, newest first:\n");
-            for project in &projects {
+            for project in opened {
+                let _ = writeln!(text, "  {}: {}", project.name, project.folder.display());
+            }
+        }
+        if !shared.is_empty() {
+            text.push_str("Folders this app shares that hold a Stave project:\n");
+            for project in shared {
                 let _ = writeln!(text, "  {}: {}", project.name, project.folder.display());
             }
         }
@@ -565,6 +581,55 @@ pub fn recent_projects(list: &Path) -> Vec<RecentProject> {
         }
     }
     projects
+}
+
+/// How long to wait for the app to say which folders it shares.
+const ROOTS_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The folders the app shares (its roots, when it says it has them) that
+/// hold a `.stave` file, sorted, each once.
+#[expect(
+    deprecated,
+    reason = "roots are deprecated by SEP-2577, but the hosts Stave serves still share \
+              their folders this way"
+)]
+async fn shared_projects(peer: &Peer<RoleServer>) -> Vec<RecentProject> {
+    let shares = peer
+        .peer_info()
+        .is_some_and(|info| info.capabilities.roots.is_some());
+    if !shares {
+        return Vec::new();
+    }
+    let Ok(Ok(listed)) = tokio::time::timeout(ROOTS_WAIT, peer.list_roots()).await else {
+        return Vec::new();
+    };
+    let mut folders: Vec<PathBuf> = listed
+        .roots
+        .iter()
+        .filter_map(|root| file_uri_path(&root.uri))
+        .filter(|folder| holds_stave_file(folder))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    folders
+        .into_iter()
+        .map(|folder| RecentProject {
+            name: folder_name(&folder),
+            folder,
+        })
+        .collect()
+}
+
+/// Whether `folder` holds a `.stave` file directly inside it.
+fn holds_stave_file(folder: &Path) -> bool {
+    std::fs::read_dir(folder).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "stave")
+        })
+    })
 }
 
 /// The path of a `file://` URI, percent-decoded; `None` for any other

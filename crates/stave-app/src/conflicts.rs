@@ -232,6 +232,119 @@ pub fn check_sides(folder: &Path, files: &dyn FileSource) -> Result<Vec<Opened>,
         .collect()
 }
 
+/// What checking one side of the project's conflicts found that the
+/// project as written doesn't already say (grammar, "Conflicts",
+/// "Checking": each side parses, solves and checks on its own).
+#[derive(Debug)]
+pub struct SideProblems {
+    /// Which side, counting from 1, in the order the sides are written.
+    pub number: usize,
+    /// The side's label in the first conflict that has it (`yours`, the
+    /// AI app's name); empty when the markers have none.
+    pub label: String,
+    /// The sources the side was read from, to show its problems with.
+    pub sources: stave_lang::SourceMap,
+    /// Its problems not already among the project's own.
+    pub diagnostics: Vec<stave_lang::Diagnostic>,
+}
+
+impl SideProblems {
+    /// The problems, as `stave check` prints them, under a line naming
+    /// the side.
+    pub fn render(&self) -> String {
+        let heading = if self.label.is_empty() {
+            fill_in(
+                &tr("in side {number} of the conflicts:"),
+                &[("number", &self.number)],
+            )
+        } else {
+            fill_in(
+                &tr("in side {number} of the conflicts ('{label}'):"),
+                &[("number", &self.number), ("label", &self.label)],
+            )
+        };
+        format!(
+            "{heading}\n{}",
+            stave_lang::render_diagnostics(&self.sources, &self.diagnostics)
+        )
+    }
+
+    /// How many of its problems are errors.
+    pub fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.is_error())
+            .count()
+    }
+}
+
+/// Each side of the project's conflicts checked on its own, beside the
+/// project as written (`opened`): the problems a side has that the project
+/// doesn't already report. Empty when there are no conflicts, or when no
+/// side has a problem of its own.
+///
+/// # Errors
+///
+/// When the project can't be loaded.
+pub fn side_problems(
+    folder: &Path,
+    files: &dyn FileSource,
+    opened: &Opened,
+) -> Result<Vec<SideProblems>, LoadError> {
+    let labels = side_labels(folder, files)?;
+    let known: Vec<(stave_lang::Code, &str)> = opened
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.code, diagnostic.message.as_str()))
+        .collect();
+    let mut found = Vec::new();
+    for (index, side) in check_sides(folder, files)?.into_iter().enumerate() {
+        let diagnostics: Vec<stave_lang::Diagnostic> = side
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !known.contains(&(diagnostic.code, diagnostic.message.as_str())))
+            .cloned()
+            .collect();
+        if diagnostics.is_empty() {
+            continue;
+        }
+        found.push(SideProblems {
+            number: index.saturating_add(1),
+            label: labels.get(index).cloned().unwrap_or_default(),
+            sources: side.sources,
+            diagnostics,
+        });
+    }
+    Ok(found)
+}
+
+/// Each side's label, by its place, from the first conflict that has a
+/// side there.
+fn side_labels(folder: &Path, files: &dyn FileSource) -> Result<Vec<String>, LoadError> {
+    let mut paths = files
+        .list_stave_files(folder)
+        .map_err(|source| LoadError::Unreadable {
+            folder: folder.to_owned(),
+            source,
+        })?;
+    paths.sort();
+    let mut labels: Vec<String> = Vec::new();
+    for path in paths {
+        let text = files
+            .read(&path)
+            .map_err(|source| LoadError::UnreadableFile {
+                path: path.clone(),
+                source,
+            })?;
+        for conflict in find_conflicts(&text) {
+            for side in conflict.sides.iter().skip(labels.len()) {
+                labels.push(side.label.clone());
+            }
+        }
+    }
+    Ok(labels)
+}
+
 /// How many sides the conflict with the most sides has, in any of the
 /// project's own `.stave` files; 0 without conflicts. Reads the files'
 /// text only: the project is opened once per side afterwards.

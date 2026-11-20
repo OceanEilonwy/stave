@@ -117,9 +117,41 @@ impl StaveServer {
                     .filter(|diagnostic| diagnostic.severity == severity)
                     .count()
             };
-            let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
+            // A file with conflicts is checked once per side too.
+            let sides = stave_app::conflicts::side_problems(
+                &project.folder,
+                &stave_modules::DiskFiles,
+                &opened,
+            )
+            .map_err(|error| super::projects::load_error(&project.folder, error))?;
+            let side_count = |severity: Severity| {
+                sides
+                    .iter()
+                    .flat_map(|side| &side.diagnostics)
+                    .filter(|diagnostic| diagnostic.severity == severity)
+                    .count()
+            };
+            let (errors, warnings) = (
+                count(Severity::Error).saturating_add(side_count(Severity::Error)),
+                count(Severity::Warning).saturating_add(side_count(Severity::Warning)),
+            );
+            let side_text: String = sides.iter().map(|side| side.render()).collect();
+            let side_json: Vec<Value> = sides
+                .iter()
+                .map(|side| {
+                    json!({
+                        "side": side.number,
+                        "label": side.label,
+                        "problems": side
+                            .diagnostics
+                            .iter()
+                            .map(|diagnostic| problem_json(&side.sources, &project.folder, diagnostic))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
             let text = format!(
-                "{}checked {}: {}, {}\n",
+                "{}{side_text}checked {}: {}, {}\n",
                 render_diagnostics(&opened.sources, &opened.diagnostics),
                 plain_count(opened.root_files, "file", "files"),
                 plain_count(errors, "error", "errors"),
@@ -144,6 +176,7 @@ impl StaveServer {
                     "errors": errors,
                     "warnings": warnings,
                     "problems": problems,
+                    "sides": side_json,
                 }),
             ))
         })
