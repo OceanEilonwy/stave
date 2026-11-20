@@ -35,7 +35,7 @@ mod show;
 
 pub use show::{
     APPLICATION_ID, OBJECT_PATH, SHOW_PROJECT_ACTION, SHOW_PROJECT_PARAMETER, Shown,
-    show_in_application, show_in_stave,
+    application_is_running, show_in_application, show_in_stave, stave_is_running,
 };
 
 /// The server's name in every app's settings.

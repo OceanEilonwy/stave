@@ -10,9 +10,11 @@
 //! and its files, merged as text, are checked the same way. Applying
 //! follows the project's merge policy (`.stave/agents.toml`, then the
 //! person's `agents.toml`): under `off` only the person applies, from the
-//! window. The window, not the agent, brings the project folder up to
-//! date with main.
+//! window. A running window brings the project folder up to date with
+//! main itself, keeping the person's unsaved edits; when no window is
+//! running, `apply_suggestion` and `undo` bring it up to date.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -21,6 +23,7 @@ use rmcp::{Peer, RoleServer, tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use stave_app::versions::{CaughtUp, catch_up};
 use stave_history::{
     Actor, ActorKind, History, HistoryError, MergePolicy, ProjectFiles, RevisionId, SuggestionId,
     UndoScope, merge_policy,
@@ -319,6 +322,7 @@ impl StaveServer {
         let project = self.require_project().await?;
         let actor = agent_line::actor(&self.agent(peer).await);
         let config_dir = self.options().config_dir.clone();
+        let window = self.window().await;
         blocking(move || {
             let folder = &project.folder;
             let mut history = agent_line::history(folder)?;
@@ -339,9 +343,11 @@ impl StaveServer {
                 }
             };
             let short = main.as_str().get(..SHORT_ID).unwrap_or(main.as_str());
+            drop(history);
+            let folder_now = bring_folder_up_to_date(folder, window);
             let text = format!(
-                "Applied \"{}\": it is now in the project as version {short}. Stave brings the \
-                 open project up to date; undo takes it back.",
+                "Applied \"{}\": it is now in the project as version {short}. {folder_now} \
+                 Undo takes it back.",
                 suggestion.title
             );
             Ok(answer(
@@ -379,16 +385,81 @@ impl StaveServer {
     async fn undo_own(&self, peer: &Peer<RoleServer>) -> Result<CallToolResult, McpError> {
         let project = self.require_project().await?;
         let actor = agent_line::actor(&self.agent(peer).await);
+        let window = self.window().await;
         blocking(move || {
             let mut history = agent_line::history(&project.folder)?;
             let undone = history.undo(&actor, UndoScope::Own)?;
+            drop(history);
+            let folder_now = bring_folder_up_to_date(&project.folder, window);
             Ok(answer(
-                format!("Undid this app's last change: {undone}."),
+                format!("Undid this app's last change: {undone}. {folder_now}"),
                 json!({ "undone": undone }),
             ))
         })
         .await
     }
+}
+
+impl StaveServer {
+    /// Whether the Stave window is running. When the bus can't be asked
+    /// the window is taken to be running, so the folder is never written
+    /// under a window that may hold unsaved edits.
+    async fn window(&self) -> Window {
+        match stave_link::application_is_running(&self.options().window_bus_name).await {
+            Ok(false) => Window::NotRunning,
+            Ok(true) | Err(_) => Window::Running,
+        }
+    }
+}
+
+/// Whether the Stave window is running, and so who brings the project
+/// folder up to date with main.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Window {
+    /// The window brings the folder up to date when it shows the project,
+    /// keeping the person's unsaved edits.
+    Running,
+    /// No window holds unsaved edits, so the server brings the folder up
+    /// to date itself, at once.
+    NotRunning,
+}
+
+/// Brings `folder` up to date with main when no window is running to do
+/// it, and says in a sentence where the folder stands. The change is
+/// already recorded on main, so a folder that can't be written is told,
+/// not raised as an error. A window that starts between the question and
+/// the writing catches up from wherever the folder was left.
+fn bring_folder_up_to_date(folder: &std::path::Path, window: Window) -> String {
+    match window {
+        Window::Running => "The Stave window brings the project's files up to date when it \
+                            shows the project."
+            .to_owned(),
+        Window::NotRunning => match catch_up(folder, &BTreeSet::new()) {
+            Ok(CaughtUp::UpToDate) => "The project's files are up to date.".to_owned(),
+            Ok(CaughtUp::Wrote { conflicted, .. }) if conflicted.is_empty() => {
+                "The project's files are up to date.".to_owned()
+            }
+            Ok(CaughtUp::Wrote { conflicted, .. }) => format!(
+                "The project's files are up to date, but {} clashed with edits made in the \
+                 folder and now hold conflict markers; list_conflicts shows them.",
+                joined(&conflicted)
+            ),
+            Ok(CaughtUp::Waiting { files }) => format!(
+                "The project's files aren't up to date yet: {} is open with unsaved edits.",
+                joined(&files)
+            ),
+            Err(error) => format!("The project's files couldn't be brought up to date: {error}"),
+        },
+    }
+}
+
+/// Paths in words, separated by commas.
+fn joined(paths: &[stave_history::RelativePath]) -> String {
+    paths
+        .iter()
+        .map(|path| path.as_path().display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Who made a change, in words: the person's name, or the app's.
@@ -590,5 +661,72 @@ mod tests {
         let kept = history.files_at(&main).unwrap();
         assert_eq!(text(&kept, "c.stave"), "c, after the rebase\n");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod catching_up {
+    use std::path::Path;
+
+    use stave_history::{Actor, ActorKind, History, RelativePath};
+
+    use super::{Window, bring_folder_up_to_date};
+
+    fn person() -> Actor {
+        Actor {
+            kind: ActorKind::User,
+            name: "Ann".to_owned(),
+            id: "window".to_owned(),
+        }
+    }
+
+    /// A folder with versions on whose main holds "a, changed" while the
+    /// file on disk still says "a".
+    fn folder_behind_main(name: &str) -> std::path::PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("stave-mcp-unit-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        std::fs::write(folder.join("a.stave"), "a\n").unwrap();
+        let mut history = History::start(&folder).unwrap();
+        let mut files = history.read_folder().unwrap();
+        history.save(&files, &person(), "First version").unwrap();
+        files.insert(
+            RelativePath::new(Path::new("a.stave")).unwrap(),
+            b"a, changed\n".to_vec(),
+        );
+        // Recorded on main without touching the folder, as an apply does.
+        let main = history.main().unwrap();
+        let id = history
+            .suggest(&person(), None, &main, &files, "patch", "Change a")
+            .unwrap();
+        history.apply(&id, &person(), &main, &files).unwrap();
+        folder
+    }
+
+    /// While the window runs it may hold unsaved edits, so the server
+    /// leaves the folder to it.
+    #[test]
+    fn a_running_window_brings_the_folder_up_to_date_itself() {
+        let folder = folder_behind_main("window_running");
+        let words = bring_folder_up_to_date(&folder, Window::Running);
+        assert!(words.contains("Stave window"), "{words}");
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.stave")).unwrap(),
+            "a\n"
+        );
+    }
+
+    /// With no window running, the server writes main into the folder.
+    #[test]
+    fn with_no_window_the_server_brings_the_folder_up_to_date() {
+        let folder = folder_behind_main("window_not_running");
+        let words = bring_folder_up_to_date(&folder, Window::NotRunning);
+        assert_eq!(words, "The project's files are up to date.");
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.stave")).unwrap(),
+            "a, changed\n"
+        );
     }
 }
