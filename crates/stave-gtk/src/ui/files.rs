@@ -55,12 +55,14 @@ use stave_app::save_failure::SaveFailure;
 use stave_app::session::{LineNumber, SourceLocation};
 use stave_ide::{
     Analysis, Buffers, Document, FilePosition, Location, Overlay, SymbolId, TokenClass,
+    TokenModifiers,
 };
 use stave_lang::Severity;
 use stave_lang::ast::Span;
 
 use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run};
 use super::tab_strip::PageTab;
+use super::theme;
 
 /// How long typing must pause before the names are worked out again.
 const ANALYSE_DELAY: Duration = Duration::from_millis(150);
@@ -1470,7 +1472,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         let lines = self.active_lines();
         let fresh = self.fresh();
         if let Some((analysis, file)) = &fresh {
-            let runs: Vec<(Run, TokenClass)> = analysis
+            let runs: Vec<(Run, TokenClass, TokenModifiers)> = analysis
                 .tokens(*file)
                 .into_iter()
                 .map(|token| {
@@ -1480,6 +1482,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
                             end: token.span.end(),
                         },
                         token.class,
+                        token.modifiers,
                     )
                 })
                 .collect();
@@ -2150,29 +2153,7 @@ fn markup_line(text: &str, start: u32, tokens: &[stave_ide::SemanticToken], dark
             out.push_str(&escape(plain));
         }
         let piece = escape(text.get(from..to).unwrap_or(""));
-        let colour = match token.class {
-            TokenClass::Keyword => Some(if dark { "#dc8add" } else { "#9141ac" }),
-            TokenClass::Comment | TokenClass::DocComment => {
-                Some(if dark { "#9a9996" } else { "#6f6e73" })
-            }
-            TokenClass::Text => Some(if dark { "#8ff0a4" } else { "#1b7a4c" }),
-            TokenClass::Number => Some(if dark { "#ffa348" } else { "#c64600" }),
-            TokenClass::Function | TokenClass::EnumWord => {
-                Some(if dark { "#78aeed" } else { "#1c71d8" })
-            }
-            TokenClass::Type => Some(if dark { "#99c1f1" } else { "#1a5fb4" }),
-            _ => None,
-        };
-        let italic = matches!(token.class, TokenClass::Comment | TokenClass::DocComment);
-        match colour {
-            Some(colour) if italic => {
-                out.push_str(&format!(
-                    "<span foreground=\"{colour}\" style=\"italic\">{piece}</span>"
-                ));
-            }
-            Some(colour) => out.push_str(&format!("<span foreground=\"{colour}\">{piece}</span>")),
-            None => out.push_str(&piece),
-        }
+        out.push_str(&theme::markup(&piece, token.class, token.modifiers, dark));
         at = to;
     }
     if let Some(rest) = text.get(at..) {

@@ -53,6 +53,7 @@ mod slider;
 mod start_page;
 mod style;
 mod tab_strip;
+mod theme;
 mod tree;
 mod update;
 mod view_layout;
