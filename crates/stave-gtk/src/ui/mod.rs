@@ -17,6 +17,7 @@
 //! tree, the inspector, focus mode, problems) and `stave-scene` (poses,
 //! camera, picking); this module only wires widgets to them.
 
+mod ai_link;
 mod app;
 mod chrome;
 mod dock;

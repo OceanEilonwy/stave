@@ -13,6 +13,7 @@ members = [
   "crates/stave-render",
   "crates/stave-ide",
   "crates/stave-history",
+  "crates/stave-link",
   "crates/stave-app",
   "crates/stave-mcp",
   "crates/stave-cli",

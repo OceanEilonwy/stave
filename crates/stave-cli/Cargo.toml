@@ -15,6 +15,7 @@ clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 stave-app = { path = "../stave-app" }
 stave-lang = { path = "../stave-lang" }
+stave-link = { path = "../stave-link" }
 stave-mcp = { path = "../stave-mcp" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
@@ -24,6 +25,7 @@ stave-schema = { path = "../stave-schema" }
 gltf = "1"
 serde_json = "1"
 stave-modules = { path = "../stave-modules" }
+tempfile = "3"
 
 [lints]
 workspace = true

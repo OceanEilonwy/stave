@@ -131,7 +131,7 @@ pub(in crate::ui) fn change_item(request: &ChangeRequest) -> Option<String> {
         ChangeRequest::RepeatPart { part, .. } => Some(part.as_str().to_owned()),
         ChangeRequest::MoveShares { region, .. } => Some(region.as_str().to_owned()),
         ChangeRequest::ParamKind { param, .. } => Some(param.as_str().to_owned()),
-        ChangeRequest::Grip { .. } | ChangeRequest::Hold(_) => None,
+        ChangeRequest::Grip { .. } | ChangeRequest::Hold(_) | ChangeRequest::Patch { .. } => None,
     }
 }
 
@@ -149,6 +149,7 @@ fn kind_word(request: &ChangeRequest) -> &'static str {
         ChangeRequest::Hold(_) => tr_noop("hold a distance"),
         ChangeRequest::Remove { .. } => tr_noop("remove"),
         ChangeRequest::Rename { .. } => tr_noop("rename"),
+        ChangeRequest::Patch { .. } => tr_noop("a suggested change"),
     }
 }
 

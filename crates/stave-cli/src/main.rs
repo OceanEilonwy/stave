@@ -16,7 +16,9 @@
 //!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
 //! stave edit examples/clothing_cabinet_assemblies --script steps.txt
 //! stave edit new_chest --script build.txt   # a script can start a new project
-//! stave mcp                                  # the MCP server, for an AI app
+//! stave mcp                                 # the MCP server, for an AI app
+//! stave mcp install                         # set Stave up in the AI apps found
+//! stave mcp uninstall --codex
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -48,6 +50,7 @@ use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, rend
 use stave_modules::DiskFiles;
 
 mod dump;
+mod mcp_install;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -153,6 +156,13 @@ enum Command {
         #[arg(long, conflicts_with = "script")]
         commit: bool,
     },
+    /// Use Stave from an AI app (Claude Desktop, Claude Code, Codex):
+    /// set it up there, or take it out. With no subcommand, run the server
+    /// the apps start.
+    Mcp {
+        #[command(subcommand)]
+        command: Option<mcp_install::McpCommand>,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -162,20 +172,18 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// Run Stave as an MCP server over standard input and output, for an
-    /// AI app (Claude Desktop, Claude Code, Codex) to open, check and try
-    /// changes to projects. The AI app starts it; it runs until the app
-    /// closes the connection.
-    Mcp,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Mcp => mcp(),
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::Mcp {
+            command: Some(command),
+        } => mcp_install::run(&command),
+        Command::Mcp { command: None } => mcp(),
         Command::Edit {
             path,
             patch,
