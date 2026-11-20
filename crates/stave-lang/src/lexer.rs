@@ -795,6 +795,17 @@ fn parse_magnitude(text: &str) -> Result<(Magnitude, &str), LiteralError> {
     ))
 }
 
+/// Where the unit starts in a `QUANTITY` token's text, in bytes: the
+/// length of its magnitude (`18` of `18mm`, `1-1/2` of `1-1/2in`). A
+/// magnitude is digits, `_`, `.`, `/` and `-`, and its unit starts at the
+/// first letter, as the lexer reads it (grammar, "Quantities"). `None`
+/// when the text has no magnitude or no unit.
+pub fn quantity_unit_start(text: &str) -> Option<usize> {
+    text.bytes()
+        .position(|byte| byte.is_ascii_alphabetic())
+        .filter(|&start| start > 0)
+}
+
 /// The value of a `QUANTITY` token's text.
 pub(crate) fn parse_quantity(text: &str) -> Result<Quantity, LiteralError> {
     let (magnitude, unit_text) = parse_magnitude(text)?;
@@ -1342,6 +1353,23 @@ mod tests {
             }))
         );
         assert_eq!(parse_number("4"), Ok(Number::Integer(4)));
+    }
+
+    #[test]
+    fn a_quantity_splits_into_magnitude_and_unit() {
+        for (text, magnitude) in [
+            ("18mm", "18"),
+            ("3/4in", "3/4"),
+            ("1-1/2in", "1-1/2"),
+            ("18.5mm", "18.5"),
+            ("1_000mm", "1_000"),
+            ("110deg", "110"),
+        ] {
+            assert_eq!(significant(text), [(QUANTITY, text.to_owned())], "{text}");
+            assert_eq!(quantity_unit_start(text), Some(magnitude.len()), "{text}");
+        }
+        assert_eq!(quantity_unit_start("18"), None);
+        assert_eq!(quantity_unit_start("mm"), None);
     }
 
     #[test]

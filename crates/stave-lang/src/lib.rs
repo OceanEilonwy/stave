@@ -66,11 +66,14 @@ pub use diagnostics::{
 };
 pub use diagnostics::{Fix, FixError};
 pub use format::{FormatError, format_file};
+pub use lexer::quantity_unit_start;
 pub use lower::BrokenItem;
 pub use patch::{
     ModuleFile, ModuleKey, PatchError, PatchErrorKind, PatchTarget, PatchedFile, apply_patch,
 };
-pub use patch::{Scope, TermAddress, TermFixes, TextEdit, apply_text_edits, changed_line_runs};
+pub use patch::{
+    Scope, TermAddress, TermFixes, TextEdit, apply_text_edits, changed_line_runs, text_edits,
+};
 pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The result of parsing one file.

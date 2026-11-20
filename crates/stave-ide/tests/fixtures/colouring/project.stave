@@ -1,0 +1,38 @@
+stave 1
+
+// Every token modifier and every way of writing a unit, for the
+// semantic token snapshot (tests/tokens.rs). It need not check.
+
+project "Colouring" {
+  units:      mm
+  resolution: 0.5mm
+}
+
+solved param overall_width = 900mm within 600mm..1200mm
+       param overall_depth = 3/4in
+       param overhang      = 1-1/2in
+       param slope         = 110deg
+let half = overall_width / 2
+
+stock oak_19 { species: white_oak, form: solid, thickness: 18.5mm, max_width: 200mm, max_length: 2700mm }
+
+part side_l : oak_19 {
+  length: overall_width
+  width:  overall_depth + missing_name
+}
+
+part shelf : oak_19 {
+  length: half
+  width:  overall_depth
+}
+
+joint housing : dado(side_l, shelf)
+
+// A part whose name is also a feature word (`floor` of a recess) is
+// still a part where it is named.
+part floor : oak_19 {
+  length: half
+  width:  overall_depth
+}
+
+joint floor_housing : dado(side_l, floor)

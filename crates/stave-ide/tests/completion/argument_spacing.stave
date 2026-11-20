@@ -1,0 +1,12 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part slat[4] : oak {
+  length: 600mm
+  width: 60mm
+  place {
+    spaced($0
+  }
+}
+// expect: evenly, ends

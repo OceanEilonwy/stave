@@ -2,6 +2,12 @@
 //! placement terms, spacing values, the terms of a made part's `place`, and
 //! assembly steps.
 
+use stave_lang::ast::TypeName;
+
+use crate::fields::ValueType;
+use crate::functions::{Parameter, named, positional};
+use crate::words::WordSet;
+
 /// A term in `place { }` of a part or a piece of hardware.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlacementTerm {
@@ -60,6 +66,67 @@ impl PlacementTerm {
             | PlacementTerm::Spaced => true,
             PlacementTerm::Ground | PlacementTerm::Corners | PlacementTerm::Orient => false,
         }
+    }
+
+    /// The term's arguments, positional ones first, in order: what the
+    /// checker splits a call into and what an editor offers and explains
+    /// at each argument (`center(item, axis)`: the second expects an
+    /// axis). `center` has two forms, an item and an axis or `from:` and
+    /// `to:`, so none of its arguments is required on its own.
+    pub fn arguments(self) -> &'static [Parameter] {
+        const LENGTH: ValueType = ValueType::Type(TypeName::Length);
+        const ANCHOR: ValueType = ValueType::Type(TypeName::Anchor);
+        const DIRECTION: ValueType = ValueType::Words(WordSet::Direction);
+        const fn optional(parameter: Parameter) -> Parameter {
+            Parameter {
+                required: false,
+                ..parameter
+            }
+        }
+        const AGAINST: &[Parameter] = &[positional("face", ANCHOR), named("gap", LENGTH, false)];
+        const FLUSH: &[Parameter] = &[positional("face", ANCHOR), named("inset", LENGTH, false)];
+        const CENTER: &[Parameter] = &[
+            optional(positional("item", ValueType::Items)),
+            optional(positional("axis", ValueType::Words(WordSet::Axis))),
+            named("from", ANCHOR, false),
+            named("to", ANCHOR, false),
+        ];
+        const SPACED: &[Parameter] = &[
+            positional("spacing", ValueType::Type(TypeName::Spacing)),
+            named("from", ANCHOR, true),
+            named("to", ANCHOR, true),
+        ];
+        const CORNERS: &[Parameter] = &[
+            positional("part", ValueType::Type(TypeName::Part)),
+            named("inset", LENGTH, false),
+        ];
+        const ORIENT: &[Parameter] = &[
+            named("length", DIRECTION, true),
+            named("width", DIRECTION, false),
+        ];
+        match self {
+            PlacementTerm::Ground => &[],
+            PlacementTerm::Against => AGAINST,
+            PlacementTerm::Flush => FLUSH,
+            PlacementTerm::Center => CENTER,
+            PlacementTerm::Spaced => SPACED,
+            PlacementTerm::Corners => CORNERS,
+            PlacementTerm::Orient => ORIENT,
+        }
+    }
+
+    /// How many arguments the term takes without a name.
+    pub fn positional_count(self) -> usize {
+        self.arguments().iter().filter(|a| a.positional).count()
+    }
+
+    /// The names of the arguments the term takes with a name, in order.
+    pub fn named_arguments(self) -> Vec<&'static str> {
+        self.arguments()
+            .iter()
+            .filter(|a| !a.positional)
+            .map(|a| a.name)
+            .collect()
     }
 }
 

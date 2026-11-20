@@ -33,6 +33,7 @@ pub mod choices;
 pub mod conflicts;
 pub mod edit;
 pub mod editing;
+pub mod editor_check;
 pub mod empty;
 pub mod export_view;
 pub mod finder;

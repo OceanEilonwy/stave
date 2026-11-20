@@ -1,0 +1,13 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+kind housing : joint {
+  param depth : Length = into.thickness / 3
+}
+
+part side : oak { length: 600mm }
+part shelf : oak { length: 400mm }
+
+joint shelf_housing : housing(shelf, side, depth: $0)
+// expect: -

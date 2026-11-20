@@ -1,0 +1,4 @@
+stave 1
+
+project "Shelf $0" { }
+// expect: -

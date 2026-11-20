@@ -1,0 +1,12 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part side : oak {
+  length: 600mm
+  place {
+    flush(base.left, inset: $0)
+  }
+}
+// label: flush(face, inset:)
+// active: inset

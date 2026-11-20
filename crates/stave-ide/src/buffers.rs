@@ -125,6 +125,33 @@ impl Buffers {
         Ok(self.open.get(document).map_or("", |b| b.text.as_str()))
     }
 
+    /// Opens a document with the text an editor already shows (a language
+    /// client sends it when it opens a file), or replaces the text of an
+    /// open one. The saved text is read from disk; a file not yet on disk
+    /// counts as saved empty, so its text is unsaved. A standard file keeps
+    /// Stave's own text whatever is given.
+    pub fn open_with_text(&mut self, document: &Document, text: &str) {
+        let shown = if document.is_read_only() {
+            document.std_text().unwrap_or_default()
+        } else {
+            text
+        };
+        match self.open.get_mut(document) {
+            Some(buffer) => shown.clone_into(&mut buffer.text),
+            None => {
+                let saved = read(document).unwrap_or_default();
+                self.open.insert(
+                    document.clone(),
+                    Buffer {
+                        text: shown.to_owned(),
+                        saved,
+                        before: None,
+                    },
+                );
+            }
+        }
+    }
+
     /// `true` if the document is open.
     pub fn is_open(&self, document: &Document) -> bool {
         self.open.contains_key(document)
@@ -452,6 +479,33 @@ mod tests {
         assert!(buffers.overlay().is_empty());
         // No temporary file is left behind.
         assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn opening_with_text_compares_it_to_the_disk() {
+        let folder = scratch("open-with-text");
+        let path = folder.join("a.stave");
+        fs::write(&path, "stave 1\n").unwrap();
+        let document = Document::File(path.clone());
+        let mut buffers = Buffers::new();
+        buffers.open_with_text(&document, "stave 1\n");
+        assert!(!buffers.is_dirty(&document));
+        buffers.open_with_text(&document, "stave 1\nlet a = 1\n");
+        assert!(buffers.is_dirty(&document));
+        // A file not on disk yet is unsaved.
+        let new = Document::File(folder.join("new.stave"));
+        buffers.open_with_text(&new, "stave 1\n");
+        assert!(buffers.is_dirty(&new));
+        assert_eq!(
+            buffers.overlay().read(&folder.join("new.stave")).unwrap(),
+            "stave 1\n"
+        );
+        // A standard file keeps its own text.
+        let dado = Document::std("joinery", "dado.stave").unwrap();
+        buffers.open_with_text(&dado, "changed");
+        assert!(buffers.text(&dado).unwrap().contains("kind dado"));
+        assert!(!buffers.is_dirty(&dado));
         fs::remove_dir_all(&folder).unwrap();
     }
 

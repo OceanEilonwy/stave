@@ -1,0 +1,73 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"face_frame\"))"
+---
+== frame.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  12 | project "Face frame" {
+     = project:keyword  ":text  Face frame:text  ":text
+  13 |   goal:  "A pine face frame for a small cabinet, joined with pocket screws"
+     = goal:field  ":text  A pine face frame for a small cabinet, joined with pocket screws:text  ":text
+  14 |   units: mm
+     = units:field  mm:word
+  17 | param frame_width  = 500mm within 350mm..800mm
+     = param:keyword  frame_width:param+decl  500:number  mm:unit  within:keyword  350:number  mm:unit  800:number  mm:unit
+  18 | param frame_height = 700mm within 450mm..1000mm
+     = param:keyword  frame_height:param+decl  700:number  mm:unit  within:keyword  450:number  mm:unit  1000:number  mm:unit
+  20 | stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 50mm, max_length: 2400mm }
+     = stock:keyword  pine_strip:stock+decl  species:field  pine:word  form:field  solid:word  thickness:field  19:number  mm:unit  width:field  50:number  mm:unit  max_length:field  2400:number  mm:unit
+  23 | part stile_l : pine_strip {
+     = part:keyword  stile_l:part+decl  pine_strip:stock+ref
+  24 |   length: frame_height
+     = length:field  frame_height:param+ref
+  25 |   place {
+     = place:keyword
+  26 |     ground
+     = ground:function
+  27 |     orient(length: back, width: right)
+     = orient:function  length:field  back:word  width:field  right:word
+  31 | part stile_r : pine_strip {
+     = part:keyword  stile_r:part+decl  pine_strip:stock+ref
+  32 |   length: frame_height
+     = length:field  frame_height:param+ref
+  33 |   place {
+     = place:keyword
+  34 |     orient(length: back, width: right)
+     = orient:function  length:field  back:word  width:field  right:word
+  35 |     flush(stile_l.bottom)
+     = flush:function  stile_l:part+ref  bottom:plain
+  36 |     flush(stile_l.front)
+     = flush:function  stile_l:part+ref  front:plain
+  37 |     flush(stile_l.left, inset: frame_width - 50mm)
+     = flush:function  stile_l:part+ref  left:plain  inset:field  frame_width:param+ref  50:number  mm:unit
+  43 | part rail_top : pine_strip {
+     = part:keyword  rail_top:part+decl  pine_strip:stock+ref
+  44 |   length: fit
+     = length:field  fit:keyword
+  45 |   place {
+     = place:keyword
+  46 |     orient(length: right, width: back)
+     = orient:function  length:field  right:word  width:field  back:word
+  47 |     center(from: stile_l.right, to: stile_r.left)
+     = center:function  from:field  stile_l:part+ref  right:plain  to:field  stile_r:part+ref  left:plain
+  48 |     flush(stile_l.bottom)
+     = flush:function  stile_l:part+ref  bottom:plain
+  49 |     flush(stile_l.back)
+     = flush:function  stile_l:part+ref  back:plain
+  53 | part rail_bottom : pine_strip {
+     = part:keyword  rail_bottom:part+decl  pine_strip:stock+ref
+  54 |   length: fit
+     = length:field  fit:keyword
+  55 |   place {
+     = place:keyword
+  56 |     orient(length: right, width: back)
+     = orient:function  length:field  right:word  width:field  back:word
+  57 |     center(from: stile_l.right, to: stile_r.left)
+     = center:function  from:field  stile_l:part+ref  right:plain  to:field  stile_r:part+ref  left:plain
+  58 |     flush(stile_l.bottom)
+     = flush:function  stile_l:part+ref  bottom:plain
+  59 |     flush(stile_l.front)
+     = flush:function  stile_l:part+ref  front:plain
+  65 | joint corners : pocket_screw([rail_top, rail_bottom], into: [stile_l, stile_r])
+     = joint:keyword  corners:joint+decl  pocket_screw:type+ref+std  rail_top:part+ref  rail_bottom:part+ref  into:field  stile_l:part+ref  stile_r:part+ref

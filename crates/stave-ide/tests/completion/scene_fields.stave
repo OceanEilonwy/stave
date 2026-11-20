@@ -1,0 +1,7 @@
+stave 1
+
+scene open "Open" {
+  explode: true
+  $0
+}
+// expect: show, hide, section

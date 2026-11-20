@@ -1,0 +1,4 @@
+stave 1
+
+recipe notch_by_hand : $0
+// expect: notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, diagonal, chamfer, roundover, turning

@@ -27,6 +27,68 @@ pub enum ValueType {
     Special(Special),
 }
 
+impl ValueType {
+    /// The bare words a value of this type may be written as, in the
+    /// order the grammar lists them: a closed list's words, `through` for
+    /// a depth, `fit` for a length that may fit, `true` and `false`, the
+    /// bare spacings; the words of a list's elements for a list. What
+    /// completion offers where this type is expected (grammar, "Tooling
+    /// and editors"). A param declared `: Axis` or `: Direction` takes
+    /// the same words as the closed list, as the checker reads it.
+    pub fn words(self) -> Vec<&'static str> {
+        match self {
+            ValueType::Words(set) => set.words(),
+            ValueType::Depth => WordSet::Through.words(),
+            ValueType::LengthOrFit => vec![FIT],
+            ValueType::Type(name) => type_words(name),
+            ValueType::ListOf(inner) => inner.words(),
+            ValueType::Items | ValueType::Special(_) => Vec::new(),
+        }
+    }
+}
+
+/// The bare words a value of one of the language's types may be written
+/// as.
+fn type_words(name: TypeName) -> Vec<&'static str> {
+    match name {
+        TypeName::Bool => vec!["true", "false"],
+        TypeName::Spacing => WordSet::Spacing.words(),
+        TypeName::Axis => WordSet::Axis.words(),
+        TypeName::Direction => WordSet::Direction.words(),
+        TypeName::Length
+        | TypeName::Angle
+        | TypeName::Ratio
+        | TypeName::Count
+        | TypeName::Text
+        | TypeName::Part
+        | TypeName::Parts
+        | TypeName::Stock
+        | TypeName::Region
+        | TypeName::Profile
+        | TypeName::Anchor
+        | TypeName::Mount
+        | TypeName::Shape
+        | TypeName::Boards
+        | TypeName::Splices
+        | TypeName::Envelope
+        | TypeName::Model
+        | TypeName::Patch
+        | TypeName::JointKind
+        | TypeName::HardwareKind
+        | TypeName::SlideKind
+        | TypeName::HingeKind
+        | TypeName::PullKind
+        | TypeName::SupportKind
+        | TypeName::FastenerKind
+        | TypeName::FittingKind
+        | TypeName::Tool
+        | TypeName::Recipe => Vec::new(),
+    }
+}
+
+/// The word `fit`: a part's length or width worked out from where it sits.
+pub const FIT: &str = "fit";
+
 /// Field values made of calls whose heads are fixed by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Special {
@@ -375,5 +437,19 @@ mod tests {
             find(STOCK, "species").map(|s| s.requirement),
             Some(Required)
         );
+    }
+
+    #[test]
+    fn value_types_give_their_bare_words() {
+        assert_eq!(Type(TypeName::Bool).words(), ["true", "false"]);
+        assert_eq!(
+            Type(TypeName::Direction).words(),
+            WordSet::Direction.words()
+        );
+        assert_eq!(Type(TypeName::Axis).words(), WordSet::Axis.words());
+        assert_eq!(LengthOrFit.words(), [FIT]);
+        assert_eq!(Depth.words(), ["through"]);
+        assert_eq!(ListOf(&Words(WordSet::Grain)).words(), ["length", "width"]);
+        assert!(Type(TypeName::Length).words().is_empty());
     }
 }

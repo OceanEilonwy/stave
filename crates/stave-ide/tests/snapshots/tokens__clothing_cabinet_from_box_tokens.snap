@@ -1,0 +1,129 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"clothing_cabinet_from_box\"))"
+---
+== cabinet.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   3 | import "std:casework"
+     = import:keyword  ":text  std:casework:text  ":text
+  12 | project "Clothing cabinet from a box" {
+     = project:keyword  ":text  Clothing cabinet from a box:text  ":text
+  13 |   goal:       "Heirloom quality clothing cabinet with two hinged doors and two drawers at the bottom"
+     = goal:field  ":text  Heirloom quality clothing cabinet with two hinged doors and two drawers at the bottom:text  ":text
+  14 |   units:      mm
+     = units:field  mm:word
+  15 |   resolution: 0.5mm        // the cut list rounds to this and says where it rounded
+     = resolution:field  0.5:number  mm:unit
+  16 |   tools:      [pencil, marking_knife, square, tape, marking_gauge, awl, calipers,
+     = tools:field  pencil:type+ref+std  marking_knife:type+ref+std  square:type+ref+std  tape:type+ref+std  marking_gauge:type+ref+std  awl:type+ref+std  calipers:type+ref+std
+  17 |                tenon_saw, chisel, mallet, router_plane, clamps, screwdriver,
+     = tenon_saw:type+ref+std  chisel:type+ref+std  mallet:type+ref+std  router_plane:type+ref+std  clamps:type+ref+std  screwdriver:type+ref+std
+  18 |                router, straight_bit, drill, depth_stop,
+     = router:type+ref+std  straight_bit:type+ref+std  drill:type+ref+std  depth_stop:type+ref+std
+  19 |                lathe, roughing_gouge, spindle_gouge, parting_tool]
+     = lathe:type+ref+std  roughing_gouge:type+ref+std  spindle_gouge:type+ref+std  parting_tool:type+ref+std
+  22 | param overall_width  = 940mm
+     = param:keyword  overall_width:param+decl  940:number  mm:unit
+  23 | param overall_height = 1780mm
+     = param:keyword  overall_height:param+decl  1780:number  mm:unit
+  24 | param overall_depth  = 580mm
+     = param:keyword  overall_depth:param+decl  580:number  mm:unit
+  26 | region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+     = region:keyword  envelope:region+decl  box:function  across:field  overall_width:param+ref  up:field  overall_height:param+ref  deep:field  overall_depth:param+ref
+  29 | stock oak_19       { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+  30 | stock oak_6        { species: white_oak, form: solid, thickness: 6mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_6:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  6:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+  31 | stock maple_12     { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+     = stock:keyword  maple_12:stock+decl  species:field  hard_maple:word  form:field  solid:word  thickness:field  12:number  mm:unit  max_width:field  150:number  mm:unit  max_length:field  2400:number  mm:unit
+  32 | stock ply_6        { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
+     = stock:keyword  ply_6:stock+decl  species:field  birch:word  form:field  plywood:word  thickness:field  6:number  mm:unit  max_width:field  1220:number  mm:unit  max_length:field  2440:number  mm:unit
+  33 | stock oak_dowel_28 { species: white_oak, form: dowel, diameter: 28mm }
+     = stock:keyword  oak_dowel_28:stock+decl  species:field  white_oak:word  form:field  dowel:word  diameter:field  28:number  mm:unit
+  34 | stock oak_75_sq    { species: white_oak, form: solid, thickness: 75mm, width: 75mm, max_length: 2700mm }
+     = stock:keyword  oak_75_sq:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  75:number  mm:unit  width:field  75:number  mm:unit  max_length:field  2700:number  mm:unit
+  36 | assembly case : casework.Case {
+     = assembly:keyword  case:assembly+decl  casework:module+ref+std  Case:type+ref+std
+  37 |   space:       envelope
+     = space:param+ref+std  envelope:region+ref
+  38 |   panel_stock: oak_19
+     = panel_stock:param+ref+std  oak_19:stock+ref
+  39 |   raise:       80mm
+     = raise:param+ref+std  80:number  mm:unit
+  42 | assembly back : casework.Back {
+     = assembly:keyword  back:assembly+decl  casework:module+ref+std  Back:type+ref+std
+  43 |   sides:       case.side[*]
+     = sides:param+ref+std  case:assembly+ref  side:part+ref+std
+  44 |   stands_on:   case.base
+     = stands_on:param+ref+std  case:assembly+ref  base:part+ref+std
+  45 |   under:       case.top
+     = under:param+ref+std  case:assembly+ref  top:part+ref+std
+  46 |   panel_stock: ply_6
+     = panel_stock:param+ref+std  ply_6:stock+ref
+  49 | assembly divider : casework.Divider {
+     = assembly:keyword  divider:assembly+decl  casework:module+ref+std  Divider:type+ref+std
+  50 |   space:       back.in_front
+     = space:param+ref+std  back:assembly+ref  in_front:region+ref+std
+  51 |   sides:       case.side[*]
+     = sides:param+ref+std  case:assembly+ref  side:part+ref+std
+  52 |   panel_stock: oak_19
+     = panel_stock:param+ref+std  oak_19:stock+ref
+  53 |   height:      500mm
+     = height:param+ref+std  500:number  mm:unit
+  56 | region drawer_bay[bottom, top] = split(divider.below, up)
+     = region:keyword  drawer_bay:region+decl  bottom:label+decl  top:label+decl  split:function  divider:assembly+ref  below:region+ref+std  up:word
+  58 | assembly drawer[bottom, top] : casework.Drawer {
+     = assembly:keyword  drawer:assembly+decl  bottom:label+decl  top:label+decl  casework:module+ref+std  Drawer:type+ref+std
+  59 |   opening:      drawer_bay[same]
+     = opening:param+ref+std  drawer_bay:region+ref  same:keyword
+  60 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  0.75:number  mm:unit
+  61 |   front_stock:  oak_19
+     = front_stock:param+ref+std  oak_19:stock+ref
+  62 |   box_stock:    maple_12
+     = box_stock:param+ref+std  maple_12:stock+ref
+  63 |   bottom_stock: ply_6
+     = bottom_stock:param+ref+std  ply_6:stock+ref
+  64 |   slide:        side_mount_slide(length: 500mm)
+     = slide:param+ref+std  side_mount_slide:type+ref+std  length:param+ref+std  500:number  mm:unit
+  67 | region frame_panel_door_bay[left, right] = split(divider.above, across)
+     = region:keyword  frame_panel_door_bay:region+decl  left:label+decl  right:label+decl  split:function  divider:assembly+ref  above:region+ref+std  across:word
+  69 | assembly frame_panel_door_left : casework.FramePanelDoor {
+     = assembly:keyword  frame_panel_door_left:assembly+decl  casework:module+ref+std  FramePanelDoor:type+ref+std
+  70 |   opening:     frame_panel_door_bay[left]
+     = opening:param+ref+std  frame_panel_door_bay:region+ref  left:label+ref
+  71 |   hinge_side:  case.side[left]
+     = hinge_side:param+ref+std  case:assembly+ref  side:part+ref+std  left:label+ref+std
+  72 |   mount:       overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  1.5:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  0.75:number  mm:unit
+  73 |   frame:       oak_19
+     = frame:param+ref+std  oak_19:stock+ref
+  74 |   panel_stock: oak_6
+     = panel_stock:param+ref+std  oak_6:stock+ref
+  77 | assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(envelope, across))
+     = assembly:keyword  frame_panel_door_right:assembly+decl  mirror:keyword  frame_panel_door_left:assembly+ref  about:field  mid:function  envelope:region+ref  across:word
+  79 | assembly shelf : casework.Shelf {
+     = assembly:keyword  shelf:assembly+decl  casework:module+ref+std  Shelf:type+ref+std
+  80 |   space:       divider.above
+     = space:param+ref+std  divider:assembly+ref  above:region+ref+std
+  81 |   sides:       case.side[*]
+     = sides:param+ref+std  case:assembly+ref  side:part+ref+std
+  82 |   panel_stock: oak_19
+     = panel_stock:param+ref+std  oak_19:stock+ref
+  83 |   headroom:    160mm
+     = headroom:param+ref+std  160:number  mm:unit
+  86 | assembly hanging_rail : casework.HangingRail {
+     = assembly:keyword  hanging_rail:assembly+decl  casework:module+ref+std  HangingRail:type+ref+std
+  87 |   under:      shelf.board
+     = under:param+ref+std  shelf:assembly+ref  board:part+ref+std
+  88 |   sides:      case.side[*]
+     = sides:param+ref+std  case:assembly+ref  side:part+ref+std
+  89 |   rail_stock: oak_dowel_28
+     = rail_stock:param+ref+std  oak_dowel_28:stock+ref
+  92 | assembly feet : casework.Feet {
+     = assembly:keyword  feet:assembly+decl  casework:module+ref+std  Feet:type+ref+std
+  93 |   under:      case.base
+     = under:param+ref+std  case:assembly+ref  base:part+ref+std
+  94 |   foot_stock: oak_75_sq
+     = foot_stock:param+ref+std  oak_75_sq:stock+ref

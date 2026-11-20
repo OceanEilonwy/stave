@@ -1,0 +1,9 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part base : oak {
+  length: 600mm
+  grain: $0
+}
+// expect: length, width

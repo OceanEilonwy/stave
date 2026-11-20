@@ -4390,13 +4390,13 @@ diagnostic with a "fetch" code action.
 |---|---|
 | Diagnostics | the fast and slow tiers above, with codes from the [Diagnostics](#diagnostics) table |
 | Quick fixes | each diagnostic's [fixes](#fixes), as workspace edits made by applying their patches; for a syntax error, its `help:` line as a text edit when it is mechanical ("add `as hw`", "write `name[*]`", "add `)`") |
-| Completion | the position decides the vocabulary: placement terms at the start of a line in `place { }`; cut operations after `cut`; base kinds after `kind name :`; the declaration's field table in a field position; the expected type's words in an argument (`up`, `evenly`, `plywood`); a module's public items after `module.`; labels inside `[ ]` |
+| Completion | the position decides the vocabulary: placement terms at the start of a line in `place { }`; face selectors after `cut` (`cut dado: crossing`) and the cut operations that selector takes at the start of a line in its block; base kinds after `kind name :`; the operation after `recipe name :`, and the steps in its `mark { }` and `cut { }`; the declaration's field table in a field position (fields already written left out; a component's params in an assembly); the expected type's words in an argument or a field's value (`up`, `evenly`, `plywood`, `through`, `open` after `pose ... =`); a module's public items after `module.`, and a part's faces and readable fields after `part.`; labels inside `[ ]`; units after a number |
 | Signature help | the roles and params of the kind or component being called, with defaults |
 | Hover | doc comments, types, and values worked out in the project's units |
 | Inlay hints | computed values next to their source: `length: fit` shows `= 844mm`, `between(base, top)` its value, every size its cut length |
 | Go to definition, references, rename | every name resolves to exactly one declaration (including names inside strings and qualified names across modules) |
 | Document symbols, folding | items, and the blocks inside them |
-| Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, units |
+| Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, and a quantity's unit apart from its number (`18` and `mm`); on each name, whether it declares or names an item, comes from the standard library, resolves to nothing, or is a `solved param` |
 | Formatting | `stave fmt`, applied to the lossless tree (see "Layout" below) |
 | Code actions from AI | a checked patch from an AI or the suggestion engine is offered as a workspace edit |
 | Code lens | "show in 3D" on parts and assemblies, "show work card" on parts |

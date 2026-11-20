@@ -1,0 +1,49 @@
+---
+source: crates/stave-ide/tests/outline.rs
+expression: shown
+---
+# cabinet.stave
+header project "Clothing cabinet"
+param cabinet_width
+param cabinet_height
+param cabinet_depth
+param drawer_zone
+param slide_length
+param reveal
+let overhang
+require hanger_room
+require overall_height
+scene all_open
+scene drawer_bench
+# carcass.stave
+part base
+  block place
+part side_l
+  block place
+part side_r
+part top
+  block place
+part back
+  block place
+part divider
+  block place
+part shelf
+  block place
+part rod
+  block place
+part foot
+  block place
+profile bun_foot
+joint shelf_dados
+joint back_rabbets
+joint base_dowels
+joint top_dowels
+joint rod_sockets
+joint foot_tenons
+region front_opening
+region bay
+region drawer_bay
+region door_bay
+# doors.stave
+assembly door_l
+assembly door_r
