@@ -10,11 +10,11 @@
 //!    and adds nothing) and where one part meets the other with its end.
 //! 2. **Glue across the grain** (at the joint): such a pair where the
 //!    other part holds still along the way a solid part moves, over more
-//!    than [`MOVEMENT_SPAN`].
+//!    than the moving part's limit (its stock's `max_held_width:`).
 //! 3. **Short grain** (at the joint): a `tenon` or `spigot` cut on the end
 //!    of a solid part whose grain runs along its width, across the tenon.
 //! 4. **Held across the grain** (at the part): a solid part fixed at places
-//!    further apart across its grain than [`MOVEMENT_SPAN`]: by glue on a
+//!    further apart across its grain than its limit: by glue on a
 //!    patch, by glue in a housing it is extended into across its grain, or
 //!    by a member (a screw, a dowel) that has a round hole in it and in
 //!    another part. Fixings in one other part count with their spread
@@ -33,15 +33,28 @@ use stave_model::solved::{
     BodyOwner, BodyRef, Contact as PairContact, CutKind, CutPlace, CutSource, End, JointId, Part,
     PartId, PartOrigin, RoleValue, Shape, Size3, WorldBox,
 };
+use stave_schema::fields::DEFAULT_MAX_HELD_WIDTH_NM;
 use stave_schema::words::{Grain, StockForm};
 
 use crate::names::length_text;
 use crate::walls::cut_noun;
 use crate::{Checker, Contact, Item};
 
-/// The widest a solid part may be held fast across its grain: about the
-/// width over which a season's movement stays near a millimetre.
-pub(crate) const MOVEMENT_SPAN: Length = Length::from_nm(80_000_000);
+/// The widest a solid board may be held fast across its grain: its
+/// stock's `max_held_width:`, which the solver fills with 80mm when the
+/// stock doesn't say. The default here only stands in for a part that
+/// isn't a solid board, which is never measured.
+fn limit(part: &Part) -> Length {
+    part.stock
+        .max_held_width
+        .unwrap_or(Length::from_nm(DEFAULT_MAX_HELD_WIDTH_NM))
+}
+
+/// Where a board's limit comes from, as a help line says it: `the
+/// max_held_width of oak`.
+fn limit_source(part: &Part) -> String {
+    format!("the max_held_width of {}", part.stock.name)
+}
 
 /// The world axis a part's grain runs along.
 fn grain_axis(part: &Part) -> Axis {
@@ -290,7 +303,7 @@ impl Checker<'_> {
                     });
                     let across = patch.size(axis);
                     if holds_still(other, axis)
-                        && across > MOVEMENT_SPAN
+                        && across > limit(part)
                         && !warned.contains(&part.id)
                     {
                         self.next_contact = Some(Contact::of(
@@ -311,9 +324,10 @@ impl Checker<'_> {
                             self.joint_place(joint.id),
                             Vec::new(),
                             Some(format!(
-                                "glue only a strip no wider than {} across the grain of {}, or hold it with fasteners that let it move",
-                                length_text(MOVEMENT_SPAN),
-                                self.part_name(part.id)
+                                "glue only a strip no wider than {} across the grain of {} ({}), or hold it with fasteners that let it move",
+                                length_text(limit(part)),
+                                self.part_name(part.id),
+                                limit_source(part)
                             )),
                         );
                         warned.insert(part.id);
@@ -334,7 +348,7 @@ impl Checker<'_> {
                 continue;
             };
             if let Some((span, notes)) = self.part_span(part, &held, &links)
-                && span > MOVEMENT_SPAN
+                && span > limit(part)
             {
                 self.next_contact = Some(Contact::of(design, &[Item::Part(part_id)], &[]));
                 self.report(
@@ -348,9 +362,10 @@ impl Checker<'_> {
                     self.part_place(part_id),
                     notes,
                     Some(format!(
-                        "hold {} fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within {} of each other across its grain",
+                        "hold {} fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within {} of each other across its grain ({})",
                         self.part_name(part_id),
-                        length_text(MOVEMENT_SPAN)
+                        length_text(limit(part)),
+                        limit_source(part)
                     )),
                 );
             }

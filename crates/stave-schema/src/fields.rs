@@ -156,6 +156,12 @@ pub const STOCK: &[FieldSpec] = &[
         Conditional("no; solid only"),
         false,
     ),
+    field(
+        "max_held_width",
+        Type(TypeName::Length),
+        Conditional("no (default 80mm); solid only"),
+        false,
+    ),
 ];
 
 /// `part name : stock { }` and `makes part name : stock { }`. `place { }`
@@ -188,6 +194,12 @@ pub const PART: &[FieldSpec] = &[
 
 /// The default `kerf:` of a project, in nanometres (3mm).
 pub const DEFAULT_KERF_NM: i64 = 3_000_000;
+
+/// The default `max_held_width:` of a `solid` stock, in nanometres (80mm):
+/// about the width across the grain over which a season's movement in
+/// flat-sawn oak stays near a millimetre (grammar, "Grain and wood
+/// movement").
+pub const DEFAULT_MAX_HELD_WIDTH_NM: i64 = 80_000_000;
 
 /// Members readable on every part besides its readable fields.
 pub const PART_EXTRA_MEMBERS: &[&str] = &["diameter", "stock"];

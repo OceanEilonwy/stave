@@ -683,6 +683,30 @@ impl<'a> Resolver<'a> {
         let kerf = length("kerf");
         let rough_length = length("rough_length");
         let rough_width = length("rough_width");
+        let max_held_width = length("max_held_width");
+        // A sheet or a dowel doesn't move across a grain the way a solid
+        // board does (grammar, "Grain and wood movement").
+        if form != StockForm::Solid
+            && let Some(written) = &max_held_width
+        {
+            let help = match form {
+                StockForm::Plywood | StockForm::Mdf => format!(
+                    "{} hardly swells or shrinks with the seasons, so it may be held fast at any width",
+                    form.word()
+                ),
+                StockForm::Dowel | StockForm::Solid => {
+                    "a dowel is too narrow to move much across its grain, so it may be held fast at any width"
+                        .to_owned()
+                }
+            };
+            self.error_help(
+                Code::UnknownField,
+                format!("{what} has no field 'max_held_width'"),
+                cx.file,
+                written.span,
+                help,
+            );
+        }
         // A sheet or a dowel is bought at its finished size and cut
         // straight to it (grammar, "stock").
         if form != StockForm::Solid {
@@ -762,6 +786,7 @@ impl<'a> Resolver<'a> {
             kerf,
             rough_length: rough_length.filter(|_| form == StockForm::Solid),
             rough_width: rough_width.filter(|_| form == StockForm::Solid),
+            max_held_width: max_held_width.filter(|_| form == StockForm::Solid),
         }
     }
 

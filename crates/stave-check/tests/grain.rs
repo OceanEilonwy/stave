@@ -84,7 +84,7 @@ fn glue_across_the_grain_is_warned_at_the_joint() {
         grain(&checked),
         [(
             "glued: top is glued across its grain to batten over 400mm, and wood held that wide splits as it moves with the seasons".to_owned(),
-            "glue only a strip no wider than 80mm across the grain of top, or hold it with fasteners that let it move".to_owned()
+            "glue only a strip no wider than 80mm across the grain of top (the max_held_width of oak), or hold it with fasteners that let it move".to_owned()
         )]
     );
 }
@@ -273,7 +273,7 @@ fn screws_in_round_holes_across_the_grain_hold_the_top_fast() {
     assert_eq!(
         only.help.as_deref(),
         Some(
-            "hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain"
+            "hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain (the max_held_width of oak)"
         )
     );
 }
@@ -441,4 +441,156 @@ fn a_solid_panel_glued_into_its_grooves_is_held_fast() {
 fn a_solid_panel_left_dry_in_its_grooves_is_sound() {
     let checked = check(&panel(", glue: false"));
     assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+// ---- Each stock's own limit: `max_held_width:` ----
+
+/// `text` with `max_held_width: <limit>` given to the stock `stock`.
+fn with_limit(text: &str, stock: &str, limit: &str) -> String {
+    let from = format!("stock {stock} ");
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(&from))
+        .unwrap_or_else(|| panic!("no stock {stock}"));
+    let given = line.replacen(
+        "form: solid,",
+        &format!("form: solid, max_held_width: {limit},"),
+        1,
+    );
+    assert_ne!(given, line, "stock {stock} is not solid");
+    text.replacen(line, &given, 1)
+}
+
+#[test]
+fn a_stock_that_allows_more_lets_wider_glue_pass() {
+    // The batten glued across 400mm of the top warns at the default 80mm;
+    // a wood said to move little enough to be held 450mm doesn't.
+    let text = design(&format!(
+        "{BATTEN}\njoint glued : glued_face(batten, into: top)"
+    ));
+    let checked = check(&with_limit(&text, "oak", "450mm"));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+#[test]
+fn a_stock_that_allows_less_warns_sooner() {
+    // 80mm of glue across the grain passes at the default, not at 60mm.
+    let text = format!(
+        "{}\njoint glued : glued_face(strip, into: top)",
+        design(
+            r#"
+part strip : oak_25 {
+  length: 80mm
+  width:  50mm
+  place {
+    orient(length: back, width: right)
+    against(top.bottom)
+    flush(top.left, inset: 50mm)
+    flush(top.front)
+  }
+}"#
+        )
+        .replace("width:  400mm", "width:  80mm")
+    );
+    let checked = check(&with_limit(&text, "oak", "60mm"));
+    assert_eq!(
+        grain(&checked),
+        [(
+            "glued: top is glued across its grain to strip over 80mm, and wood held that wide splits as it moves with the seasons".to_owned(),
+            "glue only a strip no wider than 60mm across the grain of top (the max_held_width of oak), or hold it with fasteners that let it move".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn the_limit_that_counts_is_the_moving_boards() {
+    // The batten's stock allowing a metre changes nothing: it is the top
+    // that moves across its grain, and the top's oak allows 80mm.
+    let text = design(&format!(
+        "{BATTEN}\njoint glued : glued_face(batten, into: top)"
+    ));
+    let checked = check(&with_limit(&text, "oak_25", "1000mm"));
+    assert_eq!(
+        messages(&checked),
+        [
+            "glued: top is glued across its grain to batten over 400mm, and wood held that wide splits as it moves with the seasons"
+        ]
+    );
+}
+
+#[test]
+fn a_stock_that_allows_more_lets_wider_fixings_pass() {
+    // Screws 201.5mm apart across the grain: held fast at the default,
+    // sound in a wood allowed 250mm.
+    let checked = check(&with_limit(&screwed("screw"), "oak", "250mm"));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+#[test]
+fn a_stock_that_allows_less_holds_fixings_to_it() {
+    let checked = check(&with_limit(&screwed("screw"), "oak", "150mm"));
+    let found: Vec<_> = checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == Code::Grain)
+        .collect();
+    let [only] = found.as_slice() else {
+        panic!("{:#?}", checked.messages());
+    };
+    assert_eq!(
+        only.help.as_deref(),
+        Some(
+            "hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 150mm of each other across its grain (the max_held_width of oak)"
+        )
+    );
+}
+
+/// The errors of a design, as `code: message (help)`.
+fn errors(checked: &Checked) -> Vec<String> {
+    checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| {
+            format!(
+                "{}: {} ({})",
+                d.code,
+                d.message,
+                d.help.clone().unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_limit_of_nothing_is_out_of_range() {
+    let checked = check(&with_limit(&design(""), "oak", "0mm"));
+    assert_eq!(
+        errors(&checked),
+        [
+            "out-of-range: 'max_held_width' must be more than 0mm, found 0mm (write the widest a board of oak may be held fast across its grain, more than 0mm, such as 80mm)"
+        ]
+    );
+    let checked = check(&with_limit(&design(""), "oak", "-20mm"));
+    assert_eq!(
+        errors(&checked),
+        [
+            "out-of-range: 'max_held_width' must be more than 0mm, found -20mm (write the widest a board of oak may be held fast across its grain, more than 0mm, such as 80mm)"
+        ]
+    );
+}
+
+#[test]
+fn a_sheet_has_no_limit() {
+    let text = design("").replace(
+        "form: plywood, thickness: 18mm,",
+        "form: plywood, max_held_width: 100mm, thickness: 18mm,",
+    );
+    let checked = check(&text);
+    assert_eq!(
+        errors(&checked),
+        [
+            "unknown-field: stock 'ply' has no field 'max_held_width' (plywood hardly swells or shrinks with the seasons, so it may be held fast at any width)"
+        ]
+    );
 }

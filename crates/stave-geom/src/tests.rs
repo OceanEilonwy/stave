@@ -51,6 +51,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
             },
             max_width: None,
             max_length: None,
+            max_held_width: Some(Length::from_mm(80)),
             allowances: Allowances {
                 kerf: Length::from_mm(3),
                 rough_length: Length::ZERO,

@@ -127,3 +127,7 @@ grain, with a species-dependent span; and add slotted clearance holes to
   checked.
 - A slot that is long the wrong way, movement in a part's thickness, and
   species.
+
+Glue in a joint's cuts, slot direction and a limit per stock
+(`max_held_width`) were taken up afterwards: see
+`2026-11-20-grain-gaps.md`.

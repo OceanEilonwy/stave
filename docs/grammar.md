@@ -769,6 +769,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `kerf` | `Length` | no (default: the project's) | no | the project's `kerf:` for parts cut from this stock |
 | `rough_length` | `Length` | no (default: the project's); `solid` only | no | the project's `rough_length:` for parts cut from this stock |
 | `rough_width` | `Length` | no (default: the project's); `solid` only | no | the project's `rough_width:` for parts cut from this stock |
+| `max_held_width` | `Length` | no (default `80mm`); `solid` only | no | the widest a board of this stock may be held fast across its grain (glued, or fixed at places this far apart) before Stave warns that it can't swell and shrink with the seasons; see [Grain and wood movement](#grain-and-wood-movement) |
 
 `thickness` or `width` written on `dowel` stock, or `diameter` on any
 other, is `error[unknown-field]` at the field (`stock 'd' has no field
@@ -792,6 +793,16 @@ sold 16mm thick, thinner than its finished thickness of 19mm`, with the help
 field 'sold'`), with the help `plywood is bought at its finished size and
 cut straight to it, so it has no rough size` (`mdf`, `dowel` alike). A
 project's `rough_length:` and `rough_width:` apply to `solid` stock only.
+
+`max_held_width` must be more than 0mm: `error[out-of-range]` at the
+field, `'max_held_width' must be more than 0mm, found 0mm`, with the help
+`write the widest a board of oak_19 may be held fast across its grain,
+more than 0mm, such as 80mm`. Written on `plywood` or `mdf` stock it is
+`error[unknown-field]` at the field (`stock 'ply_18' has no field
+'max_held_width'`), with the help `plywood hardly swells or shrinks with
+the seasons, so it may be held fast at any width` (`mdf` alike); on
+`dowel` stock the help is `a dowel is too narrow to move much across its
+grain, so it may be held fast at any width`.
 
 A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
 `max_length` is `warning[missing-field]` at the stock, once: `oak_19 doesn't
@@ -3956,7 +3967,19 @@ width`. A **solid board** is a part of `solid` stock that isn't round or
 turned: it is what moves, along the axis across its grain in its faces
 (its width, or its length for `grain: width`). A part **holds still**
 along an axis when it is a sheet (`plywood`, `mdf`), or when its grain
-runs along that axis. Glue is **on the patch** when a glued pair's
+runs along that axis.
+
+How wide a solid board may be held fast across its grain is its
+stock's **`max_held_width`** (see [`stock name { }`](#stock-name--)),
+80mm unless the stock says: about where a season's movement in
+flat-sawn oak reaches a millimetre. A wood that moves less (most pines,
+mahogany, cedar) may be given more, one that moves more (beech) less.
+Where two parts meet, the limit that counts is that of the board that
+moves, measured across its own grain; when both are solid boards that
+move, each is measured against its own limit. A sheet or a dowel has
+no limit: it doesn't move that way.
+
+Glue is **on the patch** when a glued pair's
 kind cuts nothing, places no member and no `uses:` fastener, makes no
 part and adds nothing (std's `glued_face`): all its glue is spread where
 the parts touch (`contact(a, b)`, on their drawn boxes). Glue in a
@@ -3972,13 +3995,14 @@ except as below for a part a joint extends into a housing.
    <leg> with a face or an edge`. When it is reported, the pair is not
    checked for glue across the grain.
 2. **Glue across the grain.** A pair glued on the patch where the other
-   part holds still along the way a solid board moves, over more than
-   80mm of the patch: `<joint>: <top> is glued across its grain to
-   <batten> over <450mm>, and wood held that wide splits as it moves with
-   the seasons`, at the joint's call, with the help `glue only a strip no
-   wider than 80mm across the grain of <top>, or hold it with fasteners
-   that let it move`. A cleat glued along an apron, with its grain the
-   same way, is not warned.
+   part holds still along the way a solid board moves, over more of the
+   patch than the board's `max_held_width`: `<joint>: <top> is glued
+   across its grain to <batten> over <450mm>, and wood held that wide
+   splits as it moves with the seasons`, at the joint's call, with the
+   help `glue only a strip no wider than <80mm> across the grain of
+   <top> (the max_held_width of <oak>), or hold it with fasteners that
+   let it move`. A cleat glued along an apron, with its grain the same
+   way, is not warned.
 3. **Short grain.** A `tenon` or `spigot` cut on the end of a part of
    `solid` stock (`end(p, facing: q)`) whose grain runs along its width,
    across the tenon: its fibres are only as long as the tenon is wide,
@@ -4010,13 +4034,14 @@ except as below for a part a joint extends into a housing.
    and back, with nothing else joining them, are not, since the legs move
    apart with it. A part made of boards whose seams are all unglued
    (`glue: false`) moves board by board, and each board is measured on
-   its own. Held fast over more than 80mm: `<top> is held fast at places
-   <372mm> apart across its grain, so it can't swell and shrink with the
-   seasons`, at the part's name, a note `held to <cleat_front> by
-   <top_screws>` for each of the two places, and the help `hold <top>
-   fast along one line only and let it slide everywhere else: screw it
-   through slots, use fittings made to let it move, or keep its fixings
-   within 80mm of each other across its grain`. A part already warned
+   its own. Held fast over more than its `max_held_width`: `<top> is
+   held fast at places <372mm> apart across its grain, so it can't swell
+   and shrink with the seasons`, at the part's name, a note `held to
+   <cleat_front> by <top_screws>` for each of the two places, and the
+   help `hold <top> fast along one line only and let it slide everywhere
+   else: fasten it through slots, use fittings made to let it move, or
+   keep its fixings within <80mm> of each other across its grain (the
+   max_held_width of <oak>)`. A part already warned
    for glue across the grain or end grain is not warned again here.
 
 std's `slotted_screw` drives its screws through slots in the piece (a
@@ -4031,14 +4056,12 @@ warning[grain]: top is held fast at places 372mm apart across its grain, so it c
   --> table.stave:43:6
    = note: held to cleat_front by top_screws
    = note: held to cleat_back by top_screws
-   = help: hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain
+   = help: hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain (the max_held_width of oak)
 ```
 
 **Not measured yet.** Glue in a joint's cuts (a wide tenon glued across a
 leg's grain, a solid panel glued in a groove that doesn't extend it), a
-slot that is long the wrong way, and movement in a part's thickness. The
-80mm is one number for every species; how much more one wood moves than
-another is not yet taken into account.
+slot that is long the wrong way, and movement in a part's thickness.
 
 ### Diagnostics
 
