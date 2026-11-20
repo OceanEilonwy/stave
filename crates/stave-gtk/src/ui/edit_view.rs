@@ -1058,15 +1058,10 @@ impl Window {
         let workbench = &self.widgets.workbench;
         if shows && !was {
             workbench.bring_forward_beside_view(super::workbench::PanelId::Edit);
-        } else if !shows
-            && was
-            && workbench.share_a_frame(
-                super::workbench::PanelId::Edit,
-                super::workbench::PanelId::Details,
-            )
-            && workbench.is_shown(super::workbench::PanelId::Edit)
-        {
-            workbench.present(super::workbench::PanelId::Details);
+        } else if !shows && was {
+            // Whether Edit shares its frame with Details and shows is
+            // decided by the workbench, after the moves queued before.
+            workbench.edit_panel_hidden();
         }
     }
 

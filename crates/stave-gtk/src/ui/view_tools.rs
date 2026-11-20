@@ -70,15 +70,20 @@ pub struct ViewToolbarComponent {
     playing: bool,
     /// How far apart, 0 to 1.
     slider: Slider,
+    /// X-ray and Pull apart lie in a row or stand in a column, as the
+    /// camera column they sit in does.
+    orientation: gtk::Orientation,
 }
 
-/// What the view's tools are made with: the widgets the window and the
-/// camera column still reach.
+/// What the view's tools are made with: their widgets, made by
+/// [`ViewToolbar`] (tests press them).
 #[derive(Debug)]
 pub struct ViewToolbarInit {
-    /// X-ray and Pull apart with the line above them, for the camera
-    /// column.
+    /// X-ray and Pull apart with the line above them: a root of the
+    /// tools' own, which the camera column places at its foot.
     pub section: gtk::Box,
+    /// The line above X-ray.
+    pub line: gtk::Separator,
     /// See through everything but the selection.
     pub xray: gtk::ToggleButton,
     /// Pull apart, on or off.
@@ -107,6 +112,9 @@ pub enum ViewToolbarInput {
     Offer(bool),
     /// Show X-ray on or off, without telling anyone.
     SetXray(bool),
+    /// Lay X-ray and Pull apart out in a row or a column, as the camera
+    /// column they sit in is laid out.
+    SetOrientation(gtk::Orientation),
     /// People turned X-ray on or off.
     XrayToggled(bool),
     /// People turned Pull apart on or off.
@@ -128,6 +136,9 @@ pub enum ViewToolbarOutput {
     Play,
     /// People moved the slider to this far apart, 0 to 1.
     Apart(f64),
+    /// The slider popped out beside Pull apart (`true`) or went: the
+    /// camera column meets it square while it shows.
+    PoppedOut(bool),
 }
 
 #[relm4::component(pub)]
@@ -197,6 +208,16 @@ impl Component for ViewToolbarComponent {
         section -> gtk::Box {
             #[watch]
             set_visible: model.offered,
+            #[watch]
+            set_orientation: model.orientation,
+        },
+
+        // The line between the camera buttons and the tools runs across
+        // the column.
+        #[local_ref]
+        line -> gtk::Separator {
+            #[watch]
+            set_orientation: crosswise(model.orientation),
         },
 
         // Both toggles are set from the model without hearing it back.
@@ -232,12 +253,14 @@ impl Component for ViewToolbarComponent {
     ) -> ComponentParts<Self> {
         let ViewToolbarInit {
             section,
+            line,
             xray,
             pull,
             play,
             play_icon,
         } = init;
-        let (section, xray, pull, play, play_icon) = (&section, &xray, &pull, &play, &play_icon);
+        let (section, line, xray, pull, play, play_icon) =
+            (&section, &line, &xray, &pull, &play, &play_icon);
         let slider = Slider::launch(
             &tr("How far apart"),
             24,
@@ -253,12 +276,14 @@ impl Component for ViewToolbarComponent {
             offered: true,
             playing: false,
             slider,
+            orientation: gtk::Orientation::Vertical,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: ViewToolbarInput, sender: ComponentSender<Self>, _: &Self::Root) {
+        let popped = self.on && self.offered;
         let output = match message {
             ViewToolbarInput::Show {
                 on,
@@ -282,6 +307,10 @@ impl Component for ViewToolbarComponent {
                 self.xray = on;
                 None
             }
+            ViewToolbarInput::SetOrientation(orientation) => {
+                self.orientation = orientation;
+                None
+            }
             ViewToolbarInput::XrayToggled(on) => {
                 self.xray = on;
                 Some(ViewToolbarOutput::Xray(on))
@@ -298,6 +327,10 @@ impl Component for ViewToolbarComponent {
         if let Some(output) = output {
             // Nobody listening is not a mistake.
             let _ = sender.output(output);
+        }
+        let pops = self.on && self.offered;
+        if pops != popped {
+            let _ = sender.output(ViewToolbarOutput::PoppedOut(pops));
         }
     }
 }
@@ -321,7 +354,7 @@ pub struct ViewToolbar {
     )]
     pull: gtk::ToggleButton,
     /// The play button and the slider, floating beside Pull apart while
-    /// it is on.
+    /// it is on: a root for the owner to place.
     pub popout: gtk::Box,
     /// Plays the pulling apart from together to apart.
     #[cfg_attr(
@@ -329,10 +362,11 @@ pub struct ViewToolbar {
         expect(dead_code, reason = "tests press it; the window hears its output")
     )]
     play: gtk::Button,
-    /// X-ray and Pull apart with the line above them, for the camera
-    /// column.
-    section: gtk::Box,
+    /// X-ray and Pull apart with the line above them: a root of the
+    /// tools' own, for the camera column to place at its foot.
+    pub section: gtk::Box,
     /// The line above X-ray, turned crosswise to the column.
+    #[cfg(test)]
     line: gtk::Separator,
     controller: Controller<ViewToolbarComponent>,
 }
@@ -376,6 +410,7 @@ impl ViewToolbar {
         let controller = ViewToolbarComponent::builder()
             .launch(ViewToolbarInit {
                 section: section.clone(),
+                line: line.clone(),
                 xray: xray.clone(),
                 pull: pull.clone(),
                 play: play.clone(),
@@ -388,6 +423,7 @@ impl ViewToolbar {
             popout: controller.widget().clone(),
             play,
             section,
+            #[cfg(test)]
             line,
             controller,
         }
@@ -420,6 +456,12 @@ impl ViewToolbar {
     pub fn offer(&self, offered: bool) {
         self.send(ViewToolbarInput::Offer(offered));
     }
+
+    /// Lays X-ray and Pull apart out in a row (the camera column docked in
+    /// a corner) or a column (docked on the right edge).
+    pub fn set_orientation(&self, orientation: gtk::Orientation) {
+        self.send(ViewToolbarInput::SetOrientation(orientation));
+    }
 }
 
 /// An explode amount as a whole percentage.
@@ -440,20 +482,16 @@ fn crosswise(orientation: gtk::Orientation) -> gtk::Orientation {
 
 /// The camera column: which way it runs, and whether Pull apart's slider
 /// pops out beside it.
+#[derive(Debug)]
 pub struct CameraComponent {
     /// A column (docked on the right edge) or a row (docked in a corner).
     orientation: gtk::Orientation,
     /// Pull apart's slider pops out beside the column.
     joined: bool,
-    /// Pull apart's slider, which belongs to the view's tools, and the
-    /// handler watching it come and go, let go when the column shuts
-    /// down.
-    popout: gtk::Box,
-    joined_handler: Option<gtk::glib::SignalHandlerId>,
 }
 
-/// What the camera column is made with: its buttons and the view's tools
-/// at its foot.
+/// What the camera column is made with: its buttons, and the view's tools
+/// to place at its foot.
 #[derive(Debug)]
 pub struct CameraInit {
     /// Frames everything (or the selection).
@@ -462,21 +500,19 @@ pub struct CameraInit {
     pub front: gtk::Button,
     /// Turns the view half way round.
     pub turn: gtk::Button,
-    /// X-ray and Pull apart, at the foot.
-    pub section: gtk::Box,
-    /// The line above them.
-    pub line: gtk::Separator,
-    /// Pull apart's slider, which pops out beside the column.
-    pub popout: gtk::Box,
+    /// X-ray and Pull apart, the view's tools' own root: placed at the
+    /// foot, and otherwise left as the tools have it.
+    pub section: gtk::Widget,
 }
 
 /// What the camera column is told.
 #[derive(Debug)]
 pub enum CameraInput {
     /// Lay the buttons out in a column (docked on the right edge) or a row
-    /// (docked in a corner), X-ray and Pull apart with them.
+    /// (docked in a corner).
     SetOrientation(gtk::Orientation),
-    /// Pull apart's slider popped out (or went).
+    /// Pull apart's slider popped out (or went): the column meets it
+    /// square.
     Joined(bool),
     /// People pressed Front view.
     FrontPressed,
@@ -530,16 +566,7 @@ impl Component for CameraComponent {
                 },
             },
             #[local_ref]
-            section -> gtk::Box {
-                #[watch]
-                set_orientation: model.orientation,
-            },
-        },
-
-        #[local_ref]
-        line -> gtk::Separator {
-            #[watch]
-            set_orientation: crosswise(model.orientation),
+            section -> gtk::Widget {},
         },
     }
 
@@ -553,20 +580,13 @@ impl Component for CameraComponent {
             front,
             turn,
             section,
-            line,
-            popout,
         } = init;
-        let joined = sender.input_sender().clone();
-        let joined_handler = popout.connect_visible_notify(move |popout| {
-            joined.emit(CameraInput::Joined(popout.is_visible()));
-        });
+        // The slider starts hidden (Pull apart starts off).
         let model = CameraComponent {
             orientation: gtk::Orientation::Vertical,
-            joined: popout.is_visible(),
-            popout,
-            joined_handler: Some(joined_handler),
+            joined: false,
         };
-        let (fit, front, turn, section, line) = (&fit, &front, &turn, &section, &line);
+        let (fit, front, turn, section) = (&fit, &front, &turn, &section);
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
@@ -581,13 +601,6 @@ impl Component for CameraComponent {
             CameraInput::TurnPressed => {
                 let _ = sender.output(CameraOutput::Turn);
             }
-        }
-    }
-
-    fn shutdown(&mut self, _: &mut Self::Widgets, _: relm4::Sender<CameraOutput>) {
-        // The pop-out may outlive the column: it stops telling it.
-        if let Some(handler) = self.joined_handler.take() {
-            self.popout.disconnect(handler);
         }
     }
 }
@@ -645,9 +658,7 @@ impl CameraToolbar {
                 fit: fit.clone(),
                 front: front.clone(),
                 turn: turn.clone(),
-                section: tools.section.clone(),
-                line: tools.line.clone(),
-                popout: tools.popout.clone(),
+                section: tools.section.clone().upcast(),
             })
             .forward(owner, message);
         CameraToolbar {
@@ -659,25 +670,32 @@ impl CameraToolbar {
     }
 
     /// Lays the buttons out in a column (docked on the right edge) or a
-    /// row (docked in a corner), X-ray and Pull apart with them.
+    /// row (docked in a corner); the view's tools are told the same by
+    /// the window ([`ViewToolbar::set_orientation`]).
     pub fn set_orientation(&self, orientation: gtk::Orientation) {
-        // Once the column has shut down there is nobody to tell.
-        let _ = self
-            .controller
-            .sender()
-            .send(CameraInput::SetOrientation(orientation));
+        self.send(CameraInput::SetOrientation(orientation));
+    }
+
+    /// Meets Pull apart's slider square while it pops out beside the
+    /// column (the view's tools say when, [`ViewToolbarOutput::PoppedOut`]).
+    pub fn set_joined(&self, joined: bool) {
+        self.send(CameraInput::Joined(joined));
+    }
+
+    /// Queues `input`; once the column has shut down there is nobody to
+    /// tell.
+    fn send(&self, input: CameraInput) {
+        let _ = self.controller.sender().send(input);
     }
 }
 
 /// The key shown while a problem is posed: a red square and "Shared wood
-/// at first contact".
+/// at first contact". It floats on the 3D view, placed exactly by the
+/// floats.
 pub fn contact_key() -> gtk::Box {
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Start)
-        .margin_top(52)
         .css_classes(["stave-contact-key"])
         .visible(false)
         .build();
@@ -736,10 +754,7 @@ impl Component for PlanSwitchComponent {
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
             set_spacing: 2,
-            set_halign: gtk::Align::End,
-            set_valign: gtk::Align::Start,
-            set_margin_top: 12,
-            set_margin_end: 12,
+            // It floats on the 3D view, placed exactly by the floats.
             add_css_class: "stave-plan-switch",
             set_visible: false,
             update_property: &[gtk::accessible::Property::Label(&tr("Hinge view"))],
@@ -880,6 +895,8 @@ pub struct EmptyViewComponent {
     description: String,
     /// "Open a Project…" helps here.
     offers_open: bool,
+    /// The page takes the dark stage colour.
+    dark: bool,
 }
 
 /// What the empty view is told.
@@ -894,6 +911,8 @@ pub enum EmptyViewInput {
         /// Offer "Open a Project…".
         offers_open: bool,
     },
+    /// Take the dark stage colour (`true`) or the light one.
+    Dark(bool),
 }
 
 #[relm4::component(pub)]
@@ -908,6 +927,8 @@ impl Component for EmptyViewComponent {
             set_orientation: gtk::Orientation::Vertical,
             add_css_class: "stave-stage",
             add_css_class: "stave-empty",
+            #[watch]
+            set_class_active: ("dark", model.dark),
 
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -957,6 +978,7 @@ impl Component for EmptyViewComponent {
             title: tr("Checking…"),
             description: String::new(),
             offers_open: false,
+            dark: false,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -973,6 +995,7 @@ impl Component for EmptyViewComponent {
                 self.description = description;
                 self.offers_open = offers_open;
             }
+            EmptyViewInput::Dark(dark) => self.dark = dark,
         }
     }
 }
@@ -1014,12 +1037,23 @@ impl EmptyView {
 
     /// Says why there is nothing to draw.
     pub fn show(&self, title: &str, description: &str, offers_open: bool) {
-        // Once the page has shut down there is nobody to tell.
-        let _ = self.controller.sender().send(EmptyViewInput::Show {
+        self.send(EmptyViewInput::Show {
             title: title.to_owned(),
             description: description.to_owned(),
             offers_open,
         });
+    }
+
+    /// Takes the dark stage colour, or the light one, as the 3D view's
+    /// stage does.
+    pub fn show_dark(&self, dark: bool) {
+        self.send(EmptyViewInput::Dark(dark));
+    }
+
+    /// Queues `input`; once the page has shut down there is nobody to
+    /// tell.
+    fn send(&self, input: EmptyViewInput) {
+        let _ = self.controller.sender().send(input);
     }
 }
 
@@ -1030,6 +1064,16 @@ mod tests {
 
     use super::*;
     use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle};
+
+    /// What people did, of the outputs heard: without the slider popping
+    /// out or going, which the tools publish whoever turned Pull apart on.
+    fn people(heard: &[ViewToolbarOutput]) -> Vec<ViewToolbarOutput> {
+        heard
+            .iter()
+            .copied()
+            .filter(|output| !matches!(output, ViewToolbarOutput::PoppedOut(_)))
+            .collect()
+    }
 
     /// View tools whose outputs nobody hears.
     fn view_tools() -> ViewToolbar {
@@ -1075,7 +1119,8 @@ mod tests {
     }
 
     /// `show` sets the toggle from the model with its handler blocked:
-    /// `show` and `offer` never send an output.
+    /// `show` and `offer` never send an output of people's (only that the
+    /// slider popped out and went).
     fn show_does_not_call_back() {
         let (owner, heard) = recorder();
         let tools = ViewToolbar::new(&owner, std::convert::identity);
@@ -1098,7 +1143,17 @@ mod tests {
         settle();
         assert!(!tools.pull.is_active());
         assert!(!tools.popout.is_visible());
-        assert!(heard.borrow().is_empty(), "setters never call back");
+        assert!(
+            people(&heard.borrow()).is_empty(),
+            "setters never call back"
+        );
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                ViewToolbarOutput::PoppedOut(true),
+                ViewToolbarOutput::PoppedOut(false),
+            ]
+        );
     }
 
     #[test]
@@ -1122,7 +1177,10 @@ mod tests {
         tools.show(false, 0.0, false);
         settle();
         assert!(!tools.pull.is_active());
-        assert!(heard.borrow().is_empty(), "the component never called back");
+        assert!(
+            people(&heard.borrow()).is_empty(),
+            "the component never called back"
+        );
     }
 
     #[test]
@@ -1181,7 +1239,7 @@ mod tests {
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         settle();
         assert_eq!(
-            *heard.borrow(),
+            people(&heard.borrow()),
             vec![
                 ViewToolbarOutput::Pull(true),
                 ViewToolbarOutput::Xray(true),
@@ -1209,18 +1267,59 @@ mod tests {
         );
         settle();
         assert_eq!(camera.root.orientation(), gtk::Orientation::Horizontal);
-        assert_eq!(tools.section.orientation(), gtk::Orientation::Horizontal);
-        assert_eq!(tools.line.orientation(), gtk::Orientation::Vertical);
         assert!(camera.root.has_css_class("flat-row"));
-        tools.show(true, 0.0, false);
+        assert!(
+            tools.section.is_ancestor(&camera.root),
+            "the tools sit at its foot"
+        );
+        assert_eq!(
+            tools.section.orientation(),
+            gtk::Orientation::Vertical,
+            "the tools are laid out by their own component"
+        );
+        camera.set_joined(true);
         settle();
         assert!(
             camera.root.has_css_class("joined"),
             "the pop-out is beside it"
         );
-        tools.show(false, 0.0, false);
+        camera.set_joined(false);
         settle();
         assert!(!camera.root.has_css_class("joined"));
+    }
+
+    #[test]
+    fn the_view_tools_turn_and_say_when_the_slider_pops_out() {
+        on_gtk_thread(view_tools_turn_and_pop_out);
+    }
+
+    /// The tools lay X-ray and Pull apart out as they are told, the line
+    /// above them crosswise; they say when the slider pops out (Pull apart
+    /// on and the tools offered) and when it goes, once each time.
+    fn view_tools_turn_and_pop_out() {
+        let (owner, heard) = recorder();
+        let tools = ViewToolbar::new(&owner, std::convert::identity);
+        tools.set_orientation(gtk::Orientation::Horizontal);
+        settle();
+        assert_eq!(tools.section.orientation(), gtk::Orientation::Horizontal);
+        assert_eq!(tools.line.orientation(), gtk::Orientation::Vertical);
+        tools.show(true, 0.0, false);
+        tools.show(true, 0.5, false);
+        settle();
+        tools.offer(false);
+        settle();
+        tools.show(false, 0.0, false);
+        tools.offer(true);
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                ViewToolbarOutput::PoppedOut(true),
+                ViewToolbarOutput::PoppedOut(false),
+            ],
+            "out, then away when the tools are taken away; offered again \
+             with Pull apart off, it stays away"
+        );
     }
 
     #[test]
@@ -1245,12 +1344,8 @@ mod tests {
         drop(camera);
         settle();
         assert!(root.upgrade().is_none(), "the column is freed");
-        // The pop-out outlives the column, no longer telling it.
-        tools.show(true, 0.0, false);
-        settle();
-        assert!(tools.popout.is_visible());
-        drop(tools);
         assert!(input.send(CameraInput::Joined(false)).is_err());
+        drop(tools);
     }
 
     #[test]
@@ -1343,6 +1438,13 @@ mod tests {
         settle();
         assert_eq!(empty.controller.model().title, "A library folder");
         assert!(empty.open.is_visible());
+        empty.show_dark(true);
+        assert!(!empty.root.has_css_class("dark"), "queued");
+        settle();
+        assert!(empty.root.has_css_class("dark"), "it styles itself");
+        empty.show_dark(false);
+        settle();
+        assert!(!empty.root.has_css_class("dark"));
         let root = empty.root.downgrade();
         let input = empty.controller.sender().clone();
         drop(empty);

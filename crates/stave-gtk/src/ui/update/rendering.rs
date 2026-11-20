@@ -104,6 +104,9 @@ pub(in crate::ui) enum RenderingInput {
     /// The workbench moved the view's tool groups: they are in these spots
     /// now.
     ToolsMoved(view_layout::Spots),
+    /// Pull apart's slider popped out beside the camera column (or went):
+    /// the column meets it square while it shows.
+    PullSliderShown(bool),
     /// Draws the view now.
     RenderNow,
     /// Shows the frame the GPU has ready.
@@ -153,10 +156,8 @@ impl From<RenderingInput> for WindowInput {
 /// The header's outputs as the window's messages (forwarded at launch).
 pub(in crate::ui) fn header_said(output: header::HeaderOutput) -> WindowInput {
     match output {
-        header::HeaderOutput::View(view) => RenderingInput::ShowView(view),
-        header::HeaderOutput::Scene(index) => RenderingInput::SceneChosen(index),
+        header::HeaderOutput::View(view) => RenderingInput::ShowView(view).into(),
     }
-    .into()
 }
 
 /// The view tools' outputs as the window's messages.
@@ -166,6 +167,7 @@ pub(in crate::ui) fn view_tools_said(output: view_tools::ViewToolbarOutput) -> W
         view_tools::ViewToolbarOutput::Pull(on) => RenderingInput::PullApart(on),
         view_tools::ViewToolbarOutput::Play => RenderingInput::PlayExplode,
         view_tools::ViewToolbarOutput::Apart(value) => RenderingInput::ExplodeSlid(value),
+        view_tools::ViewToolbarOutput::PoppedOut(shown) => RenderingInput::PullSliderShown(shown),
     }
     .into()
 }
@@ -445,7 +447,12 @@ impl Window {
             RenderingInput::CameraKey(key) => self.update_orbit(|orbit| key.apply(orbit)),
             RenderingInput::ToolOriented { group, orientation } => match group {
                 view_layout::Group::Scene => {}
-                view_layout::Group::Camera => self.widgets.camera.set_orientation(orientation),
+                view_layout::Group::Camera => {
+                    // X-ray and Pull apart, at the column's foot, turn with
+                    // it.
+                    self.widgets.camera.set_orientation(orientation);
+                    self.widgets.view_toolbar.set_orientation(orientation);
+                }
                 view_layout::Group::Moves => self.widgets.dock.set_moves_orientation(orientation),
                 view_layout::Group::Motion => self.widgets.motion.set_orientation(orientation),
             },
@@ -453,6 +460,7 @@ impl Window {
                 self.widgets.workbench.dock_tool(group, spot);
             }
             RenderingInput::ToolsMoved(spots) => self.widgets.floats.refresh(spots),
+            RenderingInput::PullSliderShown(shown) => self.widgets.camera.set_joined(shown),
             RenderingInput::RenderNow => self.render_now(),
             RenderingInput::PollFrame(ticket) => self.poll_frame(ticket),
         }
@@ -611,13 +619,14 @@ impl Window {
     /// The 3D view's area behind its cards takes the stage colour, so a
     /// page laid out around the view (hardware focus) matches it.
     pub(in crate::ui) fn show_backdrop(&self, dark: bool) {
-        for page in [&self.widgets.stage, &self.widgets.empty.root] {
-            if dark {
-                page.add_css_class("dark");
-            } else {
-                page.remove_css_class("dark");
-            }
+        let stage = &self.widgets.stage;
+        if dark {
+            stage.add_css_class("dark");
+        } else {
+            stage.remove_css_class("dark");
         }
+        // The empty page styles itself.
+        self.widgets.empty.show_dark(dark);
         // What only the dark style changes in the sheet (the code blocks)
         // hangs off the window: a CSS media query doesn't see a style
         // chosen in the app's menu.
@@ -835,7 +844,7 @@ impl Window {
             })
             .unwrap_or_default();
         self.widgets
-            .header
+            .dock
             .show_scenes(&titles, self.session.scene_index());
         self.state.problem = None;
         self.show_problem_controls(None);
