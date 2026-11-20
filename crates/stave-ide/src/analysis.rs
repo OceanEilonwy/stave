@@ -6,16 +6,21 @@
 //! Positions are byte offsets into a file's text ([`FilePosition`]);
 //! lines are worked out only for what is shown ([`Location::line`]).
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use stave_lang::ast::Span;
 use stave_lang::{Diagnostic, FileId, SyntaxKind, SyntaxNode};
 use stave_modules::{FileSource, LoadError, ModuleSet};
 use stave_schema::words::WordSet;
 
+use crate::completion::Completion;
 use crate::document::Document;
+use crate::host::{AnalysisHost, build_fresh};
 use crate::index::{
-    FileData, Index, Symbol, SymbolId, SymbolKind, UseKind, declared_name, span_of, word_of,
+    FileData, Index, Reference, Symbol, SymbolId, SymbolKind, UseKind, declared_name, span_of,
+    word_of,
 };
 use crate::tokens::SemanticToken;
 use crate::words;
@@ -154,25 +159,63 @@ pub struct Found {
 }
 
 /// One loaded project, indexed for the editor. Build it again when a
-/// file changes; it reads open buffers through the [`FileSource`] it is
-/// loaded with ([`crate::Overlay`]).
+/// file changes, through an [`AnalysisHost`] to reuse what the change
+/// did not touch; it reads open buffers through the [`FileSource`] it is
+/// loaded with ([`crate::Overlay`]). Cloning it is cheap: clones share
+/// the index and what has been worked out from it.
 #[derive(Debug, Clone)]
 pub struct Analysis {
-    pub(crate) index: Index,
+    pub(crate) index: Arc<Index>,
+    /// Completions already worked out, by position.
+    completions: Arc<Mutex<BTreeMap<FilePosition, Vec<Completion>>>>,
 }
 
+/// How many positions' completions an analysis keeps.
+const KEPT_COMPLETIONS: usize = 64;
+
 impl Analysis {
-    /// Loads and indexes a project folder.
+    /// Loads and indexes a project folder, working everything out. An
+    /// editor that loads again after every change keeps an
+    /// [`AnalysisHost`] instead, which gives the same analysis with less
+    /// work.
     pub fn load(folder: &Path, files: &dyn FileSource) -> Result<Analysis, LoadError> {
-        let set = ModuleSet::load_with(folder, files)?;
-        Ok(Analysis::from_modules(folder, set))
+        AnalysisHost::new().analyse(folder, files)
     }
 
     /// Indexes modules already loaded.
     pub fn from_modules(folder: &Path, set: ModuleSet) -> Analysis {
+        Analysis::from_index(build_fresh(folder, set))
+    }
+
+    pub(crate) fn from_index(index: Index) -> Analysis {
         Analysis {
-            index: Index::new(folder, set),
+            index: Arc::new(index),
+            completions: Arc::default(),
         }
+    }
+
+    /// The completions at a position, worked out once per analysis.
+    pub(crate) fn kept_completions(
+        &self,
+        position: FilePosition,
+        work_out: impl FnOnce() -> Vec<Completion>,
+    ) -> Vec<Completion> {
+        if let Some(kept) = self
+            .completions
+            .lock()
+            .ok()
+            .and_then(|kept| kept.get(&position).cloned())
+        {
+            return kept;
+        }
+        let completions = work_out();
+        if let Ok(mut kept) = self.completions.lock() {
+            if kept.len() >= KEPT_COMPLETIONS {
+                kept.clear();
+            }
+            kept.insert(position, completions.clone());
+        }
+        completions
     }
 
     /// The project folder.
@@ -218,8 +261,7 @@ impl Analysis {
     /// own folder: `door_l`.
     pub fn project_symbol(&self, name: &str) -> Option<&Symbol> {
         self.index
-            .symbols
-            .iter()
+            .symbols()
             .find(|s| s.module == self.index.root && s.container.is_none() && s.name == name)
     }
 
@@ -253,13 +295,11 @@ impl Analysis {
     /// The reference under a position: a name covers the offsets from its
     /// first byte to just after its last, so a cursor at the end of a word
     /// is on it.
-    fn reference_at(&self, position: FilePosition) -> Option<&crate::index::Reference> {
-        let references = &self.index.references;
-        let after = references
-            .partition_point(|r| (r.file, r.span.start()) <= (position.file, position.offset));
+    fn reference_at(&self, position: FilePosition) -> Option<&Reference> {
+        let references = self.index.references(position.file);
+        let after = references.partition_point(|r| r.span.start() <= position.offset);
         let candidate = references.get(after.checked_sub(1)?)?;
-        (candidate.file == position.file && candidate.span.end() >= position.offset)
-            .then_some(candidate)
+        (candidate.span.end() >= position.offset).then_some(candidate)
     }
 
     /// The symbol a name at a position means (or declares).
@@ -284,12 +324,12 @@ impl Analysis {
         let symbol = self.symbol(id)?;
         let mut uses: Vec<Use> = self
             .index
-            .uses
+            .uses()
             .get(&id)
             .map(|positions| {
                 positions
                     .iter()
-                    .filter_map(|position| self.index.references.get(*position))
+                    .filter_map(|position| self.index.reference(*position))
                     .filter_map(|reference| {
                         let location = self.location(reference.file, reference.span)?;
                         let line_text = self
@@ -465,29 +505,32 @@ impl Analysis {
 
     /// Every significant token of a file, coloured.
     pub fn tokens(&self, file: FileId) -> Vec<SemanticToken> {
-        self.index.tokens(file)
+        match self.index.files.get(&file) {
+            Some(data) => data.tokens.get_or_init(|| self.index.tokens(file)).clone(),
+            None => Vec::new(),
+        }
     }
 
     /// The lenses of a file: one above each part, assembly, piece of
     /// hardware, component and kind, in order.
     pub fn lenses(&self, file: FileId) -> Vec<Lens> {
-        let mut lenses: Vec<Lens> = self
-            .index
+        let Some(data) = self.index.files.get(&file) else {
+            return Vec::new();
+        };
+        let mut lenses: Vec<Lens> = data
+            .items
             .symbols
             .iter()
-            .filter(|s| s.file == file)
             .filter(|s| {
                 s.kind.is_shown_in_3d()
                     || matches!(s.kind, SymbolKind::Component | SymbolKind::Kind)
             })
             .filter_map(|s| {
-                let uses = self.index.uses.get(&s.id).map_or(0, |positions| {
-                    positions
-                        .iter()
-                        .filter_map(|p| self.index.references.get(*p))
-                        .filter(|r| r.kind != UseKind::Declared)
-                        .count()
-                });
+                let uses = self
+                    .index
+                    .uses_of(s.id)
+                    .filter(|r| r.kind != UseKind::Declared)
+                    .count();
                 Some(Lens {
                     symbol: s.id,
                     kind: s.kind,
@@ -505,10 +548,7 @@ impl Analysis {
     /// headers) in a file: the fast tier, available on every change. The
     /// checker's slower diagnostics come with a check.
     pub fn diagnostics(&self, file: FileId) -> impl Iterator<Item = &Diagnostic> {
-        self.index
-            .diagnostics
-            .iter()
-            .filter(move |d| d.primary().is_some_and(|label| label.file == file))
+        self.index.diagnostics.get(&file).into_iter().flatten()
     }
 
     /// Every loaded file of the project's own folders (not the standard
@@ -557,7 +597,7 @@ impl Analysis {
                 ));
             }
         }
-        for symbol in &self.index.symbols {
+        for symbol in self.index.symbols() {
             if symbol.kind == SymbolKind::Label || symbol.kind == SymbolKind::Module {
                 continue;
             }

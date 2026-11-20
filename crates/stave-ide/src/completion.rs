@@ -137,6 +137,10 @@ impl Analysis {
     /// starting with what is already typed. Empty where nothing fits or
     /// the cursor is in a comment or a string.
     pub fn completions(&self, position: FilePosition) -> Vec<Completion> {
+        self.kept_completions(position, || self.work_out_completions(position))
+    }
+
+    fn work_out_completions(&self, position: FilePosition) -> Vec<Completion> {
         let Some(root) = self.index.files.get(&position.file).map(FileData::root) else {
             return Vec::new();
         };
@@ -1059,8 +1063,7 @@ impl Context<'_> {
             SymbolKind::Module => {
                 let from = index.files.get(&self.file).and_then(|f| f.module);
                 let mut items: Vec<&Symbol> = index
-                    .symbols
-                    .iter()
+                    .symbols()
                     .filter(|s| s.module == symbol.module && s.container.is_none())
                     .filter(|s| !s.private || Some(s.module) == from)
                     .filter(|s| {
@@ -1088,8 +1091,7 @@ impl Context<'_> {
                     return Vec::new();
                 };
                 index
-                    .symbols
-                    .iter()
+                    .symbols()
                     .filter(|s| s.container == Some(*component) && s.kind != SymbolKind::Label)
                     .map(Candidate::symbol)
                     .collect()
@@ -1131,8 +1133,7 @@ impl Context<'_> {
     fn inside(&self, container: SymbolId, kind: SymbolKind) -> Vec<&Symbol> {
         self.analysis
             .index
-            .symbols
-            .iter()
+            .symbols()
             .filter(|s| s.container == Some(container) && s.kind == kind)
             .collect()
     }

@@ -88,8 +88,7 @@ impl Analysis {
     pub fn project_items(&self) -> Vec<&Symbol> {
         let mut items: Vec<&Symbol> = self
             .index
-            .symbols
-            .iter()
+            .symbols()
             .filter(|s| {
                 s.module == self.index.root && s.container.is_none() && s.kind != SymbolKind::Module
             })
@@ -181,16 +180,9 @@ impl Analysis {
     /// uses, as file and span.
     fn references_to(&self, symbol: SymbolId) -> Vec<(FileId, Span)> {
         self.index
-            .uses
-            .get(&symbol)
-            .map(|positions| {
-                positions
-                    .iter()
-                    .filter_map(|position| self.index.references.get(*position))
-                    .map(|reference| (reference.file, reference.span))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .uses_of(symbol)
+            .map(|reference| (reference.file, reference.span))
+            .collect()
     }
 
     /// Refuses a new name that something already has where the symbol
@@ -209,12 +201,12 @@ impl Analysis {
         };
         match target.container {
             Some(container) => {
-                if let Some(found) = self.index.inner_scope.get(container, to) {
+                if let Some(found) = self.index.inner_name(container, to) {
                     return Err(clash(found));
                 }
             }
             None => {
-                if let Some(found) = self.index.module_scope.get(target.module, to) {
+                if let Some(found) = self.index.module_name(target.module, to) {
                     return Err(clash(found));
                 }
                 let module_files = self
@@ -224,7 +216,7 @@ impl Analysis {
                     .map(|m| m.files.clone())
                     .unwrap_or_default();
                 for file in module_files {
-                    if self.index.imports.get(file, to).is_some() {
+                    if self.index.import_name(file, to).is_some() {
                         return Err(RenameError::Clash {
                             name: to.to_owned(),
                             what: "the name a file of the project imports a module under"
@@ -236,7 +228,7 @@ impl Analysis {
                 // A name of the prelude would be hidden everywhere in the
                 // project, changing what other uses of it mean.
                 for prelude in &self.index.prelude {
-                    if let Some(found) = self.index.module_scope.get(*prelude, to)
+                    if let Some(found) = self.index.module_name(*prelude, to)
                         && self.symbol(found).is_some_and(|s| !s.private)
                     {
                         return Err(clash(found));
@@ -247,14 +239,14 @@ impl Analysis {
         // A use inside a component or kind body that declares the new name
         // would mean that member after the rename.
         for (file, span) in self.references_to(target.id) {
-            for body in self.index.symbols.iter().filter(|s| {
+            for body in self.index.symbols().filter(|s| {
                 s.file == file
                     && matches!(s.kind, SymbolKind::Component | SymbolKind::Kind)
                     && s.span.start() <= span.start()
                     && span.end() <= s.span.end()
                     && Some(s.id) != target.container
             }) {
-                if let Some(found) = self.index.inner_scope.get(body.id, to) {
+                if let Some(found) = self.index.inner_name(body.id, to) {
                     return Err(clash(found));
                 }
             }
@@ -298,15 +290,12 @@ impl Analysis {
     fn uses_of_item(&self, symbol: SymbolId) -> Vec<(FileId, Span)> {
         let labels = self
             .index
-            .symbols
-            .iter()
+            .symbols()
             .filter(|s| s.container == Some(symbol) && s.kind == SymbolKind::Label)
             .map(|s| s.id);
         std::iter::once(symbol)
             .chain(labels)
-            .filter_map(|id| self.index.uses.get(&id))
-            .flatten()
-            .filter_map(|position| self.index.references.get(*position))
+            .flat_map(|id| self.index.uses_of(id))
             .filter(|reference| reference.kind != UseKind::Declared)
             .map(|reference| (reference.file, reference.span))
             .collect()

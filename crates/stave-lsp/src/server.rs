@@ -1,5 +1,7 @@
 //! The server's state and main loop: open documents onto [`Buffers`],
-//! one [`Analysis`] per project folder rebuilt on every change, the fast
+//! one [`Analysis`] per project folder rebuilt on every change (through
+//! the project's [`AnalysisHost`], which redoes only what the change
+//! touched), the fast
 //! diagnostics published at once and the slow ones from a background
 //! check after typing pauses.
 
@@ -29,7 +31,7 @@ use lsp_types::{
     TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Uri,
     WorkDoneProgressOptions, WorkspaceEdit,
 };
-use stave_ide::{Analysis, Buffers, Document, FilePosition, Overlay};
+use stave_ide::{Analysis, AnalysisHost, Buffers, Document, FilePosition, Overlay};
 use stave_lang::ast::Span;
 use stave_lang::{FileId, SourceMap};
 
@@ -143,6 +145,8 @@ struct SlowResult {
 struct Project {
     /// The latest analysis; `None` when the folder could not be loaded.
     analysis: Option<Analysis>,
+    /// What the analyses so far worked out, for the next to reuse.
+    host: AnalysisHost,
     /// The text's generation, from the server-wide count of changes, so a
     /// slow check's result for older text is dropped, even one started
     /// before the project was closed and opened again.
@@ -426,7 +430,7 @@ impl Server {
     /// Loads a project again after a change, publishes its fast
     /// diagnostics, and puts off its slow check until typing pauses.
     fn rebuild(&mut self, folder: &Path) -> Result<(), ServerError> {
-        let loaded = Analysis::load(folder, &self.buffers.overlay());
+        let overlay = self.buffers.overlay();
         let delay = self.config.slow_delay;
         self.generations = self.generations.wrapping_add(1);
         let generation = self.generations;
@@ -434,6 +438,7 @@ impl Server {
             let Some(project) = self.projects.get_mut(folder) else {
                 return Ok(());
             };
+            let loaded = project.host.analyse(folder, &overlay);
             project.generation = generation;
             project.slow.clear();
             project.due = Some(Instant::now() + delay);
@@ -646,11 +651,13 @@ impl Server {
                     None => project_folder(path),
                 };
                 if !self.projects.contains_key(&folder) {
-                    let analysis = Analysis::load(&folder, &self.buffers.overlay()).ok();
+                    let mut host = AnalysisHost::new();
+                    let analysis = host.analyse(&folder, &self.buffers.overlay()).ok();
                     self.projects.insert(
                         folder.clone(),
                         Project {
                             analysis,
+                            host,
                             ..Project::default()
                         },
                     );

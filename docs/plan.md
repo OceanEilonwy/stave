@@ -272,6 +272,13 @@ word. What is missing is listed step by step below.
      file and re-resolves only what names that file's items, and a
      benchmark shows completion and tokens well within a keystroke on the
      largest example plus its imports.
+   - Status (2026-11-20): done for `stave-modules` and `stave-ide`, with a
+     small hand-written query layer (`stave_ide::AnalysisHost`; the crate
+     docs' "Incrementality" say why not `salsa`). Parses are kept by
+     `stave_modules::Parses`; items, module names, resolution, tokens,
+     completions and fast diagnostics are cached queries; `stave-lsp` and
+     `stave-gtk` keep a host per project. `stave-check`'s layers are not
+     incremental yet.
 5. **Hover values, inlay hints, symbols, folding, formatting and fixes**
    (`stave-ide`, `stave-app`, `stave-lsp`).
    - Hover and inlay hints show worked-out values in the project's units:

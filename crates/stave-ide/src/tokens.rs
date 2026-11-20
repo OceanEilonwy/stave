@@ -200,14 +200,7 @@ impl Index {
         };
         let root = data.root();
         // References of this file, in order, to walk alongside the tokens.
-        let first = self.references.partition_point(|r| r.file < file);
-        let references = self
-            .references
-            .get(first..)
-            .unwrap_or(&[])
-            .iter()
-            .take_while(|r| r.file == file);
-        let mut references = references.peekable();
+        let mut references = self.references(file).iter().peekable();
         let mut out = Vec::new();
         for token in root
             .descendants_with_tokens()
@@ -268,7 +261,7 @@ impl Index {
             {
                 modifiers = modifiers.with(TokenModifier::StandardLibrary);
             }
-            if self.solved_params.contains(&symbol.id) {
+            if self.is_solved(symbol.id) {
                 modifiers = modifiers.with(TokenModifier::SolvedParam);
             }
             out.push(SemanticToken {
