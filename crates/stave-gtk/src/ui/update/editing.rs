@@ -253,31 +253,13 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::time::Instant;
 
     use super::*;
     use crate::ui::edit_view::unchecked;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, settle, settle_until};
     use relm4::{ComponentController, Controller};
     use stave_app::edit::Picked;
     use stave_app::session::Selection;
-
-    /// Runs the main loop until `done` holds or `limit` has passed, so the
-    /// window's timers (the menu's check steps, the card's short wait
-    /// before a command that tries the candidate again) get their turn.
-    fn settle_until(limit: Duration, done: impl Fn() -> bool) -> bool {
-        let deadline = Instant::now() + limit;
-        loop {
-            settle();
-            if done() {
-                return true;
-            }
-            if Instant::now() > deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
 
     /// A fresh copy of the door fixture (a cabinet with a bay to add a
     /// door to) in a temporary folder of its own.
