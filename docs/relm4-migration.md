@@ -328,7 +328,7 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `edit_view/item_tools.rs` | `ItemTools` | (`connect_item_tools`) `name.connect_editing_notify` (when editing ends) → `ItemToolsOutput::Rename(String)`; `mirror.connect_active_notify` (when switched on) → `Mirror`; `hold.connect_clicked` → `Hold`; `remove.connect_clicked` → `Remove`; `repeat` `Unfold` → `Unfold`; `repeat.row` `Changed` → `Repeat { count, axis }` | what `Window::update_item_tools` fills in → `Show(ItemToolsShown)` | Its `filling: Rc<Cell<bool>>` guard goes: `#[block_signal]` on the name and Mirror while filling. |
 | `edit_view/hold.rs` | `HoldCard` | (`connect_hold`) `try_it.connect_clicked` and `reason.connect_activate` → `HoldCardOutput::TryIt`; `cancel.connect_clicked` → `Cancel` | `show(&Measured, &Measured, &Result<Length, String>)` → `Show { first, second, now }` | *query*: the reason entry's text, read by `try_hold`: carry it in `TryIt { reason: String }`. |
 | `edit_view/hold.rs` | `Hold` | (`connect_hold`) `from_space.connect_clicked` → `HoldOutput::FromSpace` | — | Owns the `HoldCard`; `from_space` sits in the edit menu's root. |
-| `edit_view/repeat_handles.rs` | `Repeats`, `Handle` | (`connect_repeats`) `row.connect_unfold` → `RepeatsOutput::Unfold`; `row.row.connect_changed` → `Changed { count, axis }`; the count overlay's drag and the boundary drags (`connect_boundary_drag`) → `Dragged { index, to }` | handle placement (from `shown_boundaries`) → `Show(Vec<Boundary>)` | Mostly `impl Window` today: split the widget part out first. Its `row` is a `RepeatFoldRow`. |
+| `edit_view/repeat_handles.rs` | `Repeats`, `Handle` | the card's stepper (a `RepeatFoldComponent` the window owns, forwarded at launch): `Unfold` → `EditingInput::CardRepeatUnfolded`, `Changed { count, axis, shows }` → `CardRepeatChanged { count, axis, shows }`; the count overlay's drag and the boundary drags → `CountDragBegun`/`CountDragged`/`CountDragEnded` and `BoundaryDragBegun`/`BoundaryDragged`/`BoundaryDragEnded` | `RepeatFoldShown::show`/`show_count` return the `RepeatFoldInput` the window sends | **Done**: plain model state of the window, not a component. The stepper's controller and its `RepeatFoldShown` copy (read at once by the count handle and scripts) are fields of `Repeats`; the drag (`drag`, `dragged_count`, `dragged_boundary`, `count_on`) and each handle's `nudge` are plain fields, written only by the window's handlers of the gesture messages. A script's `Repeat…` marks the copy asked and queues `CardRepeatUnfolded`, as a click does. |
 | `edit_view/grip_layer.rs` | `GripLayer` | — | — | A GObject subclass (layout manager): stays a widget. |
 
 ## Phase 2: the application and the window
@@ -608,6 +608,22 @@ these (rule 8), and never put a `RefCell` round the shared answer.
   when the main loop next runs rather than inside the breakpoint's
   signal; `layout()` still reports a folded edge as it was before.
 
+### The grips, the readout and the repeat handles
+
+- `GripView` owns the size section's `Controller<GripPanelComponent>`
+  (inside a `GripSection`, launched in `EditView::new` with its output
+  forwarded to `EditingInput::GripPanel`) and the readout's
+  `Controller<ReadoutComponent>`; the `GripPanel` and `Readout` shims and
+  their `connect_action` are gone.
+- The grips' lines are drawn from a copy: each time the grips are placed,
+  the window hands the drawing area a new draw function owning that
+  frame's `Vec<Drawn>` (the old `Rc<RefCell<Vec<Drawn>>>` is gone).
+- `Repeats` holds the card's `RepeatFoldComponent` and its
+  `RepeatFoldShown`; its drag and the handles' nudges are plain fields.
+- `connect_editor_link` (empty) is gone; `connect_grips` and
+  `connect_repeats` only put their overlays and gestures over the 3D
+  view, with no output callbacks.
+
 ### Done by the group lanes and the integration
 
 - Every handler is an `impl Window` method on `&mut self`: closing, the
@@ -667,10 +683,7 @@ All three were on `main` before the move, not caused by it.
   strips in thread-local `RefCell`s (borrowed only to copy in or out,
   never across a call); they hold data and a message-sending route now,
   not closures that read the Code panel.
-- The editing leaves `ChangeCard`, `GripPanel`, `RepeatRow`, `ItemTools`
-  and `HoldCard` still take per-output callbacks.
-- `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an
-  `Rc<RefCell<..>>` shared with their draw function: give the draw
-  function a copy, as the slider does.
+- The editing leaves `ChangeCard`, `RepeatRow`, `ItemTools` and
+  `HoldCard` still take per-output callbacks.
 - Replace `Unprinted` payloads with `Debug` types where the types can
   have it.
