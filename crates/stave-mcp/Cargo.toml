@@ -4,8 +4,17 @@ description = "Stave as an MCP server: AI apps open, check and try changes to .s
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+# Embeds the built viewer page (target/viewer/stave-viewer.html), or a
+# page saying how to build it.
+build = "build.rs"
 
 [dependencies]
+# The localhost viewer's HTTP server, bound to 127.0.0.1 only.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.22"
+# The localhost viewer's session token.
+getrandom = "0.4"
+pollster = "0.4"
 rmcp = { version = "3.11", features = ["server", "macros", "transport-io"] }
 roxmltree = "0.21"
 schemars = "1"
@@ -14,15 +23,19 @@ serde_json = "1"
 stave-app = { path = "../stave-app" }
 stave-history = { path = "../stave-history" }
 stave-lang = { path = "../stave-lang" }
+stave-link = { path = "../stave-link" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
+stave-render = { path = "../stave-render" }
 stave-scene = { path = "../stave-scene" }
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net"] }
 
 [dev-dependencies]
+base64 = "0.22"
+glam = "0.30"
 rmcp = { version = "3.11", features = ["client", "server", "macros", "transport-io"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "net"] }
 
 [lints]
 workspace = true

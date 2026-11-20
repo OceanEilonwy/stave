@@ -4,9 +4,12 @@
 //! through the same pipeline the window and `stave check` use.
 //!
 //! ```text
-//! AI app ──stdio, JSON-RPC──▶ StaveServer ──▶ tools/{projects,looking,changing,revisions}
+//! AI app ──stdio, JSON-RPC──▶ StaveServer ──▶ tools/{projects,looking,changing,revisions,
+//!                                              │          conflicts,preview}
 //!                                              ├──▶ stave-app (open, check, try a patch)
-//!                                              └──▶ stave-history (versions, suggestions)
+//!                                              ├──▶ stave-history (versions, suggestions)
+//!                                              └──▶ stave-render, stave-link (pictures, the window)
+//! browser ◀──127.0.0.1 only, with a token──── viewer_server (the preview page)
 //! ```
 //!
 //! One server serves one connection, and so one agent: the AI app named
@@ -25,6 +28,12 @@
 //! then brings the folder up to date. `new_project` writes a new project
 //! into an empty folder. Paths are never trusted: [`project_path`] refuses
 //! one that leads out of the project folder.
+//!
+//! `preview` shows the project (and a suggestion as a ghost) in 3D: as the
+//! MCP App page `ui://stave/viewer` in an app that shows pages, and, for
+//! every app, as a link to the same page served on the loopback address
+//! ([`viewer_server`]). `show_in_stave` asks the Stave window to show it,
+//! and `render_view` draws a picture. None of them changes anything.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -34,13 +43,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
-use rmcp::{Peer, RoleServer, ServerHandler, ServiceExt as _, tool_handler};
-use tokio::sync::Mutex;
+use rmcp::model::{
+    Implementation, ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams,
+    ReadResourceResponse, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, Peer, RoleServer, ServerHandler, ServiceExt as _, tool_handler};
+use tokio::sync::{Mutex, OnceCell};
 
 mod agent_line;
 mod error;
 pub mod tools;
+pub mod viewer_server;
 
 pub use error::McpError;
 
@@ -132,6 +146,8 @@ struct Session {
 pub struct StaveServer {
     options: Arc<ServerOptions>,
     session: Arc<Mutex<Session>>,
+    /// The localhost viewer, started by the first `preview`.
+    viewer: Arc<OnceCell<viewer_server::ViewerServer>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -141,6 +157,7 @@ impl StaveServer {
         Self {
             options: Arc::new(options),
             session: Arc::new(Mutex::new(Session::default())),
+            viewer: Arc::new(OnceCell::new()),
             tool_router: tools::router(),
         }
     }
@@ -186,12 +203,51 @@ impl StaveServer {
     }
 }
 
+impl StaveServer {
+    /// The localhost viewer, started the first time it is asked for.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Viewer`] when it can't be started.
+    pub async fn viewer_server(&self) -> Result<&viewer_server::ViewerServer, McpError> {
+        Ok(self
+            .viewer
+            .get_or_try_init(|| {
+                viewer_server::ViewerServer::start(Arc::from(tools::preview::local_page()))
+            })
+            .await?)
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for StaveServer {
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            tools::preview::viewer_resource(),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        tools::preview::read_viewer(&request.uri).map(ReadResourceResponse::from)
+    }
+
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("stave", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(Implementation::new("stave", env!("CARGO_PKG_VERSION")))
+        .with_instructions(INSTRUCTIONS)
     }
 }
 
@@ -204,7 +260,10 @@ kinds with std_lookup, then try the patch with try_patch, which checks it on a s
 writes nothing. A problem's fixes are patches too (fixes_for). With the project's versions on, \
 record a patch that fits as a suggestion with suggest; the person sees it, and apply_suggestion \
 puts it into the project when the project's settings allow. list_suggestions, list_versions, \
-discard_suggestion and undo look after suggestions and versions.";
+discard_suggestion and undo look after suggestions and versions. preview shows the project in \
+3D (a suggestion as a ghost over it, given its id) and gives a link to the same view for a web \
+browser; show_in_stave asks the Stave window to show it; render_view draws a picture. None of \
+them changes anything.";
 
 /// Serves one connection over standard input and output until the AI app
 /// closes it: what `stave mcp` runs.
