@@ -705,11 +705,6 @@ rules can't remove:
 
 ### Still to do
 
-- `focus_stage.rs`'s three cards still give their sliders a callback
-  (`Slider::new` + `connect_changed`); each becomes
-  `Slider::launch(.., sender.input_sender(), <Card>Input::<Variant>)`,
-  and then `Slider::new`, `connect_changed` and the slider's `Bridge`
-  go.
 - The editing leaves `ChangeCard`, `GripPanel`, `RepeatRow`, `ItemTools`
   and `HoldCard` still take per-output callbacks.
 - `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an

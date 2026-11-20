@@ -151,3 +151,14 @@ pub(crate) fn handle_each<T: 'static>(
         }
     });
 }
+
+/// A sender whose messages go to `on_message`, one at a time, when the
+/// main loop runs (`settle()`): what a test gives a component to forward
+/// its outputs to, as an owner gives its own input. `on_message` may do
+/// what an owner's handler would (send setters, fire signals); it is
+/// freed once every clone of the sender has gone.
+pub(crate) fn listener<T: 'static>(on_message: impl FnMut(T) + 'static) -> relm4::Sender<T> {
+    let (sender, receiver) = relm4::channel::<T>();
+    handle_each(receiver, on_message);
+    sender
+}

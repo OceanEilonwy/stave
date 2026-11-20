@@ -573,9 +573,9 @@ pub(in crate::ui) struct Widgets {
     /// The dock and its panels round the 3D view.
     workbench: workbench::Workbench,
     /// The Problems panel.
-    problems: Rc<panels::ProblemsPanel>,
+    problems: panels::ProblemsPanel,
     /// The Files panel.
-    file_list: Rc<panels::FilesList>,
+    file_list: panels::FilesList,
     /// A short line at the top of the view: focus mode, posed problems.
     hint: gtk::Label,
     hint_box: gtk::Box,
@@ -1193,8 +1193,8 @@ pub(in crate::ui) fn build_widgets(
     let camera = CameraToolbar::new(&view_toolbar, &to_window, update::rendering::camera_said);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new(&to_window, update::selection::plan_switch_said);
-    let step_card = StepCard::new();
-    let problem_card = ProblemCard::new();
+    let step_card = StepCard::new(&to_window, update::selection::step_card_said);
+    let problem_card = ProblemCard::new(&to_window, update::selection::problem_card_said);
     let dock = Dock::new(
         &header.scene,
         &motion,
@@ -1232,8 +1232,8 @@ pub(in crate::ui) fn build_widgets(
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
-    let pictures = Pictures::new();
-    let swing_card = SwingCard::new();
+    let pictures = Pictures::new(&to_window, update::selection::pictures_said);
+    let swing_card = SwingCard::new(&to_window, update::selection::swing_card_said);
     let stage = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["stave-stage"])
@@ -1250,8 +1250,12 @@ pub(in crate::ui) fn build_widgets(
 
     // The panels round the view: the parts tree, the files, the
     // selection's account, the open files and the problems.
-    let tree = TreeSidebar::new();
-    let inspector = Inspector::new();
+    let tree = TreeSidebar::new(&to_window, update::selection::tree_said);
+    let inspector = Inspector::new(
+        &to_window,
+        update::selection::inspector_said,
+        update::selection::focus_panel_said,
+    );
     let details_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     details_box.append(&inspector.root);
     let details = gtk::ScrolledWindow::builder()
@@ -1267,8 +1271,8 @@ pub(in crate::ui) fn build_widgets(
         .vexpand(true)
         .build();
     let files = Files::new();
-    let file_list = panels::FilesList::new();
-    let problems = panels::ProblemsPanel::new();
+    let file_list = panels::FilesList::new(&to_window, update::selection::file_list_said);
+    let problems = panels::ProblemsPanel::new(&to_window, update::selection::problems_said);
     let output = output::OutputPanel::new();
 
     // The 3D View panel: the view, with the problems pinned on the model
@@ -1405,7 +1409,7 @@ pub(in crate::ui) fn build_widgets(
         window.add_breakpoint(narrow);
     }
 
-    let finder = Finder::new();
+    let finder = Finder::new(&to_window, update::selection::finder_said);
 
     Ok(Widgets {
         window: window.clone(),

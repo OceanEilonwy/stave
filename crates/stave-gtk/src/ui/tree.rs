@@ -57,7 +57,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::empty::{EmptyState, LibraryItem};
 use stave_app::focus::Target;
 use stave_app::i18n::{fill_in, tr};
@@ -71,7 +71,6 @@ use stave_model::solved::AssemblyId;
 use stave_scene::Item;
 
 use super::icons::{self, Paint, PathIcon, Shape};
-use super::relm4_shim::Bridge;
 
 /// The panel's own look: sizes, the chips' colours (light, and dark under
 /// the window's `stave-dark`) and the partner links.
@@ -562,18 +561,19 @@ impl Component for TreeComponent {
     }
 }
 
-/// The Parts panel: it owns the component (dropping it shuts the
-/// component down), passes its setters on as [`TreeInput`] messages and
-/// each [`TreeOutput`] to the callback connected with
-/// [`TreeSidebar::connect_outputs`].
+/// The Parts panel: it owns the component's controller (dropping it shuts
+/// the component down) and passes its setters on as [`TreeInput`]
+/// messages; each [`TreeOutput`] goes where the owner said when it made
+/// the panel.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
-/// after whatever called them has returned. Callbacks run from the main
-/// loop after the panel's update has finished, never from inside it.
+/// after whatever called them has returned. Outputs reach the owner from
+/// the main loop after the panel's update has finished, never from inside
+/// it.
 pub struct TreeSidebar {
     /// The panel's content.
     pub root: gtk::Box,
-    bridge: Bridge<TreeComponent>,
+    controller: Controller<TreeComponent>,
 }
 
 fn rgba(swatch: Swatch) -> gtk::gdk::RGBA {
@@ -586,42 +586,44 @@ fn rgba(swatch: Swatch) -> gtk::gdk::RGBA {
 }
 
 impl TreeSidebar {
-    /// An empty panel.
-    pub fn new() -> TreeSidebar {
-        let bridge = Bridge::<TreeComponent>::launch(());
+    /// An empty panel; each [`TreeOutput`] (a row chosen, a library's
+    /// item to open, a joint to focus on, a partner link under the
+    /// pointer) is made the owner's message by `map` and sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(TreeOutput) -> X + 'static,
+    ) -> TreeSidebar {
+        let controller = TreeComponent::builder().launch(()).forward(to, map);
         TreeSidebar {
-            root: bridge.widget().clone(),
-            bridge,
+            root: controller.widget().clone(),
+            controller,
         }
     }
 
-    /// Calls `callback` with each [`TreeOutput`] from now on (a row
-    /// chosen, a library's item to open, a joint to focus on, a partner
-    /// link under the pointer), instead of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(TreeOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the panel has gone there is nothing to show.
+    fn send(&self, input: TreeInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Shows a new tree and its joints, keeping what is folded.
     pub fn show_tree(&self, tree: PartsTree, joints: PartJoints) {
-        self.bridge.send(TreeInput::ShowTree { tree, joints });
+        self.send(TreeInput::ShowTree { tree, joints });
     }
 
     /// Shows why there are no parts; for a library, what it defines.
     pub fn show_empty(&self, empty: EmptyState) {
-        self.bridge.send(TreeInput::ShowEmpty(empty));
+        self.send(TreeInput::ShowEmpty(empty));
     }
 
     /// What the tree says while it has no rows: `None` for "Nothing to
     /// show yet".
     pub fn set_placeholder(&self, placeholder: Option<&str>) {
-        self.bridge
-            .send(TreeInput::SetPlaceholder(placeholder.map(str::to_owned)));
+        self.send(TreeInput::SetPlaceholder(placeholder.map(str::to_owned)));
     }
 
     /// Takes the latest check's marks for the dots.
     pub fn show_marks(&self, marks: Rc<Marks>) {
-        self.bridge.send(TreeInput::ShowMarks(marks));
+        self.send(TreeInput::ShowMarks(marks));
     }
 
     /// Highlights the selection's row and lists what the selected part is
@@ -629,8 +631,7 @@ impl TreeSidebar {
     /// under the same part, and then the rows are left as they are, so
     /// nothing folds and the list does not move.
     pub fn show_selection(&self, selection: Option<&Selection>) {
-        self.bridge
-            .send(TreeInput::ShowSelection(selection.cloned()));
+        self.send(TreeInput::ShowSelection(selection.cloned()));
     }
 }
 
@@ -1742,7 +1743,7 @@ mod tests {
             adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
             let stile = part(&design, "door_l.stile[hinge]");
             for width in [300, 200, 150] {
-                let sidebar = TreeSidebar::new();
+                let sidebar = quiet_sidebar();
                 sidebar.show_tree(
                     stave_app::inspect::parts_tree(&design),
                     PartJoints::new(&design),
@@ -1802,10 +1803,8 @@ mod tests {
     /// activated by hand (a click, Enter) is passed on, once.
     fn tree_selects_rows_quietly() {
         let design = stool();
-        let sidebar = TreeSidebar::new();
-        let list = list_of(&sidebar);
         let chosen = Rc::new(RefCell::new(Vec::new()));
-        sidebar.connect_outputs({
+        let sidebar = sidebar_with({
             let chosen = Rc::clone(&chosen);
             move |output| {
                 if let TreeOutput::Select(selection) = output {
@@ -1813,6 +1812,7 @@ mod tests {
                 }
             }
         });
+        let list = list_of(&sidebar);
         sidebar.show_tree(
             stave_app::inspect::parts_tree(&design),
             stave_app::part_joints::PartJoints::new(&design),
@@ -1831,7 +1831,7 @@ mod tests {
         settle();
         assert!(chosen.borrow().is_empty());
         let other = sidebar
-            .bridge
+            .controller
             .model()
             .rows
             .iter()
@@ -1870,10 +1870,9 @@ mod tests {
     /// held) and the callbacks are all freed.
     fn tree_is_freed() {
         let design = cabinet();
-        let sidebar = TreeSidebar::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        sidebar.connect_outputs(move |_| {
+        let sidebar = sidebar_with(move |_| {
             let _ = &held;
         });
         let callbacks = Rc::downgrade(&token);
@@ -1891,14 +1890,14 @@ mod tests {
             .expect("side_l's joined-to rows have partner links")
             .downgrade();
         let row = sidebar
-            .bridge
+            .controller
             .model()
             .rows
             .first()
             .map(|(row, _)| row.downgrade())
             .expect("the panel has rows");
         let root = sidebar.root.downgrade();
-        let input = sidebar.bridge.sender().clone();
+        let input = sidebar.controller.sender().clone();
         assert!(root.upgrade().is_some(), "the widget lives while held");
         drop(sidebar);
         settle();
@@ -1921,10 +1920,9 @@ mod tests {
     /// a choice; rebuilding the rows says only that nothing is hovered.
     fn setters_do_not_choose() {
         let design = stool();
-        let sidebar = TreeSidebar::new();
         let heard: Rc<RefCell<Vec<TreeOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
-        sidebar.connect_outputs(move |output| match output {
+        let sidebar = sidebar_with(move |output| match output {
             TreeOutput::Select(_) | TreeOutput::Focus(_) | TreeOutput::Source(_) => {
                 log.borrow_mut().push(output);
             }
@@ -1933,7 +1931,7 @@ mod tests {
         sidebar.set_placeholder(Some("No parts yet"));
         settle();
         assert_eq!(
-            sidebar.bridge.model().placeholder.as_deref(),
+            sidebar.controller.model().placeholder.as_deref(),
             Some("No parts yet")
         );
         let words = descendants(sidebar.root.upcast_ref())
@@ -1954,7 +1952,10 @@ mod tests {
         let part = design.parts().first().expect("a part");
         sidebar.show_selection(Some(&Selection::of_item(Item::Part(part.id))));
         settle();
-        assert!(sidebar.bridge.model().rows.len() > 1, "the parts have rows");
+        assert!(
+            sidebar.controller.model().rows.len() > 1,
+            "the parts have rows"
+        );
         assert!(heard.borrow().is_empty(), "setters never choose");
     }
 
@@ -1973,7 +1974,36 @@ mod tests {
     /// queued too.
     fn choices_are_queued() {
         let design = stool();
-        let sidebar = Rc::new(TreeSidebar::new());
+        // The panel and its list, for the window's handler below.
+        type Handles = (std::rc::Weak<TreeSidebar>, gtk::ListBoxRow);
+        let shared: Rc<RefCell<Option<Handles>>> = Rc::default();
+        let heard: Rc<RefCell<Vec<Selection>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let handles = Rc::clone(&shared);
+        let sidebar = Rc::new(sidebar_with(move |output| {
+            let TreeOutput::Select(selection) = output else {
+                return;
+            };
+            let Some((sidebar, then)) = handles
+                .borrow()
+                .as_ref()
+                .and_then(|(weak, then)| Some((weak.upgrade()?, then.clone())))
+            else {
+                return;
+            };
+            // Reading the model would panic were its update still running.
+            let _ = sidebar.controller.model().rows.len();
+            let first = log.borrow().is_empty();
+            log.borrow_mut().push(selection.clone());
+            if first {
+                // GTK activating another row from in here only queues a
+                // message: nothing is heard under us.
+                list_of(&sidebar).emit_by_name::<()>("row-activated", &[&then]);
+                assert_eq!(log.borrow().len(), 1, "the inner choice is queued");
+            }
+            // As the window does: show what was chosen. Queued too.
+            sidebar.show_selection(Some(&selection));
+        }));
         let list = list_of(&sidebar);
         sidebar.show_tree(
             stave_app::inspect::parts_tree(&design),
@@ -1981,7 +2011,7 @@ mod tests {
         );
         settle();
         let entries: Vec<(gtk::ListBoxRow, Selection)> = sidebar
-            .bridge
+            .controller
             .model()
             .rows
             .iter()
@@ -1997,36 +2027,12 @@ mod tests {
         let [(first_row, first), (second_row, second), ..] = entries.as_slice() else {
             panic!("the stool has two parts' rows");
         };
-        let heard: Rc<RefCell<Vec<Selection>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&sidebar);
-        let inner = list.clone();
-        let then = second_row.clone();
-        sidebar.connect_outputs(move |output| {
-            let TreeOutput::Select(selection) = output else {
-                return;
-            };
-            let Some(sidebar) = weak.upgrade() else {
-                return;
-            };
-            // Reading the model would panic were its update still running.
-            let _ = sidebar.bridge.model().rows.len();
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(selection.clone());
-            if first {
-                // GTK activating another row from in here only queues a
-                // message: nothing is heard under us.
-                inner.emit_by_name::<()>("row-activated", &[&then]);
-                assert_eq!(log.borrow().len(), 1, "the inner choice is queued");
-            }
-            // As the window does: show what was chosen. Queued too.
-            sidebar.show_selection(Some(&selection));
-        });
+        shared.replace(Some((Rc::downgrade(&sidebar), second_row.clone())));
 
         list.emit_by_name::<()>("row-activated", &[first_row]);
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         assert_eq!(
-            sidebar.bridge.model().selection,
+            sidebar.controller.model().selection,
             None,
             "the choice is only queued"
         );
@@ -2037,7 +2043,7 @@ mod tests {
             vec![first.clone(), second.clone()],
             "each choice after its update, the inner one after the first"
         );
-        let model = sidebar.bridge.model();
+        let model = sidebar.controller.model();
         assert_eq!(
             model.selection.as_ref(),
             Some(second),
@@ -2056,14 +2062,32 @@ mod tests {
 
     /// The cabinet's panel, filled.
     fn cabinet_sidebar() -> (TreeSidebar, SolvedDesign) {
+        cabinet_sidebar_with(|_| {})
+    }
+
+    /// The cabinet's panel, filled, its outputs going to `on_output`.
+    fn cabinet_sidebar_with(
+        on_output: impl FnMut(TreeOutput) + 'static,
+    ) -> (TreeSidebar, SolvedDesign) {
         let design = cabinet();
-        let sidebar = TreeSidebar::new();
+        let sidebar = sidebar_with(on_output);
         sidebar.show_tree(
             stave_app::inspect::parts_tree(&design),
             PartJoints::new(&design),
         );
         settle();
         (sidebar, design)
+    }
+
+    /// A panel whose outputs go to `on_output`, as the window's go to its
+    /// input.
+    fn sidebar_with(on_output: impl FnMut(TreeOutput) + 'static) -> TreeSidebar {
+        TreeSidebar::new(&crate::ui::gtk_test::listener(on_output), |output| output)
+    }
+
+    /// A panel whose outputs nobody hears.
+    fn quiet_sidebar() -> TreeSidebar {
+        sidebar_with(|_| {})
     }
 
     /// The list's rows, in order.
@@ -2074,7 +2098,7 @@ mod tests {
     /// The rows the model holds, in order.
     fn model_rows(sidebar: &TreeSidebar) -> Vec<gtk::ListBoxRow> {
         sidebar
-            .bridge
+            .controller
             .model()
             .rows
             .iter()
@@ -2153,10 +2177,8 @@ mod tests {
     /// row again, Left on a part row goes to its heading; none of it is a
     /// choice, and a key that means nothing on its row is left to GTK.
     fn keys_fold_and_open() {
-        let (sidebar, _design) = cabinet_sidebar();
-        let list = list_of(&sidebar);
         let chosen = Rc::new(Cell::new(0));
-        sidebar.connect_outputs({
+        let (sidebar, _design) = cabinet_sidebar_with({
             let chosen = Rc::clone(&chosen);
             move |output| {
                 if let TreeOutput::Select(_) = output {
@@ -2164,6 +2186,7 @@ mod tests {
                 }
             }
         });
+        let list = list_of(&sidebar);
         let window = gtk::Window::builder().child(&sidebar.root).build();
         window.present();
         settle();
@@ -2172,7 +2195,7 @@ mod tests {
         let focus = || gtk::prelude::GtkWindowExt::focus(&window);
         let find_row = |wanted: &dyn Fn(&RowKind) -> bool| {
             sidebar
-                .bridge
+                .controller
                 .model()
                 .rows
                 .iter()
@@ -2187,7 +2210,7 @@ mod tests {
         };
         // Left on the part row after it goes up to the heading.
         let (entry, entry_kind) = sidebar
-            .bridge
+            .controller
             .model()
             .rows
             .get(index + 1)

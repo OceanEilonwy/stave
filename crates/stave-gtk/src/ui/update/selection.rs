@@ -114,127 +114,115 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     });
     root.add_action(&off_screen);
 
-    let sender = input.clone();
-    widgets.problems.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                ProblemsOutput::Choose(index) => SelectionInput::ShowProblem(index),
-                ProblemsOutput::Source(location) => SelectionInput::GoToSource(location),
-            }
-            .into(),
-        );
-    });
-    let sender = input.clone();
-    widgets
-        .file_list
-        .connect_outputs(move |output| match output {
-            FilesListOutput::Open(path) => {
-                if let Some(line) = LineNumber::new(1) {
-                    sender.emit(
-                        SelectionInput::GoToSource(SourceLocation {
-                            path: path.display().to_string(),
-                            line,
-                        })
-                        .into(),
-                    );
-                }
-            }
-        });
-    let sender = input.clone();
-    widgets.tree.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                TreeOutput::Select(selection) => SelectionInput::SelectAndFrame(Some(selection)),
-                TreeOutput::Source(location) => SelectionInput::GoToSource(location),
-                TreeOutput::Focus(target) => SelectionInput::Focus(target),
-                TreeOutput::Hover(items) => SelectionInput::Hovered(items),
-            }
-            .into(),
-        );
-    });
-    // A link the inspector draws is the editing group's: a click selects
-    // or lights what it names.
-    let sender = input.clone();
-    widgets.inspector.connect_outputs(move |output| {
-        sender.emit(match output {
-            InspectorOutput::Focus(target) => SelectionInput::Focus(target).into(),
-            InspectorOutput::Source(location) => SelectionInput::GoToSource(location).into(),
-            InspectorOutput::Link(target) => EditingInput::LinkClicked(target).into(),
-            InspectorOutput::Hover(target) => EditingInput::LinkHovered(target).into(),
-        });
-    });
+    // The panels, the finder, focus mode's cards, the dock's chips, From
+    // above and the motion slider send their outputs as the window's
+    // messages, forwarded when `build_widgets` launched them (the `_said`
+    // functions below).
+}
 
-    // The finder finds through `stave_app::finder`, and lists the verbs a
-    // query names through the editing group; the window answers both
-    // searches from its own update.
-    let sender = input.clone();
-    widgets.finder.connect_outputs(move |output| {
-        sender.emit(match output {
-            FinderOutput::Search(query) => SelectionInput::FinderSearch(query).into(),
-            FinderOutput::Hit { hit, choice } => SelectionInput::FinderHit { hit, choice }.into(),
-            FinderOutput::SearchActions(query) => EditingInput::FinderActions(query).into(),
-            FinderOutput::Action(index) => EditingInput::RunFinderAction(index).into(),
-        });
-    });
+/// The Problems panel's outputs as the window's messages.
+pub(in crate::ui) fn problems_said(output: ProblemsOutput) -> WindowInput {
+    match output {
+        ProblemsOutput::Choose(index) => SelectionInput::ShowProblem(index),
+        ProblemsOutput::Source(location) => SelectionInput::GoToSource(location),
+    }
+    .into()
+}
 
-    // Focus mode's panel and its controls in the 3D view's area. The
-    // panel turns its checks on when it shows a new focus, with their
-    // handlers blocked, so these hear people alone; messages are handled
-    // in the order the checks changed, so the model ends as they show.
-    let sender = input.clone();
-    widgets.inspector.focus.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                FocusPanelOutput::Done => SelectionInput::LeaveFocus,
-                FocusPanelOutput::Source(location) => SelectionInput::GoToSource(location),
-                FocusPanelOutput::Xray(on) => SelectionInput::FocusXray(on),
-                FocusPanelOutput::Tint(on) => SelectionInput::FocusTint(on),
-                FocusPanelOutput::Fade(on) => SelectionInput::FocusFade(on),
-            }
-            .into(),
-        );
-    });
-    let sender = input.clone();
-    widgets.step_card.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                StepCardOutput::Play => SelectionInput::PlayFocus,
-                StepCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
-            }
-            .into(),
-        );
-    });
-    let sender = input.clone();
-    widgets.swing_card.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                SwingCardOutput::Play => SelectionInput::PlayFocus,
-                SwingCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
-            }
-            .into(),
-        );
-    });
-    let sender = input.clone();
-    widgets
-        .problem_card
-        .connect_outputs(move |output| match output {
-            ProblemCardOutput::Moved(value) => {
-                sender.emit(SelectionInput::ProblemMoved(value).into())
-            }
-        });
-    let sender = input.clone();
-    widgets.pictures.connect_outputs(move |output| {
-        sender.emit(
-            match output {
-                PicturesOutput::Resized => SelectionInput::PicturesResized,
-                PicturesOutput::Chosen(index) => SelectionInput::PictureChosen(index),
-            }
-            .into(),
-        );
-    });
-    // The dock's chips, From above and the motion slider send their
-    // outputs as `SelectionInput`s, forwarded when `build_widgets`
-    // launched them.
+/// The Files panel's outputs as the window's messages: a file opens at
+/// its first line.
+pub(in crate::ui) fn file_list_said(output: FilesListOutput) -> WindowInput {
+    match output {
+        FilesListOutput::Open(path) => SelectionInput::GoToSource(SourceLocation {
+            path: path.display().to_string(),
+            line: LineNumber::FIRST,
+        })
+        .into(),
+    }
+}
+
+/// The Parts panel's outputs as the window's messages.
+pub(in crate::ui) fn tree_said(output: TreeOutput) -> WindowInput {
+    match output {
+        TreeOutput::Select(selection) => SelectionInput::SelectAndFrame(Some(selection)),
+        TreeOutput::Source(location) => SelectionInput::GoToSource(location),
+        TreeOutput::Focus(target) => SelectionInput::Focus(target),
+        TreeOutput::Hover(items) => SelectionInput::Hovered(items),
+    }
+    .into()
+}
+
+/// The inspector's outputs as the window's messages. A link it draws is
+/// the editing group's: a click selects or lights what it names, the
+/// pointer on it lights it.
+pub(in crate::ui) fn inspector_said(output: InspectorOutput) -> WindowInput {
+    match output {
+        InspectorOutput::Focus(target) => SelectionInput::Focus(target).into(),
+        InspectorOutput::Source(location) => SelectionInput::GoToSource(location).into(),
+        InspectorOutput::Link(target) => EditingInput::LinkClicked(target).into(),
+        InspectorOutput::Hover(target) => EditingInput::LinkHovered(target).into(),
+    }
+}
+
+/// The finder's outputs as the window's messages. It finds through
+/// `stave_app::finder`, and lists the verbs a query names through the
+/// editing group; the window answers both searches from its own update.
+pub(in crate::ui) fn finder_said(output: FinderOutput) -> WindowInput {
+    match output {
+        FinderOutput::Search(query) => SelectionInput::FinderSearch(query).into(),
+        FinderOutput::Hit { hit, choice } => SelectionInput::FinderHit { hit, choice }.into(),
+        FinderOutput::SearchActions(query) => EditingInput::FinderActions(query).into(),
+        FinderOutput::Action(index) => EditingInput::RunFinderAction(index).into(),
+    }
+}
+
+/// Focus mode's panel's outputs as the window's messages. The panel turns
+/// its checks on when it shows a new focus, with their handlers blocked,
+/// so these are people's alone; they are handled in the order the checks
+/// changed, so the model ends as they show.
+pub(in crate::ui) fn focus_panel_said(output: FocusPanelOutput) -> WindowInput {
+    match output {
+        FocusPanelOutput::Done => SelectionInput::LeaveFocus,
+        FocusPanelOutput::Source(location) => SelectionInput::GoToSource(location),
+        FocusPanelOutput::Xray(on) => SelectionInput::FocusXray(on),
+        FocusPanelOutput::Tint(on) => SelectionInput::FocusTint(on),
+        FocusPanelOutput::Fade(on) => SelectionInput::FocusFade(on),
+    }
+    .into()
+}
+
+/// The joint's step player's outputs as the window's messages.
+pub(in crate::ui) fn step_card_said(output: StepCardOutput) -> WindowInput {
+    match output {
+        StepCardOutput::Play => SelectionInput::PlayFocus,
+        StepCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
+    }
+    .into()
+}
+
+/// Hardware focus's swing card's outputs as the window's messages.
+pub(in crate::ui) fn swing_card_said(output: SwingCardOutput) -> WindowInput {
+    match output {
+        SwingCardOutput::Play => SelectionInput::PlayFocus,
+        SwingCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
+    }
+    .into()
+}
+
+/// A problem's motion card's outputs as the window's messages.
+pub(in crate::ui) fn problem_card_said(output: ProblemCardOutput) -> WindowInput {
+    match output {
+        ProblemCardOutput::Moved(value) => SelectionInput::ProblemMoved(value).into(),
+    }
+}
+
+/// Hardware focus's small views' outputs as the window's messages.
+pub(in crate::ui) fn pictures_said(output: PicturesOutput) -> WindowInput {
+    match output {
+        PicturesOutput::Resized => SelectionInput::PicturesResized,
+        PicturesOutput::Chosen(index) => SelectionInput::PictureChosen(index),
+    }
+    .into()
 }
 
 /// The motion bar's outputs as the window's messages (forwarded at
