@@ -1,6 +1,6 @@
-//! Building the index: every declaration of every loaded file as a
-//! [`Symbol`], the scopes they live in, and every name written in the
-//! source resolved to the symbol it means, as a [`Reference`].
+//! The index: every declaration of every loaded file as a [`Symbol`], the
+//! scopes they live in, and every name written in the source resolved to
+//! the symbol it means, as a [`Reference`].
 //!
 //! The index works on the lossless syntax tree, so it sees items the
 //! parser recovered from as well as correct ones: a half-typed line while
@@ -17,21 +17,52 @@
 //!
 //! The reading is syntactic: where only the types tell (an enum word that
 //! is also an item's name), the checker's diagnostics have the last word.
+//!
+//! The index is made of per-file and per-module parts so that
+//! [`crate::AnalysisHost`] can keep them from one change to the next:
+//!
+//! - [`FileItems`], a file's declarations: a function of the file's tree
+//!   alone. A [`SymbolId`] is the file and the declaration's place in it,
+//!   so the ids of one file's symbols do not move when another file
+//!   changes.
+//! - [`ModuleNames`], the names a module declares at its top level: a
+//!   function of its files' items.
+//! - [`FileResolution`], a file's references, with every name lookup the
+//!   resolving made and what it found ([`Read`], [`Seen`]). The
+//!   resolution of an unchanged file is kept when every lookup it made
+//!   still finds the same thing, so a change re-resolves only the files
+//!   that named what changed.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use stave_lang::ast::Span;
 use stave_lang::{Diagnostic, FileId, GreenNode, SourceMap, SyntaxKind, SyntaxNode};
-use stave_modules::{ModuleId, ModuleSet, ModuleSource};
+use stave_modules::ModuleId;
 
-/// Identifies a [`Symbol`] in an [`crate::Analysis`].
+use crate::tokens::SemanticToken;
+
+/// Identifies a [`Symbol`] in an [`crate::Analysis`]: the file it is
+/// declared in and its place among that file's declarations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SymbolId(u32);
+pub struct SymbolId {
+    file: FileId,
+    local: u32,
+}
 
 impl SymbolId {
-    fn index(self) -> usize {
-        usize::try_from(self.0).unwrap_or(usize::MAX)
+    /// The `local` of a module's own symbol, which sits on its `library`
+    /// or `project` item.
+    const MODULE: u32 = u32::MAX;
+
+    /// The symbol of the module whose header is in `file`.
+    fn module_in(file: FileId) -> SymbolId {
+        SymbolId {
+            file,
+            local: SymbolId::MODULE,
+        }
     }
 }
 
@@ -234,13 +265,35 @@ pub struct Reference {
     pub kind: UseKind,
 }
 
-/// A loaded file.
+/// Where a [`Reference`] is kept: its file and its place among that
+/// file's references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ReferenceId {
+    file: FileId,
+    position: usize,
+}
+
+/// A loaded file and what is worked out from it.
 #[derive(Debug, Clone)]
 pub(crate) struct FileData {
     pub(crate) path: String,
     pub(crate) module: Option<ModuleId>,
     pub(crate) green: GreenNode,
+    /// Its declarations.
+    pub(crate) items: Arc<FileItems>,
+    /// Its import names, in source order: the name, where it is written
+    /// and the module's symbol.
+    pub(crate) imports: Vec<(String, Span, SymbolId)>,
+    /// Its references and the lookups they took.
+    pub(crate) resolution: Arc<FileResolution>,
+    /// Its coloured tokens, worked out the first time they are asked for
+    /// and kept while its resolution is.
+    pub(crate) tokens: TokensMemo,
 }
+
+/// A file's coloured tokens, once worked out; shared by the analyses
+/// that keep its resolution.
+pub(crate) type TokensMemo = Arc<OnceLock<Vec<SemanticToken>>>;
 
 impl FileData {
     pub(crate) fn root(&self) -> SyntaxNode {
@@ -251,22 +304,20 @@ impl FileData {
 /// A loaded module.
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleData {
-    pub(crate) name: String,
-    pub(crate) symbol: Option<SymbolId>,
+    /// Its own symbol, on its `library` or `project` item.
+    pub(crate) symbol: Option<Symbol>,
     pub(crate) files: Vec<FileId>,
     pub(crate) standard: bool,
+    /// The names it declares at its top level.
+    pub(crate) names: Arc<ModuleNames>,
 }
 
 /// Names declared in each scope, keyed first by the scope's id so a
 /// lookup by `&str` needs no allocation.
-#[derive(Debug, Clone)]
-pub(crate) struct Scopes<K>(BTreeMap<K, BTreeMap<String, SymbolId>>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Scopes<K: Ord>(BTreeMap<K, BTreeMap<String, SymbolId>>);
 
 impl<K: Ord + Copy> Scopes<K> {
-    fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-
     /// The symbol `name` means in `scope`, if it declares it.
     pub(crate) fn get(&self, scope: K, name: &str) -> Option<SymbolId> {
         self.0
@@ -285,8 +336,172 @@ impl<K: Ord + Copy> Scopes<K> {
     }
 }
 
-/// Everything the queries read: built once per change of the files.
+/// A module's `library` or `project` item, where its symbol sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Header {
+    name_span: Span,
+    span: Span,
+    docs: Vec<String>,
+    signature: String,
+}
+
+/// The items query: one file's declarations, worked out from its tree
+/// alone.
 #[derive(Debug, Clone)]
+pub(crate) struct FileItems {
+    file: FileId,
+    module: ModuleId,
+    /// Its symbols in declaration order; a symbol's `local` is its place.
+    pub(crate) symbols: Vec<Symbol>,
+    /// The symbol an item node declares, by node start.
+    item_at: BTreeMap<u32, SymbolId>,
+    /// What each component and kind declares inside, and each item's
+    /// labels.
+    inner: Scopes<SymbolId>,
+    /// The params written `solved param`.
+    solved: BTreeSet<SymbolId>,
+    /// Its `library` or `project` item.
+    header: Option<Header>,
+    /// Its assemblies, with the span of each node, to link to their
+    /// components.
+    assemblies: Vec<(SymbolId, Span)>,
+}
+
+/// The module names query: the names a module declares at its top level,
+/// the first declaration of each name winning.
+pub(crate) type ModuleNames = BTreeMap<String, SymbolId>;
+
+/// A lookup resolving made, for checking later that it still finds the
+/// same thing.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Read {
+    /// A name at a module's top level.
+    ModuleName(ModuleId, String),
+    /// A name inside a component, a kind or an item's labels.
+    InnerName(SymbolId, String),
+    /// A file's import name.
+    ImportName(FileId, String),
+    /// What a symbol is.
+    Symbol(SymbolId),
+    /// The component an assembly is an instance of.
+    Instance(SymbolId),
+}
+
+/// What a [`Read`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Seen {
+    /// The symbol a name or an assembly's component is, or none.
+    Symbol(Option<SymbolId>),
+    /// What a symbol is, or that there is none.
+    Shape(Option<SymbolShape>),
+}
+
+/// What resolving and colouring read of a symbol: everything but where it
+/// is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SymbolShape {
+    kind: SymbolKind,
+    name: String,
+    module: ModuleId,
+    container: Option<SymbolId>,
+    private: bool,
+    solved: bool,
+    standard: bool,
+}
+
+/// Records the lookups of one resolution, or none.
+#[derive(Debug, Default)]
+pub(crate) struct Recorder(Option<RefCell<BTreeMap<Read, Seen>>>);
+
+impl Recorder {
+    /// A recorder that records nothing.
+    pub(crate) fn off() -> Recorder {
+        Recorder(None)
+    }
+
+    /// A recorder that records every lookup.
+    fn on() -> Recorder {
+        Recorder(Some(RefCell::new(BTreeMap::new())))
+    }
+
+    fn note(&self, read: impl FnOnce() -> Read, seen: Option<SymbolId>) {
+        if let Some(reads) = &self.0 {
+            reads.borrow_mut().insert(read(), Seen::Symbol(seen));
+        }
+    }
+
+    fn note_symbol(&self, index: &Index, id: SymbolId) {
+        if let Some(reads) = &self.0 {
+            let read = Read::Symbol(id);
+            if !reads.borrow().contains_key(&read) {
+                reads
+                    .borrow_mut()
+                    .insert(read, Seen::Shape(index.shape(id)));
+            }
+        }
+    }
+
+    fn finish(self) -> BTreeMap<Read, Seen> {
+        self.0.map(RefCell::into_inner).unwrap_or_default()
+    }
+}
+
+/// The resolution query: one file's references, with the lookups that
+/// found them.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileResolution {
+    /// Its references, sorted by position, declarations included.
+    pub(crate) references: Vec<Reference>,
+    /// Every lookup made and what it found.
+    pub(crate) reads: BTreeMap<Read, Seen>,
+    /// What the reads depend on, to tell quickly that none can have
+    /// changed.
+    pub(crate) depends: Depends,
+}
+
+/// What a resolution's reads depend on: the files whose declarations
+/// they looked at, the modules whose names they looked up, whether they
+/// asked which component an assembly is an instance of, and whether they
+/// looked at a module's own symbol. A change that touches none of these
+/// leaves every read as it was.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Depends {
+    pub(crate) files: BTreeSet<FileId>,
+    pub(crate) modules: BTreeSet<ModuleId>,
+    pub(crate) instances: bool,
+    pub(crate) module_symbols: bool,
+}
+
+impl Depends {
+    fn of(reads: &BTreeMap<Read, Seen>) -> Depends {
+        let mut depends = Depends::default();
+        for read in reads.keys() {
+            match read {
+                Read::ModuleName(module, _) => {
+                    depends.modules.insert(*module);
+                }
+                Read::InnerName(container, _) => {
+                    depends.files.insert(container.file);
+                }
+                Read::ImportName(file, _) => {
+                    depends.files.insert(*file);
+                }
+                Read::Symbol(id) if id.local == SymbolId::MODULE => {
+                    depends.module_symbols = true;
+                }
+                Read::Symbol(id) => {
+                    depends.files.insert(id.file);
+                }
+                Read::Instance(_) => depends.instances = true,
+            }
+        }
+        depends
+    }
+}
+
+/// Everything the queries read: put together from the per-file and
+/// per-module parts on every change.
+#[derive(Debug)]
 pub(crate) struct Index {
     pub(crate) folder: PathBuf,
     pub(crate) sources: SourceMap,
@@ -294,21 +509,14 @@ pub(crate) struct Index {
     pub(crate) modules: BTreeMap<ModuleId, ModuleData>,
     pub(crate) root: ModuleId,
     pub(crate) prelude: Vec<ModuleId>,
-    pub(crate) symbols: Vec<Symbol>,
-    pub(crate) module_scope: Scopes<ModuleId>,
-    pub(crate) inner_scope: Scopes<SymbolId>,
-    /// Each file's import names.
-    pub(crate) imports: Scopes<FileId>,
-    /// The symbol an item node declares, by file and node start.
-    item_at: BTreeMap<(FileId, u32), SymbolId>,
     /// The component each assembly is an instance of.
-    instance_of: BTreeMap<SymbolId, SymbolId>,
-    /// Every reference, sorted by file and position.
-    pub(crate) references: Vec<Reference>,
-    /// Indices into `references`, by symbol.
-    pub(crate) uses: BTreeMap<SymbolId, Vec<usize>>,
-    /// The loader's diagnostics: syntax, imports and module headers.
-    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) instance_of: BTreeMap<SymbolId, SymbolId>,
+    /// The loader's diagnostics (syntax, imports and module headers), by
+    /// the file of their primary label.
+    pub(crate) diagnostics: BTreeMap<FileId, Vec<Diagnostic>>,
+    /// Every use of every symbol, worked out the first time it is asked
+    /// for.
+    uses: OnceLock<BTreeMap<SymbolId, Vec<ReferenceId>>>,
 }
 
 /// The start of a node, as a byte offset.
@@ -386,185 +594,57 @@ fn block_of(node: &SyntaxNode) -> Option<SyntaxNode> {
         .find(|child| child.kind() == SyntaxKind::BLOCK)
 }
 
-impl Index {
-    /// Indexes every file of a loaded module set.
-    pub(crate) fn new(folder: &Path, set: ModuleSet) -> Index {
-        let mut index = Index {
-            folder: folder.to_path_buf(),
-            sources: set.sources,
-            files: BTreeMap::new(),
-            modules: BTreeMap::new(),
-            root: set.root,
-            prelude: set.prelude,
+impl FileItems {
+    /// Works out a file's declarations from its tree.
+    pub(crate) fn new(file: FileId, module: ModuleId, root: &SyntaxNode) -> FileItems {
+        let mut items = FileItems {
+            file,
+            module,
             symbols: Vec::new(),
-            module_scope: Scopes::new(),
-            inner_scope: Scopes::new(),
-            imports: Scopes::new(),
             item_at: BTreeMap::new(),
-            instance_of: BTreeMap::new(),
-            references: Vec::new(),
-            uses: BTreeMap::new(),
-            diagnostics: set.diagnostics,
+            inner: Scopes(BTreeMap::new()),
+            solved: BTreeSet::new(),
+            header: None,
+            assemblies: Vec::new(),
         };
-        // Parse every module file again for its lossless tree (the loader
-        // keeps only the typed one).
-        for module in &set.modules {
-            let mut files = Vec::with_capacity(module.files.len());
-            for file in &module.files {
-                let Some(source) = index.sources.get(file.file) else {
-                    continue;
-                };
-                let parse = stave_lang::parse_file(file.file, source.text());
-                index.files.insert(
-                    file.file,
-                    FileData {
-                        path: file.path.clone(),
-                        module: Some(module.id),
-                        green: parse.green,
-                    },
-                );
-                files.push(file.file);
-            }
-            index.modules.insert(
-                module.id,
-                ModuleData {
-                    name: module.name.clone(),
-                    symbol: None,
-                    files,
-                    standard: matches!(module.source, ModuleSource::Std { .. }),
-                },
-            );
+        items.header = root
+            .children()
+            .find(|child| matches!(child.kind(), SyntaxKind::LIBRARY | SyntaxKind::PROJECT))
+            .map(|item| Header {
+                name_span: item
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::STRING)
+                    .map(|string| span_of(&string))
+                    .or_else(|| word_of(&item).map(|(_, span)| span))
+                    .unwrap_or_else(|| span_of(&item)),
+                span: span_of(&item),
+                docs: docs(&item),
+                signature: signature(&item),
+            });
+        for item in root.children() {
+            items.declare_item(&item, None);
         }
-        // Pass 1: declarations, module by module.
-        let module_ids: Vec<ModuleId> = index.modules.keys().copied().collect();
-        for module in &module_ids {
-            index.declare_module(*module);
-        }
-        // Imports, which the loader already resolved.
-        for module in &set.modules {
-            for file in &module.files {
-                for import in &file.imports {
-                    let Some(symbol) = index
-                        .modules
-                        .get(&import.module)
-                        .and_then(|data| data.symbol)
-                    else {
-                        continue;
-                    };
-                    index
-                        .imports
-                        .0
-                        .entry(file.file)
-                        .or_default()
-                        .insert(import.name.clone(), symbol);
-                    index.references.push(Reference {
-                        file: file.file,
-                        span: import.name_span,
-                        symbol,
-                        kind: UseKind::Imported,
-                    });
-                }
-            }
-        }
-        // Pass 2: which component each assembly is an instance of, then
-        // every reference.
-        index.link_assemblies();
-        let file_ids: Vec<FileId> = index.files.keys().copied().collect();
-        for file in file_ids {
-            index.resolve_file(file);
-        }
-        index
-            .references
-            .sort_by_key(|r| (r.file, r.span.start(), r.span.end()));
-        index.references.dedup();
-        for (position, reference) in index.references.iter().enumerate() {
-            index
-                .uses
-                .entry(reference.symbol)
-                .or_default()
-                .push(position);
-        }
-        index
+        items
     }
 
-    pub(crate) fn symbol(&self, id: SymbolId) -> Option<&Symbol> {
-        self.symbols.get(id.index())
-    }
-
-    fn push_symbol(&mut self, mut symbol: Symbol) -> SymbolId {
-        let id = SymbolId(u32::try_from(self.symbols.len()).unwrap_or(u32::MAX));
+    fn push_symbol(&mut self, mut symbol: Symbol) -> Option<SymbolId> {
+        let local = u32::try_from(self.symbols.len())
+            .ok()
+            .filter(|local| *local != SymbolId::MODULE)?;
+        let id = SymbolId {
+            file: self.file,
+            local,
+        };
         symbol.id = id;
         self.symbols.push(symbol);
-        id
-    }
-
-    // ---- pass 1: declarations ----
-
-    fn declare_module(&mut self, module: ModuleId) {
-        let Some(data) = self.modules.get(&module) else {
-            return;
-        };
-        let name = data.name.clone();
-        let files = data.files.clone();
-        // The module's own symbol sits on its `library` or `project` item.
-        let mut header: Option<(FileId, SyntaxNode)> = None;
-        for file in &files {
-            let Some(root) = self.files.get(file).map(FileData::root) else {
-                continue;
-            };
-            if header.is_none()
-                && let Some(item) = root
-                    .children()
-                    .find(|child| matches!(child.kind(), SyntaxKind::LIBRARY | SyntaxKind::PROJECT))
-            {
-                header = Some((*file, item));
-            }
-        }
-        let symbol = header.map(|(file, item)| {
-            let title = item
-                .children()
-                .find(|child| child.kind() == SyntaxKind::STRING)
-                .map(|string| span_of(&string))
-                .or_else(|| word_of(&item).map(|(_, span)| span))
-                .unwrap_or_else(|| span_of(&item));
-            self.push_symbol(Symbol {
-                id: SymbolId(0),
-                kind: SymbolKind::Module,
-                name: name.clone(),
-                file,
-                name_span: title,
-                span: span_of(&item),
-                container: None,
-                module,
-                docs: docs(&item),
-                private: false,
-                signature: signature(&item),
-            })
-        });
-        if let Some(data) = self.modules.get_mut(&module) {
-            data.symbol = symbol;
-        }
-        for file in &files {
-            let Some(root) = self.files.get(file).map(FileData::root) else {
-                continue;
-            };
-            for item in root.children() {
-                self.declare_item(&item, *file, module, None);
-            }
-        }
+        Some(id)
     }
 
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
     )]
-    fn declare_item(
-        &mut self,
-        node: &SyntaxNode,
-        file: FileId,
-        module: ModuleId,
-        container: Option<SymbolId>,
-    ) {
+    fn declare_item(&mut self, node: &SyntaxNode, container: Option<SymbolId>) {
         let Some(kind) = SymbolKind::of_node(node.kind()) else {
             return;
         };
@@ -574,32 +654,37 @@ impl Index {
         let private = node
             .children_with_tokens()
             .any(|element| element.kind() == SyntaxKind::KW_PRIVATE);
-        let id = self.push_symbol(Symbol {
-            id: SymbolId(0),
+        let Some(id) = self.push_symbol(Symbol {
+            id: SymbolId::module_in(self.file),
             kind,
             name: name.clone(),
-            file,
+            file: self.file,
             name_span,
             span: span_of(node),
             container,
-            module,
+            module: self.module,
             docs: docs(node),
             private,
             signature: signature(node),
-        });
-        // The first declaration of a name wins; a second is the checker's
-        // `duplicate-name`.
-        match container {
-            Some(container) => self.inner_scope.declare(container, &name, id),
-            None => self.module_scope.declare(module, &name, id),
+        }) else {
+            return;
+        };
+        if kind == SymbolKind::Param
+            && node
+                .children_with_tokens()
+                .any(|element| element.kind() == SyntaxKind::KW_SOLVED)
+        {
+            self.solved.insert(id);
         }
-        self.item_at.insert((file, start(node)), id);
-        self.references.push(Reference {
-            file,
-            span: name_span,
-            symbol: id,
-            kind: UseKind::Declared,
-        });
+        if kind == SymbolKind::Assembly {
+            self.assemblies.push((id, span_of(node)));
+        }
+        // The first declaration of a name wins; a second is the checker's
+        // `duplicate-name`. Top-level names go to the module's names.
+        if let Some(container) = container {
+            self.inner.declare(container, &name, id);
+        }
+        self.item_at.insert(start(node), id);
         // An array's labels.
         if let Some(spec) = node
             .children()
@@ -609,26 +694,22 @@ impl Index {
                 let Some((text, span)) = word_of(&label) else {
                     continue;
                 };
-                let label_id = self.push_symbol(Symbol {
-                    id: SymbolId(0),
+                let Some(label_id) = self.push_symbol(Symbol {
+                    id: SymbolId::module_in(self.file),
                     kind: SymbolKind::Label,
                     name: text.clone(),
-                    file,
+                    file: self.file,
                     name_span: span,
                     span,
                     container: Some(id),
-                    module,
+                    module: self.module,
                     docs: Vec::new(),
                     private: false,
                     signature: format!("label {text} of {name}"),
-                });
-                self.inner_scope.declare(id, &text, label_id);
-                self.references.push(Reference {
-                    file,
-                    span,
-                    symbol: label_id,
-                    kind: UseKind::Declared,
-                });
+                }) else {
+                    continue;
+                };
+                self.inner.declare(id, &text, label_id);
             }
         }
         // What a component or a kind declares inside.
@@ -636,7 +717,7 @@ impl Index {
             SyntaxKind::COMPONENT => {
                 if let Some(block) = block_of(node) {
                     for child in block.children() {
-                        self.declare_item(&child, file, module, Some(id));
+                        self.declare_item(&child, Some(id));
                     }
                 }
             }
@@ -646,11 +727,11 @@ impl Index {
                         if child.kind() == SyntaxKind::ROLES {
                             if let Some(roles) = block_of(&child) {
                                 for role in roles.children() {
-                                    self.declare_item(&role, file, module, Some(id));
+                                    self.declare_item(&role, Some(id));
                                 }
                             }
                         } else {
-                            self.declare_item(&child, file, module, Some(id));
+                            self.declare_item(&child, Some(id));
                         }
                     }
                 }
@@ -659,64 +740,350 @@ impl Index {
         }
     }
 
+    /// The symbol of the module, when its header is in this file.
+    pub(crate) fn module_symbol(&self, name: &str) -> Option<Symbol> {
+        let header = self.header.as_ref()?;
+        Some(Symbol {
+            id: SymbolId::module_in(self.file),
+            kind: SymbolKind::Module,
+            name: name.to_owned(),
+            file: self.file,
+            name_span: header.name_span,
+            span: header.span,
+            container: None,
+            module: self.module,
+            docs: header.docs.clone(),
+            private: false,
+            signature: header.signature.clone(),
+        })
+    }
+
+    /// `true` if the file has a `library` or `project` item.
+    pub(crate) fn has_header(&self) -> bool {
+        self.header.is_some()
+    }
+}
+
+/// Works out the names a module declares at its top level from its files'
+/// items, in file order.
+pub(crate) fn module_names<'a>(files: impl IntoIterator<Item = &'a FileItems>) -> ModuleNames {
+    let mut names = ModuleNames::new();
+    for items in files {
+        for symbol in items.symbols.iter().filter(|s| s.container.is_none()) {
+            if !names.contains_key(&symbol.name) {
+                names.insert(symbol.name.clone(), symbol.id);
+            }
+        }
+    }
+    names
+}
+
+impl Index {
+    /// An index of these files and modules, with no assembly linked and
+    /// no file resolved yet ([`Index::link_assemblies`],
+    /// [`Index::resolve_file`]).
+    pub(crate) fn new(
+        folder: PathBuf,
+        sources: SourceMap,
+        files: BTreeMap<FileId, FileData>,
+        modules: BTreeMap<ModuleId, ModuleData>,
+        root: ModuleId,
+        prelude: Vec<ModuleId>,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Index {
+        let mut by_file: BTreeMap<FileId, Vec<Diagnostic>> = BTreeMap::new();
+        for diagnostic in diagnostics {
+            if let Some(file) = diagnostic.primary().map(|label| label.file) {
+                by_file.entry(file).or_default().push(diagnostic);
+            }
+        }
+        Index {
+            folder,
+            sources,
+            files,
+            modules,
+            root,
+            prelude,
+            instance_of: BTreeMap::new(),
+            diagnostics: by_file,
+            uses: OnceLock::new(),
+        }
+    }
+
+    /// The symbol with this id.
+    pub(crate) fn symbol(&self, id: SymbolId) -> Option<&Symbol> {
+        let data = self.files.get(&id.file)?;
+        if id.local == SymbolId::MODULE {
+            return self
+                .modules
+                .get(&data.module?)?
+                .symbol
+                .as_ref()
+                .filter(|symbol| symbol.id == id);
+        }
+        data.items.symbols.get(usize::try_from(id.local).ok()?)
+    }
+
+    /// Every symbol: module by module, each module's own symbol first and
+    /// then its files' declarations in order.
+    pub(crate) fn symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.modules.values().flat_map(move |module| {
+            module.symbol.iter().chain(
+                module
+                    .files
+                    .iter()
+                    .filter_map(|file| self.files.get(file))
+                    .flat_map(|data| data.items.symbols.iter()),
+            )
+        })
+    }
+
+    /// What a symbol is, for checking a kept resolution.
+    fn shape(&self, id: SymbolId) -> Option<SymbolShape> {
+        let symbol = self.symbol(id)?;
+        Some(SymbolShape {
+            kind: symbol.kind,
+            name: symbol.name.clone(),
+            module: symbol.module,
+            container: symbol.container,
+            private: symbol.private,
+            solved: self.is_solved(id),
+            standard: self
+                .modules
+                .get(&symbol.module)
+                .is_some_and(|module| module.standard),
+        })
+    }
+
+    /// `true` for a param written `solved param`.
+    pub(crate) fn is_solved(&self, id: SymbolId) -> bool {
+        self.files
+            .get(&id.file)
+            .is_some_and(|data| data.items.solved.contains(&id))
+    }
+
+    /// The symbol `name` means at a module's top level.
+    pub(crate) fn module_name(&self, module: ModuleId, name: &str) -> Option<SymbolId> {
+        self.modules.get(&module)?.names.get(name).copied()
+    }
+
+    /// The symbol `name` means inside a component or kind, or as a label
+    /// of an item.
+    pub(crate) fn inner_name(&self, container: SymbolId, name: &str) -> Option<SymbolId> {
+        self.files
+            .get(&container.file)?
+            .items
+            .inner
+            .get(container, name)
+    }
+
+    /// The module symbol a file imports under `name`; the last import of a
+    /// name wins.
+    pub(crate) fn import_name(&self, file: FileId, name: &str) -> Option<SymbolId> {
+        self.files
+            .get(&file)?
+            .imports
+            .iter()
+            .rev()
+            .find(|(import, _, _)| import == name)
+            .map(|(_, _, symbol)| *symbol)
+    }
+
+    /// The symbol an item node of a file declares, by the node's start.
+    fn item_at(&self, file: FileId, offset: u32) -> Option<SymbolId> {
+        self.files.get(&file)?.items.item_at.get(&offset).copied()
+    }
+
+    /// A file's references, sorted by position.
+    pub(crate) fn references(&self, file: FileId) -> &[Reference] {
+        self.files
+            .get(&file)
+            .map_or(&[], |data| data.resolution.references.as_slice())
+    }
+
+    /// The reference kept at this place.
+    pub(crate) fn reference(&self, id: ReferenceId) -> Option<&Reference> {
+        self.references(id.file).get(id.position)
+    }
+
+    /// Every use of every symbol, as places of references in file and
+    /// position order.
+    pub(crate) fn uses(&self) -> &BTreeMap<SymbolId, Vec<ReferenceId>> {
+        self.uses.get_or_init(|| {
+            let mut uses: BTreeMap<SymbolId, Vec<ReferenceId>> = BTreeMap::new();
+            for (file, data) in &self.files {
+                for (position, reference) in data.resolution.references.iter().enumerate() {
+                    uses.entry(reference.symbol).or_default().push(ReferenceId {
+                        file: *file,
+                        position,
+                    });
+                }
+            }
+            uses
+        })
+    }
+
+    /// The references to a symbol.
+    pub(crate) fn uses_of(&self, id: SymbolId) -> impl Iterator<Item = &Reference> {
+        self.uses()
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .filter_map(|place| self.reference(*place))
+    }
+
+    /// `true` if a kept read still finds what it found.
+    pub(crate) fn still_holds(&self, read: &Read, seen: &Seen) -> bool {
+        let found = match read {
+            Read::ModuleName(module, name) => self.module_name(*module, name),
+            Read::InnerName(container, name) => self.inner_name(*container, name),
+            Read::ImportName(file, name) => self.import_name(*file, name),
+            Read::Instance(assembly) => self.instance_of.get(assembly).copied(),
+            Read::Symbol(id) => {
+                return match seen {
+                    Seen::Shape(shape) => self.has_shape(*id, shape.as_ref()),
+                    Seen::Symbol(_) => false,
+                };
+            }
+        };
+        *seen == Seen::Symbol(found)
+    }
+
+    /// `true` if a symbol is what `shape` says, or is missing as it says.
+    fn has_shape(&self, id: SymbolId, shape: Option<&SymbolShape>) -> bool {
+        match (self.symbol(id), shape) {
+            (None, None) => true,
+            (Some(symbol), Some(shape)) => {
+                symbol.kind == shape.kind
+                    && symbol.name == shape.name
+                    && symbol.module == shape.module
+                    && symbol.container == shape.container
+                    && symbol.private == shape.private
+                    && self.is_solved(id) == shape.solved
+                    && self
+                        .modules
+                        .get(&symbol.module)
+                        .is_some_and(|module| module.standard)
+                        == shape.standard
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        }
+    }
+
     // ---- scopes ----
+
+    /// The kind of a symbol, recorded.
+    fn kind_of(&self, recorder: &Recorder, id: SymbolId) -> Option<SymbolKind> {
+        recorder.note_symbol(self, id);
+        self.symbol(id).map(|s| s.kind)
+    }
 
     /// The component or kind body a node is inside.
     fn container_at(&self, file: FileId, node: &SyntaxNode) -> Option<SymbolId> {
         node.ancestors()
             .find(|a| matches!(a.kind(), SyntaxKind::COMPONENT | SyntaxKind::KIND))
-            .and_then(|a| self.item_at.get(&(file, start(&a))).copied())
+            .and_then(|a| self.item_at(file, start(&a)))
     }
 
     /// The innermost named item a node is inside.
     pub(crate) fn item_around(&self, file: FileId, node: &SyntaxNode) -> Option<SymbolId> {
         node.ancestors()
             .filter(|a| SymbolKind::of_node(a.kind()).is_some())
-            .find_map(|a| self.item_at.get(&(file, start(&a))).copied())
+            .find_map(|a| self.item_at(file, start(&a)))
     }
 
-    fn visible(&self, symbol: SymbolId, from: Option<ModuleId>) -> bool {
+    fn visible(&self, recorder: &Recorder, symbol: SymbolId, from: Option<ModuleId>) -> bool {
+        recorder.note_symbol(self, symbol);
         self.symbol(symbol)
             .is_some_and(|s| !s.private || Some(s.module) == from)
     }
 
+    fn module_name_read(
+        &self,
+        recorder: &Recorder,
+        module: ModuleId,
+        name: &str,
+    ) -> Option<SymbolId> {
+        let found = self.module_name(module, name);
+        recorder.note(|| Read::ModuleName(module, name.to_owned()), found);
+        found
+    }
+
+    fn inner_name_read(
+        &self,
+        recorder: &Recorder,
+        container: SymbolId,
+        name: &str,
+    ) -> Option<SymbolId> {
+        let found = self.inner_name(container, name);
+        recorder.note(|| Read::InnerName(container, name.to_owned()), found);
+        found
+    }
+
+    fn instance_read(&self, recorder: &Recorder, assembly: SymbolId) -> Option<SymbolId> {
+        let found = self.instance_of.get(&assembly).copied();
+        recorder.note(|| Read::Instance(assembly), found);
+        found
+    }
+
     /// What a bare name means at a node.
-    fn lookup(&self, file: FileId, node: &SyntaxNode, name: &str) -> Option<SymbolId> {
+    pub(crate) fn lookup(&self, file: FileId, node: &SyntaxNode, name: &str) -> Option<SymbolId> {
+        self.lookup_read(&Recorder::off(), file, node, name)
+    }
+
+    fn lookup_read(
+        &self,
+        recorder: &Recorder,
+        file: FileId,
+        node: &SyntaxNode,
+        name: &str,
+    ) -> Option<SymbolId> {
         let module = self.files.get(&file).and_then(|f| f.module);
         // The enclosing body first, then further out.
         if let Some(container) = self.container_at(file, node)
-            && let Some(found) = self.inner_scope.get(container, name)
+            && let Some(found) = self.inner_name_read(recorder, container, name)
         {
             return Some(found);
         }
         if let Some(module) = module
-            && let Some(found) = self.module_scope.get(module, name)
+            && let Some(found) = self.module_name_read(recorder, module, name)
         {
             return Some(found);
         }
-        if let Some(found) = self.imports.get(file, name) {
-            return Some(found);
+        let imported = self.import_name(file, name);
+        recorder.note(|| Read::ImportName(file, name.to_owned()), imported);
+        if imported.is_some() {
+            return imported;
         }
         self.prelude.iter().find_map(|prelude| {
-            self.module_scope
-                .get(*prelude, name)
-                .filter(|found| self.visible(*found, module))
+            self.module_name_read(recorder, *prelude, name)
+                .filter(|found| self.visible(recorder, *found, module))
         })
     }
 
     /// What `name` after a `.` means when the left side is `base`.
-    fn member(&self, file: FileId, base: SymbolId, name: &str) -> Option<SymbolId> {
+    pub(crate) fn member(&self, file: FileId, base: SymbolId, name: &str) -> Option<SymbolId> {
+        self.member_read(&Recorder::off(), file, base, name)
+    }
+
+    fn member_read(
+        &self,
+        recorder: &Recorder,
+        file: FileId,
+        base: SymbolId,
+        name: &str,
+    ) -> Option<SymbolId> {
+        recorder.note_symbol(self, base);
         let symbol = self.symbol(base)?;
         match symbol.kind {
             SymbolKind::Module => {
                 let from = self.files.get(&file).and_then(|f| f.module);
-                self.module_scope
-                    .get(symbol.module, name)
-                    .filter(|found| self.visible(*found, from))
+                self.module_name_read(recorder, symbol.module, name)
+                    .filter(|found| self.visible(recorder, *found, from))
             }
             SymbolKind::Assembly => {
-                let component = self.instance_of.get(&base)?;
-                self.inner_scope.get(*component, name)
+                let component = self.instance_read(recorder, base)?;
+                self.inner_name_read(recorder, component, name)
             }
             SymbolKind::Component
             | SymbolKind::Kind
@@ -739,11 +1106,9 @@ impl Index {
     }
 
     /// A label of an array.
-    fn label(&self, base: SymbolId, name: &str) -> Option<SymbolId> {
-        let found = self.inner_scope.get(base, name)?;
-        self.symbol(found)
-            .filter(|s| s.kind == SymbolKind::Label)
-            .map(|s| s.id)
+    fn label(&self, recorder: &Recorder, base: SymbolId, name: &str) -> Option<SymbolId> {
+        let found = self.inner_name_read(recorder, base, name)?;
+        (self.kind_of(recorder, found) == Some(SymbolKind::Label)).then_some(found)
     }
 
     /// What an expression names, when it names an item.
@@ -751,25 +1116,30 @@ impl Index {
         clippy::wildcard_enum_match_arm,
         reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
     )]
-    fn resolve_expr(&self, file: FileId, node: &SyntaxNode) -> Option<SymbolId> {
+    fn resolve_expr(
+        &self,
+        recorder: &Recorder,
+        file: FileId,
+        node: &SyntaxNode,
+    ) -> Option<SymbolId> {
         match node.kind() {
             SyntaxKind::NAME_REF => {
                 let (name, _) = word_of(node)?;
-                self.lookup(file, node, &name)
+                self.lookup_read(recorder, file, node, &name)
             }
             SyntaxKind::MEMBER_EXPR => {
                 let base = node.children().next()?;
-                let base = self.resolve_expr(file, &base)?;
+                let base = self.resolve_expr(recorder, file, &base)?;
                 let member = node
                     .children()
                     .filter(|c| c.kind() == SyntaxKind::NAME)
                     .last()?;
                 let (name, _) = word_of(&member)?;
-                self.member(file, base, &name)
+                self.member_read(recorder, file, base, &name)
             }
             SyntaxKind::INDEX_EXPR | SyntaxKind::PAREN_EXPR => {
                 let inner = node.children().next()?;
-                self.resolve_expr(file, &inner)
+                self.resolve_expr(recorder, file, &inner)
             }
             _ => None,
         }
@@ -779,6 +1149,7 @@ impl Index {
     /// including) `until`.
     fn resolve_segments(
         &self,
+        recorder: &Recorder,
         file: FileId,
         node: &SyntaxNode,
         until: Option<&SyntaxNode>,
@@ -800,9 +1171,9 @@ impl Index {
                         continue;
                     };
                     current = if first {
-                        self.lookup(file, &child, &name)
+                        self.lookup_read(recorder, file, &child, &name)
                     } else {
-                        current.and_then(|base| self.member(file, base, &name))
+                        current.and_then(|base| self.member_read(recorder, file, base, &name))
                     };
                     first = false;
                     out.push((span, current));
@@ -821,30 +1192,39 @@ impl Index {
         clippy::wildcard_enum_match_arm,
         reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
     )]
-    fn index_base(&self, file: FileId, index: &SyntaxNode) -> Option<SymbolId> {
+    fn index_base(
+        &self,
+        recorder: &Recorder,
+        file: FileId,
+        index: &SyntaxNode,
+    ) -> Option<SymbolId> {
         let parent = index.parent()?;
         match parent.kind() {
             SyntaxKind::INDEX_EXPR => {
                 let base = parent.children().next()?;
-                self.resolve_expr(file, &base)
+                self.resolve_expr(recorder, file, &base)
             }
             SyntaxKind::PATH => self
-                .resolve_segments(file, &parent, Some(index))
+                .resolve_segments(recorder, file, &parent, Some(index))
                 .last()
                 .and_then(|(_, symbol)| *symbol),
             _ => None,
         }
     }
 
-    fn link_assemblies(&mut self) {
-        // Instances of a component first, then mirrors (which take their
-        // source's component), a few rounds for mirrors of mirrors.
+    /// Works out which component each assembly is an instance of:
+    /// instances of a component first, then mirrors (which take their
+    /// source's component), a few rounds for mirrors of mirrors.
+    pub(crate) fn link_assemblies(&mut self) {
+        let recorder = Recorder::off();
         let mut assemblies: Vec<(FileId, SymbolId, SyntaxNode)> = Vec::new();
         for (file, data) in &self.files {
-            for node in data.root().descendants() {
-                if node.kind() == SyntaxKind::ASSEMBLY
-                    && let Some(id) = self.item_at.get(&(*file, start(&node)))
-                {
+            if data.items.assemblies.is_empty() {
+                continue;
+            }
+            let root = data.root();
+            for (id, span) in &data.items.assemblies {
+                if let Some(node) = node_with_span(&root, SyntaxKind::ASSEMBLY, *span) {
                     assemblies.push((*file, *id, node));
                 }
             }
@@ -858,7 +1238,7 @@ impl Index {
                 let component = if let Some(reference) =
                     node.children().find(|c| c.kind() == SyntaxKind::REF)
                 {
-                    self.resolve_segments(*file, &reference, None)
+                    self.resolve_segments(&recorder, *file, &reference, None)
                         .last()
                         .and_then(|(_, symbol)| *symbol)
                         .filter(|s| {
@@ -869,7 +1249,7 @@ impl Index {
                     node.children()
                         .find(|c| c.kind() == SyntaxKind::MIRROR)
                         .and_then(|mirror| mirror.children().find(|c| c.kind().is_expr()))
-                        .and_then(|source| self.resolve_expr(*file, &source))
+                        .and_then(|source| self.resolve_expr(&recorder, *file, &source))
                         .and_then(|source| self.instance_of.get(&source).copied())
                 };
                 if let Some(component) = component {
@@ -883,12 +1263,35 @@ impl Index {
         }
     }
 
-    // ---- pass 2: references ----
+    // ---- references ----
 
-    fn resolve_file(&mut self, file: FileId) {
-        let Some(root) = self.files.get(&file).map(FileData::root) else {
-            return;
+    /// The resolution query: resolves every name of a file, recording
+    /// each lookup.
+    pub(crate) fn resolve_file(&self, file: FileId) -> FileResolution {
+        let Some(data) = self.files.get(&file) else {
+            return FileResolution::default();
         };
+        let recorder = Recorder::on();
+        let mut references: Vec<Reference> = data
+            .items
+            .symbols
+            .iter()
+            .map(|symbol| Reference {
+                file,
+                span: symbol.name_span,
+                symbol: symbol.id,
+                kind: UseKind::Declared,
+            })
+            .collect();
+        for (_, span, symbol) in &data.imports {
+            references.push(Reference {
+                file,
+                span: *span,
+                symbol: *symbol,
+                kind: UseKind::Imported,
+            });
+        }
+        let root = data.root();
         let mut found: Vec<(Span, SymbolId, SyntaxNode)> = Vec::new();
         #[expect(
             clippy::wildcard_enum_match_arm,
@@ -902,15 +1305,15 @@ impl Index {
                     };
                     let symbol = match node.parent() {
                         Some(parent) if parent.kind() == SyntaxKind::INDEX => self
-                            .index_base(file, &parent)
-                            .and_then(|base| self.label(base, &name))
+                            .index_base(&recorder, file, &parent)
+                            .and_then(|base| self.label(&recorder, base, &name))
                             .or_else(|| {
                                 (name != "same")
-                                    .then(|| self.lookup(file, &node, &name))
+                                    .then(|| self.lookup_read(&recorder, file, &node, &name))
                                     .flatten()
                             }),
                         _ if is_enum_word_position(&node, &name) => None,
-                        _ => self.lookup(file, &node, &name),
+                        _ => self.lookup_read(&recorder, file, &node, &name),
                     };
                     if let Some(symbol) = symbol {
                         found.push((span, symbol, node.clone()));
@@ -931,14 +1334,14 @@ impl Index {
                         continue;
                     };
                     if let Some(symbol) = self
-                        .resolve_expr(file, &base)
-                        .and_then(|base| self.member(file, base, &name))
+                        .resolve_expr(&recorder, file, &base)
+                        .and_then(|base| self.member_read(&recorder, file, base, &name))
                     {
                         found.push((span, symbol, node.clone()));
                     }
                 }
                 SyntaxKind::REF | SyntaxKind::PATH => {
-                    for (span, symbol) in self.resolve_segments(file, &node, None) {
+                    for (span, symbol) in self.resolve_segments(&recorder, file, &node, None) {
                         if let Some(symbol) = symbol {
                             found.push((span, symbol, node.clone()));
                         }
@@ -951,7 +1354,7 @@ impl Index {
                     let Some((name, span)) = word_of(&first) else {
                         continue;
                     };
-                    if let Some(symbol) = self.lookup(file, &node, &name) {
+                    if let Some(symbol) = self.lookup_read(&recorder, file, &node, &name) {
                         found.push((span, symbol, node.clone()));
                     }
                 }
@@ -973,10 +1376,9 @@ impl Index {
                         continue;
                     };
                     if let Some(symbol) = self
-                        .item_at
-                        .get(&(file, start(&assembly)))
-                        .and_then(|a| self.instance_of.get(a))
-                        .and_then(|c| self.inner_scope.get(*c, &name))
+                        .item_at(file, start(&assembly))
+                        .and_then(|a| self.instance_read(&recorder, a))
+                        .and_then(|c| self.inner_name_read(&recorder, c, &name))
                     {
                         found.push((span, symbol, node.clone()));
                     }
@@ -1006,19 +1408,19 @@ impl Index {
                             .children()
                             .find(|c| c.kind() == SyntaxKind::REF)
                             .and_then(|r| {
-                                self.resolve_segments(file, &r, None)
+                                self.resolve_segments(&recorder, file, &r, None)
                                     .last()
                                     .and_then(|(_, s)| *s)
                             }),
                         SyntaxKind::CALL_EXPR => call
                             .children()
                             .next()
-                            .and_then(|head| self.resolve_expr(file, &head)),
+                            .and_then(|head| self.resolve_expr(&recorder, file, &head)),
                         _ => None,
                     });
                     if let Some(symbol) = callee
-                        .filter(|c| self.symbol(*c).is_some_and(|s| s.kind == SymbolKind::Kind))
-                        .and_then(|kind| self.inner_scope.get(kind, &name))
+                        .filter(|c| self.kind_of(&recorder, *c) == Some(SymbolKind::Kind))
+                        .and_then(|kind| self.inner_name_read(&recorder, kind, &name))
                     {
                         found.push((span, symbol, node.clone()));
                     }
@@ -1028,12 +1430,24 @@ impl Index {
         }
         for (span, symbol, node) in found {
             let kind = self.use_kind(file, &node);
-            self.references.push(Reference {
+            references.push(Reference {
                 file,
                 span,
                 symbol,
                 kind,
             });
+        }
+        // What every reference means is part of what colouring reads.
+        for reference in &references {
+            recorder.note_symbol(self, reference.symbol);
+        }
+        references.sort_by_key(|r| (r.span.start(), r.span.end()));
+        references.dedup();
+        let reads = recorder.finish();
+        FileResolution {
+            references,
+            depends: Depends::of(&reads),
+            reads,
         }
     }
 
@@ -1098,6 +1512,18 @@ impl Index {
         }
         UseKind::Value(item)
     }
+}
+
+/// The node of this kind that covers exactly this span.
+fn node_with_span(root: &SyntaxNode, kind: SyntaxKind, span: Span) -> Option<SyntaxNode> {
+    let range = rowan::TextRange::new(span.start().into(), span.end().into());
+    let element = root.covering_element(range);
+    let node = match element {
+        rowan::NodeOrToken::Node(node) => node,
+        rowan::NodeOrToken::Token(token) => token.parent()?,
+    };
+    node.ancestors()
+        .find(|node| node.kind() == kind && node.text_range() == range)
 }
 
 /// `true` where a bare word reads as an enum word rather than an item: a

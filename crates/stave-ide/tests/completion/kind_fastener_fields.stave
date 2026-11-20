@@ -1,0 +1,6 @@
+stave 1
+
+kind peg : fastener {
+  $0
+}
+// expect: diameter, length, envelope, model, license, species

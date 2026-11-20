@@ -1,0 +1,4 @@
+stave 1
+
+stock oak { species: wa$0 }
+// expect: walnut

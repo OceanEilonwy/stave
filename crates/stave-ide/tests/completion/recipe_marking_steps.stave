@@ -1,0 +1,9 @@
+stave 1
+
+recipe notch_by_hand : notch {
+  tools: [marking_knife]
+  mark {
+    $0
+  }
+}
+// expect: knife, pencil, line, gauge, square_around, centre_mark, transfer, hatch, template

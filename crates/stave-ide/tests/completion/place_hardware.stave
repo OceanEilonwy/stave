@@ -1,0 +1,8 @@
+stave 1
+
+hardware knob : brass_knob(on: door) {
+  place {
+    $0
+  }
+}
+// expect: against, flush, center, spaced

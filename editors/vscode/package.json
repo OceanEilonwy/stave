@@ -1,0 +1,165 @@
+{
+  "name": "stave",
+  "displayName": "Stave",
+  "description": "The Stave woodworking language: colouring, diagnostics, completion and navigation from stave-lsp.",
+  "version": "0.1.0",
+  "publisher": "stave",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OceanEilonwy/stave"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "stave",
+        "aliases": ["Stave", "stave"],
+        "extensions": [".stave"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "stave",
+        "scopeName": "source.stave",
+        "path": "./syntaxes/stave.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Stave",
+      "properties": {
+        "stave.server.path": {
+          "type": "string",
+          "default": "stave-lsp",
+          "markdownDescription": "The `stave-lsp` executable: a name looked up on `PATH`, or an absolute path. It is started with no arguments and speaks the language server protocol over standard input and output.",
+          "scope": "machine-overridable"
+        },
+        "stave.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Log the messages between VS Code and stave-lsp to the Stave output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "stave.restartServer",
+        "title": "Restart Language Server",
+        "category": "Stave"
+      }
+    ],
+    "semanticTokenTypes": [
+      { "id": "unit", "description": "The unit of a quantity: the `mm` of `18mm`, the `deg` of `110deg`." },
+      { "id": "component", "superType": "type", "description": "A component." },
+      { "id": "kind", "superType": "type", "description": "A kind (of part, joint or hardware)." },
+      { "id": "part", "superType": "class", "description": "A part." },
+      { "id": "madePart", "superType": "class", "description": "A part a kind makes." },
+      { "id": "joint", "superType": "interface", "description": "A joint." },
+      { "id": "param", "superType": "parameter", "description": "A param." },
+      { "id": "region", "superType": "variable", "description": "A region." },
+      { "id": "hardware", "superType": "struct", "description": "A piece of hardware." },
+      { "id": "assembly", "superType": "class", "description": "An assembly: an instance of a component." },
+      { "id": "scene", "superType": "variable", "description": "A scene." },
+      { "id": "stock", "superType": "struct", "description": "A stock." },
+      { "id": "profile", "superType": "struct", "description": "A profile." },
+      { "id": "recipe", "superType": "function", "description": "A recipe." },
+      { "id": "let", "superType": "variable", "description": "A let." },
+      { "id": "require", "superType": "variable", "description": "A named require." },
+      { "id": "role", "superType": "parameter", "description": "A role of a kind: `piece: Part`." },
+      { "id": "label", "superType": "enumMember", "description": "A label of an array: `bottom` in `rail[bottom, top]`." },
+      { "id": "member", "superType": "property", "description": "A named piece of a hardware kind: `member cup`." }
+    ],
+    "semanticTokenModifiers": [
+      { "id": "reference", "description": "A name that means an item declared elsewhere." },
+      { "id": "unresolved", "description": "A word where an item's name goes that names nothing." },
+      { "id": "solvedParam", "description": "A `solved param`, declared or named." }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "stave",
+        "scopes": {
+          "comment.documentation": ["comment.line.documentation.stave", "comment.block.documentation"],
+          "unit": ["keyword.other.unit.stave", "keyword.other.unit"],
+          "component": ["variable.other.component.stave", "entity.name.type"],
+          "component.declaration": ["entity.name.type.component.stave", "entity.name.type"],
+          "kind": ["variable.other.kind.stave", "entity.name.type"],
+          "kind.declaration": ["entity.name.type.kind.stave", "entity.name.type"],
+          "part": ["variable.other.part.stave", "entity.name.type.class"],
+          "part.declaration": ["entity.name.part.stave", "entity.name.type.class"],
+          "madePart": ["variable.other.part.stave", "entity.name.type.class"],
+          "madePart.declaration": ["entity.name.part.stave", "entity.name.type.class"],
+          "joint": ["variable.other.joint.stave", "entity.name.type.interface"],
+          "joint.declaration": ["entity.name.joint.stave", "entity.name.type.interface"],
+          "param": ["variable.other.param.stave", "variable.parameter"],
+          "param.declaration": ["entity.name.param.stave", "variable.parameter"],
+          "region": ["variable.other.region.stave", "variable.other.object"],
+          "region.declaration": ["entity.name.region.stave", "variable.other.object"],
+          "hardware": ["variable.other.hardware.stave", "entity.name.type.struct"],
+          "hardware.declaration": ["entity.name.hardware.stave", "entity.name.type.struct"],
+          "assembly": ["variable.other.assembly.stave", "entity.name.type.class"],
+          "assembly.declaration": ["entity.name.assembly.stave", "entity.name.type.class"],
+          "scene": ["variable.other.scene.stave", "entity.name.section"],
+          "scene.declaration": ["entity.name.scene.stave", "entity.name.section"],
+          "stock": ["variable.other.stock.stave", "support.type"],
+          "stock.declaration": ["entity.name.stock.stave", "support.type"],
+          "profile": ["variable.other.profile.stave", "support.type"],
+          "profile.declaration": ["entity.name.profile.stave", "support.type"],
+          "recipe": ["variable.other.recipe.stave", "entity.name.function"],
+          "recipe.declaration": ["entity.name.function.recipe.stave", "entity.name.function"],
+          "let": ["variable.other.let.stave", "variable.other.constant"],
+          "let.declaration": ["entity.name.let.stave", "variable.other.constant"],
+          "require": ["variable.other.require.stave", "entity.name.label"],
+          "require.declaration": ["entity.name.require.stave", "entity.name.label"],
+          "role": ["variable.other.role.stave", "variable.parameter"],
+          "label": ["variable.other.label.stave", "variable.other.enummember"],
+          "member": ["variable.other.member.stave", "variable.other.property"]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[stave]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.wordBasedSuggestions": "off"
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "unit:stave": { "italic": true },
+          "*.reference:stave": { "underline": true },
+          "*.solvedParam:stave": { "bold": true },
+          "*.defaultLibrary:stave": { "italic": true }
+        }
+      },
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": "keyword.other.unit.stave",
+            "settings": { "fontStyle": "italic" }
+          }
+        ]
+      }
+    }
+  },
+  "scripts": {
+    "copy-grammar": "node scripts/copy-grammar.mjs",
+    "compile": "npm run copy-grammar && tsc -p ./",
+    "watch": "npm run copy-grammar && tsc -watch -p ./",
+    "check": "npm run copy-grammar && tsc -p ./ --noEmit && node scripts/check-manifest.mjs",
+    "vscode:prepublish": "npm run compile",
+    "package": "npx --yes @vscode/vsce@3 package --skip-license"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.82.0",
+    "typescript": "5.9.3"
+  }
+}

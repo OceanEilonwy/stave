@@ -149,7 +149,7 @@ forwards what people do.
 | Crate | Module | What |
 |---|---|---|
 | `stave-app` | `session` | The shared state and its commands and events (below). |
-| `stave-ide` | (crate) | The navigation layer the editor uses and `stave-lsp` will (below): `Analysis`, `Buffers`, `Overlay`, `Document`. Depends on `stave-lang`, `stave-modules` and `stave-schema` only. |
+| `stave-ide` | (crate) | The navigation layer the editor and `stave-lsp` use (below): `Analysis`, `Buffers`, `Overlay`, `Document`. Depends on `stave-lang`, `stave-modules` and `stave-schema` only. |
 | `stave-app` | `check` | One check as a value that crosses threads (`check::run`, `check::run_with` for open buffers, `Checked`, `Outcome`), and the folder watcher with its debounce (`Watcher`, `RECHECK_DELAY` = 250 ms). |
 | `stave-app` | `link` | The text and the 3D view share one selection: `selection_for` (the part, assembly or hardware a name means), `placed_at` (the line that places a selection), `chip` ("Linked to the text · door_l, line 9"). |
 | `stave-app` | `part_joints` | The Parts panel's joint chips per part and per folded assembly, the selected part's joined-to rows, the headings' notes, which assemblies fold, and what a narrow panel shows (`Density`). |

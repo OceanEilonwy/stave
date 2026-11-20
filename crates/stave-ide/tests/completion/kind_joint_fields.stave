@@ -1,0 +1,8 @@
+stave 1
+
+kind housing : joint {
+  param depth = into.thickness / 3
+  insert: [push(piece, along: width)]
+  $0
+}
+// expect: cut_first, adds, uses, note

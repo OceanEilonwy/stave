@@ -1,0 +1,4 @@
+stave 1
+
+// place { $0 }
+// expect: -

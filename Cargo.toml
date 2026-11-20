@@ -17,6 +17,7 @@ members = [
   "crates/stave-link",
   "crates/stave-app",
   "crates/stave-mcp",
+  "crates/stave-lsp",
   "crates/stave-cli",
   "crates/stave-gtk",
 ]

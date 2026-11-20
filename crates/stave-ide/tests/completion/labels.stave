@@ -1,0 +1,16 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part shelf[top, middle, bottom] : oak {
+  length: 600mm
+  width: 300mm
+}
+
+part divider : oak {
+  length: 300mm
+  place {
+    against(shelf[$0].top)
+  }
+}
+// expect: top, middle, bottom

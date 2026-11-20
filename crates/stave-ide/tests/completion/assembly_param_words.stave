@@ -1,0 +1,11 @@
+stave 1
+
+component Shelf {
+  param lipped : Bool = false
+  param facing : Direction = front
+}
+
+assembly top_shelf : Shelf {
+  facing: $0
+}
+// expect: up, down, left, right, front, back

@@ -786,14 +786,14 @@ fn unapplied(error: &PatchError, file: FileId) -> Vec<Diagnostic> {
 
 /// The parsed files of the project's module and of the local modules it
 /// imports, which a patch is applied to, and each module's folder.
-struct Target {
+pub(crate) struct Target {
     project: Vec<(String, Parse<ast::File>)>,
     locals: BTreeMap<String, Vec<(String, Parse<ast::File>)>>,
-    folders: BTreeMap<ModuleKey, PathBuf>,
+    pub(crate) folders: BTreeMap<ModuleKey, PathBuf>,
 }
 
 impl Target {
-    fn of(modules: &ModuleSet, folder: &Path) -> Self {
+    pub(crate) fn of(modules: &ModuleSet, folder: &Path) -> Self {
         let parsed = |module: &stave_modules::Module| -> Vec<(String, Parse<ast::File>)> {
             module
                 .files
@@ -841,7 +841,7 @@ impl Target {
         target
     }
 
-    fn patch_target(&self) -> PatchTarget<'_> {
+    pub(crate) fn patch_target(&self) -> PatchTarget<'_> {
         fn files(files: &[(String, Parse<ast::File>)]) -> Vec<stave_lang::ModuleFile<'_>> {
             files
                 .iter()

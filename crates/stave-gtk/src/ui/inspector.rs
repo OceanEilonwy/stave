@@ -41,7 +41,6 @@ use stave_app::focus::Target;
 use stave_app::i18n::{fill_in, ntr, tr};
 use stave_app::inspect::{
     Connection, ConnectionSection, Field, Inspection, LinkTarget, Snippet, Swatch, SwatchShape,
-    TokenClass,
 };
 use stave_app::session::{Selection, SourceLocation};
 use stave_lang::Severity;
@@ -49,7 +48,7 @@ use stave_lang::Severity;
 use super::focus_panel::{FocusPanel, FocusPanelOutput};
 use super::icons;
 use super::sections::{self, LinkHandlers};
-use super::style::CODE;
+use super::theme::Role;
 
 /// Which of the inspector's pages shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -593,14 +592,7 @@ pub(super) fn line_markup(line: &[stave_app::inspect::Token]) -> String {
     let mut markup = String::new();
     for token in line {
         let text = gtk::glib::markup_escape_text(&token.text);
-        let colour = match token.class {
-            TokenClass::Plain => None,
-            TokenClass::Keyword => Some(CODE.keyword),
-            TokenClass::Type | TokenClass::Function => Some(CODE.name),
-            TokenClass::Number => Some(CODE.number),
-            TokenClass::Text => Some(CODE.text),
-            TokenClass::Comment => Some(CODE.comment),
-        };
+        let colour = Role::of_snippet(token.class).map(|role| role.look().on_code);
         match colour {
             Some(colour) => {
                 markup.push_str(&format!("<span foreground=\"{colour}\">{text}</span>"));

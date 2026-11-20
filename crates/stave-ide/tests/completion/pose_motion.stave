@@ -1,0 +1,6 @@
+stave 1
+
+scene open "Open" {
+  pose door = $0
+}
+// expect: open, closed

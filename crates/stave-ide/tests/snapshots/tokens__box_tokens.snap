@@ -1,0 +1,170 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"box\"))"
+---
+== box.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   9 | project "Box" {
+     = project:keyword  ":text  Box:text  ":text
+  10 |   goal:       "A small walnut keepsake box with a hinged lid"
+     = goal:field  ":text  A small walnut keepsake box with a hinged lid:text  ":text
+  11 |   units:      mm
+     = units:field  mm:word
+  12 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  13 |   tools:      [pencil, marking_knife, square, tape, marking_gauge, awl, calipers,
+     = tools:field  pencil:type+ref+std  marking_knife:type+ref+std  square:type+ref+std  tape:type+ref+std  marking_gauge:type+ref+std  awl:type+ref+std  calipers:type+ref+std
+  14 |                router, straight_bit, clamps, chisel, mallet, drill, depth_stop,
+     = router:type+ref+std  straight_bit:type+ref+std  clamps:type+ref+std  chisel:type+ref+std  mallet:type+ref+std  drill:type+ref+std  depth_stop:type+ref+std
+  15 |                screwdriver]
+     = screwdriver:type+ref+std
+  19 | param box_length = 300mm within 200mm..450mm        // outside, left to right
+     = param:keyword  box_length:param+decl  300:number  mm:unit  within:keyword  200:number  mm:unit  450:number  mm:unit
+  20 | param box_depth  = 200mm within 150mm..300mm        // outside, front to back
+     = param:keyword  box_depth:param+decl  200:number  mm:unit  within:keyword  150:number  mm:unit  300:number  mm:unit
+  21 | param box_height = 110mm within 80mm..200mm         // the body, without the lid
+     = param:keyword  box_height:param+decl  110:number  mm:unit  within:keyword  80:number  mm:unit  200:number  mm:unit
+  22 | let rabbet_depth = 6mm                              // half the thickness of the ends
+     = let:keyword  rabbet_depth:let+decl  6:number  mm:unit
+  23 | let bottom_up    = 6mm                              // the bottom's groove starts this far up
+     = let:keyword  bottom_up:let+decl  6:number  mm:unit
+  26 | require useful : box_height - bottom_up - ply_6.thickness >= 60mm "the box should be at least 60mm deep inside"
+     = require:keyword  useful:require+decl  box_height:param+ref  bottom_up:let+ref  ply_6:stock+ref  thickness:plain  60:number  mm:unit  ":text  the box should be at least 60mm deep inside:text  ":text
+  29 | stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  walnut_12:stock+decl  species:field  walnut:word  form:field  solid:word  thickness:field  12:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  30 | stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_width: 1220mm, max_length: 2440mm }
+     = stock:keyword  ply_6:stock+decl  species:field  birch:word  form:field  plywood:word  thickness:field  6:number  mm:unit  max_width:field  1220:number  mm:unit  max_length:field  2440:number  mm:unit
+  35 | part end_l : walnut_12 {
+     = part:keyword  end_l:part+decl  walnut_12:stock+ref
+  36 |   length: box_depth
+     = length:field  box_depth:param+ref
+  37 |   width:  box_height
+     = width:field  box_height:param+ref
+  38 |   place {
+     = place:keyword
+  39 |     ground
+     = ground:function
+  40 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+  44 | part end_r : walnut_12 {
+     = part:keyword  end_r:part+decl  walnut_12:stock+ref
+  45 |   length: box_depth
+     = length:field  box_depth:param+ref
+  46 |   width:  box_height
+     = width:field  box_height:param+ref
+  47 |   place {
+     = place:keyword
+  48 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+  49 |     against(end_l.right, gap: box_length - 2 * walnut_12.thickness)
+     = against:function  end_l:part+ref  right:plain  gap:field  box_length:param+ref  2:number  walnut_12:stock+ref  thickness:plain
+  50 |     flush(end_l.bottom)
+     = flush:function  end_l:part+ref  bottom:plain
+  51 |     flush(end_l.front)
+     = flush:function  end_l:part+ref  front:plain
+  56 | part front : walnut_12 {
+     = part:keyword  front:part+decl  walnut_12:stock+ref
+  57 |   length: fit
+     = length:field  fit:keyword
+  58 |   width:  box_height
+     = width:field  box_height:param+ref
+  59 |   place {
+     = place:keyword
+  60 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+  61 |     center(from: end_l.right, to: end_r.left)
+     = center:function  from:field  end_l:part+ref  right:plain  to:field  end_r:part+ref  left:plain
+  62 |     flush(end_l.bottom)
+     = flush:function  end_l:part+ref  bottom:plain
+  63 |     flush(end_l.front)
+     = flush:function  end_l:part+ref  front:plain
+  68 | part back = mirror(front, about: mid(end_l, deep))
+     = part:keyword  back:part+decl  mirror:keyword  front:part+ref  about:field  mid:function  end_l:part+ref  deep:word
+  71 | part bottom : ply_6 {
+     = part:keyword  bottom:part+decl  ply_6:stock+ref
+  72 |   length: fit                          // between the ends, plus the grooves
+     = length:field  fit:keyword
+  73 |   width:  fit                          // between the front and back, plus the grooves
+     = width:field  fit:keyword
+  74 |   place {
+     = place:keyword
+  75 |     flush(end_l.bottom, inset: bottom_up)
+     = flush:function  end_l:part+ref  bottom:plain  inset:field  bottom_up:let+ref
+  76 |     center(from: end_l.right, to: end_r.left)
+     = center:function  from:field  end_l:part+ref  right:plain  to:field  end_r:part+ref  left:plain
+  77 |     center(from: front.back, to: back.front)
+     = center:function  from:field  front:part+ref  back:plain  to:field  back:part+ref  front:plain
+  82 | joint corners       : rabbet([front, back], into: [end_l, end_r], depth: rabbet_depth)
+     = joint:keyword  corners:joint+decl  rabbet:type+ref+std  front:part+ref  back:part+ref  into:field  end_l:part+ref  end_r:part+ref  depth:param+ref+std  rabbet_depth:let+ref
+  83 | joint bottom_groove : groove(bottom, into: [front, back, end_l, end_r], depth: 6mm, glue: false)
+     = joint:keyword  bottom_groove:joint+decl  groove:type+ref+std  bottom:part+ref  into:field  front:part+ref  back:part+ref  end_l:part+ref  end_r:part+ref  depth:param+ref+std  6:number  mm:unit  glue:field  false:keyword
+  88 | region outline = opening(
+     = region:keyword  outline:region+decl  opening:function
+  89 |   left:   end_l.left,
+     = left:field  end_l:part+ref  left:plain
+  90 |   right:  end_r.right,
+     = right:field  end_r:part+ref  right:plain
+  91 |   bottom: end_l.bottom,
+     = bottom:field  end_l:part+ref  bottom:plain
+  92 |   top:    end_l.top,
+     = top:field  end_l:part+ref  top:plain
+  93 |   front:  end_l.front,
+     = front:field  end_l:part+ref  front:plain
+  94 |   back:   end_l.back,
+     = back:field  end_l:part+ref  back:plain
+  97 | assembly lid : Lid {
+     = assembly:keyword  lid:assembly+decl  Lid:type+ref
+  98 |   outline:   outline
+     = outline:param+ref  outline:region+ref
+  99 |   hinge_on:  back
+     = hinge_on:param+ref  back:part+ref
+ 100 |   lid_stock: walnut_12
+     = lid_stock:param+ref  walnut_12:stock+ref
+ 104 | scene lid_open "Lid open" {
+     = scene:keyword  lid_open:scene+decl  ":text  Lid open:text  ":text
+ 105 |   pose lid = 100deg                    // a lid stay stops it just past upright
+     = pose:keyword  lid:assembly+ref  100:number  deg:unit
+== lid.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   6 | component Lid {
+     = component:keyword  Lid:type+decl
+   7 |   param outline     : Region           // the space the lid sits on top of
+     = param:keyword  outline:param+decl  Region:type
+   8 |   param hinge_on    : Part             // the side of the box the hinges are housed in
+     = param:keyword  hinge_on:param+decl  Part:type
+   9 |   param lid_stock   : Stock
+     = param:keyword  lid_stock:param+decl  Stock:type
+  10 |   param hinge_kind  : HingeKind = butt_hinge(length: 40mm)
+     = param:keyword  hinge_kind:param+decl  HingeKind:type  butt_hinge:type+ref+std  length:param+ref+std  40:number  mm:unit
+  11 |   param hinge_inset = 40mm             // from each end of the lid to the end of a hinge
+     = param:keyword  hinge_inset:param+decl  40:number  mm:unit
+  13 |   part panel : lid_stock {
+     = part:keyword  panel:part+decl  lid_stock:param+ref
+  14 |     length: outline.across
+     = length:field  outline:param+ref  across:plain
+  15 |     width:  outline.deep
+     = width:field  outline:param+ref  deep:plain
+  16 |     place {
+     = place:keyword
+  17 |       against(outline.top)
+     = against:function  outline:param+ref  top:plain
+  18 |       flush(outline.left)
+     = flush:function  outline:param+ref  left:plain
+  19 |       flush(outline.front)
+     = flush:function  outline:param+ref  front:plain
+  25 |   hardware hinges[left, right] : hinge_kind(panel, on: hinge_on, face: bottom) {
+     = hardware:keyword  hinges:hardware+decl  left:label+decl  right:label+decl  hinge_kind:param+ref  panel:part+ref  on:field  hinge_on:param+ref  face:field  bottom:word
+  26 |     place {
+     = place:keyword
+  27 |       spaced(ends(inset: hinge_inset), from: panel.left, to: panel.right)
+     = spaced:function  ends:function  inset:field  hinge_inset:param+ref  from:field  panel:part+ref  left:plain  to:field  panel:part+ref  right:plain
+  31 |   hardware lift_knob : knob(panel, face: top, diameter: 20mm, projection: 22mm) {
+     = hardware:keyword  lift_knob:hardware+decl  knob:type+ref+std  panel:part+ref  face:field  top:word  diameter:param+ref+std  20:number  mm:unit  projection:param+ref+std  22:number  mm:unit
+  32 |     place {
+     = place:keyword
+  33 |       center(panel, across)
+     = center:function  panel:part+ref  across:word
+  34 |       flush(panel.front, inset: 25mm)
+     = flush:function  panel:part+ref  front:plain  inset:field  25:number  mm:unit

@@ -1,0 +1,6 @@
+stave 1
+
+import "std:casework"
+
+assembly drawer : casework.Dr$0
+// expect: Drawer

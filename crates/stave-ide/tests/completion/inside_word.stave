@@ -1,0 +1,11 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part base : oak {
+  length: 600mm
+  place {
+    ag$0ainst(base.top)
+  }
+}
+// expect: against

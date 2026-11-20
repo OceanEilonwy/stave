@@ -1,0 +1,7 @@
+stave 1
+
+stock ply {
+  species: birch
+  form: $0
+}
+// expect: solid, plywood, mdf, dowel

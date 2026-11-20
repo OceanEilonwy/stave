@@ -1,0 +1,141 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"side_table_from_box\"))"
+---
+== table.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   3 | import "std:frames"
+     = import:keyword  ":text  std:frames:text  ":text
+  12 | project "Side table (from a box)" {
+     = project:keyword  ":text  Side table (from a box):text  ":text
+  13 |   goal:       "A small oak side table with a lower shelf"
+     = goal:field  ":text  A small oak side table with a lower shelf:text  ":text
+  14 |   units:      mm
+     = units:field  mm:word
+  15 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  16 |   style:      "shaker"
+     = style:field  ":text  shaker:text  ":text
+  20 | param overall_width  = 500mm within 400mm..600mm
+     = param:keyword  overall_width:param+decl  500:number  mm:unit  within:keyword  400:number  mm:unit  600:number  mm:unit
+  21 | param overall_height = 600mm within 550mm..700mm
+     = param:keyword  overall_height:param+decl  600:number  mm:unit  within:keyword  550:number  mm:unit  700:number  mm:unit
+  22 | param overall_depth  = 500mm within 400mm..600mm
+     = param:keyword  overall_depth:param+decl  500:number  mm:unit  within:keyword  400:number  mm:unit  600:number  mm:unit
+  24 | region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+     = region:keyword  envelope:region+decl  box:function  across:field  overall_width:param+ref  up:field  overall_height:param+ref  deep:field  overall_depth:param+ref
+  27 | require knee_room    : overall_height - apron_front.apron.width - top.board.thickness >= 380mm "leave room under the aprons for your knees"
+     = require:keyword  knee_room:require+decl  overall_height:param+ref  apron_front:assembly+ref  apron:part+ref+std  width:plain  top:assembly+ref  board:part+ref+std  thickness:plain  380:number  mm:unit  ":text  leave room under the aprons for your knees:text  ":text
+  28 | require shelf_clear  : between(slats.slat[0], apron_front.apron) >= 200mm "leave room above the shelf for a stack of books"
+     = require:keyword  shelf_clear:require+decl  between:function  slats:assembly+ref  slat:part+ref+std  0:number  apron_front:assembly+ref  apron:part+ref+std  200:number  mm:unit  ":text  leave room above the shelf for a stack of books:text  ":text
+  29 | require slats_strong : slats.slat_width >= 40mm "narrow slats bend; make the top bigger or the gaps smaller"
+     = require:keyword  slats_strong:require+decl  slats:assembly+ref  slat_width:let+ref+std  40:number  mm:unit  ":text  narrow slats bend; make the top bigger or the gaps smaller:text  ":text
+  32 | stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+  33 | stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+     = stock:keyword  oak_45_sq:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  45:number  mm:unit  width:field  45:number  mm:unit  max_length:field  2700:number  mm:unit
+  37 | assembly top : frames.Top {
+     = assembly:keyword  top:assembly+decl  frames:module+ref+std  Top:type+ref+std
+  38 |   space:     envelope
+     = space:param+ref+std  envelope:region+ref
+  39 |   top_stock: oak_19
+     = top_stock:param+ref+std  oak_19:stock+ref
+  42 | assembly legs : frames.Legs {
+     = assembly:keyword  legs:assembly+decl  frames:module+ref+std  Legs:type+ref+std
+  43 |   under:     top.board
+     = under:param+ref+std  top:assembly+ref  board:part+ref+std
+  44 |   leg_stock: oak_45_sq
+     = leg_stock:param+ref+std  oak_45_sq:stock+ref
+  45 |   length:    overall_height - top.board.thickness
+     = length:param+ref+std  overall_height:param+ref  top:assembly+ref  board:part+ref+std  thickness:plain
+  50 | assembly apron_front : frames.Apron {
+     = assembly:keyword  apron_front:assembly+decl  frames:module+ref+std  Apron:type+ref+std
+  51 |   legs:        [legs.leg[front_left], legs.leg[front_right]]
+     = legs:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  legs:assembly+ref  leg:part+ref+std  front_right:label+ref+std
+  52 |   under:       top.board
+     = under:param+ref+std  top:assembly+ref  board:part+ref+std
+  53 |   outside:     legs.leg[front_left].front
+     = outside:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  front:plain
+  54 |   start:       legs.leg[front_left].right
+     = start:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  right:plain
+  55 |   apron_stock: oak_19
+     = apron_stock:param+ref+std  oak_19:stock+ref
+  56 |   run:         right
+     = run:param+ref+std  right:word
+  59 | assembly apron_back = mirror(apron_front, about: mid(top.board, deep))
+     = assembly:keyword  apron_back:assembly+decl  mirror:keyword  apron_front:assembly+ref  about:field  mid:function  top:assembly+ref  board:part+ref+std  deep:word
+  61 | assembly apron_left : frames.Apron {
+     = assembly:keyword  apron_left:assembly+decl  frames:module+ref+std  Apron:type+ref+std
+  62 |   legs:        [legs.leg[front_left], legs.leg[back_left]]
+     = legs:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  legs:assembly+ref  leg:part+ref+std  back_left:label+ref+std
+  63 |   under:       top.board
+     = under:param+ref+std  top:assembly+ref  board:part+ref+std
+  64 |   outside:     legs.leg[front_left].left
+     = outside:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  left:plain
+  65 |   start:       legs.leg[front_left].back
+     = start:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  back:plain
+  66 |   apron_stock: oak_19
+     = apron_stock:param+ref+std  oak_19:stock+ref
+  67 |   run:         back
+     = run:param+ref+std  back:word
+  70 | assembly apron_right = mirror(apron_left, about: mid(top.board, across))
+     = assembly:keyword  apron_right:assembly+decl  mirror:keyword  apron_left:assembly+ref  about:field  mid:function  top:assembly+ref  board:part+ref+std  across:word
+  73 | assembly cleat_front : frames.Cleat {
+     = assembly:keyword  cleat_front:assembly+decl  frames:module+ref+std  Cleat:type+ref+std
+  74 |   apron:       apron_front.apron
+     = apron:param+ref+std  apron_front:assembly+ref  apron:part+ref+std
+  75 |   inside:      apron_front.apron.back
+     = inside:param+ref+std  apron_front:assembly+ref  apron:part+ref+std  back:plain
+  76 |   under:       top.board
+     = under:param+ref+std  top:assembly+ref  board:part+ref+std
+  77 |   start:       apron_front.apron.left
+     = start:param+ref+std  apron_front:assembly+ref  apron:part+ref+std  left:plain
+  78 |   cleat_stock: oak_19
+     = cleat_stock:param+ref+std  oak_19:stock+ref
+  79 |   run:         right
+     = run:param+ref+std  right:word
+  80 |   inward:      back
+     = inward:param+ref+std  back:word
+  83 | assembly cleat_back = mirror(cleat_front, about: mid(top.board, deep))
+     = assembly:keyword  cleat_back:assembly+decl  mirror:keyword  cleat_front:assembly+ref  about:field  mid:function  top:assembly+ref  board:part+ref+std  deep:word
+  87 | assembly stretcher_front : frames.Stretcher {
+     = assembly:keyword  stretcher_front:assembly+decl  frames:module+ref+std  Stretcher:type+ref+std
+  88 |   legs:            [legs.leg[front_left], legs.leg[front_right]]
+     = legs:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  legs:assembly+ref  leg:part+ref+std  front_right:label+ref+std
+  89 |   outside:         legs.leg[front_left].front
+     = outside:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  front:plain
+  90 |   start:           legs.leg[front_left].right
+     = start:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  right:plain
+  91 |   lower_end:       legs.leg[front_left].bottom
+     = lower_end:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  bottom:plain
+  92 |   stretcher_stock: oak_19
+     = stretcher_stock:param+ref+std  oak_19:stock+ref
+  93 |   run:             right
+     = run:param+ref+std  right:word
+  96 | assembly stretcher_back = mirror(stretcher_front, about: mid(top.board, deep))
+     = assembly:keyword  stretcher_back:assembly+decl  mirror:keyword  stretcher_front:assembly+ref  about:field  mid:function  top:assembly+ref  board:part+ref+std  deep:word
+  98 | assembly slats : frames.Slats {
+     = assembly:keyword  slats:assembly+decl  frames:module+ref+std  Slats:type+ref+std
+  99 |   rails:      [stretcher_front.rail, stretcher_back.rail]
+     = rails:param+ref+std  stretcher_front:assembly+ref  rail:part+ref+std  stretcher_back:assembly+ref  rail:part+ref+std
+ 100 |   on:         stretcher_front.rail.top
+     = on:param+ref+std  stretcher_front:assembly+ref  rail:part+ref+std  top:plain
+ 101 |   fill_from:  legs.leg[front_left].right
+     = fill_from:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_left:label+ref+std  right:plain
+ 102 |   fill_to:    legs.leg[front_right].left
+     = fill_to:param+ref+std  legs:assembly+ref  leg:part+ref+std  front_right:label+ref+std  left:plain
+ 103 |   ends_from:  stretcher_front.rail.front
+     = ends_from:param+ref+std  stretcher_front:assembly+ref  rail:part+ref+std  front:plain
+ 104 |   ends_to:    stretcher_back.rail.back
+     = ends_to:param+ref+std  stretcher_back:assembly+ref  rail:part+ref+std  back:plain
+ 105 |   slat_stock: oak_19
+     = slat_stock:param+ref+std  oak_19:stock+ref
+ 106 |   run:        back
+     = run:param+ref+std  back:word
+ 107 |   spread:     right
+     = spread:param+ref+std  right:word
+ 111 | scene frame "Without the top" {
+     = scene:keyword  frame:scene+decl  ":text  Without the top:text  ":text
+ 112 |   hide: top
+     = hide:field  top:assembly+ref
