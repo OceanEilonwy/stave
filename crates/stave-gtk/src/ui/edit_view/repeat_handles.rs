@@ -238,6 +238,7 @@ impl Window {
             widgets.view_toolbar.popout.upcast_ref(),
             widgets.motion.root.upcast_ref(),
             widgets.hint_box.upcast_ref(),
+            widgets.block_box.upcast_ref(),
             widgets.contact_key.upcast_ref(),
             widgets.plan_switch.root.upcast_ref(),
             widgets.step_card.root.upcast_ref(),
