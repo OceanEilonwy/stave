@@ -21,10 +21,12 @@
 use adw::prelude::*;
 use gtk::{gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
-use stave_app::i18n::{fill_in, tr};
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use stave_app::session::{Activity, Build, Pill, Tone, View};
+use std::path::PathBuf;
 
 use super::icons::{self, PathIcon};
+use super::{app, workbench};
 
 /// `true` for a view that is made: one the switcher and its shortcut may
 /// lead to. A view that isn't made stays out of reach rather than show a
@@ -67,6 +69,8 @@ pub struct HeaderComponent {
     pill: Option<PillShown>,
     /// The build button's state and tooltip.
     build: Option<(Build, String)>,
+    /// The recent projects Open Recent lists, newest first.
+    recent: Vec<PathBuf>,
 }
 
 /// What the title bar is told.
@@ -101,6 +105,10 @@ pub enum HeaderInput {
         /// What it does, or why there is nothing to build.
         tooltip: String,
     },
+    /// List these project folders, newest first, under Project → Open
+    /// Recent (the application's recent projects, sent to every window
+    /// whenever they change).
+    ShowRecent(Vec<PathBuf>),
     /// People chose a view in the switcher.
     ViewChosen(View),
 }
@@ -116,6 +124,8 @@ pub enum HeaderOutput {
 /// handed to the component, which owns their state.
 #[derive(Clone, Debug)]
 pub struct HeaderParts {
+    /// The Open Recent submenu of the bar's own menus.
+    recent: gio::Menu,
     menu_bar: gtk::PopoverMenuBar,
     menu_button: gtk::MenuButton,
     title: adw::WindowTitle,
@@ -163,9 +173,11 @@ pub struct HeaderWidgets {
 }
 
 impl HeaderParts {
-    /// The bar's widgets for a project in `folder_label`, its menus made
-    /// of `menus`.
-    fn new(folder_label: &str, menus: &gio::Menu) -> HeaderParts {
+    /// The bar's widgets for a project in `folder_label`, with its own
+    /// menus ([`main_menu`]) and their Open Recent submenu.
+    fn new(folder_label: &str) -> HeaderParts {
+        let recent = gio::Menu::new();
+        let menus = &main_menu(&recent);
         let menu_bar = gtk::PopoverMenuBar::from_model(Some(menus));
         menu_bar.add_css_class("stave-menu-bar");
         menu_bar.set_valign(gtk::Align::Center);
@@ -320,6 +332,7 @@ impl HeaderParts {
         build.set_visible(false);
 
         HeaderParts {
+            recent,
             menu_bar,
             menu_button,
             title,
@@ -418,6 +431,103 @@ fn show_pill(parts: &HeaderParts, shown: &PillShown) {
         .update_property(&[gtk::accessible::Property::Label(&tooltip)]);
 }
 
+/// The title bar's menus: Project, Edit, View and Help, each a submenu
+/// (the menu bar shows them side by side; a narrow window's one menu
+/// button lists them).
+fn main_menu(recent: &gio::Menu) -> gio::Menu {
+    /// A section of `(label, action)` items.
+    fn section(items: &[(&str, &str)]) -> gio::Menu {
+        let section = gio::Menu::new();
+        for (label, action) in items {
+            section.append(Some(&tr(label)), Some(action));
+        }
+        section
+    }
+    let project = gio::Menu::new();
+    let opening = section(&[
+        (tr_noop("New Project…"), "win.new-project"),
+        (tr_noop("Open Project…"), "win.open"),
+    ]);
+    opening.append_submenu(Some(&tr("Open Recent")), recent);
+    project.append_section(None, &opening);
+    project.append_section(
+        None,
+        &section(&[
+            (tr_noop("Save"), "win.save"),
+            (tr_noop("Check Again"), "win.check"),
+            (tr_noop("Build Plan"), "win.build"),
+        ]),
+    );
+    project.append_section(
+        None,
+        &section(&[(tr_noop("Export 3D Model…"), "win.export-view")]),
+    );
+    let edit = gio::Menu::new();
+    edit.append_section(
+        None,
+        &section(&[
+            (tr_noop("Find…"), "win.find"),
+            (tr_noop("Find in the Text"), "win.search"),
+            (tr_noop("Format the Text"), "win.format"),
+        ]),
+    );
+    edit.append_section(
+        None,
+        &section(&[
+            (tr_noop("Next Problem"), "win.next-problem"),
+            (tr_noop("Previous Problem"), "win.previous-problem"),
+        ]),
+    );
+    let view = gio::Menu::new();
+    view.append_section(
+        None,
+        &section(&[
+            (tr_noop("Design"), "win.view-design"),
+            (tr_noop("Cut List"), "win.view-cut-list"),
+        ]),
+    );
+    view.append_section(
+        None,
+        &section(&[
+            (tr_noop("Back"), "win.back"),
+            (tr_noop("Forward"), "win.forward"),
+            (tr_noop("Frame Everything"), "win.frame"),
+        ]),
+    );
+    // Any panel but the 3D view can be closed, and a first launch shows
+    // only the 3D view, Parts and Problems; these open the others, a
+    // closed one where it was.
+    let panels = gio::Menu::new();
+    for id in workbench::PanelId::ALL {
+        panels.append(
+            Some(&id.title()),
+            Some(&format!("win.show-panel::{}", id.word())),
+        );
+    }
+    panels.append(Some(&tr("Reset Layout")), Some("win.reset-layout"));
+    view.append_section(Some(&tr("Panels")), &panels);
+    view.append_section(Some(&tr("Style")), &app::style_section());
+    let menu = gio::Menu::new();
+    menu.append_submenu(Some(&tr("Project")), &project);
+    menu.append_submenu(Some(&tr("Edit")), &edit);
+    menu.append_submenu(Some(&tr("View")), &view);
+    menu.append_submenu(Some(&tr("Help")), &app::help_section());
+    menu
+}
+
+/// Fills the Open Recent submenu again with `folders`, newest first.
+fn fill_recent(menu: &gio::Menu, folders: &[PathBuf]) {
+    menu.remove_all();
+    for folder in folders {
+        let item = gio::MenuItem::new(Some(&app::menu_label(&app::folder_name(folder))), None);
+        item.set_action_and_target_value(
+            Some("win.open-recent"),
+            Some(&folder.display().to_string().to_variant()),
+        );
+        menu.append_item(&item);
+    }
+}
+
 /// Adds the bar's own setters to a breakpoint for a window at most
 /// `width` sp wide: the switcher's words go at most 760 sp; at most 600
 /// sp the menu bar folds into one menu button and the switcher is drawn
@@ -477,6 +587,7 @@ impl Component for HeaderComponent {
             view: View::Design,
             pill: None,
             build: None,
+            recent: Vec::new(),
         };
         let widgets = HeaderWidgets { parts, view_chosen };
         ComponentParts { model, widgets }
@@ -494,6 +605,10 @@ impl Component for HeaderComponent {
             }
             // The bar's own widgets: `update_with_view` adds the setters.
             HeaderInput::Narrow { .. } => None,
+            HeaderInput::ShowRecent(recent) => {
+                self.recent = recent;
+                None
+            }
             HeaderInput::ShowPill(pill) => {
                 self.pill = Some(pill);
                 None
@@ -521,10 +636,14 @@ impl Component for HeaderComponent {
         sender: ComponentSender<Self>,
         root: &Self::Root,
     ) {
+        let recent = matches!(message, HeaderInput::ShowRecent(_));
         if let HeaderInput::Narrow { breakpoint, width } = &message {
             narrow(&widgets.parts, breakpoint, *width);
         }
         self.update(message, sender.clone(), root);
+        if recent {
+            fill_recent(&widgets.parts.recent, &self.recent);
+        }
         self.update_view(widgets, sender);
     }
 
@@ -551,16 +670,16 @@ pub struct Header {
 
 impl Header {
     /// A title bar for a project in `folder_label` (shown as its name
-    /// until the design is loaded), its menu bar made of `menus`: one
-    /// submenu each for Project, Edit, View and Help. People's choices go
-    /// to `owner` as `message(output)`.
+    /// until the design is loaded), its menu bar its own: one submenu
+    /// each for Project, Edit, View and Help ([`main_menu`]), Open Recent
+    /// empty until [`Header::show_recent`]. People's choices go to
+    /// `owner` as `message(output)`.
     pub fn new<M: 'static>(
         folder_label: &str,
-        menus: &gio::Menu,
         owner: &relm4::Sender<M>,
         message: impl Fn(HeaderOutput) -> M + 'static,
     ) -> Header {
-        let parts = HeaderParts::new(folder_label, menus);
+        let parts = HeaderParts::new(folder_label);
         #[cfg(test)]
         let kept = parts.clone();
         let controller = HeaderComponent::builder()
@@ -585,6 +704,11 @@ impl Header {
             title: title.to_owned(),
             folder: folder.to_owned(),
         });
+    }
+
+    /// Lists these project folders, newest first, under Open Recent.
+    pub fn show_recent(&self, folders: Vec<PathBuf>) {
+        self.send(HeaderInput::ShowRecent(folders));
     }
 
     /// The view showing.
@@ -641,12 +765,7 @@ mod tests {
 
     /// A bar whose outputs go to `owner`.
     fn header_for(owner: &relm4::Sender<HeaderOutput>) -> Header {
-        Header::new(
-            "hall_table",
-            &gio::Menu::new(),
-            owner,
-            std::convert::identity,
-        )
+        Header::new("hall_table", owner, std::convert::identity)
     }
 
     /// A bar whose outputs nobody hears.
@@ -667,7 +786,7 @@ mod tests {
         let token = Rc::new(());
         let held = Rc::clone(&token);
         let (owner, _) = recorder();
-        let header = Header::new("hall_table", &gio::Menu::new(), &owner, move |output| {
+        let header = Header::new("hall_table", &owner, move |output| {
             let _ = &held;
             output
         });
@@ -687,6 +806,41 @@ mod tests {
             "the component's runtime, and with it the model, is gone"
         );
         assert!(callback.upgrade().is_none(), "the message maker is freed");
+    }
+
+    #[test]
+    fn each_bar_lists_the_recent_projects_in_a_menu_of_its_own() {
+        on_gtk_thread(recent_projects_are_listed);
+    }
+
+    /// Open Recent is the bar's own submenu, filled from `ShowRecent`
+    /// when the main loop runs; another bar's stays as it was.
+    fn recent_projects_are_listed() {
+        let (one, two) = (header(), header());
+        assert_ne!(one.parts.recent, two.parts.recent, "no menu is shared");
+        one.show_recent(vec![
+            PathBuf::from("/home/me/hall_table"),
+            PathBuf::from("/home/me/chest"),
+        ]);
+        assert_eq!(one.parts.recent.n_items(), 0, "only queued");
+        settle();
+        assert_eq!(one.parts.recent.n_items(), 2);
+        let label = one
+            .parts
+            .recent
+            .item_attribute_value(0, "label", None)
+            .and_then(|label| label.get::<String>());
+        assert_eq!(label.as_deref(), Some("hall__table"), "underscores doubled");
+        let target = one
+            .parts
+            .recent
+            .item_attribute_value(1, "target", None)
+            .and_then(|target| target.get::<String>());
+        assert_eq!(target.as_deref(), Some("/home/me/chest"));
+        assert_eq!(two.parts.recent.n_items(), 0);
+        one.show_recent(Vec::new());
+        settle();
+        assert_eq!(one.parts.recent.n_items(), 0, "filled again, not added to");
     }
 
     #[test]

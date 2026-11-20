@@ -59,6 +59,7 @@
 #![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 
 mod loader;
+mod parses;
 mod source;
 mod std_library;
 
@@ -69,6 +70,7 @@ use stave_lang::ast::{File, Span};
 use stave_lang::diagnostics::SourceMapError;
 use stave_lang::{Diagnostic, FileId, SourceMap};
 
+pub use parses::Parses;
 pub use source::{DiskFiles, FileSource, MemoryFiles, normalize};
 pub use std_library::{PRELUDE_MODULES, STD_MODULES, std_files};
 
@@ -200,7 +202,7 @@ impl ModuleSet {
 
     /// Loads the project in `folder`, reading files from `files`.
     pub fn load_with(folder: &Path, files: &dyn FileSource) -> Result<ModuleSet, LoadError> {
-        loader::load(folder, files, None)
+        loader::load(folder, files, None, None)
     }
 
     /// Loads the project in `folder` again, reading files from `files`,
@@ -214,7 +216,25 @@ impl ModuleSet {
         folder: &Path,
         files: &dyn FileSource,
     ) -> Result<ModuleSet, LoadError> {
-        loader::load(folder, files, Some(self))
+        loader::load(folder, files, Some(self), None)
+    }
+
+    /// Loads the project in `folder`, reading files from `files`, and
+    /// parses only the files whose text is not the one `parses` kept from
+    /// the previous load; the new parses are kept for the next. The
+    /// result is the same as [`ModuleSet::load_with`]'s, and
+    /// [`Parses::parsed`] says which files were parsed: an editor that
+    /// loads again after each keystroke parses one file each time.
+    ///
+    /// The typed trees move into the result rather than being copied;
+    /// hand them back with [`Parses::reclaim`] when done with them, or the
+    /// next load parses those files again.
+    pub fn load_cached(
+        folder: &Path,
+        files: &dyn FileSource,
+        parses: &mut Parses,
+    ) -> Result<ModuleSet, LoadError> {
+        loader::load(folder, files, None, Some(parses))
     }
 
     /// `true` if any diagnostic is an error.

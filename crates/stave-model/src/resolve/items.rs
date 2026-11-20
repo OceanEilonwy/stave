@@ -1056,18 +1056,22 @@ impl<'a> Resolver<'a> {
             }
             let length = |name: &'static str| Expect::ty(Ty::Length).named(name);
             let anchor = |name: &'static str| Expect::ty(Ty::Anchor).named(name);
+            // The term's own argument table, shared with the editor.
+            let args = self.split_args(
+                cx,
+                head,
+                &call.args,
+                &term.named_arguments(),
+                term.positional_count(),
+            );
             let kind = match term {
-                PlacementTerm::Ground => {
-                    self.split_args(cx, head, &call.args, &[], 0);
-                    PlaceTermKind::Ground
-                }
+                PlacementTerm::Ground => PlaceTermKind::Ground,
                 PlacementTerm::Against | PlacementTerm::Flush => {
                     let extra = if term == PlacementTerm::Against {
                         "gap"
                     } else {
                         "inset"
                     };
-                    let args = self.split_args(cx, head, &call.args, &[extra], 1);
                     let Some(face) = args.positional.first() else {
                         self.missing_argument(cx, head, "a face", call.span);
                         continue;
@@ -1084,7 +1088,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 PlacementTerm::Center => {
-                    let args = self.split_args(cx, head, &call.args, &["from", "to"], 2);
                     if args.positional.is_empty() {
                         let (Some(from), Some(to)) = (args.get("from"), args.get("to")) else {
                             self.missing_argument(
@@ -1122,7 +1125,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 PlacementTerm::Spaced => {
-                    let args = self.split_args(cx, head, &call.args, &["from", "to"], 1);
                     let (Some(spacing), Some(from), Some(to)) =
                         (args.positional.first(), args.get("from"), args.get("to"))
                     else {
@@ -1142,7 +1144,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 PlacementTerm::Corners => {
-                    let args = self.split_args(cx, head, &call.args, &["inset"], 1);
                     let Some(part) = args.positional.first() else {
                         self.missing_argument(cx, head, "a part", call.span);
                         continue;
@@ -1155,7 +1156,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 PlacementTerm::Orient => {
-                    let args = self.split_args(cx, head, &call.args, &["length", "width"], 0);
                     let direction =
                         |name: &'static str| Expect::ty(Ty::Word(WordSet::Direction)).named(name);
                     let Some(length) = args.get("length") else {

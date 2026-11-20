@@ -1,0 +1,4 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 3/4i$0 }
+// expect: in

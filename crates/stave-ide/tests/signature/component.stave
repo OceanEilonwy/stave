@@ -1,0 +1,9 @@
+stave 1
+
+import "std:casework"
+
+assembly drawer : casework.Drawer {
+  pull_kind: $0
+}
+// label: casework.Drawer(opening:, mount:, front_stock:, box_stock:, bottom_stock:, slide:, pull_kind = bar_pull(centres: 160mm), bottom_gap = 15mm, top_gap = 15mm, box_height = opening.up - bottom_gap - top_gap, front_screw_inset = 20mm)
+// active: pull_kind

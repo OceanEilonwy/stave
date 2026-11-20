@@ -364,8 +364,6 @@ pub(super) struct Shell {
     remembers: bool,
     /// A failure to save the settings has been reported.
     reported: bool,
-    /// The Open Recent submenu every project window's menu shares.
-    recent: gio::Menu,
     /// Where the application's own messages go.
     sender: ComponentSender<Shell>,
 }
@@ -456,7 +454,6 @@ impl Component for Shell {
             remembered,
             remembers,
             reported: false,
-            recent: gio::Menu::new(),
             sender,
         };
         ComponentParts { model, widgets: () }
@@ -569,7 +566,6 @@ impl Shell {
         {
             application.set_accels_for_action(accelerator.action, accelerator.keys);
         }
-        self.refresh_recent();
     }
 
     /// Stave was started (or started again) with no folder: the window
@@ -623,8 +619,7 @@ impl Shell {
         }
         let builder = Window::builder();
         let root = builder.widget().clone();
-        let widgets = match build_widgets(&root, &self.application, &folder, &self.recent, &options)
-        {
+        let widgets = match build_widgets(&root, &self.application, &folder, &options) {
             Ok(widgets) => widgets,
             Err(error) => {
                 // The root was never shown; nothing else holds it.
@@ -651,6 +646,9 @@ impl Shell {
             controller,
         });
         self.record_recent(&folder);
+        // Each window keeps its own Open Recent; the new one hears the
+        // list now (the others hear it too, as it may have changed).
+        self.refresh_recent();
         if let Some(page) = self.start.take() {
             page.window.close();
         }
@@ -699,6 +697,7 @@ impl Shell {
             }
             WindowOutput::Opened(folder) => {
                 self.record_recent(&folder);
+                self.refresh_recent();
                 if let Some(open) = self.windows.iter_mut().find(|open| open.id == id) {
                     open.folder = folder;
                 }
@@ -853,7 +852,6 @@ impl Shell {
             false,
         );
         gtk::RecentManager::default().add_full(&uri, &data);
-        self.refresh_recent();
     }
 
     /// The project folders opened lately, newest first, that are still
@@ -871,16 +869,13 @@ impl Shell {
         newest_folders(items)
     }
 
-    /// Fills the Open Recent submenu again.
+    /// Tells every project window the recent projects, for its own Open
+    /// Recent submenu ([`ProjectInput::ShowRecent`]): each window's header
+    /// owns its menu, so no menu is shared between windows.
     fn refresh_recent(&self) {
-        self.recent.remove_all();
-        for folder in self.recent_projects() {
-            let item = gio::MenuItem::new(Some(&menu_label(&folder_name(&folder))), None);
-            item.set_action_and_target_value(
-                Some("win.open-recent"),
-                Some(&folder.display().to_string().to_variant()),
-            );
-            self.recent.append_item(&item);
+        let recent = self.recent_projects();
+        for open in &self.windows {
+            self.send_to(open.id, ProjectInput::ShowRecent(recent.clone()));
         }
     }
 }
@@ -993,7 +988,7 @@ pub(super) fn folder_name(folder: &Path) -> String {
 
 /// A menu shows an underscore as the next letter's mnemonic: a folder's
 /// own underscores are doubled.
-fn menu_label(text: &str) -> String {
+pub(super) fn menu_label(text: &str) -> String {
     text.replace('_', "__")
 }
 

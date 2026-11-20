@@ -6,11 +6,9 @@ use std::path::{Path, PathBuf};
 
 use stave_lang::ast::{Import, Item, ItemKind, Span, StringLit, StringPart, is_word};
 use stave_lang::diagnostics::{SourceFile, SourceMapError};
-use stave_lang::{
-    Code, Diagnostic, FileId, Label, SourceMap, is_keyword, is_patch_source, parse_file,
-    parse_patch_file,
-};
+use stave_lang::{Code, Diagnostic, FileId, Label, SourceMap, is_keyword};
 
+use crate::parses::{Parsed, Parses};
 use crate::source::{FileSource, is_stave_path, normalize};
 use crate::std_library::{PRELUDE_MODULES, STD_MODULES, module_files, std_module};
 use crate::{
@@ -23,6 +21,7 @@ pub(crate) fn load(
     folder: &Path,
     files: &dyn FileSource,
     prior: Option<&ModuleSet>,
+    parses: Option<&mut Parses>,
 ) -> Result<ModuleSet, LoadError> {
     let canonical = files
         .canonical(folder)
@@ -37,7 +36,7 @@ pub(crate) fn load(
         });
     }
 
-    let mut loader = Loader::new(files, prior);
+    let mut loader = Loader::new(files, prior, parses);
     let standard = STD_MODULES
         .into_iter()
         .find(|module| is_same_as_std(&texts, module));
@@ -255,6 +254,8 @@ struct Loader<'a> {
     stack: Vec<ModuleId>,
     /// A previous load whose parses may be reused ([`Loader::reusable`]).
     prior: Option<Prior<'a>>,
+    /// Parses kept from one load to the next ([`Parses`]).
+    parses: Option<&'a mut Parses>,
 }
 
 /// A previous load: its sources and its parsed files by id.
@@ -285,9 +286,17 @@ impl<'a> Prior<'a> {
 }
 
 impl<'a> Loader<'a> {
-    fn new(files: &'a dyn FileSource, prior: Option<&'a ModuleSet>) -> Self {
+    fn new(
+        files: &'a dyn FileSource,
+        prior: Option<&'a ModuleSet>,
+        mut parses: Option<&'a mut Parses>,
+    ) -> Self {
+        if let Some(parses) = parses.as_deref_mut() {
+            parses.begin();
+        }
         Self {
             prior: prior.map(Prior::of),
+            parses,
             files,
             sources: SourceMap::new(),
             modules: Vec::new(),
@@ -301,6 +310,9 @@ impl<'a> Loader<'a> {
 
     /// Sorts the diagnostics and builds the result.
     fn finish(mut self, root: ModuleId, prelude: Vec<ModuleId>) -> ModuleSet {
+        if let Some(parses) = self.parses.as_deref_mut() {
+            parses.end();
+        }
         self.diagnostics.sort_by_key(|diagnostic| {
             let primary = diagnostic.primary();
             (
@@ -364,37 +376,58 @@ impl<'a> Loader<'a> {
             let text = self.sources.get(file).map_or("", SourceFile::text);
             if let Some(reused) = self.reusable(file, &path, text) {
                 files.push(reused);
-            } else if is_patch_source(text) {
-                let parse = parse_patch_file(file, text);
-                self.diagnostics.extend(parse.diagnostics);
-            } else {
-                let parse = parse_file(file, text);
-                self.diagnostics.extend(parse.diagnostics);
-                if let Some((version, header_span)) = parse
-                    .ast
-                    .as_ref()
-                    .map(|ast| (ast.header.version, ast.header.span))
-                    && version != stave_lang::FORMAT_VERSION
-                {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            Code::NotSupported,
-                            format!("format version {version} is not supported yet"),
-                            Label::new(file, header_span),
-                        )
-                        .with_help(format!(
-                            "this version of Stave reads files that start with 'stave {}'",
-                            stave_lang::FORMAT_VERSION
-                        )),
-                    );
+                continue;
+            }
+            let mut fresh;
+            let parsed = match self.parses.as_deref_mut() {
+                Some(parses) => parses.parse(file, text),
+                None => {
+                    fresh = Parsed::new(file, text);
+                    &mut fresh
                 }
-                files.push(ModuleFile {
-                    file,
-                    path,
-                    ast: parse.ast,
-                    imports: Vec::new(),
-                    broken: parse.broken,
-                });
+            };
+            match parsed {
+                Parsed::Patch { diagnostics, .. } => {
+                    self.diagnostics.extend(diagnostics.iter().cloned());
+                }
+                Parsed::File {
+                    ast,
+                    lent,
+                    diagnostics,
+                    broken,
+                    ..
+                } => {
+                    self.diagnostics.extend(diagnostics.iter().cloned());
+                    if let Some((version, header_span)) = ast
+                        .as_ref()
+                        .map(|ast| (ast.header.version, ast.header.span))
+                        && version != stave_lang::FORMAT_VERSION
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                Code::NotSupported,
+                                format!("format version {version} is not supported yet"),
+                                Label::new(file, header_span),
+                            )
+                            .with_help(format!(
+                                "this version of Stave reads files that start with 'stave {}'",
+                                stave_lang::FORMAT_VERSION
+                            )),
+                        );
+                    }
+                    files.push(ModuleFile {
+                        file,
+                        path,
+                        // The tree moves into the set; a kept one comes
+                        // back with `Parses::reclaim`.
+                        ast: {
+                            *lent = true;
+                            ast.take()
+                        },
+                        imports: Vec::new(),
+                        broken: broken.clone(),
+                    });
+                }
             }
         }
         let header = self.header(&name, &files, first_file);

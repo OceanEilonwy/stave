@@ -16,6 +16,8 @@
 //!   assembly steps (namespace 3: call heads fixed by position).
 //! - [`functions`]: built-in function signatures, and the points and
 //!   shapes written inside a hardware kind's members.
+//! - [`positions`]: questions an editor asks by position: the fields a
+//!   block takes, what an argument of a fixed call expects.
 //!
 //! Joint, hardware and tool kinds themselves are *not* built in: they are
 //! written in `.stave` in the standard library, mechanisms included. The tests at the bottom of
@@ -30,6 +32,7 @@ pub mod functions;
 pub mod kinds;
 pub mod operations;
 pub mod placement;
+pub mod positions;
 pub mod recipes;
 pub mod species;
 pub mod words;

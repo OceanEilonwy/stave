@@ -1,0 +1,9 @@
+stave 1
+
+kind housing : joint {
+  param depth = into.thickness / 3
+  cut housing: crossing(into, piece) {
+    $0
+  }
+}
+// expect: notch, slot, pocket, tenon, round, drill, dovetail_socket, dovetail_tail, diagonal

@@ -1,0 +1,139 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"japanese_joinery\"))"
+---
+== ari_tsugi.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+   5 | kind ari_tsugi : joint {
+     = kind:keyword  ari_tsugi:type+decl  joint:plain
+   6 |   roles {
+     = roles:keyword
+   7 |     piece: Part                      // carries the tail
+     = piece:role+decl  Part:type
+   8 |     into:  Part                      // carries the socket
+     = into:role+decl  Part:type
+  11 |   param neck = piece.width / 3
+     = param:keyword  neck:param+decl  piece:role+ref  width:plain  3:number
+  13 |   param depth = piece.width / 2
+     = param:keyword  depth:param+decl  piece:role+ref  width:plain  2:number
+  15 |   param angle = 10deg
+     = param:keyword  angle:param+decl  10:number  deg:unit
+  16 |   require same_section : piece.width == into.width && piece.thickness == into.thickness "both beams need the same section"
+     = require:keyword  same_section:require+decl  piece:role+ref  width:plain  into:role+ref  width:plain  piece:role+ref  thickness:plain  into:role+ref  thickness:plain  ":text  both beams need the same section:text  ":text
+  17 |   require fits         : depth <= into.length / 4 "the dovetail is too deep for this beam"
+     = require:keyword  fits:require+decl  depth:param+ref  into:role+ref  length:plain  4:number  ":text  the dovetail is too deep for this beam:text  ":text
+  21 |   insert:    [push(piece, along: thickness)]
+     = insert:field  push:function  piece:role+ref  along:field  thickness:word
+  22 |   cut_first: piece                        // cut the tail first, then mark the socket from it
+     = cut_first:field  piece:role+ref
+  23 |   adds:      extend(piece, by: depth)     // the beams are drawn meeting end to end; the tail reaches past
+     = adds:field  extend:function  piece:role+ref  by:field  depth:param+ref
+  25 |   cut socket: end(into, facing: piece) {
+     = cut:keyword  socket:plain  end:function  into:role+ref  facing:field  piece:role+ref
+  26 |     dovetail_socket(neck: neck, depth: depth, angle: angle)
+     = dovetail_socket:function  neck:field  neck:param+ref  depth:field  depth:param+ref  angle:field  angle:param+ref
+  28 |   cut tail: end(piece, facing: into) {
+     = cut:keyword  tail:plain  end:function  piece:role+ref  facing:field  into:role+ref
+  29 |     dovetail_tail(neck: neck, depth: depth, angle: angle)
+     = dovetail_tail:function  neck:field  neck:param+ref  depth:field  depth:param+ref  angle:field  angle:param+ref
+  32 |   note: "Set a sliding bevel to {angle} for the tail; trace the finished tail onto {into} to mark the socket"
+     = note:field  ":text  Set a sliding bevel to :text  angle:param+ref   for the tail; trace the finished tail onto :text  into:role+ref   to mark the socket:text  ":text
+== chidori.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  17 | kind chidori : joint {
+     = kind:keyword  chidori:type+decl  joint:plain
+  18 |   roles {
+     = roles:keyword
+  19 |     lock:   Part                      // the stick that turns to lock the node
+     = lock:role+decl  Part:type
+  20 |     first:  Part                      // halved under the second, at the bottom of the node
+     = first:role+decl  Part:type
+  21 |     second: Part                      // halved over the first, at the top of the node
+     = second:role+decl  Part:type
+  24 |   param size = lock.width
+     = param:keyword  size:param+decl  lock:role+ref  width:plain
+  26 |   param round_diameter = size * 3 / 4
+     = param:keyword  round_diameter:param+decl  size:param+ref  3:number  4:number
+  28 |   param flats = size * 9 / 20
+     = param:keyword  flats:param+decl  size:param+ref  9:number  20:number
+  30 |   require square : lock.width == size && lock.thickness == size &&
+     = require:keyword  square:require+decl  lock:role+ref  width:plain  size:param+ref  lock:role+ref  thickness:plain  size:param+ref
+  31 |                    first.width == size && first.thickness == size &&
+     = first:role+ref  width:plain  size:param+ref  first:role+ref  thickness:plain  size:param+ref
+  32 |                    second.width == size && second.thickness == size "all three sticks need the same square section"
+     = second:role+ref  width:plain  size:param+ref  second:role+ref  thickness:plain  size:param+ref  ":text  all three sticks need the same square section:text  ":text
+  33 |   require locks : flats < round_diameter "the flats must be closer together than the diameter, or the quarter turn won't lock"
+     = require:keyword  locks:require+decl  flats:param+ref  round_diameter:param+ref  ":text  the flats must be closer together than the diameter, or the quarter turn won't lock:text  ":text
+  37 |   cut first_lap: crossing(first, second) {
+     = cut:keyword  first_lap:plain  crossing:function  first:role+ref  second:role+ref
+  38 |     notch(depth: size / 2)
+     = notch:function  depth:field  size:param+ref  2:number
+  40 |   cut second_lap: crossing(second, first, opposite: true) {
+     = cut:keyword  second_lap:plain  crossing:function  second:role+ref  first:role+ref  opposite:field  true:keyword
+  41 |     notch(depth: size / 2)
+     = notch:function  depth:field  size:param+ref  2:number
+  46 |   cut first_lock_hole: crossing(first, lock, normal: thickness) {
+     = cut:keyword  first_lock_hole:plain  crossing:function  first:role+ref  lock:role+ref  normal:field  thickness:word
+  47 |     drill(diameter: round_diameter, depth: through)
+     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word
+  48 |     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
+     = slot:function  width:field  flats:param+ref  depth:field  through:word  angle:field  45:number  deg:unit  from_centre:field  true:keyword
+  50 |   cut second_lock_hole: crossing(second, lock, normal: thickness) {
+     = cut:keyword  second_lock_hole:plain  crossing:function  second:role+ref  lock:role+ref  normal:field  thickness:word
+  51 |     drill(diameter: round_diameter, depth: through)
+     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word
+  52 |     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
+     = slot:function  width:field  flats:param+ref  depth:field  through:word  angle:field  45:number  deg:unit  from_centre:field  true:keyword
+  57 |   cut rounding: crossing(lock, first) {
+     = cut:keyword  rounding:plain  crossing:function  lock:role+ref  first:role+ref
+  58 |     round(diameter: round_diameter, flats: flats, flats_angle: 45deg)
+     = round:function  diameter:field  round_diameter:param+ref  flats:field  flats:param+ref  flats_angle:field  45:number  deg:unit
+  61 |   cut_first: [first, second, lock]            // bore and slot the pair, then fit the lock to the holes
+     = cut_first:field  first:role+ref  second:role+ref  lock:role+ref
+  63 |   insert: [
+     = insert:field
+  64 |     push(second, along: thickness),           // lower the second stick onto the first
+     = push:function  second:role+ref  along:field  thickness:word
+  65 |     push(lock, along: width, angle: 45deg),   // slide the lock in along the diagonal, flats leading
+     = push:function  lock:role+ref  along:field  width:word  angle:field  45:number  deg:unit
+  66 |     rotate(lock, by: 90deg, about: length),   // a quarter turn locks the node
+     = rotate:function  lock:role+ref  by:field  90:number  deg:unit  about:field  length:word
+  69 |   note: "Halve {first} and {second} together, slide {lock} in along the slots with its flats facing them, then give it a quarter turn"
+     = note:field  ":text  Halve :text  first:role+ref   and :text  second:role+ref   together, slide :text  lock:role+ref   in along the slots with its flats facing them, then give it a quarter turn:text  ":text
+== library.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  17 | library "Japanese joinery samples" {
+     = library:keyword  ":text  Japanese joinery samples:text  ":text
+  18 |   about: "Sample joint kinds: ari tsugi and chidori"
+     = about:field  ":text  Sample joint kinds: ari tsugi and chidori:text  ":text
+  22 | kind sumitsubo : tool {
+     = kind:keyword  sumitsubo:type+decl  tool:plain
+  23 |   title: "sumitsubo (ink line)"
+     = title:field  ":text  sumitsubo (ink line):text  ":text
+  28 | recipe outline_with_sumitsubo : outline {
+     = recipe:keyword  outline_with_sumitsubo:recipe+decl  outline:plain
+  29 |   tools: [sumitsubo, square, marking_knife, tenon_saw, chisel, mallet]
+     = tools:field  sumitsubo:type+ref  square:type+ref+std  marking_knife:type+ref+std  tenon_saw:type+ref+std  chisel:type+ref+std  mallet:type+ref+std
+  30 |   rank:  5
+     = rank:field  5:number
+  31 |   mark {
+     = mark:keyword
+  32 |     line(outline, with: sumitsubo)
+     = line:function  outline:word  with:field  sumitsubo:type+ref
+  33 |     square_around(outline)
+     = square_around:function  outline:word
+  34 |     hatch(waste)
+     = hatch:function  waste:word
+  36 |   cut {
+     = cut:keyword
+  37 |     saw(outline)
+     = saw:function  outline:word
+  38 |     chop(waste)
+     = chop:function  waste:word
+  39 |     pare(outline)
+     = pare:function  outline:word
+  41 |   check: "the cut faces are flat and split the ink lines"
+     = check:field  ":text  the cut faces are flat and split the ink lines:text  ":text

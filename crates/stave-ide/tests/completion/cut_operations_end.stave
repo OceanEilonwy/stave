@@ -1,0 +1,8 @@
+stave 1
+
+kind stub : joint {
+  cut stub: end(piece, facing: into) {
+    $0
+  }
+}
+// expect: pocket, tenon, spigot, drill, dovetail_socket, dovetail_tail

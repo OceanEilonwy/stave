@@ -1,0 +1,21 @@
+[package]
+name = "zed-stave"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Zed extension for the Stave language: starts stave-lsp."
+
+# Its own workspace: the extension is built to WebAssembly by Zed, not as part
+# of the Stave workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+zed_extension_api = "0.7.0"
+
+[lints.rust]
+unsafe_code = "forbid"

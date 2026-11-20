@@ -334,4 +334,15 @@ shot $files/narrow.png $cabinet --view files --theme light --size 760x900 --file
 # places it and the camera frames it in the room the editor leaves, dark.
 shot $files/selected_in_3d_dark.png $cabinet --view files --theme dark --select 'door_l.stile[hinge]'
 
+# ---- the editor's colours (docs/screenshots/editor-colouring) ----
+# Every kind of item in its own colour (parts brown, params gold, stocks
+# olive, joints indigo, hardware magenta, regions mauve, labels slate),
+# units coloured and in italics after their numbers, and names that mean
+# an item declared elsewhere underlined; light and dark.
+colouring=docs/screenshots/editor-colouring
+shot $colouring/cabinet_carcass_light.png $cabinet --view files --theme light --file carcass.stave:99 --cursor shelf_dados
+shot $colouring/cabinet_params_dark.png $cabinet --view files --theme dark --file cabinet.stave:20
+shot $colouring/box_lid_light.png examples/box --view files --theme light --file lid.stave:25 --cursor hinges --size 1440x1300
+shot $colouring/chest_regions_dark.png examples/chest_of_drawers --view files --theme dark --file chest.stave:25 --cursor envelope
+
 exit $failed

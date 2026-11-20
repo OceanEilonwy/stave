@@ -54,6 +54,7 @@ mod slider;
 mod start_page;
 mod style;
 mod tab_strip;
+mod theme;
 mod tree;
 mod update;
 mod versions;
@@ -74,7 +75,7 @@ use stave_app::Contact;
 use stave_app::check::{self, Checked, Watcher};
 use stave_app::finder::{self as finding, Goal};
 use stave_app::focus::{self, Focus, Target};
-use stave_app::i18n::{fill_in, ntr, tr, tr_noop};
+use stave_app::i18n::{fill_in, ntr, tr};
 use stave_app::inspect;
 use stave_app::link;
 use stave_app::problems::{self, Mark, Marks};
@@ -1145,90 +1146,6 @@ fn settle_for_screenshot() {
     }
 }
 
-/// The title bar's menus: Project, Edit, View and Help, each a submenu
-/// (the menu bar shows them side by side; a narrow window's one menu
-/// button lists them).
-fn main_menu(recent: &gio::Menu) -> gio::Menu {
-    /// A section of `(label, action)` items.
-    fn section(items: &[(&str, &str)]) -> gio::Menu {
-        let section = gio::Menu::new();
-        for (label, action) in items {
-            section.append(Some(&tr(label)), Some(action));
-        }
-        section
-    }
-    let project = gio::Menu::new();
-    let opening = section(&[
-        (tr_noop("New Project…"), "win.new-project"),
-        (tr_noop("Open Project…"), "win.open"),
-    ]);
-    opening.append_submenu(Some(&tr("Open Recent")), recent);
-    project.append_section(None, &opening);
-    project.append_section(
-        None,
-        &section(&[
-            (tr_noop("Save"), "win.save"),
-            (tr_noop("Check Again"), "win.check"),
-            (tr_noop("Build Plan"), "win.build"),
-        ]),
-    );
-    project.append_section(
-        None,
-        &section(&[(tr_noop("Export 3D Model…"), "win.export-view")]),
-    );
-    let edit = gio::Menu::new();
-    edit.append_section(
-        None,
-        &section(&[
-            (tr_noop("Find…"), "win.find"),
-            (tr_noop("Find in the Text"), "win.search"),
-            (tr_noop("Format the Text"), "win.format"),
-        ]),
-    );
-    edit.append_section(
-        None,
-        &section(&[
-            (tr_noop("Next Problem"), "win.next-problem"),
-            (tr_noop("Previous Problem"), "win.previous-problem"),
-        ]),
-    );
-    let view = gio::Menu::new();
-    view.append_section(
-        None,
-        &section(&[
-            (tr_noop("Design"), "win.view-design"),
-            (tr_noop("Cut List"), "win.view-cut-list"),
-        ]),
-    );
-    view.append_section(
-        None,
-        &section(&[
-            (tr_noop("Back"), "win.back"),
-            (tr_noop("Forward"), "win.forward"),
-            (tr_noop("Frame Everything"), "win.frame"),
-        ]),
-    );
-    // Any panel but the 3D view can be closed, and a first launch shows
-    // only the 3D view, Parts and Problems; these open the others, a
-    // closed one where it was.
-    let panels = gio::Menu::new();
-    for id in workbench::PanelId::ALL {
-        panels.append(
-            Some(&id.title()),
-            Some(&format!("win.show-panel::{}", id.word())),
-        );
-    }
-    panels.append(Some(&tr("Reset Layout")), Some("win.reset-layout"));
-    view.append_section(Some(&tr("Panels")), &panels);
-    view.append_section(Some(&tr("Style")), &app::style_section());
-    let menu = gio::Menu::new();
-    menu.append_submenu(Some(&tr("Project")), &project);
-    menu.append_submenu(Some(&tr("Edit")), &edit);
-    menu.append_submenu(Some(&tr("View")), &view);
-    menu.append_submenu(Some(&tr("Help")), &app::help_section());
-    menu
-}
-
 /// Builds a project window's widgets into `window` (the component's
 /// root, made by [`Window::init_root`]), before the component is
 /// launched: a failure leaves nothing to launch.
@@ -1236,7 +1153,6 @@ pub(in crate::ui) fn build_widgets(
     window: &adw::ApplicationWindow,
     application: &adw::Application,
     folder: &Path,
-    recent: &gio::Menu,
     options: &Options,
 ) -> Result<Widgets> {
     if options.window_screenshot.is_some() {
@@ -1246,12 +1162,7 @@ pub(in crate::ui) fn build_widgets(
     // The window's own leaves send it their outputs through this channel
     // (`Window::init` passes them on): each is forwarded at launch.
     let (to_window, leaf_outputs) = relm4::channel::<WindowInput>();
-    let header = Header::new(
-        &folder_name,
-        &main_menu(recent),
-        &to_window,
-        update::rendering::header_said,
-    );
+    let header = Header::new(&folder_name, &to_window, update::rendering::header_said);
 
     // The 3D view, its controls floating on it (`view_layout` keeps them
     // apart): the scene menu at the top left; the camera buttons, X-ray
@@ -1722,8 +1633,7 @@ mod tests {
         };
         let builder = Window::builder();
         let root = builder.widget().clone();
-        let widgets =
-            build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+        let widgets = build_widgets(&root, &application, &folder, &options).unwrap();
         let closed = Rc::new(Cell::new(false));
         let heard = Rc::clone(&closed);
         // What the application listens for to drop the controller.

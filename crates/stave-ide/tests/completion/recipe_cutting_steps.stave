@@ -1,0 +1,9 @@
+stave 1
+
+recipe notch_by_hand : notch {
+  tools: [marking_knife]
+  cut {
+    $0
+  }
+}
+// expect: saw, chop, pare, plane, rout, bore, turn, shave

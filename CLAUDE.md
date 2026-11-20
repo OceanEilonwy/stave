@@ -80,15 +80,20 @@ Dependency order (a crate depends only on crates above it):
 `stave-lang` → `stave-schema` → `stave-modules` → `stave-model` → `stave-solve`
 → `stave-geom` → `stave-check` → `stave-workplan` → `stave-scene` →
 `stave-render` → `stave-output` → `stave-app` → `stave-mcp` → `stave-cli`,
-`stave-gtk`.
+`stave-gtk`, `stave-lsp`.
 
 Beside that chain (`docs/superpowers/specs/2026-11-20-ai-integration-design.md`,
 "Crates", and [`docs/ai.md`](docs/ai.md)):
 
 - `stave-ide` (the editor's navigation layer: names, uses, hovers, colours,
-  open buffers) sits after `stave-modules` and before `stave-app`: it
-  depends only on `stave-lang`, `stave-schema` and `stave-modules`, has no
-  GTK types, and the future `stave-lsp` builds on it.
+  completion, open buffers) sits after `stave-modules` and before
+  `stave-app`: it depends only on `stave-lang`, `stave-schema` and
+  `stave-modules`, and has no GTK or protocol types.
+- `stave-lsp` (the language server binary) is a front end like `stave-cli`
+  and `stave-gtk`: it builds on `stave-app` (for the slow diagnostics and
+  worked-out values) and on `stave-ide`, as `docs/grammar.md` ("Tooling and
+  editors") says, and holds only the protocol: positions, URIs and message
+  plumbing.
 - `stave-history` (versions: a project's revisions, suggestions and main
   line in `.stave/history/`, on `jj-lib` at an exact pin, Stave standing in
   for the working copy) depends on no Stave crate and sits before

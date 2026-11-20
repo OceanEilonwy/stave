@@ -1,0 +1,7 @@
+stave 1
+
+project "Shelf" {
+  goal: "A shelf"
+  $0
+}
+// expect: units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width

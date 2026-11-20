@@ -1,0 +1,43 @@
+{
+  "comment": "The semantic token legend stave-lsp sends in its initialize result, in this order. editors/README.md describes each entry and how stave-ide's TokenClass and TokenModifier map onto it; editors/vscode/scripts/check-manifest.mjs checks the VS Code extension against it, and a stave-lsp test checks the server against it.",
+  "tokenTypes": [
+    "keyword",
+    "comment",
+    "string",
+    "number",
+    "operator",
+    "function",
+    "type",
+    "namespace",
+    "enumMember",
+    "property",
+    "variable",
+    "unit",
+    "component",
+    "kind",
+    "recipe",
+    "stock",
+    "profile",
+    "scene",
+    "param",
+    "let",
+    "region",
+    "part",
+    "joint",
+    "hardware",
+    "assembly",
+    "require",
+    "role",
+    "madePart",
+    "member",
+    "label"
+  ],
+  "tokenModifiers": [
+    "declaration",
+    "reference",
+    "defaultLibrary",
+    "unresolved",
+    "solvedParam",
+    "documentation"
+  ]
+}

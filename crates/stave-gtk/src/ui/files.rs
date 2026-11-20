@@ -60,13 +60,17 @@ use stave_app::problems::Marks;
 use stave_app::save_failure::SaveFailure;
 use stave_app::session::{LineNumber, SourceLocation};
 use stave_ide::{
-    Analysis, Buffers, Document, FilePosition, Location, Overlay, SymbolId, TokenClass,
+    Analysis, AnalysisHost, Buffers, Document, FilePosition, Location, Overlay, SymbolId,
+    TokenClass, TokenModifiers,
 };
 use stave_lang::Severity;
 use stave_lang::ast::Span;
 
-use super::editor::{Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run, SearchEvent};
+use super::editor::{
+    ConflictSettle, Editor, EscapeProbe, LensClick, LensLine, LineStarts, Run, SearchEvent,
+};
 use super::tab_strip::PageTab;
+use super::theme;
 
 /// How long typing must pause before the names are worked out again.
 const ANALYSE_DELAY: Duration = Duration::from_millis(150);
@@ -268,6 +272,8 @@ pub enum FilesInput<Then> {
         generation: u64,
         /// The analysis, when the project could be read.
         analysis: Option<Box<Analysis>>,
+        /// What it worked out, handed back for the next analysis to reuse.
+        host: Box<AnalysisHost>,
     },
     /// The pause before checking again is over.
     CheckDue(u64),
@@ -308,6 +314,8 @@ pub enum FilesInput<Then> {
     ListUses(SymbolId),
     /// A lens's "show in 3D" was clicked.
     ShowIn3d(SymbolId),
+    /// A link above a conflict was clicked: the editor settles it.
+    SettleConflict(ConflictSettle),
     /// The uses panel's × was clicked.
     CloseUses,
     /// Escape in the text: closes what is open over it.
@@ -633,6 +641,9 @@ pub struct FilesComponent<Then: fmt::Debug + 'static> {
     fresh_memo: Option<FreshMemo>,
     analysing: bool,
     analyse_again: bool,
+    /// What the analyses so far worked out, for the next to reuse; away on
+    /// the worker thread while one is worked out.
+    host: Option<Box<AnalysisHost>>,
     tabs: Vec<Tab>,
     active: Option<usize>,
     /// The last check, kept by the session too: shared, not copied.
@@ -716,6 +727,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             clicks.forward(sender.input_sender().clone(), |click| match click {
                 LensClick::Uses(symbol) => FilesInput::ListUses(symbol),
                 LensClick::Show(symbol) => FilesInput::ShowIn3d(symbol),
+                LensClick::Settle(settle) => FilesInput::SettleConflict(settle),
             }),
         );
         // So does what the editor's search hears (its bar's outputs and
@@ -827,6 +839,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             fresh_memo: None,
             analysing: false,
             analyse_again: false,
+            host: Some(Box::default()),
             tabs: Vec::new(),
             active: None,
             checked: None,
@@ -949,7 +962,11 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 folder,
                 generation,
                 analysis,
-            } => self.analysed(folder, generation, analysis),
+                host,
+            } => {
+                self.host = Some(host);
+                self.analysed(folder, generation, analysis);
+            }
             FilesInput::CheckDue(ticket) => {
                 if ticket == self.check_ticket {
                     self.tell(FilesOutput::Check);
@@ -985,6 +1002,9 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 self.show_hover(self.cursor());
             }
             FilesInput::ListUses(symbol) => self.list_uses(symbol),
+            FilesInput::SettleConflict(settle) => {
+                self.editor.settle_conflict(&settle);
+            }
             FilesInput::ShowIn3d(symbol) => {
                 if let Some(analysis) = self.analysis.clone() {
                     self.tell(FilesOutput::ShowIn3d { analysis, symbol });
@@ -1792,18 +1812,21 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         let overlay = self.buffers.overlay();
         let generation = self.generation;
         let input = self.sender.input_sender().clone();
+        // Only one analysis is worked out at a time, so the host is here.
+        let mut host = self.host.take().unwrap_or_default();
         glib::spawn_future_local(async move {
             let loaded = gio::spawn_blocking(move || {
-                let analysis = Analysis::load(&folder, &overlay).ok().map(Box::new);
-                (folder, analysis)
+                let analysis = host.analyse(&folder, &overlay).ok().map(Box::new);
+                (folder, analysis, host)
             })
             .await;
-            let (folder, analysis) = loaded.unwrap_or_default();
+            let (folder, analysis, host) = loaded.unwrap_or_default();
             // The page may have gone; then nobody needs the names.
             let _ = input.send(FilesInput::Analysed {
                 folder,
                 generation,
                 analysis,
+                host,
             });
         });
     }
@@ -1836,7 +1859,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         let lines = self.active_lines();
         let fresh = self.fresh();
         if let Some((analysis, file)) = &fresh {
-            let runs: Vec<(Run, TokenClass)> = analysis
+            let runs: Vec<(Run, TokenClass, TokenModifiers)> = analysis
                 .tokens(*file)
                 .into_iter()
                 .map(|token| {
@@ -1846,6 +1869,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
                             end: token.span.end(),
                         },
                         token.class,
+                        token.modifiers,
                     )
                 })
                 .collect();
@@ -2503,29 +2527,7 @@ fn markup_line(text: &str, start: u32, tokens: &[stave_ide::SemanticToken], dark
             out.push_str(&escape(plain));
         }
         let piece = escape(text.get(from..to).unwrap_or(""));
-        let colour = match token.class {
-            TokenClass::Keyword => Some(if dark { "#dc8add" } else { "#9141ac" }),
-            TokenClass::Comment | TokenClass::DocComment => {
-                Some(if dark { "#9a9996" } else { "#6f6e73" })
-            }
-            TokenClass::Text => Some(if dark { "#8ff0a4" } else { "#1b7a4c" }),
-            TokenClass::Number => Some(if dark { "#ffa348" } else { "#c64600" }),
-            TokenClass::Function | TokenClass::EnumWord => {
-                Some(if dark { "#78aeed" } else { "#1c71d8" })
-            }
-            TokenClass::Type => Some(if dark { "#99c1f1" } else { "#1a5fb4" }),
-            _ => None,
-        };
-        let italic = matches!(token.class, TokenClass::Comment | TokenClass::DocComment);
-        match colour {
-            Some(colour) if italic => {
-                out.push_str(&format!(
-                    "<span foreground=\"{colour}\" style=\"italic\">{piece}</span>"
-                ));
-            }
-            Some(colour) => out.push_str(&format!("<span foreground=\"{colour}\">{piece}</span>")),
-            None => out.push_str(&piece),
-        }
+        out.push_str(&theme::markup(&piece, token.class, token.modifiers, dark));
         at = to;
     }
     if let Some(rest) = text.get(at..) {

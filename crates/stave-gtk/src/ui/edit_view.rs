@@ -235,6 +235,7 @@ fn card_heard(output: EditCardOutput) -> WindowInput {
         EditCardOutput::OptionsOpen(setting) => EditingInput::CardOptionsOpen(setting),
         EditCardOutput::Link(target) => EditingInput::LinkClicked(target),
         EditCardOutput::Hover(target) => EditingInput::LinkHovered(target),
+        EditCardOutput::WantsLayout => EditingInput::CardWantsLayout,
     }
     .into()
 }
@@ -1094,6 +1095,23 @@ impl Window {
     /// The card says which setting's short list is open now.
     pub(in crate::ui) fn card_options_open(&mut self, setting: Option<String>) {
         self.editing.card_open_options = setting;
+    }
+
+    /// The card asked for a layout to bring its open short list into
+    /// sight (an edit script's `choices`, whose picture is taken from the
+    /// last layout): the window lays out its own tree at the size it has,
+    /// then tells the card, which scrolls its own scrolled window. The
+    /// picture's own layout, just before it is saved
+    /// (`ProjectInput::CaptureTick`), shows it scrolled.
+    pub(in crate::ui) fn lay_out_for_card(&self) {
+        let window = &self.widgets.window;
+        let (width, height) = (window.width(), window.height());
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        window.allocate(width, height, -1, None);
+        // Only fails once the card has shut down, with the window.
+        let _ = self.editing.card.sender().send(EditCardInput::LaidOut);
     }
 
     /// The menu near where it was asked for, inside the view (the cards

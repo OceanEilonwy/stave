@@ -1,0 +1,227 @@
+//! Stave's language server: the editor features of [`stave_ide`] and the
+//! checks of [`stave_app`] over the language server protocol, so `.stave`
+//! files can be edited in any editor (grammar, "Tooling and editors").
+//!
+//! The binary is `stave-lsp`. It takes no arguments and speaks the
+//! protocol over standard input and output; an editor starts it for files
+//! ending in `.stave`.
+//!
+//! # What it answers
+//!
+//! - **Documents.** `didOpen`, `didChange` (incremental) and `didClose`
+//!   keep the editor's text in [`stave_ide::Buffers`]; every change loads
+//!   the file's project again through the buffers' [`stave_ide::Overlay`],
+//!   so unsaved text is what is checked. A file's project is the nearest
+//!   folder at or above it whose files declare a `project` (so a library
+//!   folder inside a project, like `hardware/`, is part of it), or the
+//!   file's own folder.
+//! - **Diagnostics, in two tiers** (grammar, "Fast and slow diagnostics").
+//!   On every change the loader's diagnostics (syntax, imports, module
+//!   headers) from [`stave_ide::Analysis::diagnostics`] are published at
+//!   once. When typing has paused for [`Config::slow_delay`], the whole
+//!   pipeline ([`stave_app::open_with`]) runs in a background thread on a
+//!   snapshot of the buffers, and its diagnostics are published with the
+//!   fast ones. A change drops the slow diagnostics of the text before it
+//!   and starts the wait again; a check still running when its text
+//!   changes is not interrupted (z3 can't be stopped midway), but its
+//!   result is dropped and the next check starts when it ends.
+//! - **Navigation:** definition, references, hover, rename (with
+//!   `prepareRename`; a name declared outside the project is refused).
+//! - **Worked-out values.** The background check also works out the
+//!   design's values ([`stave_app::editor_check`]) in the project's
+//!   units: hover adds what a param, `let`, size or `between(...)` works
+//!   out to, and inlay hints put it after the text (`length: fit` shows
+//!   `= 844mm`, a size a joint adds to `= 844mm, cut 862mm`; a literal is
+//!   not repeated). The values are kept while typing, each shown only
+//!   while the text it was worked out for is unchanged at the same place;
+//!   when a check brings new ones, a client that offers
+//!   `workspace.inlayHint.refreshSupport` is asked to refresh its hints.
+//! - **Document symbols and folding** from the lossless tree, on every
+//!   change: items, and the blocks inside them (`place`, `roles`, `cut`,
+//!   ...); every block, comment run and import run over several lines
+//!   folds.
+//! - **Formatting:** `textDocument/formatting` lays the buffer out as
+//!   `stave fmt` does ([`stave_app::format::format_edits`]), as the
+//!   smallest edits; a file with syntax errors is refused with why, and a
+//!   standard library document is left alone.
+//! - **Quick fixes** (`textDocument/codeAction`, kind `quickfix`): each
+//!   slow diagnostic's fixes as workspace edits made by applying their
+//!   patches to the checked text (the first is preferred), and on every
+//!   keystroke the fast diagnostics' help lines that say exactly what to
+//!   write ([`stave_ide::Analysis::help_fixes`]: `add ")" at the end of
+//!   line 7`, `write ')' here`, an `as` name for an import).
+//! - **Semantic tokens** (full), with the legend below.
+//! - **Completion** and **signature help** from
+//!   [`stave_ide::Analysis::completions`] and
+//!   [`stave_ide::Analysis::signature_help`].
+//! - **Code lens:** "2 uses" above each part, assembly, piece of hardware,
+//!   component and kind, running the client command `stave.showUses`
+//!   (arguments: the document URI and the name's position), and "show in
+//!   3D" on what the 3D view can show, running `stave.showIn3d` (argument:
+//!   the item's name), and "show work card" on parts, running
+//!   `stave.showWorkCard` (argument: the part's name). Editors that don't
+//!   know the commands show the lenses as text.
+//! - **The standard library** is served read-only as
+//!   `stave-std:///joinery/dado.stave` documents, so go-to-definition
+//!   reaches `dado` and every built-in kind. An editor that can't open a
+//!   `stave-std:` URI itself asks for its text with the request
+//!   `stave/standardDocument`, params `{"uri": "stave-std:///…"}`, result
+//!   `{"text": "…"}`. Changes sent for such a document are ignored.
+//!
+//! Positions are converted at the edge, in [`line_index`]: UTF-16 code
+//! units unless the client offers UTF-8.
+//!
+//! # Semantic token legend
+//!
+//! Token types, in legend order (the index is the type's number):
+//!
+//! | # | Type | What | Stave's class |
+//! |---|---|---|---|
+//! | 0 | `keyword` | keywords, contextual words in place | `Keyword` |
+//! | 1 | `comment` | comments; doc comments carry `documentation` | `Comment`, `DocComment` |
+//! | 2 | `string` | strings | `Text` |
+//! | 3 | `number` | numbers, and a quantity's number (`18` of `18mm`) | `Number` |
+//! | 4 | `operator` | brackets, operators, separators | `Punctuation` |
+//! | 5 | `function` | fixed call heads, built-in functions (`flush`, `mid`) | `Function` |
+//! | 6 | `type` | type names (`Region`), components and kinds named as types | `Type` |
+//! | 7 | `namespace` | modules (`casework`, `hw`) | `Module`, `Item(Module)` |
+//! | 8 | `enumMember` | words of a closed list (`up`, `open`, `plywood`) | `EnumWord` |
+//! | 9 | `property` | fields, named arguments, members after `.` | `Field` |
+//! | 10 | `variable` | a name that resolves to nothing (with `unresolved`) | `Plain` |
+//! | 11 | `unit` | a quantity's unit (`mm` of `18mm`, `deg`) | `Unit` |
+//! | 12–29 | `component`, `kind`, `recipe`, `stock`, `profile`, `scene`, `param`, `let`, `region`, `part`, `joint`, `hardware`, `assembly`, `require`, `role`, `madePart`, `member`, `label` | a name of an item of that kind | `Item(..)` |
+//!
+//! Types 11 to 29 are Stave's own; an editor maps them to colours (the VS
+//! Code extension declares them with a standard super type: `unit` →
+//! `keyword` or `number`, the item kinds → `variable`, `component` and
+//! `kind` → `type`). Text with no colour (a name that means nothing and
+//! has no modifier, an unreadable character) is not sent.
+//!
+//! Token modifiers, in legend order (the bit is `1 << index`):
+//!
+//! | # | Modifier | What |
+//! |---|---|---|
+//! | 0 | `declaration` | the name an item is declared with |
+//! | 1 | `reference` | a name that means an item declared elsewhere (underlined in the GTK editor) |
+//! | 2 | `defaultLibrary` | a name of an item from the standard library |
+//! | 3 | `unresolved` | a word where a name goes that means nothing |
+//! | 4 | `solvedParam` | a `solved param`, declared or named |
+//! | 5 | `documentation` | a doc comment (`///`) |
+//!
+//! Every token is on one line: a comment over several lines is sent as one
+//! token per line.
+//!
+//! # Why `lsp-server` and `lsp-types`
+//!
+//! The protocol layer is rust-analyzer's: `lsp-server` (the message loop
+//! and transport, maintained in the rust-analyzer repository) and
+//! `lsp-types` (the protocol's types). Both are mature and widely used,
+//! synchronous, and need no async runtime: the analysis is synchronous and
+//! fast, and the one slow job (the background check) is a plain thread.
+//! `Connection::memory` gives the integration test an in-memory client.
+//! The async alternatives (`tower-lsp-server`) would add an executor for
+//! nothing Stave needs.
+//!
+//! # Simplifications
+//!
+//! - Names, types and placement (layers 2 and 3) come with the background
+//!   check rather than on every keystroke: today only the full pipeline
+//!   reports them. The editor's own queries are incremental (step 4 of
+//!   the plan); the checker's layers are not yet.
+//! - Every change loads the project again through the project's
+//!   [`stave_ide::AnalysisHost`], which parses and resolves again only
+//!   what the change touched (well under a millisecond for an edit on
+//!   the examples); requests are answered one at a time on the main loop,
+//!   so `$/cancelRequest` has nothing to cancel.
+//! - Files changed on disk by another program are read when the next
+//!   change to an open file of the project loads it again.
+//! - A fix that creates a file is not offered as a quick fix: it needs a
+//!   resource operation not every editor takes. The GTK app and `stave`
+//!   apply it.
+//! - Values need the design solved, so they come with the background
+//!   check, which solves the design a second time to read them off the
+//!   solver ([`stave_solve::values`]); no value is shown for an item
+//!   whose design does not solve.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+mod convert;
+mod legend;
+pub mod line_index;
+mod server;
+mod uri;
+
+use std::time::Duration;
+
+use lsp_server::{Connection, ProtocolError};
+
+pub use convert::{
+    DIAGNOSTIC_SOURCE, SHOW_IN_3D_COMMAND, SHOW_USES_COMMAND, SHOW_WORK_CARD_COMMAND,
+};
+pub use uri::{document_uri, uri_document};
+
+/// The request that gives a standard library document's text.
+pub const STANDARD_DOCUMENT_REQUEST: &str = "stave/standardDocument";
+
+/// How the server behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Config {
+    /// How long typing must pause before the slow checks run.
+    pub slow_delay: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            slow_delay: Duration::from_millis(400),
+        }
+    }
+}
+
+/// Why the server stopped with an error.
+#[derive(Debug, thiserror::Error)]
+pub enum ServerError {
+    /// The connection broke or the client broke the protocol.
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+    /// The client's `initialize` request could not be read.
+    #[error("can't read the initialize request: {0}")]
+    Initialize(String),
+    /// Reading standard input or writing standard output failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// The client went away while the server was sending to it.
+    #[error("the client disconnected")]
+    Disconnected,
+    /// The client sent `exit` without `shutdown` first; the protocol asks
+    /// the server to stop with an error exit code then.
+    #[error("the client exited without shutting the server down")]
+    ExitWithoutShutdown,
+}
+
+/// Serves one client on a connection until it exits: the `initialize`
+/// handshake, then requests and notifications. Returns when the client
+/// sends `exit` after `shutdown` or the connection closes.
+///
+/// # Errors
+///
+/// A broken connection or protocol, an unreadable `initialize`
+/// request, or `exit` without `shutdown`; see [`ServerError`].
+pub fn run(connection: &Connection, config: Config) -> Result<(), ServerError> {
+    server::run(connection, config)
+}
+
+/// Serves one client over standard input and output, as the `stave-lsp`
+/// binary does.
+///
+/// # Errors
+///
+/// As [`run`], and a failure of the input and output threads.
+pub fn serve_stdio(config: Config) -> Result<(), ServerError> {
+    let (connection, io_threads) = Connection::stdio();
+    run(&connection, config)?;
+    drop(connection);
+    io_threads.join()?;
+    Ok(())
+}

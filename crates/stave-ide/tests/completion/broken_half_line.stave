@@ -1,0 +1,12 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part side : oak {
+  length: 600mm
+  place {
+    orient(length: $0
+    flush(base.left)
+  }
+}
+// expect: up, down, left, right, front, back

@@ -61,8 +61,10 @@ use gtk::subclass::prelude::*;
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use sourceview5::prelude::*;
 use sourceview5::subclass::prelude::*;
-use stave_ide::{SymbolId, SymbolKind, TokenClass};
+use stave_ide::{SymbolId, TokenClass, TokenModifiers};
 use stave_lang::Severity;
+
+use super::theme::{self, Role, Slant, Weight};
 
 /// The CSS class the text view and its gutter's marks carry in the dark
 /// style: they read it when they draw.
@@ -310,15 +312,10 @@ fn write_style_schemes() -> Option<std::path::PathBuf> {
 
 /// The tags every buffer shares.
 struct Tags {
-    keyword: gtk::TextTag,
-    comment: gtk::TextTag,
-    doc: gtk::TextTag,
-    text: gtk::TextTag,
-    number: gtk::TextTag,
-    function: gtk::TextTag,
-    kind: gtk::TextTag,
-    module: gtk::TextTag,
-    word: gtk::TextTag,
+    /// One tag per kind of word, in the theme's order (`theme.rs`).
+    syntax: Vec<(Role, gtk::TextTag)>,
+    /// The underline of a name that means an item declared elsewhere.
+    reference: gtk::TextTag,
     error: gtk::TextTag,
     warning: gtk::TextTag,
     declared: gtk::TextTag,
@@ -344,18 +341,32 @@ impl Tags {
             table.add(&tag);
             tag
         };
+        // Tags made later win where they set the same property.
+        let used = tag("used");
+        let declared = tag("declared");
+        let syntax = Role::SYNTAX
+            .into_iter()
+            .map(|role| {
+                let made = tag(role.tag_name());
+                let look = role.look();
+                match look.slant {
+                    Slant::Upright => {}
+                    Slant::Italic => made.set_style(gtk::pango::Style::Italic),
+                }
+                match look.weight {
+                    Weight::Regular => {}
+                    Weight::Bold => made.set_weight(look.weight.pango()),
+                }
+                (role, made)
+            })
+            .collect();
+        let reference = tag("reference");
+        reference.set_underline(theme::REFERENCE_UNDERLINE);
         let tags = Tags {
-            used: tag("used"),
-            declared: tag("declared"),
-            keyword: tag("keyword"),
-            comment: tag("comment"),
-            doc: tag("doc"),
-            text: tag("text"),
-            number: tag("number"),
-            function: tag("function"),
-            kind: tag("type"),
-            module: tag("module"),
-            word: tag("word"),
+            syntax,
+            reference,
+            used,
+            declared,
             error: tag("error"),
             warning: tag("warning"),
             lens: tag("lens"),
@@ -368,10 +379,7 @@ impl Tags {
             conflict_base: tag("conflict-base"),
             conflict_links: tag("conflict-links"),
         };
-        tags.comment.set_style(gtk::pango::Style::Italic);
-        tags.doc.set_style(gtk::pango::Style::Italic);
-        tags.kind.set_weight(600);
-        tags.declared.set_weight(600);
+        tags.declared.set_weight(Weight::Bold.pango());
         tags.lens
             .set_pixels_above_lines(LINE_SPACING.saturating_add(LENS_HEIGHT));
         tags.conflict_links
@@ -390,72 +398,37 @@ impl Tags {
         ]
     }
 
+    /// The tag a word of this class is painted with; a character the
+    /// lexer couldn't read takes the error's underline.
     fn class(&self, class: TokenClass) -> Option<&gtk::TextTag> {
-        match class {
-            TokenClass::Keyword => Some(&self.keyword),
-            TokenClass::Comment => Some(&self.comment),
-            TokenClass::DocComment => Some(&self.doc),
-            TokenClass::Text => Some(&self.text),
-            TokenClass::Number => Some(&self.number),
-            TokenClass::Function => Some(&self.function),
-            TokenClass::Type => Some(&self.kind),
-            TokenClass::Module => Some(&self.module),
-            TokenClass::EnumWord => Some(&self.word),
-            TokenClass::Error => Some(&self.error),
-            TokenClass::Item(kind) => match kind {
-                SymbolKind::Component | SymbolKind::Kind => Some(&self.kind),
-                SymbolKind::Module => Some(&self.module),
-                SymbolKind::Recipe
-                | SymbolKind::Stock
-                | SymbolKind::Profile
-                | SymbolKind::Scene
-                | SymbolKind::Param
-                | SymbolKind::Let
-                | SymbolKind::Region
-                | SymbolKind::Part
-                | SymbolKind::Joint
-                | SymbolKind::Hardware
-                | SymbolKind::Assembly
-                | SymbolKind::Require
-                | SymbolKind::Role
-                | SymbolKind::MadePart
-                | SymbolKind::Member
-                | SymbolKind::Label => None,
-            },
-            TokenClass::Field | TokenClass::Punctuation | TokenClass::Plain => None,
+        match Role::of_token(class)? {
+            Role::Error => Some(&self.error),
+            role => self.role(role),
         }
     }
 
-    fn syntax(&self) -> [&gtk::TextTag; 9] {
-        [
-            &self.keyword,
-            &self.comment,
-            &self.doc,
-            &self.text,
-            &self.number,
-            &self.function,
-            &self.kind,
-            &self.module,
-            &self.word,
-        ]
+    /// The tag of a role.
+    fn role(&self, role: Role) -> Option<&gtk::TextTag> {
+        self.syntax
+            .iter()
+            .find(|(each, _)| *each == role)
+            .map(|(_, tag)| tag)
     }
 
-    /// The design's colours (FilesMode.dc.html), and lighter ones for the
-    /// dark style.
+    /// Every tag [`Editor::paint`] sets, to clear before painting again.
+    fn syntax(&self) -> impl Iterator<Item = &gtk::TextTag> {
+        self.syntax
+            .iter()
+            .map(|(_, tag)| tag)
+            .chain(std::iter::once(&self.reference))
+    }
+
+    /// The theme's colours (`theme.rs`) for the light or dark style.
     fn colour(&self, dark: bool) {
         let rgba = |hex: &str| gtk::gdk::RGBA::parse(hex).unwrap_or(gtk::gdk::RGBA::BLACK);
-        let set = |tag: &gtk::TextTag, light: &str, darker: &str| {
-            tag.set_foreground_rgba(Some(&rgba(if dark { darker } else { light })));
-        };
-        set(&self.keyword, "#9141ac", "#dc8add");
-        set(&self.comment, "#6f6e73", "#9a9996");
-        set(&self.doc, "#6f6e73", "#9a9996");
-        set(&self.text, "#1b7a4c", "#8ff0a4");
-        set(&self.number, "#c64600", "#ffa348");
-        set(&self.function, "#1c71d8", "#78aeed");
-        set(&self.kind, "#1a5fb4", "#99c1f1");
-        set(&self.module, "#3d3846", "#deddda");
-        set(&self.word, "#1c71d8", "#78aeed");
+        for (role, tag) in &self.syntax {
+            tag.set_foreground_rgba(Some(&rgba(role.look().colour(dark))));
+        }
         self.declared
             .set_background_rgba(Some(&rgba(if dark { "#1e3a5f" } else { "#d3e4f9" })));
         self.used
@@ -694,13 +667,11 @@ fn line_problem(view: &gtk::TextView, line: &gtk::TextIter) -> Option<Severity> 
 /// libadwaita's error and warning colours (`@error_color`,
 /// `@warning_color`) for the light or dark style.
 fn problem_colour(severity: Severity, dark: bool) -> gtk::gdk::RGBA {
-    let hex = match (severity, dark) {
-        (Severity::Error, false) => "#c01c28",
-        (Severity::Error, true) => "#ff7b63",
-        (Severity::Warning | Severity::Note, false) => "#9c6e03",
-        (Severity::Warning | Severity::Note, true) => "#f8e45c",
+    let role = match severity {
+        Severity::Error => Role::Error,
+        Severity::Warning | Severity::Note => Role::Warning,
     };
-    gtk::gdk::RGBA::parse(hex).unwrap_or(gtk::gdk::RGBA::RED)
+    gtk::gdk::RGBA::parse(role.look().colour(dark)).unwrap_or(gtk::gdk::RGBA::RED)
 }
 
 /// Draws a wave under every visible run of `tag`, line by line, in
@@ -1212,12 +1183,27 @@ pub enum SearchEvent {
 }
 
 /// Which link of a lens was clicked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LensClick {
     /// "2 uses": list the declaration's uses.
     Uses(SymbolId),
     /// "show in 3D": select it in the 3D view.
     Show(SymbolId),
+    /// A link above a conflict ("Keep yours", ...): settle it in the
+    /// buffer showing ([`Editor::settle_conflict`]).
+    Settle(ConflictSettle),
+}
+
+/// What a conflict's link asks: settle conflict number `index` (from 0)
+/// by `resolution`, if it still reads `original`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictSettle {
+    /// Which conflict of the text, from 0.
+    pub index: usize,
+    /// How to settle it.
+    pub resolution: stave_lang::conflict::Resolution,
+    /// The conflict's text when the link was made.
+    pub original: String,
 }
 
 /// Which click a lens's link makes, given its declaration.
@@ -1245,14 +1231,12 @@ impl EscapeProbe {
     }
 }
 
-/// A link above a conflict that settles conflict number `index` (from 0)
-/// of `buffer` by `resolution`, if the conflict still reads `original`.
+/// A link above a conflict that asks, on the lens channel, to settle it
+/// ([`LensClick::Settle`]): its handlers only send.
 fn conflict_link(
-    buffer: &gtk::TextBuffer,
-    index: usize,
+    lens: &relm4::Sender<LensClick>,
     label: &str,
-    resolution: &stave_lang::conflict::Resolution,
-    original: &str,
+    settle: ConflictSettle,
 ) -> gtk::Button {
     let button = super::style::as_link(
         gtk::Button::builder()
@@ -1270,20 +1254,14 @@ fn conflict_link(
     mouse.connect_pressed(|gesture, _, _, _| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
-    let settle = {
-        let buffer = buffer.downgrade();
-        let resolution = resolution.clone();
-        let original = original.to_owned();
-        move || {
-            if let Some(buffer) = buffer.upgrade() {
-                settle_conflict(&buffer, index, &resolution, &original);
-            }
-        }
+    let send = {
+        let lens = lens.clone();
+        move || lens.emit(LensClick::Settle(settle.clone()))
     };
-    let from_mouse = settle.clone();
+    let from_mouse = send.clone();
     mouse.connect_released(move |_, _, _, _| from_mouse());
     button.add_controller(mouse);
-    button.connect_clicked(move |_| settle());
+    button.connect_clicked(move |_| send());
     button
 }
 
@@ -1373,6 +1351,19 @@ struct LensSlot {
 }
 
 impl Editor {
+    /// A conflict's link was clicked ([`LensClick::Settle`]): settles it
+    /// in the buffer showing as one undoable change, if it still reads as
+    /// it did when the link was made. `false` when it doesn't, and
+    /// nothing changes.
+    pub fn settle_conflict(&self, settle: &ConflictSettle) -> bool {
+        settle_conflict(
+            &self.view.buffer(),
+            settle.index,
+            &settle.resolution,
+            &settle.original,
+        )
+    }
+
     /// An empty editor whose buffers share `table`; a lens's links send
     /// their clicks on `lens`, and the search sends what it hears on
     /// `search_events`.
@@ -1548,25 +1539,29 @@ impl Editor {
         let _ = self.search.sender().send(input);
     }
 
-    /// Colours a buffer by its tokens, and tints its conflicts with their
-    /// links above them ([`Editor::mark_conflicts`]).
+    /// Colours a buffer by its tokens, underlines the names that mean an
+    /// item declared elsewhere, and tints its conflicts with their links
+    /// above them ([`Editor::mark_conflicts`]).
     pub fn paint(
         &mut self,
         buffer: &gtk::TextBuffer,
         lines: &LineStarts,
-        runs: &[(Run, TokenClass)],
+        runs: &[(Run, TokenClass, TokenModifiers)],
     ) {
         let (start, end) = buffer.bounds();
         for tag in self.tags.syntax() {
             buffer.remove_tag(tag, &start, &end);
         }
-        for (run, class) in runs {
-            if let Some(tag) = self.tags.class(*class) {
-                buffer.apply_tag(
-                    tag,
-                    &iter_at(buffer, lines, run.start),
-                    &iter_at(buffer, lines, run.end),
-                );
+        for (run, class, modifiers) in runs {
+            let class_tag = self.tags.class(*class);
+            let underline = theme::is_underlined(*modifiers).then_some(&self.tags.reference);
+            if class_tag.is_none() && underline.is_none() {
+                continue;
+            }
+            let from = iter_at(buffer, lines, run.start);
+            let to = iter_at(buffer, lines, run.end);
+            for tag in class_tag.into_iter().chain(underline) {
+                buffer.apply_tag(tag, &from, &to);
             }
         }
         self.mark_conflicts(buffer);
@@ -1643,11 +1638,13 @@ impl Editor {
                     row.root.append(&dot);
                 }
                 row.root.append(&conflict_link(
-                    buffer,
-                    file_conflict.index,
+                    &self.lens,
                     &action.label,
-                    &action.resolution,
-                    &original,
+                    ConflictSettle {
+                        index: file_conflict.index,
+                        resolution: action.resolution.clone(),
+                        original: original.clone(),
+                    },
                 ));
             }
             row.line = i32::try_from(file_conflict.lines.start().saturating_sub(1)).unwrap_or(0);
@@ -2318,15 +2315,26 @@ mod tests {
     }
 
     /// A conflict's sides are tinted, a row of links sits above its
-    /// opening line, and a link replaces the conflict in the buffer as one
-    /// undoable change. A link left from before the conflict changed
-    /// settles nothing.
+    /// opening line, and a link asks (on the lens channel) to replace the
+    /// conflict in the buffer, which the editor does as one undoable
+    /// change when its owner hands the click back. A link left from
+    /// before the conflict changed settles nothing.
     fn conflict_links_settle() {
-        let mut editor = Editor::new(
-            &gtk::TextTagTable::new(),
-            relm4::channel().0,
-            relm4::channel().0,
-        );
+        let (lens, clicks) = recorder::<LensClick>();
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), lens, relm4::channel().0);
+        // What the Files component does with each click it hears.
+        let hand_back = |editor: &Editor| {
+            let mut settled = Vec::new();
+            settle();
+            let heard: Vec<LensClick> = clicks.borrow_mut().drain(..).collect();
+            for click in heard {
+                match click {
+                    LensClick::Settle(settle) => settled.push(editor.settle_conflict(&settle)),
+                    LensClick::Uses(_) | LensClick::Show(_) => {}
+                }
+            }
+            settled
+        };
         let text = "stave 1\n\n<<<<<<< conflict 1 of 1\n+++++++ yours\nlet a = 1\n------- before\n+++++++ theirs\nlet b = 2\n>>>>>>> conflict 1 of 1 ends\n";
         let buffer = editor.new_buffer(text);
         editor.show_buffer(&buffer, true);
@@ -2365,6 +2373,8 @@ mod tests {
         }
         let changed = whole_text(&buffer);
         stale.emit_clicked();
+        assert_eq!(whole_text(&buffer), changed, "the link only asks");
+        assert_eq!(hand_back(&editor), [false]);
         assert_eq!(whole_text(&buffer), changed);
 
         // Painted again, the new row's link settles the conflict, as one
@@ -2372,6 +2382,8 @@ mod tests {
         editor.paint(&buffer, &LineStarts::new(&changed), &[]);
         let row = editor.conflict_rows.first().expect("a row of links");
         link(row, "Keep both").emit_clicked();
+        assert_eq!(whole_text(&buffer), changed, "the link only asks");
+        assert_eq!(hand_back(&editor), [true]);
         assert_eq!(
             whole_text(&buffer),
             "stave 1\n\nlet c = 3\nlet a = 1\nlet b = 2\n"

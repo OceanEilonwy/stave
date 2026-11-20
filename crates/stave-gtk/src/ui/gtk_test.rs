@@ -35,10 +35,13 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             // test exercises an input method, so none is listened to.
             if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_im_module(Some("gtk-im-context-simple"));
-                // The font and resolution `tools/window-shot` lays the
-                // window out with (GNOME's default), so tests that measure
-                // text read the same on a desktop and on a private
-                // Broadway display, which has no desktop settings.
+            }
+            // One font at 96 dpi, whatever the display's settings: the one
+            // `--window-screenshot` uses (`settle_for_screenshot`), so tests
+            // that lay widgets out at a width in sp, or measure text, read
+            // the same on any desktop and on the private Broadway display
+            // the tests run on.
+            if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_font_name(Some("Adwaita Sans 11"));
                 settings.set_gtk_xft_dpi(96 * 1024);
             }

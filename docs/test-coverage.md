@@ -556,7 +556,8 @@ pinned down the same way.
 | `stave fmt` aligns the word `param` across prefixes in a run of params | `lang/param_kinds::the_word_param_lines_up_across_prefixes`, `lang/param_kinds::private_and_a_kind_together_make_the_longest_prefix`, `lang/param_kinds::param_alignment_is_kept_inside_a_component_and_a_run_ends_at_a_blank_line`, `lang/param_kinds::comments_after_aligned_params_stay_put` | covered |
 | Formatting is idempotent and keeps the tree; it refuses files with errors | `lang/corpus::formatting_is_idempotent_and_keeps_the_meaning`, `lang/fuzz::mutated_sources_never_panic_hang_or_lose_text`, `lang/format::refuses_files_with_errors`, `cli/cli::fmt_skips_files_with_errors` | covered |
 | Every file of the repository is formatted | `lang/corpus::every_corpus_file_is_already_formatted`, `cli/cli::the_whole_repository_is_formatted` | covered |
-| Fast and slow tiers, incremental queries, the language server and its features | — | pending: stave-lsp is a later step |
+| The language server: open, change and close onto buffers, fast and slow diagnostics, definition, references, hover, rename, semantic tokens, completion, signature help, code lenses, standard library documents | `lsp/server::an_editor_session_over_the_protocol`, `lsp/line_index::non_ascii_columns_count_code_units`, `lsp/line_index::changes_apply_in_order_in_code_units`, `lsp/legend::the_legend_is_fixed`, `lsp/legend::tokens_are_relative_and_split_by_line`, `lsp/uri::files_with_spaces_and_accents_round_trip`, `lsp/server::a_library_folder_inside_a_project_belongs_to_it`, `lsp/server::standard_documents_are_served_read_only`, `lsp/server::a_check_started_before_a_project_closed_is_dropped_when_it_reopens`, `lsp/server::a_change_to_a_document_never_opened_is_ignored`, `lsp/server::exiting_without_shutdown_is_an_error`, `lsp/convert::a_diagnostic_carries_its_help_notes_and_other_labels` | covered |
+| Incremental queries | — | pending: plan step 4 |
 
 ### Smart edits
 

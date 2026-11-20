@@ -1,0 +1,15 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+kind wedge : joint {
+  /// The way the wedge is driven.
+  param toward : Direction = up
+  param depth : Length = 9mm
+}
+
+part side : oak { length: 600mm }
+part shelf : oak { length: 400mm }
+
+joint wedged : wedge(shelf, side, depth: 6mm, toward: $0
+// expect: up, down, left, right, front, back

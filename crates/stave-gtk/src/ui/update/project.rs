@@ -29,6 +29,9 @@ pub(in crate::ui) enum ProjectInput {
     OpenNewProject(PathBuf),
     /// A project just made: its envelope lit as the first space to click.
     Welcome,
+    /// The application's recent projects changed (or the window just
+    /// opened): Open Recent lists these folders, newest first.
+    ShowRecent(Vec<PathBuf>),
     /// The Open action: ask for a project folder.
     ChooseFolder,
     /// A folder chosen, dropped on the window or picked from Open Recent.
@@ -340,6 +343,7 @@ impl Window {
                 self.welcome_new_project();
             }
             ProjectInput::Welcome => self.welcome_new_project(),
+            ProjectInput::ShowRecent(folders) => self.widgets.header.show_recent(folders),
             ProjectInput::ChooseFolder => self.choose_folder(),
             ProjectInput::GoToFolder(path) => self.go_to_folder(path),
             ProjectInput::OpenHere(folder) => {
@@ -1186,8 +1190,7 @@ mod tests {
             };
             let builder = Window::builder();
             let root = builder.widget().clone();
-            let widgets =
-                build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+            let widgets = build_widgets(&root, &application, &folder, &options).unwrap();
             let removed = Rc::new(Cell::new(false));
             let heard = Rc::clone(&removed);
             let removed_handler = application.connect_window_removed(move |_, _| heard.set(true));

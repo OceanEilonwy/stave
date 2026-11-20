@@ -1,5 +1,6 @@
 //! "Show in Stave": asks the Stave window, if it is running, to open a
-//! project folder and show a patch on it as a ghost (never written).
+//! project folder and show a patch on it as a ghost (never written); and
+//! whether the window is running at all.
 //!
 //! The window is a GApplication, which answers
 //! `org.freedesktop.Application.ActivateAction` at its object path on the
@@ -83,12 +84,7 @@ pub async fn show_in_application(
         .await
         .map_err(LinkError::NoSessionBus)?;
     let bus_name = BusName::try_from(name).map_err(zbus::Error::from)?;
-    let bus = DBusProxy::new(&connection).await?;
-    let owned = bus
-        .name_has_owner(bus_name.clone())
-        .await
-        .map_err(zbus::Error::from)?;
-    if !owned {
+    if !has_owner(&connection, &bus_name).await? {
         return Ok(Shown::NotRunning);
     }
     let parameter = StructureBuilder::new()
@@ -126,6 +122,41 @@ pub async fn show_in_application(
     }
 }
 
+/// Whether the Stave window is running: whether its name on the session
+/// bus has an owner. A desktop with no session bus has no window running.
+///
+/// # Errors
+///
+/// [`LinkError::Bus`] when the bus couldn't be asked.
+pub async fn stave_is_running() -> Result<bool, LinkError> {
+    application_is_running(APPLICATION_ID).await
+}
+
+/// [`stave_is_running`] for the application with this bus name: another
+/// build of Stave, or a test's stand-in.
+///
+/// # Errors
+///
+/// As [`stave_is_running`].
+pub async fn application_is_running(name: &str) -> Result<bool, LinkError> {
+    let connection = match Connection::session().await {
+        Ok(connection) => connection,
+        // No session bus: nothing can be running on it.
+        Err(_) => return Ok(false),
+    };
+    let bus_name = BusName::try_from(name).map_err(zbus::Error::from)?;
+    has_owner(&connection, &bus_name).await
+}
+
+/// Whether `name` has an owner on the bus `connection` talks to.
+async fn has_owner(connection: &Connection, name: &BusName<'_>) -> Result<bool, LinkError> {
+    let bus = DBusProxy::new(connection).await?;
+    Ok(bus
+        .name_has_owner(name.clone())
+        .await
+        .map_err(zbus::Error::from)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +178,14 @@ mod tests {
             }
             Err(error) => panic!("{error}"),
         }
+    }
+
+    #[test]
+    fn a_name_nobody_owns_is_not_running() {
+        let running = pollster::block_on(application_is_running(
+            "io.github.OceanEilonwy.StaveTest.NobodyOwnsThis",
+        ));
+        assert!(matches!(running, Ok(false)), "{running:?}");
     }
 
     #[test]
