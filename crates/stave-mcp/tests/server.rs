@@ -20,15 +20,21 @@ async fn initialize_lists_tools() {
     assert_eq!(
         names,
         [
+            "apply_suggestion",
             "check",
             "describe",
+            "discard_suggestion",
             "fixes_for",
             "grammar",
             "list_projects",
+            "list_suggestions",
+            "list_versions",
             "new_project",
             "open_project",
             "std_lookup",
+            "suggest",
             "try_patch",
+            "undo",
         ]
     );
 }

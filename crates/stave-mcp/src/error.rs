@@ -112,4 +112,70 @@ pub enum McpError {
     /// Where Stave keeps its settings couldn't be worked out.
     #[error("Stave can't find your home folder: HOME is not set.")]
     NoHome,
+    /// A tool that works on the project's versions was called while
+    /// they are off.
+    #[error(
+        "Versions are off for this project. Call open_project again with start_versions: true to turn them on."
+    )]
+    VersionsOff,
+    /// The project folder sits inside a bigger repository, so versions
+    /// can't be kept for it.
+    #[error(
+        "'{}' is inside another project's history (at '{}'), so Stave can't keep versions of it there. Copy the project to a folder of its own, outside '{}', and open the copy.",
+        .folder.display(), .repository_root.display(), .repository_root.display()
+    )]
+    Nested {
+        /// The project folder.
+        folder: PathBuf,
+        /// The root of the repository around it.
+        repository_root: PathBuf,
+    },
+    /// The project's versions couldn't do what was asked.
+    #[error("{}", sentence(&.0.to_string()))]
+    History(#[from] stave_history::HistoryError),
+    /// The merge policy is `off`: agents suggest, the person applies.
+    #[error("Only the person using Stave can apply suggestions in this project.")]
+    ApplyNotAllowed,
+    /// The merge policy is `off`, so an agent can't make a new project.
+    #[error(
+        "Only the person using Stave can make new projects here: agents may only suggest changes."
+    )]
+    NewProjectNotAllowed,
+    /// A patch to suggest doesn't fit, so nothing was recorded.
+    #[error("The patch doesn't fit, so nothing was suggested. What Stave found:\n{0}")]
+    SuggestionRefused(String),
+    /// A patch to suggest fits but leaves the design with errors, so it
+    /// could never be applied; nothing was recorded.
+    #[error(
+        "The patch fits, but the design doesn't check clean afterwards, so it couldn't be applied and nothing was suggested. Fix these errors first, in the same patch or an earlier suggestion:\n{0}"
+    )]
+    SuggestionNotClean(String),
+    /// A suggestion, tried on the project as it is now, leaves errors.
+    #[error(
+        "The suggestion doesn't check clean on the project as it is now, so it wasn't applied. What Stave found:\n{0}"
+    )]
+    NotClean(String),
+    /// A suggestion's patches no longer fit main, and moving its line
+    /// onto main clashed.
+    #[error(
+        "The suggestion's patches no longer fit the project as it is now, and moving it onto the project clashes in {}. Resolve the clashes in the suggestion, or discard it and suggest the change again.",
+        .files.join(", ")
+    )]
+    Clashes {
+        /// The files with clashes.
+        files: Vec<String>,
+    },
+}
+
+/// `text` as a sentence: a capital first letter and a full stop.
+fn sentence(text: &str) -> String {
+    let mut letters = text.chars();
+    let mut sentence: String = letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default();
+    if !sentence.ends_with(['.', '!', '?']) {
+        sentence.push('.');
+    }
+    sentence
 }
