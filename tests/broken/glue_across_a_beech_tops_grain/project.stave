@@ -1,0 +1,33 @@
+// expect: warning[grain] glued: top is glued across its grain to strip over 70mm, and wood held that wide splits as it moves with the seasons
+stave 1
+
+// A strip glued across the end of a beech top (audit finding 89). Beech
+// moves more with the seasons than oak, so its stock allows only 60mm to
+// be held fast across the grain (max_held_width), and 70mm of glue across
+// it is too much, though it would pass at the 80mm a stock allows when it
+// doesn't say.
+
+project "Glue across a beech top's grain" {
+  units: mm
+}
+
+stock beech { species: beech, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm, max_held_width: 60mm }
+
+part top : beech {
+  length: 400mm
+  width:  70mm
+  place { ground }
+}
+
+part strip : beech {
+  length: 70mm
+  width:  40mm
+  place {
+    orient(length: back, width: right)
+    against(top.bottom)
+    flush(top.left, inset: 20mm)
+    flush(top.front)
+  }
+}
+
+joint glued : glued_face(strip, into: top)

@@ -174,6 +174,47 @@ impl Solver<'_> {
         })
     }
 
+    /// A `solid` stock's `max_held_width:`, or its 80mm default: more than
+    /// 0mm, reported once however often it is read. `None` for a sheet or
+    /// a dowel, which don't move across a grain (grammar, "Grain and wood
+    /// movement").
+    pub(crate) fn max_held_width(&mut self, stock: StockId) -> Solved<Option<Length>> {
+        let def = self.sound(self.model.defs.sound_stock(stock), "a stock's declaration")?;
+        if def.form != StockForm::Solid {
+            return Ok(None);
+        }
+        let Some(expr) = &def.max_held_width else {
+            return Ok(Some(Length::from_nm(
+                stave_schema::fields::DEFAULT_MAX_HELD_WIDTH_NM,
+            )));
+        };
+        let Some(ctx) = self.module_ctx(DefId::Stock(stock)) else {
+            return Err(Fault::Internal("the file an item is declared in").into());
+        };
+        let env = Env {
+            ctx,
+            file: def.decl.file,
+            kind: None,
+            array: None,
+        };
+        let name = def.decl.name.clone();
+        let value = self.eval_length(expr, &env)?;
+        if value <= ExactLength::ZERO {
+            return Err(self.out_of_range_once(
+                env.file,
+                expr.span,
+                format!(
+                    "'max_held_width' must be more than 0mm, found {}",
+                    format_length(value)
+                ),
+                &format!(
+                    "write the widest a board of {name} may be held fast across its grain, more than 0mm, such as 80mm"
+                ),
+            ));
+        }
+        Ok(Some(round_length(value)?))
+    }
+
     /// The rough allowance a part of `stock` is cut with along its grain:
     /// the stock's `rough_length`, zero for a sheet or a dowel.
     pub(crate) fn rough_length_of(&mut self, stock: StockId) -> Solved<ExactLength> {
