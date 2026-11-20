@@ -56,6 +56,7 @@ mod style;
 mod tab_strip;
 mod tree;
 mod update;
+mod versions;
 mod view_layout;
 mod view_tools;
 mod viewport;
@@ -610,6 +611,8 @@ pub(in crate::ui) struct Widgets {
     files: Files,
     /// The Output panel: what the checks said.
     output: output::OutputPanel,
+    /// The Versions panel: suggestions and the project's versions.
+    versions: versions::VersionsPanel,
     /// The controls floating on the 3D view, and their docking.
     floats: floating::Floats,
     /// Where the window's own leaves (header, view tools, dock, floating
@@ -647,6 +650,8 @@ pub(in crate::ui) struct Window {
     pins: Pins,
     /// Kept for as long as the window: dropping it stops watching.
     watcher: Option<Watcher>,
+    /// The project's versions: saves merged into them, catching up.
+    versions: versions::WindowVersions,
     /// Editing in the 3D view: the menu, the card and the ghost.
     editing: edit_view::EditView,
     /// What each frame draws selected and how each node looks, kept
@@ -682,6 +687,9 @@ pub(in crate::ui) enum WindowInput {
     Editing(update::editing::EditingInput),
     /// The 3D view: camera, drawing, pulling apart.
     Rendering(update::rendering::RenderingInput),
+    /// The project's versions: saving into them, catching up, the
+    /// Versions panel.
+    Versions(versions::VersionsInput),
 }
 
 /// What a project window tells the application.
@@ -825,6 +833,7 @@ impl Component for Window {
             },
             pins: Pins::default(),
             watcher: None,
+            versions: versions::WindowVersions::default(),
             editing: edit_view::EditView::new(sender.input_sender()),
             frame_lists: frame_lists::FrameLists::default(),
             sender,
@@ -837,6 +846,7 @@ impl Component for Window {
         update::selection::wire(&mut window);
         update::rendering::wire(&mut window);
         update::editing::wire(&mut window);
+        versions::wire(&window);
         if let Some(showcase) = options.edit_fixture {
             // The fixture's card takes the Edit panel's place of the
             // session's own; the window keeps what it shows.
@@ -856,6 +866,7 @@ impl Component for Window {
             window.ask_new_project();
         }
         window.watch();
+        window.versions_opened();
         // The keyboard starts in the 3D view, not in the first focusable
         // widget GTK finds, which can be a problem's selectable `stave
         // check` text in the card (it would show a text cursor).
@@ -887,6 +898,7 @@ impl Component for Window {
             WindowInput::Project(message) => self.update_project(message),
             WindowInput::Editing(message) => self.update_editing(message),
             WindowInput::Rendering(message) => self.update_rendering(message),
+            WindowInput::Versions(message) => self.update_versions(message),
         }
         // The selection, the change in progress and whether the text
         // reads change only here.
@@ -1328,6 +1340,7 @@ pub(in crate::ui) fn build_widgets(
     let file_list = panels::FilesList::new(&to_window, update::selection::file_list_said);
     let problems = panels::ProblemsPanel::new(&to_window, update::selection::problems_said);
     let output = output::OutputPanel::new();
+    let versions = versions::VersionsPanel::new(&to_window, versions::panel_said);
 
     // The 3D View panel: the view, with the problems pinned on the model
     // (they come later) over it.
@@ -1349,6 +1362,7 @@ pub(in crate::ui) fn build_widgets(
             (workbench::PanelId::Code, files.root.clone().upcast()),
             (workbench::PanelId::Problems, problems.root.clone().upcast()),
             (workbench::PanelId::Output, output.root.clone().upcast()),
+            (workbench::PanelId::Versions, versions.root.clone().upcast()),
         ],
         match &options.layout {
             Some(path) => workbench::Remember::From(path.clone()),
@@ -1501,6 +1515,7 @@ pub(in crate::ui) fn build_widgets(
         problem_card,
         files,
         output,
+        versions,
         floats,
         leaf_outputs: Some(leaf_outputs),
     })

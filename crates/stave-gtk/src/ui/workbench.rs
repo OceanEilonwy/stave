@@ -1,8 +1,8 @@
 //! The docked window (docs/superpowers/specs/2026-11-18-docked-window-design.md):
 //! a libpanel dock whose every part is a panel: the 3D view (the Model),
-//! Parts, Files, Details, Edit, Code, Problems and Output. Each can be
-//! dragged to an edge, into the centre (which splits into columns and
-//! rows), or into another panel's tabs; closed (all but the 3D view,
+//! Parts, Files, Details, Edit, Code, Problems, Output and Versions. Each
+//! can be dragged to an edge, into the centre (which splits into columns
+//! and rows), or into another panel's tabs; closed (all but the 3D view,
 //! which has no ×); and brought back.
 //!
 //! A first launch shows only the 3D view, Parts on the left and Problems
@@ -13,9 +13,9 @@
 //! Files on the left; the Model in the centre with the Code panel as the
 //! next tab of the same frame, its open files shown as tabs beside Model
 //! (`tab_strip`); Details with the Edit panel as tabs on the right; and
-//! Problems and Output along the bottom. The status bar's "Problems N"
-//! and "Output" buttons open the bottom edge on their panel, and its
-//! toggles show or hide each edge. A narrow window folds the side edges
+//! Problems, Output and Versions along the bottom. The status bar's
+//! "Problems N" and "Output" buttons open the bottom edge on their panel,
+//! and its toggles show or hide each edge. A narrow window folds the side edges
 //! away ([`Workbench::narrow_edges`]) and unfolds them as it widens.
 //!
 //! Where the panels are is remembered per user in `~/.config/stave/layout`
@@ -76,6 +76,8 @@ pub enum PanelId {
     Edit,
     /// What the checks said, one line each.
     Output,
+    /// Suggestions from AI apps and the project's versions.
+    Versions,
 }
 
 impl PanelId {
@@ -83,7 +85,7 @@ impl PanelId {
     pub const FIRST: [PanelId; 3] = [PanelId::View, PanelId::Parts, PanelId::Problems];
 
     /// Every panel, in the order the menu lists them.
-    pub const ALL: [PanelId; 8] = [
+    pub const ALL: [PanelId; 9] = [
         PanelId::View,
         PanelId::Parts,
         PanelId::Files,
@@ -92,6 +94,7 @@ impl PanelId {
         PanelId::Code,
         PanelId::Problems,
         PanelId::Output,
+        PanelId::Versions,
     ];
 
     /// The word the layout file and the actions use.
@@ -105,6 +108,7 @@ impl PanelId {
             PanelId::Problems => "problems",
             PanelId::Edit => "edit",
             PanelId::Output => "output",
+            PanelId::Versions => "versions",
         }
     }
 
@@ -124,6 +128,7 @@ impl PanelId {
             PanelId::Problems => tr_noop("Problems"),
             PanelId::Edit => tr_noop("Edit"),
             PanelId::Output => tr_noop("Output"),
+            PanelId::Versions => tr_noop("Versions"),
         })
     }
 
@@ -138,6 +143,7 @@ impl PanelId {
             PanelId::Code => "text-x-generic-symbolic",
             PanelId::Problems => "dialog-warning-symbolic",
             PanelId::Edit => "document-edit-symbolic",
+            PanelId::Versions => "document-open-recent-symbolic",
         }
     }
 }
@@ -283,8 +289,8 @@ impl Default for Layout {
 impl Layout {
     /// The compact board, every panel's home: Parts above Files on the
     /// left, in two frames; the Model in the centre with Code as the next
-    /// tab of its frame; Details and Edit as tabs on the right; Problems
-    /// and Output at the bottom, which is hidden; the tool groups in
+    /// tab of its frame; Details and Edit as tabs on the right; Problems,
+    /// Output and Versions at the bottom, which is hidden; the tool groups in
     /// their usual spots. A closed panel with no place of its own opens
     /// where this puts it.
     pub fn board() -> Layout {
@@ -298,6 +304,7 @@ impl Layout {
                 (PanelId::Edit, Place::new(Side::End, 0, 0, 1)),
                 (PanelId::Problems, Place::new(Side::Bottom, 0, 0, 0)),
                 (PanelId::Output, Place::new(Side::Bottom, 0, 0, 1)),
+                (PanelId::Versions, Place::new(Side::Bottom, 0, 0, 2)),
             ]),
             revealed: BTreeMap::from([
                 (Side::Start, true),
@@ -1583,7 +1590,7 @@ mod tests {
                 .frames(Side::Bottom)
                 .into_values()
                 .collect::<Vec<_>>(),
-            vec![vec![PanelId::Problems, PanelId::Output]]
+            vec![vec![PanelId::Problems, PanelId::Output, PanelId::Versions]]
         );
         assert_eq!(layout.revealed.get(&Side::Start), Some(&true));
         assert_eq!(layout.revealed.get(&Side::End), Some(&true));
@@ -1622,13 +1629,19 @@ show bottom true
             layout.frames(Side::Centre),
             BTreeMap::from([((0, 0), vec![PanelId::View])])
         );
-        // Output, newer than the file, joins the bottom where it shows.
+        // Output and Versions, newer than the file, join the bottom where
+        // it shows.
         assert_eq!(
             layout
                 .frames(Side::Bottom)
                 .into_values()
                 .collect::<Vec<_>>(),
-            vec![vec![PanelId::Code, PanelId::Problems, PanelId::Output]]
+            vec![vec![
+                PanelId::Code,
+                PanelId::Problems,
+                PanelId::Output,
+                PanelId::Versions
+            ]]
         );
         assert!(layout.frames(Side::End).is_empty());
         assert_eq!(layout.revealed.get(&Side::End), Some(&false));

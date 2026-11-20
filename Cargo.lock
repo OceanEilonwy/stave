@@ -4158,6 +4158,7 @@ dependencies = [
  "notify",
  "stave-check",
  "stave-geom",
+ "stave-history",
  "stave-ide",
  "stave-lang",
  "stave-model",
@@ -4166,6 +4167,7 @@ dependencies = [
  "stave-schema",
  "stave-smt",
  "stave-solve",
+ "tempfile",
  "thiserror",
 ]
 
