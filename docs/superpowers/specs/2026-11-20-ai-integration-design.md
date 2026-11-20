@@ -89,8 +89,8 @@ only. Chosen: **A and B**. A is the same viewer everywhere; B fits how the
 user already works. C is a fallback only (see `render_view`).
 
 **Revisions.** (a) Plain git with auto-commits; (b) jj; (c) Stave's own
-history. Chosen: **jj**, embedded through `jj-lib`, because workspaces give
-each agent its own working copy, the operation log gives undo for every
+history. Chosen: **jj**, embedded through `jj-lib`, because each agent can have
+its own line of changes, the operation log gives undo for every
 step, conflicts are recorded instead of blocking, it is a Rust library (no
 binary to install) and it stores to a git repository the user can push.
 
@@ -128,7 +128,7 @@ New crates and where they sit in the dependency order:
 | Crate | Depends on | Holds |
 |---|---|---|
 | `stave-render` | `stave-geom`, `stave-scene`, wgpu | The renderer moved out of `stave-gtk/src/render` (`mod.rs`, `meshes.rs`, `shader.wgsl`, `profile.rs`): draws a scene to a wgpu texture or surface. No GTK. Async device setup (no `pollster` inside); `web-time` in place of `std::time::Instant`. |
-| `stave-history` | `jj-lib` (pinned), `stave-lang` (for conflict text only if needed) | The revision system: open or start a project's repository, record a revision, list revisions, workspaces for agents, apply, discard, undo (operation log), conflicts. No jj type in its public API. |
+| `stave-history` | `jj-lib` (pinned), `stave-lang` (for conflict text only if needed) | The revision system: open or start a project's repository in `.stave/history/`, snapshot the project's files as a revision and write a revision's files back (Stave is the working copy), list revisions, a line of changes per agent, apply, discard, undo (operation log), conflicts. No jj type in its public API. |
 | `stave-web` | `stave-lang` … `stave-scene`, `stave-render`, `wasm-bindgen` | The browser viewer, built as WASM. |
 | `stave-mcp` | `stave-app`, `stave-history`, `stave-render` | The MCP server: tools, the MCP App page, the localhost viewer server, the "show in Stave" call, the merge policy. |
 
@@ -151,18 +151,29 @@ Changes to existing crates:
 
 ### Revisions (`stave-history`)
 
+**Where it lives.** The whole repository is kept in `.stave/history/` in
+the project folder; the folder itself stays plain files, with no `.jj`.
+jj-lib always puts a working copy's `.jj` in the working copy's root
+(`workspace.rs`, `workspace_root.join(".jj")`), so Stave doesn't use a jj
+working copy for the folder: it loads the repository from
+`.stave/history/` and acts as the working copy itself, building a tree
+from the project's files to commit and writing merged files back. The
+files that count are every file in the folder except `.stave/history/`
+and what `.gitignore` excludes *(my call)*. The cost: `jj` can't be run in
+the folder directly, only as `jj -R .stave/history …`.
+
 **Forks and main.** Everyone who changes a project works in their own fork
-(a jj workspace of the project's repository), and **main** (the project's
-main line) moves only by merges:
+(a line of commits in the repository), and **main** (the project's main
+line) moves only by merges:
 
 - **The window's fork is the project folder** the user has open. The user
   edits there as now; **saving merges** the saved files into main. A save
   is never refused for errors: beginners save half-finished designs, so
   the checker does not gate the user's own saves.
-- **Each agent's fork is a workspace outside the project folder**
-  (`~/.cache/stave/workspaces/<project>/<agent>`), so an agent never
-  touches the files the user has open. A workspace is disposable: it is
-  rebuilt from the repository when missing.
+- **Each agent's fork is a line of commits**, with no folder of its own,
+  so an agent never touches the files the user has open. Checking a patch
+  uses scratch space in `~/.cache/stave/workspaces/<project>/<agent>`,
+  which is disposable and rebuilt from the repository when missing.
 - **An agent** is one MCP connection, named by the host's `clientInfo`
   ("Claude Desktop", "Codex") plus a short id. *(My call.)*
 - Each agent request becomes a **suggestion**: one or more revisions on
@@ -203,11 +214,12 @@ main line) moves only by merges:
 the user turns versions on), Stave asks once: "Turn on versions for this
 project?".
 
-- A folder that isn't a repository gets a `.jj` folder only (jj keeps its
-  git data inside `.jj`); pushing to GitHub still works, from Stave.
+- A folder that isn't a repository gets `.stave/history/` only (jj with
+  its git data kept inside); pushing to GitHub still works, from Stave.
 - A folder that is already the root of a git repository keeps its `.git`
-  and its history; jj is set up beside it (colocated), and main is the
-  branch the folder is on, so the user's git tools keep working.
+  and its history: the repository in `.stave/history/` uses that `.git` as
+  its store (jj's "external git" setup), and main is the branch the folder
+  is on, so the user's git tools keep working.
 - A folder inside a bigger repository (as `examples/` sits inside Stave's
   own) is refused in plain words, with an offer to copy the project to a
   folder of its own. Nested repositories are not made.
@@ -283,9 +295,9 @@ Looking
   modules, read from `docs/grammar.md` and `std/`, so the AI writes valid
   patches.
 
-Changing (always into the agent's workspace, never main)
+Changing (always into the agent's own line, never main)
 
-- `try_patch(patch)`: applies it on a scratch copy in the workspace and
+- `try_patch(patch)`: applies it on a scratch copy of the agent's line and
   returns the verdict, problems, blame and what changed. Writes nothing.
 - `suggest(patch, title)`: records a patch that checks clean as (part of)
   a suggestion.
