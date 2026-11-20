@@ -199,8 +199,14 @@ now. It never edits.
 The page needs WebGPU; there is no fallback. Without it, the page says so.
 The page is built from `crates/stave-web` by `tools/build-viewer.sh`
 (it needs the `wasm32-unknown-unknown` target and the matching
-`wasm-bindgen` CLI, and says how to get them). A `stave` built before the
-viewer shows a page saying "Viewer not built: run tools/build-viewer.sh".
+`wasm-bindgen` CLI, and says how to get them). It also wants `wasm-opt`
+from [binaryen](https://github.com/WebAssembly/binaryen) on `PATH`
+(`pacman -S binaryen`, `apt install binaryen`, or a release tarball): the
+WASM is built with the size-tuned `viewer` profile and then shrunk by
+`wasm-opt -Oz`, and the page is one file of about 3.2 MB. Without
+`wasm-opt` the build warns and the page is about 3.6 MB. A `stave` built
+before the viewer shows a page saying "Viewer not built: run
+tools/build-viewer.sh".
 
 ## Conflicts
 

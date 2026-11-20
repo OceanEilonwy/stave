@@ -39,6 +39,17 @@ debug = false
 [profile.dev.package.z3]
 opt-level = 3
 
+# The browser viewer's WASM (`tools/build-viewer.sh` builds `stave-web`
+# for wasm32 with `--profile viewer`), tuned for size: it is inlined into
+# one page the MCP server embeds. Its own profile, so `--release` builds of
+# the rest of the workspace keep their speed and build times.
+[profile.viewer]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
 # Lints every crate takes with `[lints] workspace = true`.
 #
 # `wildcard_enum_match_arm`: a `_ =>` arm on one of our enums swallows the
