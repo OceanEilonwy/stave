@@ -27,8 +27,10 @@ mod folder;
 mod history;
 mod merging;
 mod paths;
+mod policy;
 mod store;
 mod suggestions;
+mod undo;
 
 use std::fmt;
 
@@ -38,6 +40,9 @@ pub use folder::VersionsStatus;
 pub use history::History;
 pub use merging::CatchUp;
 pub use paths::{PathError, ProjectFiles, RelativePath};
+pub use policy::{MergePolicy, merge_policy};
+pub use suggestions::Suggestion;
+pub use undo::UndoScope;
 
 /// A revision's id: the hex id of its commit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

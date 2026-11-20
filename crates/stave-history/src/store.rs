@@ -41,7 +41,6 @@ pub(crate) const ACTOR_ATTRIBUTE: &str = "stave-actor";
 /// The operation attribute describing an operation in plain words.
 pub(crate) const ACTION_ATTRIBUTE: &str = "stave-action";
 /// The operation attribute an undo carries: the operation it reverted.
-#[expect(dead_code, reason = "undo and the suggestions list use it, next")]
 pub(crate) const UNDOES_ATTRIBUTE: &str = "stave-undoes";
 /// The operation attribute set when an operation moved main.
 pub(crate) const MOVED_MAIN_ATTRIBUTE: &str = "stave-moved-main";
@@ -67,14 +66,33 @@ pub(crate) fn target(id: &CommitId) -> RefTarget {
     RefTarget::normal(id.clone())
 }
 
+/// The commit a bookmark points at: `None` when it is absent, an error when
+/// it points at more than one (moved two ways at once outside Stave).
+fn single_bookmark(repo: &ReadonlyRepo, name: &str) -> Result<Option<CommitId>, HistoryError> {
+    let name_buf = RefNameBuf::from(name);
+    let target = repo.view().get_local_bookmark(name_buf.as_ref());
+    if target.is_absent() {
+        return Ok(None);
+    }
+    match target.as_normal() {
+        Some(id) => Ok(Some(id.clone())),
+        None => Err(HistoryError::store(std::io::Error::other(format!(
+            "the line \"{name}\" was moved two ways at once"
+        )))),
+    }
+}
+
 /// Main's commit: the bookmark, or the root commit before the first save.
-pub(crate) fn main_id(repo: &ReadonlyRepo) -> CommitId {
-    bookmark(repo, MAIN).unwrap_or_else(|| repo.store().root_commit_id().clone())
+pub(crate) fn main_id(repo: &ReadonlyRepo) -> Result<CommitId, HistoryError> {
+    Ok(single_bookmark(repo, MAIN)?.unwrap_or_else(|| repo.store().root_commit_id().clone()))
 }
 
 /// The window's base: its bookmark, or main when it has none yet.
-pub(crate) fn window_id(repo: &ReadonlyRepo) -> CommitId {
-    bookmark(repo, WINDOW).unwrap_or_else(|| main_id(repo))
+pub(crate) fn window_id(repo: &ReadonlyRepo) -> Result<CommitId, HistoryError> {
+    match single_bookmark(repo, WINDOW)? {
+        Some(id) => Ok(id),
+        None => main_id(repo),
+    }
 }
 
 /// Reads a commit.

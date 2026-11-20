@@ -85,7 +85,6 @@ impl Actor {
     }
 
     /// Whether `other` is the same actor, as the trailers record them.
-    #[expect(dead_code, reason = "undo and the suggestions list use it, next")]
     pub(crate) fn same_as(&self, other: &Self) -> bool {
         self.to_line() == other.to_line()
     }

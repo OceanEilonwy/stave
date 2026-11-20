@@ -222,7 +222,7 @@ impl History {
             let id = self.resolve(&repo, revision)?;
             let commit = store::commit(repo.store(), &id).await?;
             let (files, _conflicted) = store::files_of(&commit.tree()).await?;
-            if id == store::main_id(&repo) {
+            if id == store::main_id(&repo)? {
                 self.observe_main(id);
             }
             Ok(files)
@@ -237,7 +237,7 @@ impl History {
     pub fn main(&self) -> Result<RevisionId, HistoryError> {
         block_on(async {
             let repo = self.head().await?;
-            let main = store::main_id(&repo);
+            let main = store::main_id(&repo)?;
             let revision = RevisionId(store::hex(&main));
             self.observe_main(main);
             Ok(revision)
@@ -253,7 +253,7 @@ impl History {
         block_on(async {
             let repo = self.head().await?;
             let root = repo.store().root_commit_id().clone();
-            let mut next = store::main_id(&repo);
+            let mut next = store::main_id(&repo)?;
             let mut versions = Vec::new();
             while versions.len() < limit && next != root {
                 let commit = store::commit(repo.store(), &next).await?;

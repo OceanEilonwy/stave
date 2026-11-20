@@ -3810,6 +3810,7 @@ dependencies = [
  "pollster 1.0.3",
  "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

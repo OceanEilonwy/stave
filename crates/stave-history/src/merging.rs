@@ -53,8 +53,8 @@ impl History {
         let new_main = block_on(async {
             let repo = self.head().await?;
             let store = repo.store().clone();
-            let main = store::commit(&store, &store::main_id(&repo)).await?;
-            let base = store::commit(&store, &store::window_id(&repo)).await?;
+            let main = store::commit(&store, &store::main_id(&repo)?).await?;
+            let base = store::commit(&store, &store::window_id(&repo)?).await?;
             let tree = store::tree_from_files(&store, files).await?;
             if base.id() == main.id() && tree.tree_ids() == main.tree_ids() {
                 return Ok(main.id().clone());
@@ -119,8 +119,8 @@ impl History {
         block_on(async {
             let repo = self.head().await?;
             let store = repo.store().clone();
-            let main = store::commit(&store, &store::main_id(&repo)).await?;
-            let window = store::commit(&store, &store::window_id(&repo)).await?;
+            let main = store::commit(&store, &store::main_id(&repo)?).await?;
+            let window = store::commit(&store, &store::window_id(&repo)?).await?;
             if window.id() == main.id() {
                 return Ok(CatchUp::UpToDate);
             }
@@ -186,7 +186,7 @@ impl History {
                     files: conflicted,
                 });
             }
-            let main = store::commit(&store, &store::main_id(&repo)).await?;
+            let main = store::commit(&store, &store::main_id(&repo)?).await?;
             let mut tree = store::tree_from_files(&store, merged).await?;
             if let Some(observed) = self.observed_main()
                 && &observed != main.id()
