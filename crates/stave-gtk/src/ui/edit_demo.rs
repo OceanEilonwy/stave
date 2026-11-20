@@ -173,7 +173,9 @@ pub(super) fn heard(output: &ShowcaseOutput) {
         ShowcaseOutput::Card(EditCardOutput::Action(action)) => {
             eprintln!("edit card: {action:?}");
         }
-        ShowcaseOutput::Menu(EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace)
+        ShowcaseOutput::Menu(
+            EditMenuOutput::Drawn | EditMenuOutput::Placed(_) | EditMenuOutput::HoldFromSpace,
+        )
         | ShowcaseOutput::Card(
             EditCardOutput::OptionsOpen(_) | EditCardOutput::Link(_) | EditCardOutput::Hover(_),
         ) => {}
@@ -234,7 +236,13 @@ pub(super) fn show<M: 'static>(
                 items: MenuEntry::list(&items),
                 from_space: false,
             });
-            place(menu.widget(), gtk::Align::Start, 470);
+            // At the top of the view, clear of the dock, a fixed way in
+            // from the left: the menu places itself.
+            let _ = menu.sender().send(EditMenuInput::PlaceAt {
+                start: 470,
+                top: 16,
+                bottom: 90,
+            });
             design.add_overlay(menu.widget());
             Some(Shown::Menu(menu))
         }
@@ -279,18 +287,6 @@ pub(super) fn show<M: 'static>(
             panel.append(card.widget());
             Some(Shown::Card(card))
         }
-    }
-}
-
-/// Floats the menu at the top of the view, `margin` from one side.
-fn place(panel: &gtk::Box, side: gtk::Align, margin: i32) {
-    panel.set_halign(side);
-    panel.set_valign(gtk::Align::Start);
-    panel.set_margin_top(16);
-    panel.set_margin_bottom(90);
-    match side {
-        gtk::Align::End => panel.set_margin_end(margin),
-        _ => panel.set_margin_start(margin),
     }
 }
 

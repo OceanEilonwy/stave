@@ -55,7 +55,8 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
             | BaseKind::Slide
             | BaseKind::Hinge
             | BaseKind::Pull
-            | BaseKind::Support,
+            | BaseKind::Support
+            | BaseKind::Fitting,
             Some(roles),
         ) => roles
             .roles
@@ -76,6 +77,7 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
             | BaseKind::Hinge
             | BaseKind::Pull
             | BaseKind::Support
+            | BaseKind::Fitting
             | BaseKind::Fastener
             | BaseKind::Tool,
             _,

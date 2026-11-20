@@ -1,5 +1,6 @@
 ---
 source: crates/stave-ide/tests/tokens.rs
+assertion_line: 378
 expression: "render_project(& examples().join(\"side_table\"))"
 ---
 == table.stave ==
@@ -153,8 +154,8 @@ expression: "render_project(& examples().join(\"side_table\"))"
      = joint:keyword  apron_tenons:joint+decl  mortise_tenon:type+ref+std  apron_front:part+ref  apron_back:part+ref  apron_left:part+ref  apron_right:part+ref  into:field  leg:part+ref  length:param+ref+std  20:number  mm:unit
  133 | joint stretcher_tenons : mortise_tenon([stretcher_front, stretcher_back], into: [leg[front_left], leg[front_right], leg[back_left], leg[back_right]], length: 25mm)
      = joint:keyword  stretcher_tenons:joint+decl  mortise_tenon:type+ref+std  stretcher_front:part+ref  stretcher_back:part+ref  into:field  leg:part+ref  front_left:label+ref  leg:part+ref  front_right:label+ref  leg:part+ref  back_left:label+ref  leg:part+ref  back_right:label+ref  length:param+ref+std  25:number  mm:unit
- 134 | joint top_screws       : screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
-     = joint:keyword  top_screws:joint+decl  screw:type+ref+std  cleat_front:part+ref  cleat_back:part+ref  into:field  top:word  count:param+ref+std  3:number  glue:field  false:keyword
+ 134 | joint top_screws       : slotted_screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
+     = joint:keyword  top_screws:joint+decl  slotted_screw:type+ref+std  cleat_front:part+ref  cleat_back:part+ref  into:field  top:word  count:param+ref+std  3:number  glue:field  false:keyword
  135 | joint slat_screws      : screw(slat[*], into: [stretcher_front, stretcher_back], length: 40mm)
      = joint:keyword  slat_screws:joint+decl  screw:type+ref+std  slat:part+ref  into:field  stretcher_front:part+ref  stretcher_back:part+ref  length:param+ref+std  40:number  mm:unit
  136 | joint cleat_glue       : glued_face([cleat_front, cleat_back], into: [apron_front, apron_back])

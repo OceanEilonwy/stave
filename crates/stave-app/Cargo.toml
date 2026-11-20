@@ -16,6 +16,7 @@ stave-ide = { path = "../stave-ide" }
 stave-scene = { path = "../stave-scene" }
 stave-schema = { path = "../stave-schema" }
 stave-smt = { path = "../stave-smt" }
+stave-history = { path = "../stave-history" }
 thiserror = "2"
 notify = "8"
 gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
@@ -24,6 +25,7 @@ gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
 glam = "0.30"
 stave-geom = { path = "../stave-geom" }
 insta = "1"
+tempfile = "3"
 stave-lang = { path = "../stave-lang" }
 stave-schema = { path = "../stave-schema" }
 

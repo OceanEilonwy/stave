@@ -109,7 +109,7 @@ fn an_unknown_project_field_lists_the_fields() {
     );
     assert_eq!(
         common::help(&opened),
-        "the fields are: goal, units, resolution, style, tools, methods, boards"
+        "the fields are: goal, units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width"
     );
 }
 

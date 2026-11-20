@@ -1,0 +1,58 @@
+// expect: error[type-mismatch] an end of shelf measures along its length, which runs 'across', not 'deep'
+stave 1
+
+// A fitting kind measures across from an end of its piece: an end places
+// along the piece's length, never across it.
+
+project "An end measured across" {
+  units: mm
+}
+
+stock board_19 { species: birch, form: plywood, thickness: 19mm, max_width: 1220mm, max_length: 2440mm }
+
+kind corner_plate : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  mount {
+    face:   top
+    across: from(end(piece, nearer: into), inset: 20mm)
+    along:  open
+  }
+  /// The plate, screwed to the top of the panel.
+  member plate {
+    with:  piece
+    shape: box(along: 30mm, across: 30mm, depth: -2mm..0mm)
+  }
+  /// The tab bent down against the other panel.
+  member tab {
+    with:  into
+    shape: box(along: 30mm, across: -32mm..-30mm, depth: 0mm..20mm)
+  }
+}
+
+part side_l : board_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part shelf : board_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    against(side_l.right)
+    flush(side_l.bottom, inset: 100mm)
+    flush(side_l.front)
+  }
+}
+
+hardware plate : corner_plate(shelf, into: side_l) {
+  place {
+    center(shelf, deep)
+  }
+}

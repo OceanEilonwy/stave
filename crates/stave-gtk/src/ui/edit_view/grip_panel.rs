@@ -20,7 +20,7 @@
 //!   Stops        stops at 1200mm, because …
 //! ```
 //!
-//! Both are relm4 components ([`GripPanelComponent`], [`ReadoutComponent`])
+//! It is a relm4 component ([`GripPanelComponent`])
 //! following `docs/relm4-migration.md`: only `update` changes what they
 //! show, and their widgets' handlers only send messages. The window owns
 //! their `Controller`s (the panel's inside a [`GripSection`]), launched
@@ -75,8 +75,8 @@ pub(in crate::ui) enum SwitchAsk {
 /// close it once the range is read.
 #[derive(Debug)]
 pub(in crate::ui) enum SwitchMenu {
-    /// The menu beside a grip's number on the model, the window's own.
-    Mark(gtk::MenuButton),
+    /// The menu beside a size's field in the Sizes card, the window's own.
+    Row(gtk::MenuButton),
     /// The menu in the size section: the section closes it when told.
     Panel,
 }
@@ -105,7 +105,18 @@ pub(super) struct GripPanelComponent {
 
 /// The menu beside a grip's value or number: "Let the solver move this",
 /// with the range a solved param needs, or the switch to make it plain.
-/// What people ask of it goes to `asked`, with the menu.
+///
+/// A stateless builder of plain widgets, not a component: the size
+/// section builds it into its own view (its options, ⋮), and the window
+/// builds it beside the field of its Sizes card's size editor. Its
+/// handlers touch only the menu's own widgets, made here: the switch
+/// shows or hides the range under it and, switched off on a solved
+/// param, pops the menu down; "Make it solved" reads the two range fields
+/// beside it. Each then hands what was asked, with the menu button (held
+/// weakly until then), to `asked`, which every caller makes send one
+/// message and do nothing else (`GripPanelInput::Switched`, or the
+/// window's `EditingInput` with [`SwitchMenu::Row`]). No Rust state is
+/// shared.
 pub(super) fn switch_menu(
     switches: &[SolverSwitch],
     asked: impl Fn(SwitchAsk, gtk::MenuButton) + Clone + 'static,
@@ -629,115 +640,21 @@ fn radio_buttons(choices: &gtk::Box) -> Vec<gtk::CheckButton> {
     radios
 }
 
-/// The one-line readout at the top of the 3D view while a grip is moved:
-/// `overall_width 940 → 1040 mm`, the name in light blue. Its model is the
-/// line it shows, or `None` while it is hidden.
-#[derive(Debug, Default)]
-pub(super) struct ReadoutComponent {
-    line: Option<(String, String)>,
-}
-
-/// What the readout is told.
-#[derive(Debug)]
-pub(super) enum ReadoutInput {
-    /// Show this name and value, or hide it for `None`.
-    Show(Option<(String, String)>),
-}
-
-#[relm4::component(pub(super))]
-impl Component for ReadoutComponent {
-    type Init = ();
-    type Input = ReadoutInput;
-    type Output = ();
-    type CommandOutput = ();
-
-    view! {
-        gtk::Box {
-            set_spacing: 8,
-            set_halign: gtk::Align::Center,
-            set_valign: gtk::Align::Start,
-            set_margin_top: 10,
-            set_can_target: false,
-            add_css_class: "stave-grip-readout",
-            #[watch]
-            set_visible: model.line.is_some(),
-
-            #[name = "name"]
-            gtk::Label {
-                add_css_class: "stave-readout-name",
-                #[watch]
-                set_label: model.line.as_ref().map_or("", |(name, _)| name.as_str()),
-            },
-            #[name = "value"]
-            gtk::Label {
-                add_css_class: "stave-readout-value",
-                #[watch]
-                set_label: model.line.as_ref().map_or("", |(_, value)| value.as_str()),
-            },
-        }
-    }
-
-    fn init(_: (), root: Self::Root, _sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let model = ReadoutComponent::default();
-        let widgets = view_output!();
-        ComponentParts { model, widgets }
-    }
-
-    fn update(
-        &mut self,
-        message: ReadoutInput,
-        _sender: ComponentSender<Self>,
-        _root: &Self::Root,
-    ) {
-        match message {
-            ReadoutInput::Show(line) => self.line = line,
-        }
-    }
-}
-
-/// What a readout says once what it was told is shown, for a test.
-#[cfg(test)]
-pub(super) fn readout_words(readout: &Controller<ReadoutComponent>) -> Option<String> {
-    crate::ui::gtk_test::settle();
-    readout
-        .model()
-        .line
-        .as_ref()
-        .filter(|_| readout.widget().is_visible())
-        .map(|(name, value)| format!("{name} {value}"))
-}
-
 fn clear(container: &gtk::Box) {
     while let Some(child) = container.first_child() {
         container.remove(&child);
     }
 }
 
-/// The grips' own few colours (libadwaita's named colours), installed
-/// once per display. The handles are small round dots (white, a blue
-/// ring), the same for every grip: what a size follows is said in words.
+/// The sizes' own few colours (libadwaita's named colours), installed
+/// once per display: the Size section, the Sizes card and its number
+/// fields.
 const STYLE: &str = r#"
 .stave-grip-title { font-family: var(--monospace-font-family, monospace); }
 entry.stave-grip-value { font-family: var(--monospace-font-family, monospace); }
 .stave-grip-change { font-size: 0.818rem; font-family: var(--monospace-font-family, monospace); color: #99c1f1; }
 .stave-grip-ask { font-size: 0.818rem; font-weight: 700; margin-top: 4px; }
 .stave-grip-stop { color: @error_color; }
-.stave-grip-handle { min-width: 8px; min-height: 8px; border-radius: 999px; background: white;
-  border: 2px solid @accent_color; box-shadow: 0 1px 2px alpha(black, 0.35); }
-.stave-grip-handle:focus-visible { outline: 2px solid alpha(@accent_color, 0.5); outline-offset: 2px; }
-.stave-grip-handle.dragging { background: @accent_color; }
-.stave-grip-lock { min-width: 18px; min-height: 18px; border-radius: 999px; background: @window_bg_color;
-  color: @window_fg_color; box-shadow: 0 1px 3px alpha(black, 0.35); -gtk-icon-size: 12px; }
-.stave-grip-lines { color: @accent_color; }
-.stave-grip-label { padding: 0; border-radius: 6px; background: alpha(@window_bg_color, 0.92);
-  color: @window_fg_color; box-shadow: 0 1px 3px alpha(black, 0.25); }
-.stave-grip-label button.stave-grip-number { color: @window_fg_color; padding: 0 6px; min-height: 20px;
-  font-weight: 600; font-size: 0.784rem; font-family: var(--monospace-font-family, monospace); }
-.stave-grip-label.locked { padding: 2px 6px; font-size: 0.784rem; opacity: 0.85; }
-.stave-grip-label entry { min-height: 22px; font-size: 0.818rem; }
-.stave-grip-label .stave-grip-error { color: @error_color; font-size: 0.818rem; font-weight: 600;
-  padding: 2px 6px 4px 6px; }
-.stave-grip-label menubutton > button { min-height: 20px; min-width: 20px; padding: 0 2px; }
 .stave-grip-switches { padding: 8px; }
 .stave-grip-switches .stave-grip-note { font-size: 0.818rem; opacity: 0.75; }
 "#;
@@ -751,6 +668,13 @@ pub(in crate::ui) fn install_style(display: &gdk::Display) {
     gtk::style_context_add_provider_for_display(
         display,
         &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+    );
+    let sizes = gtk::CssProvider::new();
+    sizes.load_from_string(super::sizes::STYLE);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &sizes,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     );
 }
@@ -793,7 +717,6 @@ mod tests {
                 words: "Pick the size that changes".to_owned(),
             },
             can_apply: false,
-            readout: None,
         }
     }
 
@@ -1021,54 +944,5 @@ mod tests {
         section.show(&two_choices(), None);
         settle();
         assert!(options_menu(&section).is_none(), "no options, no menu");
-    }
-
-    /// A readout launched as the window launches it.
-    fn readout() -> Controller<ReadoutComponent> {
-        ReadoutComponent::builder().launch(()).detach()
-    }
-
-    #[test]
-    fn a_dropped_readout_is_freed() {
-        on_gtk_thread(readout_is_freed);
-    }
-
-    fn readout_is_freed() {
-        let readout = readout();
-        let _ = readout.sender().send(ReadoutInput::Show(Some((
-            "overall_width".to_owned(),
-            "940 mm".to_owned(),
-        ))));
-        settle();
-        assert!(readout.widget().is_visible(), "a line shows it");
-        let root = readout.widget().downgrade();
-        let input = readout.sender().clone();
-        drop(readout);
-        settle();
-        assert!(root.upgrade().is_none(), "the widget is freed");
-        assert!(
-            input.send(ReadoutInput::Show(None)).is_err(),
-            "the component's runtime, and with it the model, is gone"
-        );
-    }
-
-    #[test]
-    fn the_readout_shows_once_the_main_loop_runs() {
-        on_gtk_thread(readout_is_queued);
-    }
-
-    fn readout_is_queued() {
-        let readout = readout();
-        let _ = readout.sender().send(ReadoutInput::Show(Some((
-            "overall_width".to_owned(),
-            "940 mm".to_owned(),
-        ))));
-        assert!(!readout.widget().is_visible(), "only queued");
-        assert_eq!(
-            readout_words(&readout).as_deref(),
-            Some("overall_width 940 mm")
-        );
-        let _ = readout.sender().send(ReadoutInput::Show(None));
-        assert_eq!(readout_words(&readout), None);
     }
 }

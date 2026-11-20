@@ -1,0 +1,36 @@
+// expect: error[require] 'recess_fits' fails: the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron
+stave 1
+
+// A tabletop fastener's recess is wider than a 12mm apron is thick: the
+// kind's own rule says so, at the hardware.
+
+project "A fastener in a thin apron" {
+  units: mm
+}
+
+stock pine_12 { species: pine, form: solid, thickness: 12mm, max_width: 600mm, max_length: 2400mm }
+
+part top : pine_12 {
+  length: 400mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part apron_front : pine_12 {
+  length: 300mm
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    against(top.bottom)
+    center(top, across)
+    flush(top.front, inset: 30mm)
+  }
+}
+
+hardware tie_front : tabletop_fastener(apron_front, tabletop: top) {
+  place {
+    center(apron_front, across)
+  }
+}

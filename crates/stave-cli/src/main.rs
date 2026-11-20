@@ -16,6 +16,9 @@
 //!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
 //! stave edit examples/clothing_cabinet_assemblies --script steps.txt
 //! stave edit new_chest --script build.txt   # a script can start a new project
+//! stave mcp                                 # the MCP server, for an AI app
+//! stave mcp install                         # set Stave up in the AI apps found
+//! stave mcp uninstall --codex
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -41,12 +44,14 @@ use stave_app::edit::Verdict;
 use stave_app::editing::commit_tried;
 use stave_app::format::{FormatTextError, Formatted, format_text};
 use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
+use stave_app::script;
 use stave_lang::ast;
 use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, render_diagnostics};
 use stave_modules::DiskFiles;
 
+mod cut_list;
 mod dump;
-mod script;
+mod mcp_install;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -76,6 +81,13 @@ enum Command {
         /// Print JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+    /// Print the cut list: every piece to cut, at its cut size and the
+    /// rough size to cut it from the board at, how many boards to buy and
+    /// how much edge banding.
+    CutList {
+        /// The project folder.
+        path: PathBuf,
     },
     /// Open the design in the 3D viewer. The viewer reloads when a file
     /// changes.
@@ -152,6 +164,13 @@ enum Command {
         #[arg(long, conflicts_with = "script")]
         commit: bool,
     },
+    /// Use Stave from an AI app (Claude Desktop, Claude Code, Codex):
+    /// set it up there, or take it out. With no subcommand, run the server
+    /// the apps start.
+    Mcp {
+        #[command(subcommand)]
+        command: Option<mcp_install::McpCommand>,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -168,7 +187,12 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
+        Command::CutList { path } => cut_list(&path),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::Mcp {
+            command: Some(command),
+        } => mcp_install::run(&command),
+        Command::Mcp { command: None } => mcp(),
         Command::Edit {
             path,
             patch,
@@ -321,6 +345,18 @@ fn check(path: &Path) -> Result<bool> {
             "{}",
             render_diagnostics(&opened.sources, &opened.diagnostics)
         )?;
+        // A file with conflicts is checked once per side too.
+        let sides = stave_app::conflicts::side_problems(folder, &DiskFiles, &opened)
+            .with_context(|| format!("can't open '{}'", folder.display()))?;
+        for side in &sides {
+            errors += side.error_count();
+            warnings += side
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Warning)
+                .count();
+            write!(stderr, "{}", side.render())?;
+        }
     }
     writeln!(
         stderr,
@@ -354,6 +390,34 @@ fn dump(path: &Path, json: bool) -> Result<bool> {
     } else {
         write!(stdout, "{}", dump::table(design, opened.model.as_ref()))?;
     }
+    Ok(true)
+}
+
+/// Serves the MCP server over standard input and output until the AI app
+/// closes the connection. Standard output carries the protocol only.
+fn mcp() -> Result<bool> {
+    let options = stave_mcp::ServerOptions::from_environment()?;
+    stave_mcp::serve_stdio_blocking(options)?;
+    Ok(true)
+}
+
+fn cut_list(path: &Path) -> Result<bool> {
+    let opened = open(path)?;
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    )?;
+    let Some(design) = &opened.design else {
+        if opened.error_count() == 0 {
+            bail!("'{}' is a library: it has nothing to cut", path.display());
+        }
+        return Ok(false);
+    };
+    let list = stave_solve::cut_list::cut_list(design)?;
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "{}", cut_list::table(design, &list))?;
     Ok(true)
 }
 
@@ -510,7 +574,12 @@ fn edit(folder: &Path, patch_path: &Path, commit: bool) -> Result<bool> {
 fn edit_script(folder: &Path, script_path: &Path) -> Result<bool> {
     let steps = script::parse_script(&read(script_path)?)
         .with_context(|| format!("in '{}'", script_path.display()))?;
-    script::run(folder, &steps, true, &mut std::io::stdout().lock())
+    Ok(script::run(
+        folder,
+        &steps,
+        true,
+        &mut std::io::stdout().lock(),
+    )?)
 }
 
 /// The steps the flags of `stave edit` ask for.
@@ -540,7 +609,12 @@ fn edit_steps(folder: &Path, flags: Steps) -> Result<bool> {
     let mut steps = vec![("select".to_owned(), script::Step::Select(selection))];
     let Some(choose) = flags.choose else {
         steps.push(("list".to_owned(), script::Step::List));
-        return script::run(folder, &steps, false, &mut std::io::stdout().lock());
+        return Ok(script::run(
+            folder,
+            &steps,
+            false,
+            &mut std::io::stdout().lock(),
+        )?);
     };
     steps.push(("choose".to_owned(), script::Step::Choose(choose)));
     for bind in &flags.bind {
@@ -560,7 +634,12 @@ fn edit_steps(folder: &Path, flags: Steps) -> Result<bool> {
     if flags.commit {
         steps.push(("commit".to_owned(), script::Step::Commit));
     }
-    script::run(folder, &steps, false, &mut std::io::stdout().lock())
+    Ok(script::run(
+        folder,
+        &steps,
+        false,
+        &mut std::io::stdout().lock(),
+    )?)
 }
 
 /// How `stave edit` names a patch: `patch "Add a shelf"`, or the patch

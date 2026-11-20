@@ -75,7 +75,9 @@ impl Launched {
             EditMenuComponent::builder().launch(()).connect_receiver(
                 move |_, output| match output {
                     EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
-                    EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace => {}
+                    EditMenuOutput::Drawn
+                    | EditMenuOutput::Placed(_)
+                    | EditMenuOutput::HoldFromSpace => {}
                 },
             )
         };
@@ -782,7 +784,7 @@ fn a_settings_short_list_and_its_search_choose_and_a_blamed_setting_can_be_put_b
 }
 
 /// The Case's joinery: its short list (the default, then "Search all
-/// 20…"), the search dialog finding chigiri by its description (refused:
+/// 21…"), the search dialog finding chigiri by its description (refused:
 /// it can't be chosen) and dowel by its name (chosen with Enter), then
 /// chigiri typed, blamed, and put back from the card.
 fn short_list_search_and_blame_on_the_card() {
@@ -841,7 +843,7 @@ fn short_list_search_and_blame_on_the_card() {
     let texts: Vec<&str> = rows.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(texts, ["dowel(count: 4)", ""], "the default, then Search…");
     assert!(words_in(rows[0].1.upcast_ref()).contains("default"));
-    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 20…"));
+    assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 21…"));
     rows[0].1.emit_clicked();
     rows[1].1.emit_clicked();
     settle();
@@ -914,7 +916,7 @@ fn short_list_search_and_blame_on_the_card() {
     settle();
     assert!(search.widget().is_visible());
     let all = search.model().rows();
-    assert_eq!(all.len(), 20, "every option, with nothing typed");
+    assert_eq!(all.len(), 21, "every option, with nothing typed");
     // The arrow keys move through them.
     let first = selected().unwrap();
     ask(OptionSearchInput::Step(1));
@@ -926,7 +928,7 @@ fn short_list_search_and_blame_on_the_card() {
     other.name = parse_name("mount").unwrap();
     other.options.clear();
     ask(OptionSearchInput::Update(Box::new(other)));
-    assert_eq!(search.model().rows().len(), 20);
+    assert_eq!(search.model().rows().len(), 21);
 
     // "key": chigiri, by its description, refused; Enter chooses nothing.
     type_query("key");

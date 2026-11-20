@@ -51,6 +51,32 @@ fn check_reports_errors_and_fails() {
 }
 
 #[test]
+fn check_reports_conflict_and_checks_each_side() {
+    let folder = scratch("conflict_sides");
+    std::fs::write(
+        folder.join("box.stave"),
+        "stave 1\n\nproject \"Box\" {\n  units: mm\n}\n\n\
+         <<<<<<< yours\nparam width = 300mm\n||||||| before\nparam width = 250mm\n=======\n\
+         param width = 300mm + nothing_here\n>>>>>>> Claude Desktop\n",
+    )
+    .unwrap();
+    let output = stave(&["check", folder.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("error[conflict]"), "{stderr}");
+    assert!(
+        stderr.contains("in side 2 of the conflicts ('Claude Desktop'):"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing_here"), "{stderr}");
+    assert!(
+        !stderr.contains("in side 1 of the conflicts"),
+        "the first side has no problem of its own: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
 fn check_fails_cleanly_on_a_missing_path() {
     let output = stave(&["check", "no/such/folder"]);
     assert_eq!(output.status.code(), Some(2));
@@ -316,4 +342,42 @@ fn view_says_when_the_viewer_is_missing_or_starts_it() {
         stderr.contains("the viewer isn't installed") || stderr.contains("can't find the folder"),
         "{stderr}"
     );
+}
+
+/// `stave cut-list <folder>` is the same as `snapshots/<name>.cut-list`,
+/// checked by hand when it was added (grammar, "Cut list").
+fn cut_list_matches_its_snapshot(folder: &str, name: &str) {
+    let output = stave(&["cut-list", folder]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let list = String::from_utf8(output.stdout).unwrap();
+    let snapshot = workspace()
+        .join("crates/stave-cli/tests/snapshots")
+        .join(format!("{name}.cut-list"));
+    if std::env::var_os("STAVE_UPDATE_SNAPSHOTS").is_some() {
+        std::fs::write(&snapshot, &list).unwrap();
+    }
+    let expected = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(
+        list == expected,
+        "the cut list changed; diff it against {}",
+        snapshot.display()
+    );
+}
+
+/// The shelf unit uses every allowance: rough sizes and the bought
+/// thickness of its oak, a stock's own kerf, and edge banding.
+#[test]
+fn cut_list_of_the_shelf_unit_matches_its_snapshot() {
+    cut_list_matches_its_snapshot("examples/shelf_unit", "shelf_unit");
+}
+
+/// The bookshelf, with no allowances written: the defaults.
+#[test]
+fn cut_list_of_the_bookshelf_matches_its_snapshot() {
+    cut_list_matches_its_snapshot("examples/bookshelf", "bookshelf");
 }

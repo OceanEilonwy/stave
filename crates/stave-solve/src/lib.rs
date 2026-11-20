@@ -30,9 +30,11 @@
 #![warn(missing_docs)]
 #![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 
+mod allowances;
 mod boards;
 mod build;
 mod contact;
+pub mod cut_list;
 mod edges;
 mod eval;
 mod failure;
@@ -48,6 +50,7 @@ mod models;
 mod pieces;
 mod place;
 mod rules;
+mod shapes;
 mod signature;
 pub mod trace;
 pub mod values;

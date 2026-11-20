@@ -48,6 +48,9 @@ syntax_kinds! {
     LINE_COMMENT,
     /// `/* ... */`
     BLOCK_COMMENT,
+    /// A conflict marker line, `<<<<<<< label` (grammar, "Conflicts"):
+    /// the run of marker characters and its label, without the line ending.
+    CONFLICT_MARKER,
 
     // ---- significant tokens ----
     /// A newline that ends a field, an item or an entry.
@@ -342,16 +345,28 @@ syntax_kinds! {
     /// `lo..hi` as an argument of a member's shape
     RANGE_EXPR,
 
+    /// Two or more versions of the same lines between conflict marker
+    /// lines (grammar, "Conflicts"): the marker tokens and a
+    /// [`SyntaxKind::CONFLICT_SIDE`] for each side and for the base.
+    CONFLICT,
+    /// The text of one side (or the base) of a conflict, kept as tokens
+    /// but not parsed with the rest of the file.
+    CONFLICT_SIDE,
+
     /// Source the parser could not make sense of, kept so no byte is lost.
     ERROR,
 }
 
 impl SyntaxKind {
-    /// `true` for whitespace and comments, which carry no meaning.
+    /// `true` for whitespace, comments and conflict marker lines, which
+    /// carry no meaning for the grammar.
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
-            SyntaxKind::WHITESPACE | SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT
+            SyntaxKind::WHITESPACE
+                | SyntaxKind::LINE_COMMENT
+                | SyntaxKind::BLOCK_COMMENT
+                | SyntaxKind::CONFLICT_MARKER
         )
     }
 

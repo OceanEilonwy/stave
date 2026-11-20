@@ -1,0 +1,34 @@
+// expect: warning[grain] butt: apron meets leg with its end grain, and glue on end grain holds almost nothing
+stave 1
+
+// An apron butted end on against a leg and only glued (audit finding 89):
+// the glue is all on the apron's end grain, which soaks it up and holds
+// almost nothing.
+
+project "Glue on end grain" {
+  units: mm
+}
+
+stock oak    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2400mm }
+stock oak_45 { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
+
+part leg : oak_45 {
+  length: 700mm
+  place {
+    orient(length: up, width: right)
+    ground
+  }
+}
+
+part apron : oak {
+  length: 400mm
+  width:  90mm
+  place {
+    orient(length: right, width: up)
+    against(leg.right)
+    flush(leg.top)
+    flush(leg.front)
+  }
+}
+
+joint butt : glued_face(apron, into: leg)

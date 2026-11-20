@@ -460,12 +460,14 @@ impl<R: Fn(BodyEvent) + Clone + 'static> Report for R {}
 /// One setting's short list on the card: shown in place under its row when
 /// its button is pressed (a popover would close each time a check's answer
 /// redraws it, and can't be drawn into a screenshot).
-#[derive(Clone)]
 struct ChoiceList {
     /// The setting.
     param: Ident,
     /// The button that shows and hides it.
     toggle: gtk::ToggleButton,
+    /// Its `toggled` handler, blocked while the card opens the list
+    /// itself ([`EditCardInput::OpenOptions`]).
+    toggled: glib::SignalHandlerId,
     /// The rows' box.
     list: gtk::Box,
     /// Each entry's row, by its text; the search row last, by "".
@@ -474,7 +476,7 @@ struct ChoiceList {
 
 /// The widgets a show draws that the card keeps: each setting's entry,
 /// each fix's button, each short list and the put-back button.
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct Built {
     /// Each setting's entry, by param.
     entries: Vec<(Ident, gtk::Entry)>,
@@ -893,7 +895,7 @@ fn choice_list(
         .bind_property("active", &revealer, "reveal-child")
         .sync_create()
         .build();
-    {
+    let toggled = {
         let report = report.clone();
         let param = name.to_owned();
         toggle.connect_toggled(move |toggle| {
@@ -903,11 +905,12 @@ fn choice_list(
                 param: param.clone(),
                 open,
             });
-        });
-    }
+        })
+    };
     let mut choice_list = ChoiceList {
         param: setting.name.clone(),
         toggle,
+        toggled,
         list,
         rows: Vec::new(),
     };
@@ -1342,10 +1345,16 @@ pub enum EditCardInput {
     NameEdited(String),
     /// The body's layout changed: try to bring the target into sight.
     LaidOut,
+    /// The card came on screen: it takes the keyboard, unless the
+    /// keyboard is in it already.
+    Mapped,
     /// A link in "Placed in" was clicked.
     Link(LinkTarget),
     /// The pointer entered a link (`Some`) or left it.
     Hover(Option<LinkTarget>),
+    /// Take the keyboard, while the card shows, so Enter and Escape work
+    /// on it (the option search closing gives it back).
+    Focus,
 }
 
 /// What the card tells its owner.
@@ -1522,7 +1531,10 @@ impl Component for EditCardComponent {
                 });
             });
         }
-        root.connect_map(take_focus);
+        {
+            let input = input.clone();
+            root.connect_map(move |_| input.emit(EditCardInput::Mapped));
+        }
         {
             let input = input.clone();
             frame
@@ -1580,17 +1592,26 @@ impl Component for EditCardComponent {
                 }
             }
             EditCardInput::OpenOptions(param) => {
-                let toggle = self
+                let opened = match self
                     .built
                     .options
                     .iter()
                     .find(|list| list.param.as_str() == param)
-                    .map(|list| list.toggle.clone());
-                if let Some(toggle) = toggle {
+                {
+                    Some(list) => {
+                        // The model holds it open: its handler, which would
+                        // only report that, is blocked.
+                        list.toggle.block_signal(&list.toggled);
+                        list.toggle.set_active(true);
+                        list.toggle.unblock_signal(&list.toggled);
+                        list.toggle
+                            .update_state(&[gtk::accessible::State::Expanded(Some(true))]);
+                        true
+                    }
+                    None => false,
+                };
+                if opened {
                     self.set_open_options(Some(param), &sender);
-                    // Its handler only reports the toggle, which the
-                    // model already holds.
-                    toggle.set_active(true);
                     self.scroll_to_open_options(&sender);
                 }
             }
@@ -1629,6 +1650,7 @@ impl Component for EditCardComponent {
                     Self::act(&sender, CardAction::Rename(text.to_owned()));
                 }
             }
+            EditCardInput::Mapped => take_focus(root),
             EditCardInput::LaidOut => {
                 if let Some(target) = &self.scroll_target
                     && scroll_to_target(&frame.scrolled.vadjustment(), &frame.body, target)
@@ -1641,6 +1663,13 @@ impl Component for EditCardComponent {
             }
             EditCardInput::Hover(target) => {
                 let _ = sender.output(EditCardOutput::Hover(target));
+            }
+            EditCardInput::Focus => {
+                // The card itself is focusable: it takes the keys its key
+                // handler listens for.
+                if root.is_visible() {
+                    root.grab_focus();
+                }
             }
         }
     }
@@ -1767,7 +1796,8 @@ fn applied_section(labels: &[String]) -> gtk::Box {
 
 /// Moves the keyboard into the card, unless it is there already, so
 /// Enter and Escape reach it. Does nothing until the card is on screen.
-fn take_focus(root: &gtk::Box) {
+/// Called from a card's own update (the edit card's, the change card's).
+pub(in crate::ui) fn take_focus(root: &gtk::Box) {
     if !root.is_mapped() {
         return;
     }
@@ -2082,7 +2112,9 @@ mod tests {
             EditMenuComponent::builder().launch(()).connect_receiver(
                 move |_, output| match output {
                     EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
-                    EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace => {}
+                    EditMenuOutput::Drawn
+                    | EditMenuOutput::Placed(_)
+                    | EditMenuOutput::HoldFromSpace => {}
                 },
             )
         };
@@ -2169,7 +2201,8 @@ mod tests {
             context.iteration(false);
         }
         assert!(root.is_mapped(), "the window never came up");
-        // Appearing, the card takes the keyboard.
+        // Appearing, the card takes the keyboard, from its own update.
+        settle();
         assert_eq!(
             gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
             Some(root.upcast_ref::<gtk::Widget>())
@@ -2529,6 +2562,15 @@ mod tests {
         card.send(EditCardInput::ScrollToOpenOptions);
         settle();
         assert_eq!(card.model().open_options.as_deref(), Some("front_stock"));
+        let opened = card
+            .model()
+            .built
+            .options
+            .iter()
+            .find(|list| list.param.as_str() == "front_stock")
+            .map(|list| list.toggle.clone())
+            .expect("front_stock has a short list");
+        assert!(opened.is_active(), "its button is down");
         card.send(EditCardInput::Show(Box::new(drawer_view(true, None))));
         settle();
         {
@@ -2548,6 +2590,67 @@ mod tests {
             [EditCardOutput::OptionsOpen(Some("front_stock".to_owned()))],
             "only which list is open; no action"
         );
+        // Its handler was blocked only while the card opened it: people
+        // closing it are heard.
+        let toggle = card
+            .model()
+            .built
+            .options
+            .iter()
+            .find(|list| list.param.as_str() == "front_stock")
+            .map(|list| list.toggle.clone())
+            .expect("still listed");
+        toggle.set_active(false);
+        settle();
+        assert_eq!(card.model().open_options, None);
+    }
+
+    #[test]
+    fn the_card_takes_the_keyboard_when_told() {
+        crate::ui::gtk_test::on_gtk_thread(card_takes_focus);
+    }
+
+    /// The window used to grab the keyboard for the card's root when the
+    /// option search closed; now it tells the card, which takes it in its
+    /// own update while it shows, and reports nothing.
+    fn card_takes_focus() {
+        use crate::ui::gtk_test::settle;
+        let card = Bridge::<EditCardComponent>::launch(CardSlots::new());
+        let heard: Rc<RefCell<Vec<EditCardOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        card.connect(move |output| log.borrow_mut().push(output));
+        let elsewhere = gtk::Entry::new();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&elsewhere);
+        content.append(card.widget());
+        let window = gtk::Window::builder().child(&content).build();
+        window.present();
+        settle();
+        assert!(elsewhere.grab_focus());
+        let focus = || gtk::prelude::GtkWindowExt::focus(&window);
+        card.send(EditCardInput::Focus);
+        assert_ne!(
+            focus().as_ref(),
+            Some(card.widget().upcast_ref::<gtk::Widget>()),
+            "only queued"
+        );
+        settle();
+        assert_eq!(
+            focus().as_ref(),
+            Some(card.widget().upcast_ref::<gtk::Widget>()),
+            "the card has the keyboard"
+        );
+        // A hidden card leaves the keyboard where it is.
+        assert!(elsewhere.grab_focus());
+        card.widget().set_visible(false);
+        card.send(EditCardInput::Focus);
+        settle();
+        assert!(
+            focus().is_some_and(|focus| focus.is_ancestor(&elsewhere)),
+            "the entry keeps the keyboard"
+        );
+        assert!(heard.borrow().is_empty(), "nothing is reported");
+        window.destroy();
     }
 
     #[test]

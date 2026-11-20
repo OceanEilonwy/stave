@@ -7,4 +7,4 @@ part base : oak {
   $0
   place { ground }
 }
-// expect: width, thickness, grain, shape, face_side, face_edge, note, boards, lengths, loose, edges
+// expect: width, thickness, grain, shape, face_side, face_edge, note, boards, lengths, loose, edges, banding

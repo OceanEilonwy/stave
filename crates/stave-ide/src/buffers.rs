@@ -57,6 +57,30 @@ struct Buffer {
     text: String,
     /// What is on disk, as last read or written.
     saved: String,
+    /// The text on disk the unsaved changes were made from, kept when the
+    /// file changed on disk underneath them: saving merges the two changes
+    /// from it rather than writing over the one on disk.
+    before: Option<String>,
+}
+
+/// Merges two changes to one text for a save: `(before, yours, on_disk)`,
+/// where `yours` and `on_disk` were both changed from `before`. It gives
+/// the merged text and whether it holds conflict markers (both changed the
+/// same lines).
+pub type MergeText<'a> = &'a dyn Fn(&str, &str, &str) -> (String, bool);
+
+/// How a save went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Saved {
+    /// The buffer's text was written as it was.
+    AsTyped,
+    /// The file had changed on disk under unsaved changes: the two were
+    /// merged, and the buffer now holds what was written.
+    Merged {
+        /// Both changed the same lines: both are kept between conflict
+        /// markers.
+        conflicted: bool,
+    },
 }
 
 /// What happened to an open buffer when its file changed on disk.
@@ -64,8 +88,8 @@ struct Buffer {
 pub enum Reload {
     /// The buffer had no unsaved changes and now shows the file's new text.
     Reloaded,
-    /// The buffer has unsaved changes, which are kept; saving overwrites
-    /// the file.
+    /// The buffer has unsaved changes, which are kept; saving merges them
+    /// with the change on disk.
     KeptChanges,
     /// Nothing changed.
     Unchanged,
@@ -94,6 +118,7 @@ impl Buffers {
                 Buffer {
                     saved: text.clone(),
                     text,
+                    before: None,
                 },
             );
         }
@@ -120,6 +145,7 @@ impl Buffers {
                     Buffer {
                         text: shown.to_owned(),
                         saved,
+                        before: None,
                     },
                 );
             }
@@ -172,7 +198,12 @@ impl Buffers {
     /// Writes a document's text to its file. The file is written whole to
     /// a temporary file next to it first and then moved over it, so a
     /// failed save never leaves half a file.
-    pub fn save(&mut self, document: &Document) -> Result<(), SaveError> {
+    ///
+    /// When the file changed on disk since the unsaved changes were made
+    /// from it (someone else wrote it), the two changes are merged with
+    /// `merge` and the merged text is written and shown: a change on disk
+    /// is never just written over.
+    pub fn save(&mut self, document: &Document, merge: MergeText<'_>) -> Result<Saved, SaveError> {
         let Document::File(path) = document else {
             return Err(SaveError::ReadOnly(document.source_path()));
         };
@@ -180,21 +211,46 @@ impl Buffers {
             .open
             .get_mut(document)
             .ok_or_else(|| SaveError::NotOpen(document.source_path()))?;
-        write_whole(path, &buffer.text).map_err(|source| SaveError::Unwritable {
+        // The file as it is now; a change not yet taken in by `reload`
+        // counts as much as one that was.
+        let on_disk = fs::read_to_string(path).ok();
+        let before = match (&buffer.before, &on_disk) {
+            (Some(before), _) => Some(before.clone()),
+            (None, Some(now)) if *now != buffer.saved && buffer.text != buffer.saved => {
+                Some(buffer.saved.clone())
+            }
+            (None, Some(_) | None) => None,
+        };
+        let (text, saved) = match (&before, &on_disk) {
+            (Some(before), Some(now)) if now != before => {
+                let (merged, conflicted) = merge(before, &buffer.text, now);
+                (merged, Saved::Merged { conflicted })
+            }
+            (Some(_) | None, Some(_) | None) => (buffer.text.clone(), Saved::AsTyped),
+        };
+        write_whole(path, &text).map_err(|source| SaveError::Unwritable {
             path: path.clone(),
             source,
         })?;
-        buffer.saved.clone_from(&buffer.text);
-        Ok(())
+        buffer.saved.clone_from(&text);
+        buffer.text = text;
+        buffer.before = None;
+        Ok(saved)
     }
 
     /// Saves every document with unsaved changes; the first failure stops.
-    pub fn save_all(&mut self) -> Result<(), SaveError> {
+    /// Returns the documents whose text a merge changed (see
+    /// [`Buffers::save`]), with whether each holds conflict markers.
+    pub fn save_all(&mut self, merge: MergeText<'_>) -> Result<Vec<(Document, bool)>, SaveError> {
         let dirty: Vec<Document> = self.dirty().cloned().collect();
-        for document in &dirty {
-            self.save(document)?;
+        let mut merged = Vec::new();
+        for document in dirty {
+            match self.save(&document, merge)? {
+                Saved::AsTyped => {}
+                Saved::Merged { conflicted } => merged.push((document, conflicted)),
+            }
         }
-        Ok(())
+        Ok(merged)
     }
 
     /// Throws away a document's unsaved changes, reading its file again.
@@ -203,13 +259,14 @@ impl Buffers {
         if let Some(buffer) = self.open.get_mut(document) {
             buffer.saved.clone_from(&text);
             buffer.text = text;
+            buffer.before = None;
         }
         Ok(())
     }
 
     /// Takes a change made to a file on disk by something else: a buffer
     /// without unsaved changes shows the new text; one with unsaved
-    /// changes keeps them.
+    /// changes keeps them, and its next save merges the two.
     pub fn reload(&mut self, document: &Document) -> Result<Reload, OpenError> {
         let Some(buffer) = self.open.get(document) else {
             return Ok(Reload::Unchanged);
@@ -220,7 +277,13 @@ impl Buffers {
         }
         let dirty = buffer.text != buffer.saved;
         if let Some(buffer) = self.open.get_mut(document) {
-            if !dirty {
+            if dirty {
+                // Remember what the unsaved changes were made from, so the
+                // save merges rather than writes over the change on disk.
+                if buffer.before.is_none() {
+                    buffer.before = Some(buffer.saved.clone());
+                }
+            } else {
                 buffer.text.clone_from(&text);
             }
             buffer.saved = text;
@@ -343,6 +406,55 @@ mod tests {
         folder
     }
 
+    /// A merge that keeps the buffer's text, for saves with nothing on
+    /// disk to merge.
+    fn keep_yours(_before: &str, yours: &str, _on_disk: &str) -> (String, bool) {
+        (yours.to_owned(), false)
+    }
+
+    /// A merge that says what it was given, to see that a save merges.
+    fn tell(before: &str, yours: &str, on_disk: &str) -> (String, bool) {
+        (format!("{before}|{yours}|{on_disk}"), true)
+    }
+
+    #[test]
+    fn a_save_merges_unsaved_changes_with_a_change_on_disk() {
+        let folder = scratch("merge");
+        let (a, b) = (folder.join("a.stave"), folder.join("b.stave"));
+        fs::write(&a, "old").unwrap();
+        fs::write(&b, "old").unwrap();
+        let (a, b) = (Document::File(a.clone()), Document::File(b.clone()));
+        let mut buffers = Buffers::new();
+        buffers.open(&a).unwrap();
+        buffers.open(&b).unwrap();
+        buffers.edit(&a, "mine").unwrap();
+        buffers.edit(&b, "mine").unwrap();
+        for document in [&a, &b] {
+            let Document::File(path) = document else {
+                unreachable!()
+            };
+            fs::write(path, "theirs").unwrap();
+        }
+        // Taken in by a reload, or not yet: either way the save merges.
+        assert_eq!(buffers.reload(&a).unwrap(), Reload::KeptChanges);
+        assert_eq!(
+            buffers.save(&a, &tell).unwrap(),
+            Saved::Merged { conflicted: true }
+        );
+        assert_eq!(buffers.text(&a), Some("old|mine|theirs"));
+        assert!(!buffers.is_dirty(&a));
+        let Document::File(path) = &b else {
+            unreachable!()
+        };
+        assert_eq!(buffers.save_all(&tell).unwrap(), vec![(b.clone(), true)]);
+        assert_eq!(fs::read_to_string(path).unwrap(), "old|mine|theirs");
+        // With nothing changed on disk, a save writes what was typed.
+        buffers.edit(&b, "again").unwrap();
+        assert_eq!(buffers.save(&b, &tell).unwrap(), Saved::AsTyped);
+        assert_eq!(fs::read_to_string(path).unwrap(), "again");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
     #[test]
     fn edits_are_unsaved_until_saved() {
         let folder = scratch("save");
@@ -361,7 +473,7 @@ mod tests {
         assert_eq!(overlay.read(&path).unwrap(), "stave 1\n\nlet a = 1\n");
         // Opening again keeps the unsaved text.
         assert_eq!(buffers.open(&document).unwrap(), "stave 1\n\nlet a = 1\n");
-        buffers.save(&document).unwrap();
+        buffers.save(&document, &keep_yours).unwrap();
         assert!(!buffers.is_dirty(&document));
         assert_eq!(fs::read_to_string(&path).unwrap(), "stave 1\n\nlet a = 1\n");
         assert!(buffers.overlay().is_empty());
@@ -448,7 +560,10 @@ mod tests {
             buffers.edit(&dado, "x"),
             Err(SaveError::ReadOnly(_))
         ));
-        assert!(matches!(buffers.save(&dado), Err(SaveError::ReadOnly(_))));
+        assert!(matches!(
+            buffers.save(&dado, &keep_yours),
+            Err(SaveError::ReadOnly(_))
+        ));
         assert!(!buffers.is_dirty(&dado));
     }
 

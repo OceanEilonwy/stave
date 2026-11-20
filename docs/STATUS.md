@@ -340,9 +340,11 @@ the checker's fixes on the card).
   by the setting just changed says
   so first ("It stopped fitting when joinery became chigiri.") with a
   button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
-  side", hold a distance, remove with what depends on it); count and
-  boundary handles; grips on the model (drag, type, stops, sizes that
-  follow, "Let the solver move this"); the finder's verbs.
+  side", hold a distance, remove with what depends on it); the repeat count; the selection's sizes in the Edit panel's Sizes card
+  (each opened in a size editor: slider, steps, typed value, what
+  changes, verdict, Apply; boundaries between pieces; stops; sizes that
+  follow; "Let the solver move this"); nothing is dragged on the model;
+  the finder's verbs.
 - **Command line**: `stave edit <folder> --patch <file> [--commit]` and
   `stave edit <folder> --script <file>` (a whole build as steps, with
   `options <setting>` listing a setting's options and whether each fits,
@@ -420,9 +422,9 @@ open in the editor the change stays unsaved there.
   too close to … another cut"). Its help names the pull's screw hole
   but not the setting to change: `front_screw_inset: 30mm` on the
   drawer, or `pull_kind: bar_pull(centres: 128mm)`, makes it fit.
-- Grip labels overlap each other; the Details panel's "CHANGE …"
-  heading overlaps the row above it. (The cards are in the Edit panel
-  now, so no grip label or grip panel is drawn over one.)
+- The Details panel's "CHANGE …" heading overlaps the row above it.
+  (Grips are no longer drawn on the model, so their labels no longer
+  overlap.)
 - Library place params prompt "Point at the under." (they have `//`
   comments, not `///`); the card shows raw param names.
 - **Only the four edge joints say where they apply.** `chigiri`,
@@ -465,6 +467,58 @@ open in the editor the change stays unsaved there.
 - A mirrored pair split up or deep has no gesture.
 - The full list, with what was decided and left out, is in
   `docs/workpacks/2026-11-18-graphical-editing.md`.
+
+## Editors and AI
+
+Stave works with the AI apps people already use, **Claude Desktop**,
+**Claude Code** and **Codex**, as an MCP server; [ai.md](ai.md) is the
+guide, and the design is
+`docs/superpowers/specs/2026-11-20-ai-integration-design.md`.
+
+- **Setting up**: `stave mcp install` (or Help → Use with an AI App… in
+  the window) writes Stave's entry into each app found
+  (`--claude-desktop`, `--claude-code`, `--codex` pick them);
+  `stave mcp uninstall` takes it out (`stave-link`). The apps run
+  `stave mcp`, the server over standard input and output (`stave-mcp`).
+- **Tools**: projects (`list_projects`, `open_project`, `new_project`),
+  looking (`check`, `describe`, `grammar`, `std_lookup`), changing
+  (`try_patch`, `fixes_for`, `suggest`), versions (`list_suggestions`,
+  `list_versions`, `apply_suggestion`, `discard_suggestion`, `undo`),
+  conflicts (`list_conflicts`, `try_resolution`, `resolve_conflict`) and
+  preview (`preview`, `show_in_stave`, `render_view`). Every answer is
+  plain text that stands on its own, plus structured content.
+- **Versions** (`stave-history`, on `jj-lib`): each project's history in
+  `.stave/history/`, Stave standing in for the working copy. Everyone
+  works on a line of their own: the window's is the project folder, and a
+  save merges it into the main line; each AI app's suggestions are lines
+  in the repository. Applying a suggestion re-tries its patches on main
+  as it is now and lands only when the design checks with no errors,
+  falling back to merging its files; one lock queues two merges at the
+  same moment. Undo goes through the operation log (an app's own undo
+  only reaches its own changes). A folder at the root of a git repository
+  keeps its `.git` and branch; a folder inside a bigger repository is
+  refused, with the offer of a copy.
+- **Merge policy**: `.stave/agents.toml` (`merge_policy = "off"`, `"ask"`
+  or `"auto"`, default `ask`), else `~/.config/stave/agents.toml`; a
+  suggestion that changes anything in `.stave/` is refused.
+- **The window** (`stave-gtk`): the Versions panel (Suggestions with
+  Show, Apply, Discard and Undo; the versions, newest first), turning
+  versions on, catching up when an app moves main, and "show in Stave"
+  over D-Bus (`app.show-project`), shown as a ghost and written only on
+  Add ([gui.md](gui.md), "Versions").
+- **Conflicts** (grammar, "Conflicts"): conflict marker lines (jj's
+  snapshot style and git's two-sided style) are part of the language: a
+  file with them round-trips byte for byte, `stave fmt` leaves it alone,
+  and `stave check` reports `error[conflict]` and checks each side. The
+  editor tints the sides with Keep links above them.
+- **The viewer** (`stave-web`, built by `tools/build-viewer.sh`): the
+  renderer (`stave-render`, moved out of `stave-gtk`) on WebGPU in WASM,
+  running the pipeline over the project's text; rotate, zoom, pick, open,
+  pull apart and a suggestion as a ghost. It is the MCP App page in
+  Claude Desktop and a page on `127.0.0.1` with a per-session token for
+  the other apps. Read only. The page is one self-contained file of
+  about 3.2 MB (the `viewer` Cargo profile, then binaryen's `wasm-opt
+  -Oz`; about 3.6 MB when `wasm-opt` isn't installed, 6.5 MB before).
 
 ## Not done yet
 
@@ -524,3 +578,11 @@ open in the editor the change stays unsaved there.
   extension. (Patches, rename and smart edits exist for the 3D editor and
   `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).
+  For AI apps: no `cut_list` tool (there is no cut list yet); the
+  viewer needs WebGPU (without it the page asks for `render_view`'s
+  pictures instead); Linux only. In the window, the Versions panel's
+  Resolve dialog edits a suggestion's clashing files as plain text
+  (without the editor's conflict links), the 3D view can't yet show one
+  side of a conflict as a ghost, and the Problems panel doesn't check
+  each side of a conflict on its own (`stave check` and the AI apps'
+  `check` do).

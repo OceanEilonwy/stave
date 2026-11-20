@@ -16,11 +16,14 @@ use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
+use super::ai_link::{self, Installing, ShowProject};
 use super::launch::Launch;
 use super::remember::Remembered;
 use super::start_page::StartPage;
 use super::update::project::ProjectInput;
 use super::{Options, Theme, Window, WindowInit, WindowInput, WindowOutput, build_widgets, style};
+use stave_app::editing::EditCommand;
+use stave_app::session::Command;
 
 /// The application's id, and its desktop file's, metainfo's and icon's
 /// name. Under the domain of the project's own repository.
@@ -407,6 +410,13 @@ pub(super) enum ShellInput {
     Window(WindowId, WindowOutput),
     /// GTK took this window out of the application: it has closed.
     WindowRemoved(gtk::Window),
+    /// An AI app asked (over the session bus) to show a project, and a
+    /// patch on it as a ghost.
+    ShowProject(ShowProject),
+    /// The Use with an AI App… action.
+    UseWithAiApp,
+    /// Setting Stave up in the AI apps has finished.
+    UsedWithAiApp(Installing),
 }
 
 impl Component for Shell {
@@ -498,6 +508,12 @@ impl Component for Shell {
             ShellInput::WindowRemoved(window) => self
                 .windows
                 .retain(|open| open.controller.widget().upcast_ref::<gtk::Window>() != &window),
+            ShellInput::ShowProject(request) => self.show_project(request),
+            ShellInput::UseWithAiApp => self.use_with_ai_app(),
+            ShellInput::UsedWithAiApp(installing) => ai_link::present(
+                &ai_link::report(&installing),
+                self.application.active_window().as_ref(),
+            ),
         }
     }
 }
@@ -514,10 +530,11 @@ impl Shell {
         gtk::Window::set_default_icon_name(APP_ID);
         self.theme.apply();
         let application = &self.application;
-        let actions: [(&str, ShellAction); 3] = [
+        let actions: [(&str, ShellAction); 4] = [
             ("quit", || ShellInput::Quit),
             ("about", || ShellInput::About),
             ("shortcuts", || ShellInput::Shortcuts),
+            (ai_link::USE_WITH_AI_APP, || ShellInput::UseWithAiApp),
         ];
         for (name, message) in actions {
             let action = gio::SimpleAction::new(name, None);
@@ -542,6 +559,10 @@ impl Shell {
             input.emit(ShellInput::SetTheme(theme));
         });
         application.add_action(&style);
+        let input = self.sender.input_sender().clone();
+        ai_link::add_show_project_action(application, move |request| {
+            input.emit(ShellInput::ShowProject(request));
+        });
         for accelerator in ACCELERATORS
             .iter()
             .filter(|accelerator| accelerator.scope == KeyScope::Application)
@@ -636,6 +657,36 @@ impl Shell {
         Some(id)
     }
 
+    /// An AI app asked to show a project: its window opens (or comes
+    /// forward) and the patch, if any, is tried there and shown as a
+    /// ghost, a change in progress the user may add or cancel. When the
+    /// user is already making an edit or change there, the session
+    /// refuses the patch and keeps theirs (`Rejection::ChangeInProgress`,
+    /// shown as a toast).
+    fn show_project(&mut self, request: ShowProject) {
+        let Some(id) = self.open_folder(&request.folder) else {
+            return;
+        };
+        if let Some(patch) = request.patch {
+            self.send_to(
+                id,
+                ProjectInput::Dispatch(Command::Edit(EditCommand::ShowPatch(patch))),
+            );
+        }
+    }
+
+    /// Sets Stave up in every AI app found, off the main thread, then
+    /// says what was done.
+    fn use_with_ai_app(&self) {
+        let input = self.sender.input_sender().clone();
+        glib::spawn_future_local(async move {
+            match gio::spawn_blocking(ai_link::install_found).await {
+                Ok(installing) => input.emit(ShellInput::UsedWithAiApp(installing)),
+                Err(_) => eprintln!("error: setting Stave up in the AI apps stopped"),
+            }
+        });
+    }
+
     /// A project window said something.
     fn window_said(&mut self, id: WindowId, output: WindowOutput) {
         match output {
@@ -696,8 +747,7 @@ impl Shell {
                 },
             );
         } else if let Some(page) = &self.start {
-            page.toasts
-                .add_toast(adw::Toast::builder().title(text).timeout(5).build());
+            page.notice(text);
         }
     }
 
@@ -976,9 +1026,14 @@ pub(super) fn style_section() -> gio::Menu {
     style
 }
 
-/// The menu's last section: the keyboard shortcuts and About.
+/// The menu's last section: using Stave from an AI app, the keyboard
+/// shortcuts and About.
 pub(super) fn help_section() -> gio::Menu {
     let help = gio::Menu::new();
+    help.append(
+        Some(&tr("Use with an AI App…")),
+        Some(&format!("app.{}", ai_link::USE_WITH_AI_APP)),
+    );
     help.append(Some(&tr("Keyboard Shortcuts")), Some("app.shortcuts"));
     help.append(Some(&tr("About Stave")), Some("app.about"));
     help

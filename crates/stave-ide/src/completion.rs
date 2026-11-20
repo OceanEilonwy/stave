@@ -1394,6 +1394,7 @@ fn type_text(ty: ValueType) -> String {
             Special::Uses => "fastener kinds",
             Special::Needs => "needs",
             Special::Edges => "edge profiles",
+            Special::Banding => "edge banding",
         }
         .to_owned(),
     }

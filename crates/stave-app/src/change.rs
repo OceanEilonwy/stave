@@ -158,6 +158,12 @@ pub enum ChangeRequest {
         /// Its new name.
         to: Ident,
     },
+    /// A whole patch file, written elsewhere (an AI app's suggestion):
+    /// `stave 1` and one or more `patch` blocks, tried as it is.
+    Patch {
+        /// The patch file's text.
+        text: String,
+    },
 }
 
 /// What a change does, for its card: the words and what the change found
@@ -698,6 +704,11 @@ impl Change {
                     dependants,
                 };
             }
+            ChangeRequest::Patch { text } => {
+                self.summary = patch_summary(text)?;
+                self.patch = Some(text.clone());
+                self.detail = ChangeDetail::Repeat;
+            }
             ChangeRequest::Rename { item, to } => {
                 let analysis = self.analysis()?;
                 let taken = crate::naming::TakenNames::of_project(scope.model());
@@ -854,6 +865,54 @@ impl Change {
             })
             .collect()
     }
+}
+
+/// What a patch file given whole says it does: its patches' summaries,
+/// joined. A file that doesn't read, or holds no patch, can't start.
+fn patch_summary(text: &str) -> Result<String, ChangeError> {
+    let mut sources = SourceMap::new();
+    let file = sources
+        .add(CHANGE_PATCH_NAME, text)
+        .map_err(|error| ChangeError::Unwritable(error.to_string()))?;
+    let parse = parse_patch_file(file, text);
+    if let Some(error) = parse.diagnostics.iter().find(|d| d.is_error()) {
+        return Err(ChangeError::Unwritable(fill_in(
+            &tr("the suggested change doesn't read as a patch: {error}"),
+            &[("error", &error.message)],
+        )));
+    }
+    let summaries: Vec<String> = parse
+        .ast
+        .iter()
+        .flat_map(|file| &file.patches)
+        .map(|patch| plain_text(&patch.summary))
+        .collect();
+    if summaries.is_empty() {
+        return Err(ChangeError::Unwritable(tr(
+            "the suggested change holds no patch",
+        )));
+    }
+    Ok(summaries.join("; "))
+}
+
+/// A string literal's text as written, its `{name}` parts kept as
+/// written.
+fn plain_text(literal: &stave_lang::ast::StringLit) -> String {
+    literal
+        .parts
+        .iter()
+        .map(|part| match part {
+            stave_lang::ast::StringPart::Text { text, .. } => text.clone(),
+            stave_lang::ast::StringPart::Interp { root, members, .. } => {
+                let mut name = root.as_str().to_owned();
+                for member in members {
+                    name.push('.');
+                    name.push_str(member.as_str());
+                }
+                format!("{{{name}}}")
+            }
+        })
+        .collect()
 }
 
 /// What a mirror of `item` would add in the design, when it has a mirror

@@ -4,6 +4,7 @@ crates/stave-app/src/candidates/new_project.rs
 crates/stave-app/src/candidates/write.rs
 crates/stave-app/src/change.rs
 crates/stave-app/src/choices.rs
+crates/stave-app/src/conflicts.rs
 crates/stave-app/src/edit.rs
 crates/stave-app/src/editing.rs
 crates/stave-app/src/empty.rs
@@ -26,7 +27,9 @@ crates/stave-app/src/scratch.rs
 crates/stave-app/src/session.rs
 crates/stave-app/src/solve_edit.rs
 crates/stave-app/src/stops.rs
+crates/stave-app/src/versions.rs
 crates/stave-app/src/view.rs
+crates/stave-gtk/src/ui/ai_link.rs
 crates/stave-gtk/src/ui/app.rs
 crates/stave-gtk/src/ui/chrome.rs
 crates/stave-gtk/src/ui/dock.rs
@@ -41,7 +44,7 @@ crates/stave-gtk/src/ui/edit_view/grip_text.rs
 crates/stave-gtk/src/ui/edit_view/grips.rs
 crates/stave-gtk/src/ui/edit_view/hold.rs
 crates/stave-gtk/src/ui/edit_view/item_tools.rs
-crates/stave-gtk/src/ui/edit_view/repeat_handles.rs
+crates/stave-gtk/src/ui/edit_view/sizes.rs
 crates/stave-gtk/src/ui/edit_view/verbs.rs
 crates/stave-gtk/src/ui/edit_writer.rs
 crates/stave-gtk/src/ui/editor.rs
@@ -66,6 +69,7 @@ crates/stave-gtk/src/ui/tree.rs
 crates/stave-gtk/src/ui/update/project.rs
 crates/stave-gtk/src/ui/update/rendering.rs
 crates/stave-gtk/src/ui/update/selection.rs
+crates/stave-gtk/src/ui/versions.rs
 crates/stave-gtk/src/ui/view_tools.rs
 crates/stave-gtk/src/ui/workbench.rs
 data/io.github.OceanEilonwy.Stave.desktop

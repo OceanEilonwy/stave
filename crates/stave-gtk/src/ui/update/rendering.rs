@@ -1065,11 +1065,14 @@ impl Window {
                 match shown {
                     Shown::Yes => crate::render::profile::frame_shown(),
                     Shown::No => {}
-                    Shown::Refused => self.request_render(),
+                    Shown::Refused => {
+                        // Frames from now on go by readback; this one
+                        // again too.
+                        renderer.refuse_dmabufs();
+                        self.request_render();
+                    }
                 }
                 self.show_pins();
-                self.place_ghost_verdict();
-                self.place_grips();
                 // Save the window once a frame drawn at the view's real
                 // size is up (not one drawn before the view had its size,
                 // shown stretched).
@@ -1106,18 +1109,6 @@ impl Window {
         let (_, graph) = session.drawable()?;
         let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
         self.project(state, bounds.centre())
-    }
-
-    /// How much of the 3D view's right side the camera column takes (with
-    /// the space beside it), in logical pixels: what the editing's cards
-    /// and labels keep clear of at the right.
-    pub(in crate::ui) fn right_column(&self) -> i32 {
-        let camera = &self.widgets.camera.root;
-        if camera.is_visible() {
-            camera.width().saturating_add(EDGE)
-        } else {
-            0
-        }
     }
 
     /// Where a point of the scene shows in the 3D view, in logical pixels.

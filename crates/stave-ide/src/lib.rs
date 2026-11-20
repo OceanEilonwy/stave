@@ -137,7 +137,7 @@ pub mod words;
 use std::path::{Path, PathBuf};
 
 pub use analysis::{Analysis, Crumb, FilePosition, Found, Hover, Lens, Location, Use, Uses};
-pub use buffers::{Buffers, OpenError, Overlay, Reload, SaveError};
+pub use buffers::{Buffers, MergeText, OpenError, Overlay, Reload, SaveError, Saved};
 pub use completion::{
     Completion, CompletionKind, ParameterKind, SignatureHelp, SignatureParameter,
 };

@@ -6,7 +6,12 @@
 //!
 //! The window builds a writer for each Add ([`super::files::FilesPage::writer`])
 //! from its own copies of the open buffers (GObjects the Files component
-//! published) and whether the editor shows, so the writer shares no state.
+//! published) and whether the editor shows. It shares no Rust state, but
+//! it writes into the Code panel's live buffers inside `session.apply`,
+//! because `stave_app`'s [`WriteEdits`] must answer the commit at once:
+//! an accepted exception in docs/relm4-migration.md ("Accepted
+//! exceptions"), sound because the component's handlers on a buffer only
+//! queue messages.
 //! A file it writes while the editor is open but that has no tab gets a
 //! buffer made here, which the writer reports through a channel the window
 //! drains straight after the commit ([`super::files::FilesPage::take_written`]):
@@ -23,7 +28,7 @@ use stave_app::editing::{FileEdit, WriteEdits};
 use stave_app::scratch::DiskWriter;
 use stave_ide::Document;
 
-use super::files::Written;
+use super::files::{Made, Written};
 
 /// Writes an edit's files through the open buffers, else to disk.
 pub(super) struct BufferWriter {
@@ -76,23 +81,24 @@ impl BufferWriter {
 impl WriteEdits for BufferWriter {
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()> {
         let document = Document::File(file.path.clone());
-        let (buffer, created) = match self.buffer(file) {
-            Some(buffer) => (buffer, false),
+        // The text a buffer made here starts from: the file's on disk.
+        let (buffer, base) = match self.buffer(file) {
+            Some(buffer) => (buffer, None),
             None if self.wants_buffer(file) => {
                 let text = std::fs::read_to_string(&file.path)?;
-                (super::editor::new_buffer(&self.table, &text), true)
+                (super::editor::new_buffer(&self.table, &text), Some(text))
             }
             None => return DiskWriter.write_edits(file),
         };
         apply_to_buffer(&buffer, file)?;
-        if created {
+        if base.is_some() {
             self.buffers.insert(document.clone(), buffer.clone());
         }
-        if created || self.editor_open {
+        if base.is_some() || self.editor_open {
             // The window may have gone; then nobody needs to know.
             let _ = self.written.send(Written {
                 document,
-                created: created.then_some(buffer),
+                created: base.map(|base| Made { buffer, base }),
                 // The editor shows the file the change went into.
                 show: self.editor_open,
             });

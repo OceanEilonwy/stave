@@ -17,16 +17,6 @@ pub fn f32_of_int(value: i32) -> f32 {
     f32_of(f64::from(value))
 }
 
-/// A pixel count as `f32`.
-pub fn f32_of_u32(value: u32) -> f32 {
-    f32_of(f64::from(value))
-}
-
-/// A small index as `f32` (exact below 2^24).
-pub fn f32_of_index(value: usize) -> f32 {
-    f32_of(f64::from(u32::try_from(value).unwrap_or(u32::MAX)))
-}
-
 /// A device pixel count from a scaled size: rounded and kept within
 /// `1..=16384`.
 pub fn pixels(value: f64) -> u32 {
@@ -51,11 +41,6 @@ pub fn int_of_f32(value: f32) -> i32 {
         .unwrap_or(0)
 }
 
-/// A byte size for a GPU buffer.
-pub fn bytes(size: usize) -> u64 {
-    u64::try_from(size).unwrap_or(u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,11 +48,9 @@ mod tests {
     #[test]
     fn screen_numbers_convert_exactly() {
         assert_eq!(f32_of_int(1600), 1600.0);
-        assert_eq!(f32_of_u32(1000), 1000.0);
         assert_eq!(pixels(1599.6), 1600);
         assert_eq!(pixels(-3.0), 1);
         assert_eq!(pixels(1e9), 16384);
-        assert_eq!(bytes(64), 64);
         assert_eq!(int_of_f32(99.6), 100);
         assert_eq!(int_of_f32(f32::NAN), 0);
     }

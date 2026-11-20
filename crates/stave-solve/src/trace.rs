@@ -1136,6 +1136,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 | BuiltinCall::Overlay { .. }
                 | BuiltinCall::Inset { .. }
                 | BuiltinCall::Turned { .. }
+                | BuiltinCall::Tapered { .. }
+                | BuiltinCall::Arched { .. }
                 | BuiltinCall::Joined { .. }
                 | BuiltinCall::Spliced { .. }
                 | BuiltinCall::Box { .. }
@@ -1307,6 +1309,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 | BuiltinCall::Overlay { .. }
                 | BuiltinCall::Inset { .. }
                 | BuiltinCall::Turned { .. }
+                | BuiltinCall::Tapered { .. }
+                | BuiltinCall::Arched { .. }
                 | BuiltinCall::Joined { .. }
                 | BuiltinCall::Spliced { .. }
                 | BuiltinCall::Box { .. }
@@ -1682,6 +1686,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 | BuiltinCall::Overlay { .. }
                 | BuiltinCall::Inset { .. }
                 | BuiltinCall::Turned { .. }
+                | BuiltinCall::Tapered { .. }
+                | BuiltinCall::Arched { .. }
                 | BuiltinCall::Joined { .. }
                 | BuiltinCall::Spliced { .. }
                 | BuiltinCall::Box { .. }
@@ -2086,6 +2092,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | BuiltinCall::Overlay { .. }
             | BuiltinCall::Inset { .. }
             | BuiltinCall::Turned { .. }
+            | BuiltinCall::Tapered { .. }
+            | BuiltinCall::Arched { .. }
             | BuiltinCall::Joined { .. }
             | BuiltinCall::Spliced { .. }
             | BuiltinCall::Box { .. }
@@ -2248,6 +2256,8 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | BuiltinCall::Split { .. }
             | BuiltinCall::Cover { .. }
             | BuiltinCall::Turned { .. }
+            | BuiltinCall::Tapered { .. }
+            | BuiltinCall::Arched { .. }
             | BuiltinCall::Joined { .. }
             | BuiltinCall::Spliced { .. }
             | BuiltinCall::Box { .. }

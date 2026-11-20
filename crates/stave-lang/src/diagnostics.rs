@@ -250,6 +250,8 @@ codes! {
     UnclosedBracket = "unclosed-bracket", layer 1;
     /// `<the body of part 'side_l'> is missing its closing "}"`
     MissingBrace = "missing-brace", layer 1;
+    /// `'<your saved work>' and '<Claude Desktop>' change the same lines`
+    Conflict = "conflict", layer 1;
     /// `unknown name '<name>'`
     UnknownName = "unknown-name", layer 2;
     /// `'<name>' is declared twice`
@@ -324,6 +326,10 @@ codes! {
     ModelMismatch = "model-mismatch", layer 4;
     /// Warning: a part that no joint or hardware joins to the ground part.
     LoosePart = "loose-part", layer 4;
+    /// Warning: wood joined or held against its grain: end grain glued,
+    /// glue across the grain, a tenon with the grain across it, or a solid
+    /// part held fast too far apart across its grain.
+    Grain = "grain", layer 4;
 }
 
 impl Code {

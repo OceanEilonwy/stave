@@ -1,4 +1,4 @@
-# A value typed for the divider's height that doesn't fit: the number
+# A value typed for the divider's height that doesn't fit: its field
 # turned into an entry, Enter tried it, and the entry stays open with why
 # it was refused under it.
 grips assembly divider

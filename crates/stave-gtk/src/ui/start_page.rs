@@ -46,6 +46,9 @@ pub(super) struct StartPageComponent {
     new_project: Option<NewProjectDialog>,
     /// How it asks for a folder ([`choose_folder`], or a test's).
     choose_folder: FolderChooser,
+    /// Where its short lines show: its own overlay, which only its
+    /// update adds to ([`StartPageInput::Notice`]).
+    toasts: adw::ToastOverlay,
 }
 
 impl std::fmt::Debug for StartPageComponent {
@@ -64,8 +67,6 @@ pub(super) struct StartPageInit {
     pub(super) application: adw::Application,
     /// The recent projects, newest first.
     pub(super) recent: Vec<PathBuf>,
-    /// Where its short lines show; the application adds them.
-    pub(super) toasts: adw::ToastOverlay,
     /// How it asks for a folder: [`choose_folder`].
     pub(super) choose_folder: FolderChooser,
 }
@@ -91,6 +92,9 @@ pub(super) enum StartPageInput {
     NewProjectWritten(PathBuf),
     /// The New Project dialog has closed.
     NewProjectClosed,
+    /// Show this short line on the page for a few seconds (the
+    /// application's notices while no project window is open).
+    Notice(String),
 }
 
 /// What the start page tells its owner.
@@ -252,9 +256,9 @@ impl Component for StartPageComponent {
         let StartPageInit {
             application,
             recent,
-            toasts,
             choose_folder,
         } = init;
+        let toasts = adw::ToastOverlay::new();
         let toasts = &toasts;
         let has_icon = gtk::gdk::Display::default()
             .is_some_and(|display| gtk::IconTheme::for_display(&display).has_icon(APP_ID));
@@ -267,6 +271,7 @@ impl Component for StartPageComponent {
         let model = StartPageComponent {
             new_project: None,
             choose_folder,
+            toasts: toasts.clone(),
         };
         let widgets = view_output!();
         if !recent.is_empty() {
@@ -313,6 +318,11 @@ impl Component for StartPageComponent {
             | StartPageInput::Dropped(folder)
             | StartPageInput::FolderChosen(folder) => Some(StartPageOutput::OpenFolder(folder)),
             StartPageInput::CloseRequested => Some(StartPageOutput::CloseRequest),
+            StartPageInput::Notice(text) => {
+                self.toasts
+                    .add_toast(adw::Toast::builder().title(text).timeout(5).build());
+                None
+            }
         };
         if let Some(output) = output {
             // Nobody listening is not a mistake: the owner may not want
@@ -328,8 +338,6 @@ impl Component for StartPageComponent {
 pub(super) struct StartPage {
     /// Its window.
     pub(super) window: adw::ApplicationWindow,
-    /// Where its short lines show.
-    pub(super) toasts: adw::ToastOverlay,
     controller: Controller<StartPageComponent>,
 }
 
@@ -341,12 +349,10 @@ impl StartPage {
         recent: Vec<PathBuf>,
         shell: relm4::Sender<ShellInput>,
     ) -> StartPage {
-        let toasts = adw::ToastOverlay::new();
         let controller = StartPageComponent::builder()
             .launch(StartPageInit {
                 application: application.clone(),
                 recent,
-                toasts: toasts.clone(),
                 choose_folder,
             })
             .forward(&shell, |output| match output {
@@ -356,7 +362,6 @@ impl StartPage {
             });
         StartPage {
             window: controller.widget().clone(),
-            toasts,
             controller,
         }
     }
@@ -364,6 +369,14 @@ impl StartPage {
     /// The New Project dialog; the project it makes opens in its window.
     pub(super) fn ask_new_project(&self) {
         let _ = self.controller.sender().send(StartPageInput::AskNewProject);
+    }
+
+    /// Shows a short line on the page for a few seconds.
+    pub(super) fn notice(&self, text: &str) {
+        let _ = self
+            .controller
+            .sender()
+            .send(StartPageInput::Notice(text.to_owned()));
     }
 }
 
@@ -390,7 +403,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{listener, on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, settle, settle_until};
 
     /// The folder a test's page is told was chosen, as the file chooser
     /// would tell it.
@@ -422,7 +435,6 @@ mod tests {
             .launch(StartPageInit {
                 application,
                 recent,
-                toasts: adw::ToastOverlay::new(),
                 choose_folder: choose_at_once,
             })
             .forward(to, |output| output)
@@ -475,6 +487,53 @@ mod tests {
             "the component's runtime is gone"
         );
         assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn a_notice_is_shown_by_the_page_itself() {
+        on_gtk_thread(notice_is_the_pages);
+    }
+
+    /// The application used to add its toast to the page's overlay
+    /// itself; now it tells the page, which shows it from its own update
+    /// and tells nobody anything.
+    fn notice_is_the_pages() {
+        let heard: Rc<RefCell<Vec<StartPageOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let to = listener(move |output| log.borrow_mut().push(output));
+        let page = page("Notice", Vec::new(), &to);
+        page.widget().present();
+        settle();
+        let toast_labels = |page: &Controller<StartPageComponent>| {
+            labels_in(page.model().toasts.upcast_ref())
+                .into_iter()
+                .filter(|text| text == "Couldn't open that folder")
+                .count()
+        };
+        assert_eq!(toast_labels(&page), 0);
+        let _ = page.sender().send(StartPageInput::Notice(
+            "Couldn't open that folder".to_owned(),
+        ));
+        assert_eq!(toast_labels(&page), 0, "only queued");
+        settle();
+        assert_eq!(toast_labels(&page), 1, "the page shows it");
+        assert!(heard.borrow().is_empty(), "and tells nobody");
+        page.widget().close();
+        settle();
+    }
+
+    /// Every label's text under `widget`, depth first.
+    fn labels_in(widget: &gtk::Widget) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(label) = current.downcast_ref::<gtk::Label>() {
+                found.push(label.label().to_string());
+            }
+            found.extend(labels_in(&current));
+            child = current.next_sibling();
+        }
+        found
     }
 
     #[test]
@@ -537,7 +596,14 @@ mod tests {
         }
         settle();
         assert!(page.model().new_project.is_none(), "let go once closed");
-        assert!(shown.upgrade().is_none(), "and freed");
+        // The dialog fades out on the window's frame clock even when
+        // force-closed, and holds itself until the fade's last frame.
+        assert!(
+            settle_until(std::time::Duration::from_secs(10), || shown
+                .upgrade()
+                .is_none()),
+            "and freed"
+        );
 
         page.widget().close();
         settle();

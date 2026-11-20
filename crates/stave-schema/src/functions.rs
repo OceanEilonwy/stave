@@ -31,6 +31,12 @@ pub enum Builtin {
     Inset,
     /// `turned(profile)`: a shape.
     Turned,
+    /// `tapered(to:, toward:, on:, square:)`: a shape, a square part
+    /// planed thinner toward one end (grammar, "Shaped parts").
+    Tapered,
+    /// `arched(rise:, on:, ends:)`: a shape, a square part with an arch
+    /// sawn into one face (grammar, "Shaped parts").
+    Arched,
     /// `joined(by:)`: how the boards of a part are joined.
     Joined,
     /// `spliced(by:, at:, from:)`: where a part is spliced end to end, and
@@ -105,7 +111,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 20] = [
+    pub const ALL: [Builtin; 22] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -115,6 +121,8 @@ impl Builtin {
         Builtin::Overlay,
         Builtin::Inset,
         Builtin::Turned,
+        Builtin::Tapered,
+        Builtin::Arched,
         Builtin::Joined,
         Builtin::Spliced,
         Builtin::Box,
@@ -140,6 +148,8 @@ impl Builtin {
             Builtin::Overlay => "overlay",
             Builtin::Inset => "inset",
             Builtin::Turned => "turned",
+            Builtin::Tapered => "tapered",
+            Builtin::Arched => "arched",
             Builtin::Joined => "joined",
             Builtin::Spliced => "spliced",
             Builtin::Box | Builtin::RegionBox => "box",
@@ -199,6 +209,8 @@ impl Builtin {
             | Builtin::Overlay
             | Builtin::Inset
             | Builtin::Turned
+            | Builtin::Tapered
+            | Builtin::Arched
             | Builtin::Joined
             | Builtin::Spliced
             | Builtin::Box
@@ -223,7 +235,7 @@ impl Builtin {
                 TypeName::Region
             }
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
-            Builtin::Turned => TypeName::Shape,
+            Builtin::Turned | Builtin::Tapered | Builtin::Arched => TypeName::Shape,
             Builtin::Joined => TypeName::Boards,
             Builtin::Spliced => TypeName::Splices,
             Builtin::Box | Builtin::Cylinder => TypeName::Envelope,
@@ -299,6 +311,25 @@ impl Builtin {
             }
             Builtin::Turned => {
                 const LIST: &[Parameter] = &[positional("profile", Type(TypeName::Profile))];
+                LIST
+            }
+            Builtin::Tapered => {
+                const FACE: ValueType = Words(WordSet::Face);
+                const LIST: &[Parameter] = &[
+                    named("to", LENGTH, true),
+                    named("toward", FACE, true),
+                    // One face or a list of them: checked by the solver.
+                    named("on", ValueType::ListOf(&FACE), true),
+                    named("square", LENGTH, false),
+                ];
+                LIST
+            }
+            Builtin::Arched => {
+                const LIST: &[Parameter] = &[
+                    named("rise", LENGTH, true),
+                    named("on", Words(WordSet::Face), true),
+                    named("ends", LENGTH, false),
+                ];
                 LIST
             }
             Builtin::Joined => {

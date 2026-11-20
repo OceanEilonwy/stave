@@ -1,41 +1,40 @@
-//! The words and numbers the grips show (`docs/gui.md`, "Grips"): what a
-//! grip's label says, how a value typed becomes an amount of the grip's
-//! kind, what the size section of the Edit panel says while a drag is
-//! open, and the one-line readout at the top of the view. Nothing here decides what
-//! a grip may do: that is the session's (`stave_app::gripping`), and
-//! where a drag snaps, how far it goes and whether a typed value is
-//! written as typed are `stave_app::grip_values`; these only put the
-//! answers into words and turn the pointer's position into a value.
+//! The words and numbers the sizes show (`docs/gui.md`, "Sizes"): what a
+//! size's row says, how a value typed becomes an amount of the grip's
+//! kind, and what the size section of the Edit panel says while a drag
+//! is open. Nothing here decides what a grip may do: that is the
+//! session's (`stave_app::gripping`), and where a drag snaps, how far it
+//! goes and whether a typed value is written as typed are
+//! `stave_app::grip_values`; these only put the answers into words.
 
 use stave_app::change::{Change, ChangeDetail, ChangeRequest};
 use stave_app::edit::Verdict;
 use stave_app::editing::Progress;
+use stave_app::grip_values::TypedProblem;
 pub(super) use stave_app::grip_values::{Held, grip_value};
-use stave_app::grip_values::{TypedProblem, grip_bounds};
 use stave_app::gripping::{GripDetail, GripStops, ListedGrip};
 use stave_app::grips::{FollowKind, GripAction, GripSize, MovableGrip};
 use stave_app::i18n::{fill_in, ntr, tr};
 use stave_app::stops::{Side, SideEnd, amount_text};
 use stave_lang::ast::{ExprKind, Ident};
-use stave_lang::units::{Length, Rational};
+use stave_lang::units::Rational;
 use stave_model::ids::ParamId;
 use stave_model::trace::{Amount, Freedom};
 
-/// How a grip is drawn: never by colour alone, each has its own shape,
-/// line and words.
+/// How a size's row shows it: never by colour alone, each says itself in
+/// words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GripLook {
-    /// A plain number: a round handle, a solid dimension line, its value.
+    /// A plain number: a field dragged or typed.
     Moves,
-    /// A size worked out from params: a round handle as any other, a
-    /// dashed line; "follows overall_width" is said in words.
+    /// A size worked out from params: a field as any other;
+    /// "follows overall_width" is said under its name.
     Follows,
     /// Nothing it follows can change, or it can't move either way: a
-    /// padlock and no handle, a dotted line.
+    /// padlock in its field, which takes nothing.
     Locked,
 }
 
-/// How a listed grip is drawn.
+/// How a listed grip's row shows it.
 pub(super) fn grip_look(listed: &ListedGrip) -> GripLook {
     match &listed.grip.action {
         GripAction::Moves(movable) => {
@@ -178,48 +177,8 @@ pub(super) fn side_words(side: &Side) -> String {
     }
 }
 
-/// How one end of a grip's range is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RangeEnd {
-    /// A rule stops it there: a hard red end, hatched beyond.
-    Stop,
-    /// The end of its `within`: a hard grey end.
-    Domain,
-    /// Only as far as was searched: an open end.
-    Open,
-}
-
-/// How a side's end is drawn.
-pub(super) fn range_end(side: &Side) -> RangeEnd {
-    match side.end {
-        SideEnd::Stopped { .. } => RangeEnd::Stop,
-        SideEnd::Domain => RangeEnd::Domain,
-        SideEnd::Limit => RangeEnd::Open,
-    }
-}
-
-/// A grip's range with how each end is drawn: its two last good values
-/// once its stops are found; before, its `within` (or how far it may be
-/// searched), both ends open.
-pub(super) fn grip_range(listed: &ListedGrip) -> Option<((Amount, RangeEnd), (Amount, RangeEnd))> {
-    let (low, high) = grip_bounds(listed)?;
-    Some(match &listed.stops {
-        GripStops::Found { below, above } => ((low, range_end(below)), (high, range_end(above))),
-        GripStops::NotSearched | GripStops::NotSearchable | GripStops::Failed(_) => {
-            ((low, RangeEnd::Open), (high, RangeEnd::Open))
-        }
-    })
-}
-
-/// A length as millimetres, for drawing.
-pub(super) fn length_mm(amount: Amount) -> Option<f64> {
-    match amount {
-        Amount::Length(length) => length.to_nearest_length().map(Length::to_mm_f64),
-        Amount::Angle(_) | Amount::Count(_) | Amount::Ratio(_) => None,
-    }
-}
-
-/// Millimetres from the pointer as a length amount (to the nanometre).
+/// Millimetres as a length amount (to the nanometre).
+#[cfg(test)]
 pub(super) fn mm_amount(mm: f64) -> Option<Amount> {
     stave_geom::render::length_from_nm(mm * 1e6).map(|length| Amount::Length(length.to_exact()))
 }
@@ -419,6 +378,17 @@ pub(super) fn about_words(listed: &ListedGrip) -> Option<PanelAbout> {
     })
 }
 
+/// What a size's row says under its name: "follows overall_width",
+/// "solved", "stuck: …"; `None` for a plain size.
+pub(super) fn row_note(listed: &ListedGrip) -> Option<String> {
+    Some(match grip_note(listed)? {
+        GripNote::Stuck(why) => fill_in(&tr("stuck: {why}"), &[("why", &why)]),
+        GripNote::Solved => tr("solved"),
+        GripNote::Follows(list) => fill_in(&tr("follows {list}"), &[("list", &list)]),
+        GripNote::LockedFollows(list) => fill_in(&tr("locked: follows {list}"), &[("list", &list)]),
+    })
+}
+
 /// A row of the panel under the value: its label and its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PanelAbout {
@@ -477,9 +447,6 @@ pub(super) struct PanelModel {
     pub(super) verdict: PanelVerdict,
     /// Apply writes it: only when it fits.
     pub(super) can_apply: bool,
-    /// The one line at the top of the view: the size's name and from what
-    /// to what ("overall_width", "940 → 1040 mm").
-    pub(super) readout: Option<(String, String)>,
 }
 
 /// The verdict for where a change stands.
@@ -606,24 +573,10 @@ fn drag_panel(
     if detail.target.is_none() && !checking {
         verdict = PanelVerdict {
             class: "waiting",
-            words: tr("Drag the handle, or type a value"),
+            words: tr("Drag, step or type a value"),
         };
     }
     let fits = matches!(progress, Progress::Tried(Verdict::Fits(_))) && !checking;
-    // The readout: the size that changes, from and to; before one is
-    // picked, the grip's own size.
-    let readout = detail
-        .changes
-        .first()
-        .map(|change| (change.path.clone(), arrow_words(change.from, change.to)))
-        .or_else(|| {
-            let target = detail.target?;
-            let words = match was {
-                Some(was) => arrow_words(was, detail.reached.unwrap_or(target)),
-                None => amount_words(target),
-            };
-            Some((detail.label.clone(), words))
-        });
     PanelModel {
         title: detail.label.clone(),
         value,
@@ -634,7 +587,6 @@ fn drag_panel(
         stop,
         verdict,
         can_apply: fits,
-        readout,
     }
 }
 
@@ -666,28 +618,20 @@ pub(super) fn panel_model(
                 stop: None,
                 verdict: panel_verdict(change.progress(), checking),
                 can_apply: fits,
-                readout: None,
             })
         }
         _ => None,
     }
 }
 
-/// Why a typed value was not applied, in words, for under the entry;
-/// `None` when it fits.
-pub(super) fn typed_refusal(progress: &Progress) -> Option<String> {
-    match progress {
-        Progress::Tried(Verdict::Fits(_)) => None,
-        progress => Some(panel_verdict(progress, false).words),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stave_app::grip_values::grip_bounds;
     use stave_app::grip_values::{clamped, snapped};
     use stave_app::grips::{FollowedValue, FollowsGrip, SelectionGrip};
     use stave_app::stops::SearchSteps;
+    use stave_lang::units::Length;
     use stave_lang::{Code, Diagnostic, Severity};
     use stave_model::trace::Source;
 
@@ -755,7 +699,6 @@ mod tests {
             amount_words(snapped(m.value, wanted, Some(&m.steps), true)),
             "910mm"
         );
-        assert_eq!(length_mm(mm(912)), Some(912.0));
     }
 
     #[test]
@@ -770,8 +713,7 @@ mod tests {
                 above: Box::new(stopped_side(7, 8, "'mortise_wall' fails")),
             },
         );
-        let ((low, low_end), (high, high_end)) = grip_range(&grip).unwrap();
-        assert_eq!((low_end, high_end), (RangeEnd::Domain, RangeEnd::Stop));
+        let (low, high) = grip_bounds(&grip).unwrap();
         let (value, held) = clamped(mm(9), low, high);
         assert_eq!((value, held), (mm(7), Some(Held::Above)));
         assert_eq!(

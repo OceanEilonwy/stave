@@ -61,7 +61,8 @@ pub enum Category {
     Value,
     /// A cut no recipe can make with the project's tools (`no-recipe`), a
     /// kind's cut with no name (`unnamed-cut`), a cut that leaves no wood
-    /// round it (`wall`), or one bigger than its part (`cut-size`).
+    /// round it (`wall`), one bigger than its part (`cut-size`), or wood
+    /// joined or held against its grain (`grain`).
     Cut,
     /// A hardware model doesn't match its envelope (`model-mismatch`).
     Hardware,
@@ -92,7 +93,8 @@ impl Category {
             | Code::ReservedWord
             | Code::UnknownUnit
             | Code::UnclosedBracket
-            | Code::MissingBrace => Category::Syntax,
+            | Code::MissingBrace
+            | Code::Conflict => Category::Syntax,
             Code::UnknownName
             | Code::DuplicateName
             | Code::AmbiguousName
@@ -105,7 +107,9 @@ impl Category {
             | Code::UnknownField
             | Code::MissingField
             | Code::OutOfRange => Category::Value,
-            Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize => Category::Cut,
+            Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize | Code::Grain => {
+                Category::Cut
+            }
             Code::ModelMismatch => Category::Hardware,
             Code::NotSupported | Code::Internal => Category::NotSupported,
         }

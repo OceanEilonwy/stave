@@ -320,7 +320,8 @@ impl<'a> EditScope<'a> {
             | ast::BaseKind::Slide
             | ast::BaseKind::Hinge
             | ast::BaseKind::Pull
-            | ast::BaseKind::Support => {}
+            | ast::BaseKind::Support
+            | ast::BaseKind::Fitting => {}
             ast::BaseKind::Fastener | ast::BaseKind::Tool => return None,
         }
         let mut place = Vec::new();
@@ -354,7 +355,8 @@ impl<'a> EditScope<'a> {
                 ast::BaseKind::Slide
                 | ast::BaseKind::Hinge
                 | ast::BaseKind::Pull
-                | ast::BaseKind::Support,
+                | ast::BaseKind::Support
+                | ast::BaseKind::Fitting,
             ) => Some(*face),
             _ => None,
         };

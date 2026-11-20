@@ -1,0 +1,21 @@
+// expect: error[type-mismatch] leg's right face is tapered, so the chamfer can't follow its edges
+stave 1
+
+// A chamfer runs straight along its edge, so it can't follow an edge of a
+// face that is tapered away.
+
+project "Chamfer on a tapered face" {
+  units: mm
+}
+
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
+
+part leg : oak_45_sq {
+  length: 710mm
+  shape:  tapered(to: 25mm, toward: bottom, on: [right, back])
+  edges:  chamfer(2mm, on: edge(right, front))
+  place {
+    orient(length: up, width: right)
+    ground
+  }
+}

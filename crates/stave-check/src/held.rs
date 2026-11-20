@@ -145,9 +145,10 @@ impl Checker<'_> {
             .flat_map(|part| &part.cuts)
             .filter_map(|cut| match cut.source {
                 CutSource::Joint { joint, pair } => Some((joint, pair)),
-                CutSource::Hardware { .. } | CutSource::Boards { .. } | CutSource::Edges { .. } => {
-                    None
-                }
+                CutSource::Hardware { .. }
+                | CutSource::Boards { .. }
+                | CutSource::Edges { .. }
+                | CutSource::Shape { .. } => None,
             })
             .collect();
         // Pairs that join nothing, with their joint's name.

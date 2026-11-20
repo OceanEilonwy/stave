@@ -1,0 +1,20 @@
+stave 1
+
+// A conflict inside a part's body: both sides changed its width.
+
+project "Shelf" {
+  goal:  "A small wall shelf"
+  units: mm
+}
+
+stock oak_18 { species: oak, form: solid, thickness: 18mm, max_width: 200mm, max_length: 2400mm }
+
+part shelf : oak_18 {
+  length: 600mm
+<<<<<<< your saved work
+  width:  150mm
+=======
+  width:  180mm
+>>>>>>> Claude Desktop
+  place { ground }
+}
