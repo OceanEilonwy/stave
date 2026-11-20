@@ -10,14 +10,20 @@
 //!
 //! The docking is a relm4 component, [`FloatsComponent`]: the groups'
 //! spots and the drag in progress are its model, only its update changes
-//! them, and the gestures only send [`FloatsInput`] messages. The overlay
-//! asks where each control goes while GTK lays it out, which no message
-//! can answer, so after every update the overlay's handler is given a
-//! copy of what it needs ([`Placer`]), as the outlines' draw function is.
-//! [`Floats`] owns its controller; its outputs go to the owner's input,
-//! forwarded when it is made, and the workbench's moves come back to it
-//! as [`FloatsInput::Refresh`] (the spots have one keeper, the
-//! workbench, and the floats hold a copy).
+//! them, and the gestures only send [`FloatsInput`] messages. Its root is
+//! the view's overlay, the 3D view under the controls. Each control
+//! floats in a wrapper of the component's own (its *float*), which it
+//! places, styles while it is dragged and puts the gestures and the
+//! "Press and hold" tooltip on; the controls themselves, other
+//! components' roots, are only placed in their floats and never touched
+//! (docs/relm4-migration.md, "Accepted exceptions": window-level slots).
+//! The overlay asks where each float goes while GTK lays it out, which no
+//! message can answer, so after every update the overlay's handler is
+//! given a copy of what it needs ([`Placer`]), as the outlines' draw
+//! function is. [`Floats`] owns its controller; its outputs go to the
+//! owner's input, forwarded when it is made, and the spots come to it as
+//! [`FloatsInput::Refresh`] (the spots have one keeper, the workbench,
+//! and the floats hold a copy).
 
 use stave_app::i18n::tr;
 
@@ -26,23 +32,30 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
-/// The floating controls, measured by GTK.
+/// The floats, each holding one control, measured by GTK. A float shows
+/// while its control does: a hidden control measures nothing, so its
+/// float is left out.
 #[derive(Clone)]
-struct Measured(Vec<(Floating, gtk::Widget)>);
+struct Measured(Vec<(Floating, adw::Bin)>);
 
 impl Measured {
-    fn widget(&self, item: Floating) -> Option<&gtk::Widget> {
+    fn widget(&self, item: Floating) -> Option<&adw::Bin> {
         self.0.iter().find(|(i, _)| *i == item).map(|(_, w)| w)
     }
 
     fn item_of(&self, widget: &gtk::Widget) -> Option<Floating> {
-        self.0.iter().find(|(_, w)| w == widget).map(|(i, _)| *i)
+        self.0
+            .iter()
+            .find(|(_, w)| w.upcast_ref::<gtk::Widget>() == widget)
+            .map(|(i, _)| *i)
     }
 
-    /// `true` while a group's control is showing.
+    /// `true` while a group's control is showing (its own component shows
+    /// or hides it).
     fn shows(&self, group: Group) -> bool {
         self.widget(group.floating())
-            .is_some_and(gtk::prelude::WidgetExt::is_visible)
+            .and_then(adw::Bin::child)
+            .is_some_and(|control| control.is_visible())
     }
 }
 
@@ -144,12 +157,11 @@ pub struct FloatsComponent {
 
 /// What the floating controls are made with.
 pub struct FloatsInit {
-    /// The 3D view's overlay, which the controls float on.
-    pub figure: gtk::Overlay,
-    /// The controls, each with what it is.
+    /// The 3D view, under the controls: placed as the overlay's child.
+    pub view: gtk::Widget,
+    /// The controls, each with what it is: each placed in a float of the
+    /// component's own, and otherwise left as its own component has it.
     pub floating: Vec<(Floating, gtk::Widget)>,
-    /// The spot each tool group starts in.
-    pub spots: Spots,
 }
 
 /// What the floating controls are told.
@@ -200,15 +212,17 @@ pub enum FloatsOutput {
 
 /// The docking's widgets.
 pub struct FloatsWidgets {
+    /// The view's overlay (the component's root).
     figure: gtk::Overlay,
-    /// The dashed outlines (the component's root), under the controls.
+    /// The dashed outlines, under the controls.
     outlines: gtk::DrawingArea,
+    /// The floats, one per control.
     measured: Measured,
     /// The overlay's `get-child-position` handler, holding the [`Placer`]
     /// copied at the last update.
     placing: Option<glib::SignalHandlerId>,
-    /// The press-and-hold and drag controllers put on each group.
-    gestures: Vec<(gtk::Widget, gtk::EventController)>,
+    /// The press-and-hold and drag controllers put on each group's float.
+    gestures: Vec<(adw::Bin, gtk::EventController)>,
 }
 
 impl FloatsComponent {
@@ -332,58 +346,60 @@ impl Component for FloatsComponent {
     type Input = FloatsInput;
     type Output = FloatsOutput;
     type CommandOutput = ();
-    type Root = gtk::DrawingArea;
+    type Root = gtk::Overlay;
     type Widgets = FloatsWidgets;
 
-    fn init_root() -> gtk::DrawingArea {
-        // The dashed outlines, under the controls; they never catch the
-        // pointer.
-        gtk::DrawingArea::builder()
-            .can_target(false)
-            .hexpand(true)
+    fn init_root() -> gtk::Overlay {
+        gtk::Overlay::builder()
             .vexpand(true)
-            .css_classes(["stave-dock-targets"])
+            .overflow(gtk::Overflow::Hidden)
+            .css_classes(["stave-viewport", "stave-figure"])
             .build()
     }
 
     fn init(
         init: FloatsInit,
-        root: gtk::DrawingArea,
+        root: gtk::Overlay,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let FloatsInit {
-            figure,
-            floating,
-            spots,
-        } = init;
-        figure.add_overlay(&root);
-        for (_, widget) in &floating {
-            // The layout gives each its exact place: no margins of its own.
-            widget.set_halign(gtk::Align::Fill);
-            widget.set_valign(gtk::Align::Fill);
-            widget.set_margin_top(0);
-            widget.set_margin_bottom(0);
-            widget.set_margin_start(0);
-            widget.set_margin_end(0);
-            figure.add_overlay(widget);
-        }
-        let measured = Measured(floating);
+        let FloatsInit { view, floating } = init;
+        root.set_child(Some(&view));
+        // The dashed outlines, under the controls; they never catch the
+        // pointer.
+        let outlines = gtk::DrawingArea::builder()
+            .can_target(false)
+            .hexpand(true)
+            .vexpand(true)
+            .css_classes(["stave-dock-targets"])
+            .build();
+        root.add_overlay(&outlines);
+        let floats = floating
+            .into_iter()
+            .map(|(item, control)| {
+                // The layout gives each float its exact place; the control
+                // fills it.
+                let float = adw::Bin::builder().child(&control).build();
+                root.add_overlay(&float);
+                (item, float)
+            })
+            .collect();
+        let measured = Measured(floats);
         let gestures = Group::ALL
             .into_iter()
             .filter_map(|group| {
-                let widget = measured.widget(group.floating())?;
-                Some(make_draggable(group, widget, sender.input_sender()))
+                let float = measured.widget(group.floating())?;
+                Some(make_draggable(group, float, sender.input_sender()))
             })
             .flatten()
             .collect();
-        // Each group laid out for its spot, once the owner listens.
-        sender
-            .input_sender()
-            .emit(FloatsInput::Refresh(spots.clone()));
-        let model = FloatsComponent { spots, drag: None };
+        // The spots come with the owner's first `Refresh`.
+        let model = FloatsComponent {
+            spots: Spots::default(),
+            drag: None,
+        };
         let mut widgets = FloatsWidgets {
-            figure,
-            outlines: root,
+            figure: root,
+            outlines,
             measured,
             placing: None,
             gestures,
@@ -397,7 +413,7 @@ impl Component for FloatsComponent {
         widgets: &mut FloatsWidgets,
         message: FloatsInput,
         sender: ComponentSender<Self>,
-        _root: &gtk::DrawingArea,
+        _root: &gtk::Overlay,
     ) {
         match message {
             FloatsInput::Refresh(spots) => {
@@ -411,25 +427,27 @@ impl Component for FloatsComponent {
         self.show(widgets);
     }
 
-    /// Takes the component's handlers and outlines off the widgets it
-    /// was given, which may outlive it.
+    /// Takes the component's handlers, gestures and outlines off its
+    /// overlay and floats, which live on while the window holds them.
     fn shutdown(&mut self, widgets: &mut FloatsWidgets, _output: relm4::Sender<FloatsOutput>) {
         if let Some(handler) = widgets.placing.take() {
             widgets.figure.disconnect(handler);
         }
-        for (widget, controller) in widgets.gestures.drain(..) {
-            widget.remove_controller(&controller);
+        for (float, controller) in widgets.gestures.drain(..) {
+            float.remove_controller(&controller);
         }
         widgets.figure.remove_overlay(&widgets.outlines);
     }
 }
 
-/// Press and hold a group, then drag it: the gestures put on its widget.
+/// Press and hold a group, then drag it: the gestures put on its float,
+/// and the float's tooltip saying so (a control without a tooltip of its
+/// own shows it).
 fn make_draggable(
     group: Group,
-    widget: &gtk::Widget,
+    widget: &adw::Bin,
     input: &relm4::Sender<FloatsInput>,
-) -> [(gtk::Widget, gtk::EventController); 2] {
+) -> [(adw::Bin, gtk::EventController); 2] {
     let hold = gtk::GestureLongPress::builder()
         .propagation_phase(gtk::PropagationPhase::Capture)
         .build();
@@ -451,12 +469,7 @@ fn make_draggable(
     drag.connect_cancel(move |_, _| sent.emit(FloatsInput::LetGo));
     widget.add_controller(hold.clone());
     widget.add_controller(drag.clone());
-    widget.set_tooltip_text(Some(
-        &widget
-            .tooltip_text()
-            .map(|tip| format!("{tip}\n{}", tr("Press and hold to move it")))
-            .unwrap_or_else(|| tr("Press and hold to move it")),
-    ));
+    widget.set_tooltip_text(Some(&tr("Press and hold to move it")));
     [
         (widget.clone(), hold.upcast()),
         (widget.clone(), drag.upcast()),
@@ -467,36 +480,41 @@ fn make_draggable(
 /// (dropping it shuts the component down and takes its handlers off the
 /// view); its [`FloatsOutput`]s go to the owner's input.
 pub struct Floats {
+    /// The 3D view with the controls floating on it, for the owner to
+    /// place.
+    pub root: gtk::Overlay,
     controller: Controller<FloatsComponent>,
 }
 
 impl Floats {
-    /// Floats the controls on the 3D view, each where `view_layout` puts
-    /// it for the view's size, what is showing and the groups' `spots`,
-    /// so none covers another. Its outputs (a group to lay flat or
-    /// upright, a group people docked) go to `owner` as `message(output)`,
-    /// starting with every group laid out for its spot
-    /// ([`FloatsOutput::Orient`]) when the main loop next runs.
+    /// Floats the controls on the 3D view (`view`), each where
+    /// `view_layout` puts it for the view's size, what is showing and the
+    /// groups' spots, so none covers another. The spots come with
+    /// [`Floats::refresh`]. Its outputs (a group to lay flat or upright,
+    /// a group people docked) go to `owner` as `message(output)`.
     pub fn new<M: 'static>(
-        figure: &gtk::Overlay,
+        view: &impl IsA<gtk::Widget>,
         floating: Vec<(Floating, gtk::Widget)>,
-        spots: Spots,
         owner: &relm4::Sender<M>,
         message: impl Fn(FloatsOutput) -> M + 'static,
     ) -> Floats {
         let controller = FloatsComponent::builder()
             .launch(FloatsInit {
-                figure: figure.clone(),
+                view: view.clone().upcast(),
                 floating,
-                spots,
             })
             .forward(owner, message);
-        Floats { controller }
+        Floats {
+            root: controller.widget().clone(),
+            controller,
+        }
     }
 
-    /// Lays every group out for its spot and places them again (after a
-    /// layout is applied or reset, or a group docked): the workbench keeps
-    /// the spots and says where they are.
+    /// Lays every group out for its spot (telling the owner how to lay
+    /// each one, [`FloatsOutput::Orient`]) and places them again: once
+    /// the workbench is made, and after a layout is applied or reset, or a
+    /// group docked. The workbench keeps the spots and says where they
+    /// are.
     pub fn refresh(&self, spots: Spots) {
         self.send(FloatsInput::Refresh(spots));
     }
@@ -606,14 +624,32 @@ mod tests {
         workbench_for(&owner)
     }
 
-    /// Floats on `figure` whose outputs go to `owner`.
+    /// Floats on a blank view whose outputs go to `owner`, given the
+    /// groups' `spots` as the window gives them once its workbench is made.
     fn floats_for(
-        figure: &gtk::Overlay,
         floating: Vec<(Floating, gtk::Widget)>,
         spots: Spots,
         owner: &relm4::Sender<FloatsOutput>,
     ) -> Floats {
-        Floats::new(figure, floating, spots, owner, std::convert::identity)
+        let floats = Floats::new(
+            &gtk::DrawingArea::new(),
+            floating,
+            owner,
+            std::convert::identity,
+        );
+        floats.refresh(spots);
+        floats
+    }
+
+    /// A control's float: the wrapper the floats placed it in.
+    fn float_of(control: &gtk::Widget) -> gtk::Widget {
+        control.parent().expect("the control is in its float")
+    }
+
+    /// The dashed outlines in the floats' overlay.
+    fn outlines_of(floats: &Floats) -> Option<gtk::Widget> {
+        std::iter::successors(floats.root.first_child(), gtk::Widget::next_sibling)
+            .find(|child| child.has_css_class("stave-dock-targets"))
     }
 
     /// A blank control of this size.
@@ -637,17 +673,14 @@ mod tests {
         ]
     }
 
-    /// The view's overlay, in a window big enough to lay the controls out.
-    fn figure_in_a_window() -> (gtk::Overlay, gtk::Window) {
-        let figure = gtk::Overlay::builder()
-            .child(&gtk::DrawingArea::new())
-            .build();
-        let window = gtk::Window::builder()
+    /// The floats' overlay, in a window big enough to lay the controls
+    /// out.
+    fn in_a_window(floats: &Floats) -> gtk::Window {
+        gtk::Window::builder()
             .default_width(1000)
             .default_height(700)
-            .child(&figure)
-            .build();
-        (figure, window)
+            .child(&floats.root)
+            .build()
     }
 
     /// Lets GTK lay the window out.
@@ -669,14 +702,15 @@ mod tests {
     /// no group shows: it docks there, lying flat, the chips (hidden)
     /// taking the right edge; the layout hears of it.
     fn drag_to_a_corner() {
-        let (figure, window) = figure_in_a_window();
         let laid: Rc<RefCell<Vec<(Group, gtk::Orientation)>>> = Rc::default();
         let docked = Rc::new(Cell::new(None));
         let laid_by = laid.clone();
         let docked_by = docked.clone();
         let workbench = workbench();
         let (owner, outputs) = relm4::channel();
-        let floats = floats_for(&figure, controls(), workbench.tool_spots(), &owner);
+        let floats = floats_for(controls(), workbench.tool_spots(), &owner);
+        let window = in_a_window(&floats);
+        let figure = floats.root.clone();
         handle_each(outputs, move |output| match output {
             FloatsOutput::Orient { group, orientation } => {
                 laid_by.borrow_mut().push((group, orientation));
@@ -741,10 +775,9 @@ mod tests {
 
     /// Dropping the floats shuts the component down when the main loop
     /// next runs: its outlines leave the view, its gestures leave the
-    /// controls (which live on with the view), and the model and the
-    /// callbacks are freed.
+    /// floats (which live on with the view the window holds), and the
+    /// model and the callbacks are freed.
     fn floats_are_freed() {
-        let (figure, window) = figure_in_a_window();
         let floating = controls();
         let camera = floating
             .iter()
@@ -755,28 +788,29 @@ mod tests {
         let held = Rc::clone(&token);
         let workbench = workbench();
         let (owner, _) = recorder();
-        let floats = Floats::new(
-            &figure,
-            floating,
-            workbench.tool_spots(),
-            &owner,
-            move |output| {
-                let _ = &held;
-                output
-            },
-        );
+        let floats = Floats::new(&gtk::DrawingArea::new(), floating, &owner, move |output| {
+            let _ = &held;
+            output
+        });
+        floats.refresh(workbench.tool_spots());
+        let window = in_a_window(&floats);
         let callbacks = Rc::downgrade(&token);
         drop(token);
         lay_out(&window);
-        let outlines = floats.controller.widget().downgrade();
+        let outlines = outlines_of(&floats).expect("the outlines").downgrade();
         let input = floats.controller.sender().clone();
-        assert!(matches!(gestures_of(&camera), (Some(_), Some(_))));
+        let float = float_of(&camera);
+        assert!(matches!(gestures_of(&float), (Some(_), Some(_))));
+        assert!(
+            gestures_of(&camera) == (None, None),
+            "the control itself is left as its component made it"
+        );
         drop(floats);
         settle();
         assert!(outlines.upgrade().is_none(), "the outlines are freed");
         assert!(
-            matches!(gestures_of(&camera), (None, None)),
-            "the gestures are taken off the control"
+            matches!(gestures_of(&float), (None, None)),
+            "the gestures are taken off the float"
         );
         assert!(
             input.send(FloatsInput::LetGo).is_err(),
@@ -799,7 +833,6 @@ mod tests {
     /// while it handles that, a dock asked of the workbench there and the
     /// refresh the workbench asks for after it, are queued too.
     fn signals_are_queued() {
-        let (figure, window) = figure_in_a_window();
         let floating = controls();
         let camera = floating
             .iter()
@@ -817,12 +850,8 @@ mod tests {
         let workbench = Rc::new(workbench_for(&workbench_owner));
         let layout = Rc::downgrade(&workbench);
         let (owner, outputs) = relm4::channel();
-        let floats = Rc::new(floats_for(
-            &figure,
-            floating,
-            workbench.tool_spots(),
-            &owner,
-        ));
+        let floats = Rc::new(floats_for(floating, workbench.tool_spots(), &owner));
+        let window = in_a_window(&floats);
         handle_each(outputs, move |output| {
             let FloatsOutput::Docked { group, spot } = output else {
                 return;
@@ -855,7 +884,7 @@ mod tests {
             }
         });
         lay_out(&window);
-        let (Some(hold), Some(drag)) = gestures_of(&camera) else {
+        let (Some(hold), Some(drag)) = gestures_of(&float_of(&camera)) else {
             panic!("the camera column can be held and dragged");
         };
         inner_drag.replace(Some(drag.clone()));
@@ -910,17 +939,17 @@ mod tests {
     }
 
     /// The floats tell their owner to lay each group out for its spot, from
-    /// the spots the workbench keeps, as soon as the owner listens: before
-    /// the window's first frame.
+    /// the spots the workbench keeps, as soon as the owner gives them:
+    /// before the window's first frame.
     fn oriented_at_once() {
-        let (figure, window) = figure_in_a_window();
         let workbench = workbench();
         let mut layout = Layout::default();
         layout.tools.dock(Group::Scene, Spot::Right);
         workbench.apply(layout);
         settle();
         let (owner, heard) = recorder();
-        let floats = floats_for(&figure, controls(), workbench.tool_spots(), &owner);
+        let floats = floats_for(controls(), workbench.tool_spots(), &owner);
+        let window = in_a_window(&floats);
         settle();
         let laid: Vec<(Group, gtk::Orientation)> = heard
             .borrow()
@@ -950,7 +979,6 @@ mod tests {
     /// the same turn of the main loop. The floats end where the workbench
     /// keeps (and saves) the groups, never at an older copy.
     fn floats_follow_reset_then_dock() {
-        let (figure, window) = figure_in_a_window();
         let (workbench_owner, workbench_outputs) = relm4::channel();
         let workbench = workbench_for(&workbench_owner);
         let mut layout = Layout::default();
@@ -958,12 +986,8 @@ mod tests {
         workbench.apply(layout);
         settle();
         let (owner, _) = recorder();
-        let floats = Rc::new(floats_for(
-            &figure,
-            controls(),
-            workbench.tool_spots(),
-            &owner,
-        ));
+        let floats = Rc::new(floats_for(controls(), workbench.tool_spots(), &owner));
+        let window = in_a_window(&floats);
         let refresher = Rc::downgrade(&floats);
         handle_each(workbench_outputs, move |output| {
             if let WorkbenchOutput::ToolsChanged(spots) = output

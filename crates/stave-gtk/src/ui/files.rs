@@ -622,8 +622,10 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             .description(tr("Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it."))
             .vexpand(true)
             .css_classes(["compact", "stave-code-placeholder"])
-            .build()
-            .upcast::<gtk::Widget>();
+            .build();
+        // It reads whole in any frame the panel is docked in.
+        super::empty_state::fit(&placeholder);
+        let placeholder = placeholder.upcast::<gtk::Widget>();
         // The open files show as tabs in the strip of the frame holding
         // this panel ([`FilesOutput::Tabs`]), beside the Model.
         root.append(&placeholder);

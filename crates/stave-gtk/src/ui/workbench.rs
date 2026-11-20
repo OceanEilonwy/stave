@@ -552,9 +552,9 @@ impl Dockyard {
                     .can_maximize(true)
                     .build();
                 widget.set_id(id.word());
+                // Placed, never reached into: a panel's empty state fits
+                // its frame by its own component (`empty_state::fit`).
                 widget.set_child(Some(&content));
-                // Its empty state reads whole in any frame it is docked in.
-                super::empty_state::fit_every(content.upcast_ref());
                 // The tab's menu moves the panel without dragging it.
                 let menu = gio::Menu::new();
                 for side in Side::ALL {
@@ -929,8 +929,6 @@ pub struct WorkbenchComponent {
 /// What a workbench is made with.
 pub struct WorkbenchInit {
     yard: Dockyard,
-    /// The status bar's start, for a line about the selection.
-    status: gtk::Label,
     /// The layout to start with.
     layout: Layout,
     /// Whether the layout is written to the user's file.
@@ -986,6 +984,19 @@ pub enum WorkbenchInput {
     /// Bring a panel to the front of its frame, unless that frame holds
     /// the 3D View.
     BringForwardBesideView(PanelId),
+    /// Bring a panel to the front of its frame, as
+    /// [`BringForwardBesideView`] does, only if it is open: a closed panel
+    /// stays closed. Decided here, in order, after everything the
+    /// workbench was told before.
+    ///
+    /// [`BringForwardBesideView`]: WorkbenchInput::BringForwardBesideView
+    BringForwardIfOpen(PanelId),
+    /// The Edit panel stopped showing a card: if it shares a frame with
+    /// Details and is that frame's shown tab, show Details. Decided here,
+    /// in order, after everything the workbench was told before.
+    EditPanelHidden,
+    /// Say this about the selection at the start of the status bar.
+    ShowStatus(String),
     /// Move a panel to a side.
     MoveTo {
         /// The panel.
@@ -1040,6 +1051,8 @@ pub enum WorkbenchOutput {
 /// The workbench's widgets.
 pub struct WorkbenchWidgets {
     yard: Dockyard,
+    /// The status bar's start: a line about the selection.
+    status: gtk::Label,
     /// The status bar's "Problems N" button: opens the bottom edge on
     /// the Problems panel.
     problems_button: gtk::Button,
@@ -1121,10 +1134,15 @@ impl Component for WorkbenchComponent {
     ) -> ComponentParts<Self> {
         let WorkbenchInit {
             yard,
-            status,
             layout,
             remembers,
         } = init;
+        // The status bar's start: a line about the selection.
+        let status = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["stave-status-text"])
+            .build();
         // The bottom panels folded into the status bar: "Problems N" and
         // "Output" open the bottom edge on their panel (and fold it away
         // again while it shows).
@@ -1204,6 +1222,7 @@ impl Component for WorkbenchComponent {
         };
         let widgets = WorkbenchWidgets {
             yard,
+            status,
             problems_button,
             problems_count,
             output_button,
@@ -1283,6 +1302,19 @@ impl Component for WorkbenchComponent {
             WorkbenchInput::BringForwardBesideView(id) => {
                 yard.bring_forward_beside_view(id, &self.last);
             }
+            WorkbenchInput::BringForwardIfOpen(id) => {
+                if yard.is_open(id) {
+                    yard.bring_forward_beside_view(id, &self.last);
+                }
+            }
+            WorkbenchInput::EditPanelHidden => {
+                if yard.share_a_frame(PanelId::Edit, PanelId::Details)
+                    && yard.is_shown(PanelId::Edit)
+                {
+                    yard.present(PanelId::Details, &self.last);
+                }
+            }
+            WorkbenchInput::ShowStatus(line) => widgets.status.set_label(&line),
             WorkbenchInput::MoveTo { panel, side } => {
                 yard.move_to(panel, side);
                 self.save(yard, &sender);
@@ -1334,15 +1366,19 @@ fn folds_at(width: f64) -> Vec<Side> {
 /// owner's input.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
-/// after whatever called them has returned. The queries (`is_open`,
-/// `is_shown`, `share_a_frame`; `layout` and `panel` for tests) read the
-/// dock's widgets as they are now.
+/// after whatever called them has returned. Anything decided from where
+/// the panels are (whether a panel is open, shown, or shares a frame) is
+/// decided by the workbench in its own update, in order, as a message
+/// ([`WorkbenchInput::BringForwardIfOpen`],
+/// [`WorkbenchInput::EditPanelHidden`]): a query from the owner would
+/// read the dock before the moves it had queued were made. The queries
+/// (`is_open`, `is_shown`, `share_a_frame`, `layout`, `panel`) are for
+/// tests.
 pub struct Workbench {
     /// The dock above the status bar, for the window's content.
     pub root: gtk::Box,
-    /// The status bar's start, for a line about the selection.
-    pub status: gtk::Label,
-    /// The dock's widgets, for the queries.
+    /// The dock's widgets, for tests' queries.
+    #[cfg(test)]
     yard: Dockyard,
     controller: Controller<WorkbenchComponent>,
 }
@@ -1368,22 +1404,19 @@ impl Workbench {
             Remember::Nothing => (Layout::default(), false),
             Remember::From(path) => (read(path), false),
         };
-        let status = gtk::Label::builder()
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["stave-status-text"])
-            .build();
         let controller = WorkbenchComponent::builder()
             .launch(WorkbenchInit {
+                #[cfg(test)]
                 yard: yard.clone(),
-                status: status.clone(),
+                #[cfg(not(test))]
+                yard,
                 layout,
                 remembers,
             })
             .forward(owner, message);
         Ok(Workbench {
             root: controller.widget().clone(),
-            status,
+            #[cfg(test)]
             yard,
             controller,
         })
@@ -1453,19 +1486,42 @@ impl Workbench {
         self.yard.panels.get(&id)
     }
 
-    /// `true` when two panels are tabs of the same frame.
+    /// `true` when two panels are tabs of the same frame, for tests.
+    #[cfg(test)]
     pub fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
         self.yard.share_a_frame(first, second)
     }
 
-    /// `true` while a panel is its frame's shown tab.
+    /// `true` while a panel is its frame's shown tab, for tests.
+    #[cfg(test)]
     pub fn is_shown(&self, id: PanelId) -> bool {
         self.yard.is_shown(id)
     }
 
-    /// `true` while a panel is open (in a frame, shown or not).
+    /// `true` while a panel is open (in a frame, shown or not), for tests.
+    #[cfg(test)]
     pub fn is_open(&self, id: PanelId) -> bool {
         self.yard.is_open(id)
+    }
+
+    /// Says this about the selection at the start of the status bar (empty
+    /// for nothing).
+    pub fn show_status(&self, line: &str) {
+        self.send(WorkbenchInput::ShowStatus(line.to_owned()));
+    }
+
+    /// Brings a panel forward beside the view, as
+    /// [`bring_forward_beside_view`](Self::bring_forward_beside_view)
+    /// does, only if it is open when the workbench gets to it.
+    pub fn bring_forward_if_open(&self, id: PanelId) {
+        self.send(WorkbenchInput::BringForwardIfOpen(id));
+    }
+
+    /// The Edit panel stopped showing a card: if it shares a frame with
+    /// Details and is that frame's shown tab when the workbench gets to
+    /// it, Details comes to the front.
+    pub fn edit_panel_hidden(&self) {
+        self.send(WorkbenchInput::EditPanelHidden);
     }
 
     /// Where the panels are now (an edge a narrow window folded away as
@@ -2223,6 +2279,111 @@ show bottom true
         settle();
         assert!(workbench.is_open(PanelId::Code));
         assert!(workbench.is_shown(PanelId::View));
+    }
+
+    #[test]
+    fn decisions_from_where_the_panels_are_follow_the_moves_before_them() {
+        on_gtk_thread(decisions_come_in_order);
+    }
+
+    /// "Bring Code forward if it is open" and "Edit stopped showing: show
+    /// Details if they share a frame" are decided by the workbench in its
+    /// own update, so each sees the moves queued before it. Asked of the
+    /// dock straight after queueing a move, the answer was the old one.
+    fn decisions_come_in_order() {
+        let Ok(workbench) = unheard(labels()) else {
+            panic!("the dock is built");
+        };
+        settle();
+        // Closed, it stays closed.
+        workbench.bring_forward_if_open(PanelId::Code);
+        settle();
+        assert!(
+            !workbench.is_open(PanelId::Code),
+            "a closed panel stays closed"
+        );
+        // Opened by a move queued just before, then hidden behind
+        // Problems: the decision sees it open and brings it forward.
+        workbench.move_to(PanelId::Code, Side::Bottom);
+        workbench.present(PanelId::Problems);
+        assert!(
+            !workbench.is_open(PanelId::Code),
+            "the dock hasn't moved yet: a query here reads it stale"
+        );
+        workbench.bring_forward_if_open(PanelId::Code);
+        settle();
+        assert!(workbench.is_open(PanelId::Code));
+        assert!(
+            workbench.is_shown(PanelId::Code),
+            "brought forward in order"
+        );
+        // Edit shown beside Details by a Present queued just before: when
+        // it stops showing a card, Details comes back.
+        workbench.apply(Layout::board());
+        workbench.present(PanelId::Edit);
+        assert!(
+            !workbench.share_a_frame(PanelId::Edit, PanelId::Details),
+            "the dock hasn't moved yet: a query here reads it stale"
+        );
+        workbench.edit_panel_hidden();
+        settle();
+        assert!(workbench.share_a_frame(PanelId::Edit, PanelId::Details));
+        assert!(
+            workbench.is_shown(PanelId::Details),
+            "Details is back in front"
+        );
+        assert!(!workbench.is_shown(PanelId::Edit));
+        // Not shown, Edit leaves its frame as it is.
+        workbench.present(PanelId::Parts);
+        workbench.edit_panel_hidden();
+        settle();
+        assert!(workbench.is_shown(PanelId::Details));
+        // Moved away from Details, Edit hidden changes nothing.
+        workbench.move_to(PanelId::Edit, Side::Start);
+        workbench.edit_panel_hidden();
+        settle();
+        assert!(
+            workbench.is_shown(PanelId::Edit),
+            "Details isn't in its frame"
+        );
+    }
+
+    #[test]
+    fn a_status_line_is_shown_by_message() {
+        on_gtk_thread(status_line);
+    }
+
+    /// The status bar's line about the selection is the workbench's own
+    /// label, set by message.
+    fn status_line() {
+        let Ok(workbench) = unheard(labels()) else {
+            panic!("the dock is built");
+        };
+        let label = |workbench: &Workbench| {
+            let mut stack = vec![workbench.root.clone().upcast::<gtk::Widget>()];
+            while let Some(widget) = stack.pop() {
+                if widget.has_css_class("stave-status-text") {
+                    return widget.downcast::<gtk::Label>().ok();
+                }
+                let mut child = widget.first_child();
+                while let Some(current) = child {
+                    child = current.next_sibling();
+                    stack.push(current);
+                }
+            }
+            None
+        };
+        workbench.show_status("Joins door_l to side_l");
+        assert_eq!(
+            label(&workbench).map(|label| label.label()).as_deref(),
+            Some(""),
+            "queued"
+        );
+        settle();
+        assert_eq!(
+            label(&workbench).map(|label| label.label()).as_deref(),
+            Some("Joins door_l to side_l")
+        );
     }
 
     #[test]

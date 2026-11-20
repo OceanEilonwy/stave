@@ -173,6 +173,9 @@ pub(in crate::ui) fn finder_said(output: FinderOutput) -> WindowInput {
         FinderOutput::Hit { hit, choice } => SelectionInput::FinderHit { hit, choice }.into(),
         FinderOutput::SearchActions(query) => EditingInput::FinderActions(query).into(),
         FinderOutput::Action(index) => EditingInput::RunFinderAction(index).into(),
+        FinderOutput::ClosedForGood => {
+            crate::ui::update::project::ProjectInput::FinderClosedForGood.into()
+        }
     }
 }
 
@@ -241,11 +244,14 @@ pub(in crate::ui) fn plan_switch_said(output: PlanSwitchOutput) -> WindowInput {
 }
 
 /// The dock's outputs as the window's messages: a chip selects its
-/// assembly.
+/// assembly; a scene chosen in its scene menu shows that scene.
 pub(in crate::ui) fn dock_said(output: DockOutput) -> WindowInput {
     match output {
         DockOutput::Move(assembly) => {
             SelectionInput::Select(Some(Selection::Assembly(assembly))).into()
+        }
+        DockOutput::Scene(index) => {
+            crate::ui::update::rendering::RenderingInput::SceneChosen(index).into()
         }
     }
 }
@@ -374,8 +380,7 @@ impl Window {
         };
         self.widgets
             .workbench
-            .status
-            .set_label(linked.as_deref().unwrap_or(""));
+            .show_status(linked.as_deref().unwrap_or(""));
         self.widgets.tree.show_selection(selection.as_ref());
         self.widgets.problems.show_selected(match &selection {
             Some(Selection::Problem(index)) => Some(index.0),

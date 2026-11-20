@@ -131,10 +131,7 @@ impl Component for StepCardComponent {
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
             set_spacing: 14,
-            set_valign: gtk::Align::End,
-            set_margin_start: 16,
-            set_margin_end: 16,
-            set_margin_bottom: 16,
+            // It floats on the 3D view, placed exactly by the floats.
             add_css_class: "stave-focus-card",
             set_visible: false,
             update_property: &[gtk::accessible::Property::Label(&tr("Assembly steps"))],
@@ -891,10 +888,7 @@ impl Component for ProblemCardComponent {
         adw::Clamp {
             set_maximum_size: 620,
             set_tightening_threshold: 620,
-            set_valign: gtk::Align::End,
-            set_margin_start: 16,
-            set_margin_end: 16,
-            set_margin_bottom: 16,
+            // It floats on the 3D view, placed exactly by the floats.
             #[watch]
             set_visible: model.shown,
 

@@ -119,25 +119,11 @@ fn scrolled_window(page: &adw::StatusPage) -> Option<gtk::ScrolledWindow> {
         .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
 }
 
-/// Makes every status page under `root` (itself included) fit its frame
-/// as the module says. The workbench calls it on each panel's content
-/// when it docks it; a page put into a panel later is fitted by its
-/// owner with [`fit`].
-pub fn fit_every(root: &gtk::Widget) {
-    if let Some(page) = root.downcast_ref::<adw::StatusPage>() {
-        fit(page);
-        return;
-    }
-    let mut child = root.first_child();
-    while let Some(next) = child {
-        fit_every(&next);
-        child = next.next_sibling();
-    }
-}
-
 /// Makes one status page fit its frame: a scrollbar that shows when the
 /// words overflow, and no icon while there is no room for it. A page
-/// already fitted is left as it is.
+/// already fitted is left as it is. Each component that docks a status
+/// page in a panel calls it on its own page (the Problems, Files, Code,
+/// Details and Edit panels); nothing reaches into another's page.
 pub fn fit(page: &adw::StatusPage) {
     let Some(scrolled) = scrolled_window(page) else {
         return;
@@ -174,6 +160,63 @@ mod tests {
             .expect("the page's scrolled window")
     }
 
+    /// Every status page under `root`.
+    fn pages_under(root: &gtk::Widget) -> Vec<adw::StatusPage> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(widget) = stack.pop() {
+            if let Ok(page) = widget.clone().downcast::<adw::StatusPage>() {
+                found.push(page);
+                continue;
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                stack.push(current);
+            }
+        }
+        found
+    }
+
+    /// Each panel with an empty state fits its own page when it is made:
+    /// nothing outside it (the workbench docking it) reaches in.
+    #[test]
+    fn every_docked_empty_state_is_fitted_by_its_own_panel() {
+        on_gtk_thread(|| {
+            let (problems_to, _) = crate::ui::gtk_test::recorder();
+            let problems = crate::ui::panels::ProblemsPanel::new(&problems_to, |output| output);
+            let (files_to, _) = crate::ui::gtk_test::recorder();
+            let files = crate::ui::panels::FilesList::new(&files_to, |output| output);
+            let (inspector_to, _) = crate::ui::gtk_test::recorder::<()>();
+            let inspector = crate::ui::inspector::Inspector::new(&inspector_to, |_| (), |_| ());
+            let (code_to, _) = crate::ui::gtk_test::recorder();
+            let code = crate::ui::files::FilesPage::<()>::new(&code_to, |_| ());
+            let edit = EditPanel::new(&[]);
+            for root in [
+                problems.root.clone().upcast::<gtk::Widget>(),
+                files.root.clone().upcast(),
+                inspector.root.clone().upcast(),
+                code.root.clone().upcast(),
+                edit.root.clone().upcast(),
+            ] {
+                let pages = pages_under(&root);
+                assert!(
+                    !pages.is_empty(),
+                    "{} has an empty state",
+                    root.type_().name()
+                );
+                for page in pages {
+                    assert!(
+                        scrolled(&page).vadjustment().is::<PageFit>(),
+                        "{}'s empty state is fitted",
+                        root.type_().name()
+                    );
+                }
+            }
+            settle();
+        });
+    }
+
     /// The Edit panel's empty state, fitted, in a 400x400 window, with a
     /// spacer above it and one beside it to make its frame smaller.
     struct Shown {
@@ -205,7 +248,7 @@ mod tests {
                 .default_height(400)
                 .child(&column)
                 .build();
-            fit_every(panel.root.upcast_ref());
+            // The Edit panel fits its own page (`EditPanel::new`).
             window.present();
             lay_out(&window);
             Shown {
