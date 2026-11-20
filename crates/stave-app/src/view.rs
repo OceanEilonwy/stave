@@ -29,19 +29,13 @@ use crate::Opened;
 /// it is visible. Parts that fit meet face to face without overlapping, so
 /// nothing flickers.
 pub fn scene(design: &SolvedDesign) -> SceneGraph {
-    scene_with(design, &MeshCache::new())
+    stave_scene::pipeline::scene(design)
 }
 
 /// [`scene`], taking the part meshes whose cuts haven't changed from
 /// `meshes` (the last build that used it) and leaving this build's in it.
 pub fn scene_with(design: &SolvedDesign, meshes: &MeshCache) -> SceneGraph {
-    SceneGraph::build_with(
-        design,
-        BuildOptions {
-            extent: Extent::Cut,
-        },
-        meshes,
-    )
+    stave_scene::pipeline::scene_with(design, meshes)
 }
 
 /// One labelled value of a description.
@@ -318,11 +312,7 @@ pub fn copy_text(body: &Body) -> String {
 
 /// The scene item a problem's item is.
 pub fn contact_item(item: ContactItem) -> Item {
-    match item {
-        ContactItem::Part(id) => Item::Part(id),
-        ContactItem::Hardware(id) => Item::Hardware(id),
-        ContactItem::Member(member) => Item::Member(member),
-    }
+    stave_scene::pipeline::contact_item(item)
 }
 
 /// How each node is drawn outside focus mode, when a joint's member is
@@ -575,28 +565,7 @@ pub fn contact_motion_range(graph: &SceneGraph, contact: &Contact) -> Option<Mot
 /// is about, and the shared wood (measured in the pose of
 /// [`pose_at_contact`]).
 pub fn highlight(graph: &SceneGraph, contact: &Contact) -> Highlight {
-    let nodes = graph
-        .node_ids()
-        .filter(|id| {
-            graph.node(*id).is_some_and(|node| {
-                contact
-                    .items
-                    .iter()
-                    .any(|item| contact_item(*item) == node.item)
-            })
-        })
-        .collect();
-    let volumes = contact
-        .regions
-        .iter()
-        .filter_map(|region| {
-            stave_geom::Aabb::around([
-                stave_geom::render::point(region.min()),
-                stave_geom::render::point(region.max()),
-            ])
-        })
-        .collect();
-    Highlight { nodes, volumes }
+    stave_scene::pipeline::highlight(graph, contact)
 }
 
 #[cfg(test)]

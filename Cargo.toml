@@ -11,6 +11,7 @@ members = [
   "crates/stave-check",
   "crates/stave-scene",
   "crates/stave-render",
+  "crates/stave-web",
   "crates/stave-ide",
   "crates/stave-history",
   "crates/stave-link",

@@ -1,0 +1,35 @@
+[package]
+name = "stave-web"
+description = "The Stave browser viewer: runs the pipeline on a project's text in WASM and draws it with stave-render on WebGPU"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+glam = "0.30"
+serde_json = "1"
+stave-check = { path = "../stave-check" }
+stave-lang = { path = "../stave-lang" }
+stave-model = { path = "../stave-model" }
+stave-modules = { path = "../stave-modules" }
+stave-render = { path = "../stave-render" }
+stave-scene = { path = "../stave-scene" }
+thiserror = "2"
+
+# The browser side: the canvas, WebGPU through wgpu, and the functions the
+# page calls. None of it is built for the native tests.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Navigator", "Window"] }
+wgpu = "30"
+
+[dev-dependencies]
+stave-app = { path = "../stave-app" }
+
+[lints]
+workspace = true
