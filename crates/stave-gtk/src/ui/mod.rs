@@ -935,6 +935,14 @@ impl Window {
 
     /// Sends a command to the session and redraws what changed.
     fn dispatch(&mut self, command: Command) {
+        // While the text doesn't read, editing in 3D is off: whatever
+        // asked, the session never acts on an edit that needs it.
+        if let Command::Edit(edit) = &command
+            && edit_view::needs_readable_text(edit)
+            && self.refuse_while_unreadable()
+        {
+            return;
+        }
         // Add writes through the buffers as they are now, and opens a tab
         // for what it writes only while the editor shows.
         if matches!(command, Command::Edit(stave_app::editing::EditCommand::Add)) {
@@ -1265,10 +1273,14 @@ pub(in crate::ui) fn build_widgets(
     // Why editing in 3D is off while the text doesn't read: low in the
     // view, just above the foot, wrapped, where it covers neither the
     // parts list nor a card.
+    // It fills its chip and centres each line in it: a wrapped label is
+    // as wide as its longest possible line, wider than the lines it holds.
     let block_line = gtk::Label::builder()
         .wrap(true)
         .max_width_chars(56)
         .justify(gtk::Justification::Center)
+        .xalign(0.5)
+        .hexpand(true)
         .build();
     let block_box = gtk::Box::builder()
         .css_classes(["stave-chip"])

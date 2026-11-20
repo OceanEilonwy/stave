@@ -1214,8 +1214,8 @@ impl Window {
     /// card (and its dialog) say what would go before anything does.
     /// `false` when nothing is selected that can be removed.
     pub(in crate::ui) fn remove_selected(&mut self) -> bool {
-        if !self.gestures_allowed() {
-            self.edit_toast(&self.parse_block_line().unwrap_or_default());
+        // Delete says why editing in 3D is off even with nothing selected.
+        if self.refuse_while_unreadable() {
             return true;
         }
         let Some(item) = self.change_target() else {
@@ -1246,10 +1246,8 @@ impl Window {
 
     /// Starts a change of the design, reading the editor's unsaved text.
     pub(in crate::ui) fn start_change(&mut self, command: EditCommand) {
-        if !self.gestures_allowed() {
-            self.edit_toast(&self.parse_block_line().unwrap_or_default());
-            return;
-        }
+        // Refused while the text doesn't read, as every edit command is
+        // (`Window::dispatch`).
         {
             let session = &mut self.session;
             session.set_edit_files(std::sync::Arc::new(self.widgets.files.edit_files()));

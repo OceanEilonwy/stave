@@ -437,8 +437,7 @@ impl Window {
 
     /// Begins a hold from `first`: the hint asks for the second thing.
     pub(in crate::ui) fn start_hold(&mut self, first: Measured) {
-        if !self.gestures_allowed() {
-            self.edit_toast(&self.parse_block_line().unwrap_or_default());
+        if self.refuse_while_unreadable() {
             return;
         }
         if self.edit_open() {

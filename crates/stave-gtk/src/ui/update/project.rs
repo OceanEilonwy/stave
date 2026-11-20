@@ -430,11 +430,17 @@ impl Window {
                 }
             }
             ProjectInput::Analysed(analysis) => {
-                self.state.text_blocked = edit_view::block_line(&analysis).is_some();
+                let blocked = edit_view::block_line(&analysis).is_some();
+                let was = std::mem::replace(&mut self.state.text_blocked, blocked);
                 self.widgets.files.set_analysis(analysis);
-                // The line saying why editing in 3D is off comes and goes
-                // with the text reading.
+                // The line saying why editing in 3D is off follows each
+                // analysis (its words name the problem); the face button,
+                // the item's tools and the Sizes card follow the text
+                // starting or ceasing to read.
                 self.show_parse_block_line();
+                if was != blocked {
+                    self.readability_changed();
+                }
             }
             ProjectInput::FilesSaved { ok, then } => {
                 if ok {

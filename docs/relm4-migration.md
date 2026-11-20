@@ -881,6 +881,18 @@ these (rule 8), and never put a `RefCell` round the shared answer.
   over an empty strip. It now also comes and goes when the editor's
   analysis arrives, not only when the face button is redrawn, and no
   longer replaces the hint.
+- Editing in 3D while the text doesn't read has one gate,
+  `Window::refuse_while_unreadable` (a notice saying why, beside the
+  block line), asked by `Window::dispatch` before every edit command
+  the session would act on (`edit_view::needs_readable_text`; only
+  Cancel, listing grips and the menu's check pass), and by the few
+  steps the window takes before any command (starting an edit, which
+  would drop the selection; starting a hold; the finder's verbs; Delete
+  with nothing selected). An edit script's `select` used to open the
+  menu while the text didn't read; it is refused as a click is, and the
+  script stops saying why. The face button and the Sizes card are no
+  longer offered while the text doesn't read (the item's tools already
+  weren't), and they come back when it reads again.
 - The problem pins keep clear of the edit menu where the menu last said
   it placed itself (`EditMenuOutput::Placed`), and are placed again when
   it says so, instead of where the window read the menu's margins and

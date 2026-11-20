@@ -251,7 +251,7 @@ impl Window {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::ui) mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
@@ -264,8 +264,13 @@ mod tests {
     /// A fresh copy of the door fixture (a cabinet with a bay to add a
     /// door to) in a temporary folder of its own.
     fn door_project() -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("stave-gtk-editing-group-{}", std::process::id()));
+        door_project_named("editing-group")
+    }
+
+    /// A fresh copy of the door fixture in a temporary folder named for
+    /// `tag`, so tests don't share one.
+    pub(in crate::ui) fn door_project_named(tag: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("stave-gtk-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let source =
@@ -275,7 +280,10 @@ mod tests {
     }
 
     /// Launches a project window on `folder`, as the application does.
-    fn launch(application: &adw::Application, folder: PathBuf) -> Controller<Window> {
+    pub(in crate::ui) fn launch(
+        application: &adw::Application,
+        folder: PathBuf,
+    ) -> Controller<Window> {
         let options = Options {
             layout: Some(std::env::temp_dir().join("stave-editing-test-no-layout")),
             ..Options::default()
@@ -294,7 +302,7 @@ mod tests {
     }
 
     /// Queues an editing message for the window, as its widgets do.
-    fn send(controller: &Controller<Window>, message: EditingInput) {
+    pub(in crate::ui) fn send(controller: &Controller<Window>, message: EditingInput) {
         controller.sender().send(message.into()).unwrap();
     }
 
@@ -498,6 +506,26 @@ mod tests {
         // The menu is told to stand somewhere else: until it has handled
         // that and said so, the window keeps where it was.
         let menu = controller.model().editing.menu.sender().clone();
+        // The window is laid out a few frames after it is presented,
+        // later on a busy machine.
+        let laid_out = settle_until(Duration::from_secs(10), || {
+            let design = &controller.model().widgets.design;
+            design.width() > 400 && design.height() > 300
+        });
+        assert!(laid_out, "the view is laid out");
+        // The menu's entries are checked a step at a time, each step
+        // drawing it and placing it again: wait for the last, so no later
+        // placing of the window's own replaces the one asked for below.
+        let all_checked = settle_until(Duration::from_secs(60), || {
+            controller
+                .model()
+                .session
+                .edit()
+                .is_some_and(|edit| unchecked(edit) == 0)
+        });
+        assert!(all_checked, "every entry of the menu is checked");
+        settle();
+        let before = controller.model().editing.menu_place;
         let view = {
             let design = &controller.model().widgets.design;
             (f64::from(design.width()), f64::from(design.height()))

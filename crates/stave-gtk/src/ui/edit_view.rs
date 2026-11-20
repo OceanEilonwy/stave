@@ -710,10 +710,6 @@ impl Window {
             None => facing.as_ref().and_then(picked_from_facing),
         };
         match (target, picked) {
-            (Some(Target::Region(_)), Some(_)) | (None, Some(_)) if !self.gestures_allowed() => {
-                self.edit_toast(&self.parse_block_line().unwrap_or_default());
-                true
-            }
             (Some(Target::Region(_)), Some(picked)) | (None, Some(picked)) => {
                 self.start_edit(picked, (x, y));
                 true
@@ -735,6 +731,10 @@ impl Window {
 
     /// Starts an edit from a selection: the menu opens near `point`.
     pub(super) fn start_edit(&mut self, picked: Picked, point: (f64, f64)) {
+        // Before the selection is dropped for it.
+        if self.refuse_while_unreadable() {
+            return;
+        }
         let keeps_selection = matches!(picked, Picked::Face(_));
         {
             let session = &mut self.session;
@@ -759,15 +759,19 @@ impl Window {
     }
 
     /// Shows the part's "Add onto" button when the selected part is the
-    /// one whose face was clicked and nothing is being edited.
+    /// one whose face was clicked, nothing is being edited and the text
+    /// reads.
     pub(super) fn update_face_button(&mut self) {
+        let readable = self.gestures_allowed();
         let face = self.editing.state.face;
         let selected = match self.session.selection() {
             Some(Selection::Part(part)) => Some(*part),
             _ => None,
         };
         let shown = match (face, selected) {
-            (Some(face), Some(part)) if face.part == part && !self.edit_open() => Some(face),
+            (Some(face), Some(part)) if readable && face.part == part && !self.edit_open() => {
+                Some(face)
+            }
             _ => None,
         };
         let button = &self.editing.face_button;
@@ -785,7 +789,7 @@ impl Window {
                 .session
                 .drawable()
                 .is_some_and(|(_, graph)| pointing::only_spaces(graph));
-        if waiting && !self.edit_open() && self.session.selection().is_none() {
+        if readable && waiting && !self.edit_open() && self.session.selection().is_none() {
             self.show_hint(&tr("Click inside the box to add the first piece"));
         }
         self.update_item_tools();
@@ -1565,7 +1569,9 @@ pub(in crate::ui) mod changes;
 #[cfg(test)]
 mod changes_tests;
 mod editor_link;
-pub(in crate::ui) use editor_link::block_line;
+#[cfg(test)]
+mod gate_tests;
+pub(in crate::ui) use editor_link::{block_line, needs_readable_text};
 pub(in crate::ui) mod grip_panel;
 mod grip_script;
 mod grip_text;
