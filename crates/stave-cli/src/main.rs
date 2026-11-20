@@ -16,6 +16,7 @@
 //!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
 //! stave edit examples/clothing_cabinet_assemblies --script steps.txt
 //! stave edit new_chest --script build.txt   # a script can start a new project
+//! stave mcp                                  # the MCP server, for an AI app
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -41,12 +42,12 @@ use stave_app::edit::Verdict;
 use stave_app::editing::commit_tried;
 use stave_app::format::{FormatTextError, Formatted, format_text};
 use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
+use stave_app::script;
 use stave_lang::ast;
 use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, render_diagnostics};
 use stave_modules::DiskFiles;
 
 mod dump;
-mod script;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -161,11 +162,17 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run Stave as an MCP server over standard input and output, for an
+    /// AI app (Claude Desktop, Claude Code, Codex) to open, check and try
+    /// changes to projects. The AI app starts it; it runs until the app
+    /// closes the connection.
+    Mcp,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Mcp => mcp(),
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
@@ -357,6 +364,14 @@ fn dump(path: &Path, json: bool) -> Result<bool> {
     Ok(true)
 }
 
+/// Serves the MCP server over standard input and output until the AI app
+/// closes the connection. Standard output carries the protocol only.
+fn mcp() -> Result<bool> {
+    let options = stave_mcp::ServerOptions::from_environment()?;
+    stave_mcp::serve_stdio_blocking(options)?;
+    Ok(true)
+}
+
 /// Runs the `stave-gtk` viewer that is installed next to this program.
 fn view(path: &Path, scene: Option<&str>) -> Result<bool> {
     let me = std::env::current_exe().context("can't find where stave is installed")?;
@@ -510,7 +525,12 @@ fn edit(folder: &Path, patch_path: &Path, commit: bool) -> Result<bool> {
 fn edit_script(folder: &Path, script_path: &Path) -> Result<bool> {
     let steps = script::parse_script(&read(script_path)?)
         .with_context(|| format!("in '{}'", script_path.display()))?;
-    script::run(folder, &steps, true, &mut std::io::stdout().lock())
+    Ok(script::run(
+        folder,
+        &steps,
+        true,
+        &mut std::io::stdout().lock(),
+    )?)
 }
 
 /// The steps the flags of `stave edit` ask for.
@@ -540,7 +560,12 @@ fn edit_steps(folder: &Path, flags: Steps) -> Result<bool> {
     let mut steps = vec![("select".to_owned(), script::Step::Select(selection))];
     let Some(choose) = flags.choose else {
         steps.push(("list".to_owned(), script::Step::List));
-        return script::run(folder, &steps, false, &mut std::io::stdout().lock());
+        return Ok(script::run(
+            folder,
+            &steps,
+            false,
+            &mut std::io::stdout().lock(),
+        )?);
     };
     steps.push(("choose".to_owned(), script::Step::Choose(choose)));
     for bind in &flags.bind {
@@ -560,7 +585,12 @@ fn edit_steps(folder: &Path, flags: Steps) -> Result<bool> {
     if flags.commit {
         steps.push(("commit".to_owned(), script::Step::Commit));
     }
-    script::run(folder, &steps, false, &mut std::io::stdout().lock())
+    Ok(script::run(
+        folder,
+        &steps,
+        false,
+        &mut std::io::stdout().lock(),
+    )?)
 }
 
 /// How `stave edit` names a patch: `patch "Add a shelf"`, or the patch
