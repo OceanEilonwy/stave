@@ -355,7 +355,11 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
 button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }
 button.stave-code-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-editor-column, .stave-details { background: @view_bg_color; color: @view_fg_color; }
+.stave-editor-column { background: @view_bg_color; color: @view_fg_color; }
+/* The Details panel's scrolled window takes the inspector's own colour, so
+   the panel reads as one surface: the inspector is only as tall as what
+   it shows, and the scrolled window fills the rest of the panel. */
+.stave-details { background: @window_bg_color; color: @window_fg_color; }
 .stave-editor-head { background: @headerbar_bg_color; border-bottom: 1px solid alpha(currentColor, 0.1); }
 .stave-pin { background: @error_bg_color; color: @error_fg_color; box-shadow: 0 0 0 4px alpha(@error_bg_color, 0.22); }
 .stave-pin.warning { background: @warning_bg_color; color: @warning_fg_color; box-shadow: 0 0 0 4px alpha(@warning_bg_color, 0.25); }
