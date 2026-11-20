@@ -18,7 +18,15 @@
 //! );
 //! ```
 
+use std::collections::BTreeSet;
 use std::ops::Range;
+
+use crate::ast::Span;
+use crate::diagnostics::{Code, Diagnostic, FileId, Label};
+use crate::lexer::{Token, in_conflict};
+use crate::patch::TextEdit;
+use crate::syntax::SyntaxKind;
+use crate::{FORMAT_VERSION, parse_file};
 
 /// The fewest marker characters in a run that make a marker line.
 const SHORTEST_RUN: usize = 7;
@@ -57,6 +65,21 @@ pub enum Resolution {
     KeepBoth,
     /// Write this text in place of the conflict.
     Text(String),
+}
+
+/// A way to settle one conflict that an editor or an AI tool offers beside
+/// its `error[conflict]`: a text edit, not a patch, since a conflict is a
+/// layer 1 problem (grammar, "Conflicts").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictFix {
+    /// The text on its button: "Keep this side", "Keep the other side",
+    /// "Keep side 3", "Keep both".
+    pub label: String,
+    /// What it does, for [`resolve`].
+    pub resolution: Resolution,
+    /// The same as one edit of the file's text: the conflict's bytes and
+    /// what replaces them.
+    pub edit: TextEdit,
 }
 
 /// Why a conflict can't be resolved.
@@ -363,6 +386,164 @@ fn replacement(
             }
         }
     })
+}
+
+/// The ways to settle conflict number `conflict` (an index into
+/// [`find_conflicts`]): keep each side ("Keep this side" for the first,
+/// "Keep the other side" for the second, "Keep side 3" and on), then "Keep
+/// both" when every side is whole items, at least one, and no two sides
+/// declare the same name. Empty when there is no such conflict.
+pub fn fixes(text: &str, conflict: usize) -> Vec<ConflictFix> {
+    let conflicts = find_conflicts(text);
+    let Some(found) = conflicts.get(conflict) else {
+        return Vec::new();
+    };
+    let mut resolutions: Vec<(String, Resolution)> = (0..found.sides.len())
+        .map(|side| {
+            let label = match side {
+                0 => "Keep this side".to_owned(),
+                1 => "Keep the other side".to_owned(),
+                _ => format!("Keep side {}", side + 1),
+            };
+            (label, Resolution::Keep(side))
+        })
+        .collect();
+    if keeping_both_is_whole(text, found) {
+        resolutions.push(("Keep both".to_owned(), Resolution::KeepBoth));
+    }
+    resolutions
+        .into_iter()
+        .filter_map(|(label, resolution)| {
+            let replaced = replacement(text, found, &resolution).ok()?;
+            Some(ConflictFix {
+                label,
+                resolution,
+                edit: TextEdit {
+                    range: found.range.clone(),
+                    text: replaced,
+                },
+            })
+        })
+        .collect()
+}
+
+/// `true` if every side of `conflict` is whole items, at least one, and no
+/// two sides declare the same name.
+fn keeping_both_is_whole(text: &str, conflict: &Conflict) -> bool {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for side in &conflict.sides {
+        let Some(names) = text.get(side.range.clone()).and_then(item_names) else {
+            return false;
+        };
+        for name in names {
+            if seen.contains(&name) {
+                return false;
+            }
+            seen.insert(name);
+        }
+    }
+    true
+}
+
+/// The names `side` declares when it is whole items, at least one, read as
+/// a file of its own; `None` otherwise.
+fn item_names(side: &str) -> Option<BTreeSet<String>> {
+    let text = format!("stave {FORMAT_VERSION}\n{side}");
+    let parse = parse_file(FileId::DETACHED, &text);
+    if parse.has_errors() || !parse.broken.is_empty() {
+        return None;
+    }
+    let file = parse.ast?;
+    if file.items.is_empty() || !file.imports.is_empty() {
+        return None;
+    }
+    Some(
+        file.items
+            .iter()
+            .filter_map(|item| item.kind.name())
+            .map(|name| name.as_str().to_owned())
+            .collect(),
+    )
+}
+
+/// `error[conflict]` for each conflict in `text`, at its opening marker
+/// line, and for each marker line outside them.
+pub(crate) fn diagnostics(
+    file: FileId,
+    text: &str,
+    conflicts: &[Conflict],
+    tokens: &[Token],
+) -> Vec<Diagnostic> {
+    let line_span = |start: usize| {
+        let line = text
+            .get(start..)
+            .unwrap_or("")
+            .split('\n')
+            .next()
+            .unwrap_or("");
+        let end = start + line.strip_suffix('\r').unwrap_or(line).len();
+        Span::new(offset(start), offset(end))
+    };
+    let mut out: Vec<Diagnostic> = conflicts
+        .iter()
+        .map(|conflict| {
+            let names: Vec<String> = conflict
+                .sides
+                .iter()
+                .enumerate()
+                .map(|(index, side)| {
+                    if side.label.is_empty() {
+                        format!("side {}", index + 1)
+                    } else {
+                        format!("'{}'", side.label)
+                    }
+                })
+                .collect();
+            let help = match conflict.sides.len() {
+                2 => "This file holds two versions of the same lines. Keep one, keep both, or edit between the marker lines.".to_owned(),
+                count => format!(
+                    "This file holds {count} versions of the same lines. Keep one, keep them all, or edit between the marker lines."
+                ),
+            };
+            Diagnostic::error(
+                Code::Conflict,
+                format!("{} change the same lines", and_list(&names)),
+                Label::new(file, line_span(conflict.range.start)),
+            )
+            .with_help(help)
+        })
+        .collect();
+    out.extend(
+        tokens
+            .iter()
+            .filter(|token| {
+                token.kind == SyntaxKind::CONFLICT_MARKER && !in_conflict(conflicts, token.span)
+            })
+            .map(|token| {
+                Diagnostic::error(
+                    Code::Conflict,
+                    "this conflict marker line is not part of a conflict Stave can read",
+                    Label::new(file, token.span),
+                )
+                .with_help(
+                    "Delete the line, or write the whole conflict: a <<<<<<< line, each side after a +++++++ line, and a >>>>>>> line",
+                )
+            }),
+    );
+    out
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    }
+}
+
+fn offset(position: usize) -> u32 {
+    u32::try_from(position).unwrap_or(u32::MAX)
 }
 
 /// Appends `text` to `out`, ending it with a line feed unless it is empty

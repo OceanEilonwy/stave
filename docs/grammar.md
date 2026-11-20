@@ -3694,6 +3694,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 1 | `unknown-unit` | `unknown unit '<unit>' (expected one of mm, cm, m, in, ft, deg)` |
 | 1 | `unclosed-bracket` | `this "<bracket>" is never closed` |
 | 1 | `missing-brace` | `<the body of part 'side_l'> is missing its closing "}"` |
+| 1 | `conflict` | `'<your saved work>' and '<Claude Desktop>' change the same lines` (`side 1` for a side with no label), or for a marker line outside any conflict Stave can read `this conflict marker line is not part of a conflict Stave can read`; see [Conflicts](#conflicts) |
 | 2 | `unknown-name` | `unknown name '<name>'` |
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |

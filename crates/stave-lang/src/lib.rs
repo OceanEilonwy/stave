@@ -166,6 +166,12 @@ fn parse_with<T>(
         parser::parse(file, text, &lexed.tokens, &lexed.conflicts, entry);
     let mut diagnostics = lexed.diagnostics;
     diagnostics.extend(parse_diagnostics);
+    diagnostics.extend(conflict::diagnostics(
+        file,
+        text,
+        &lexed.conflicts,
+        &lexed.tokens,
+    ));
     let root = SyntaxNode::new_root(green.clone());
     let mut lowering = lower::Lowering::new(file, &diagnostics);
     let ast = lower(&mut lowering, &root);

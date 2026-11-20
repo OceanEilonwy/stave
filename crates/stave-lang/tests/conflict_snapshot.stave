@@ -1,0 +1,37 @@
+stave 1
+
+// Two changes to the shelf, written in jj's snapshot style: the window's
+// saved work and an agent's suggestion each changed the oak shelf.
+
+project "Shelf" {
+  goal:  "A small wall shelf"
+  units: mm
+}
+
+param shelf_length = 600mm within 400mm..900mm
+
+stock oak_18 { species: oak, form: solid, thickness: 18mm, max_width: 200mm, max_length: 2400mm }
+stock pine_18 { species: pine, form: solid, thickness: 18mm, max_width: 200mm, max_length: 2400mm }
+
+<<<<<<< conflict 1 of 1
++++++++ your saved work
+part shelf : pine_18 {
+  length: shelf_length
+  width:  150mm
+  place { ground }
+}
+------- base
+part shelf : oak_18 {
+  length: shelf_length
+  width:  150mm
+  place { ground }
+}
++++++++ Claude Desktop
+part shelf : oak_18 {
+  length: shelf_length
+  width:  180mm
+  place { ground }
+}
+>>>>>>> conflict 1 of 1 ends
+
+require long_enough : shelf_length >= 400mm "the shelf should hold a row of books"
