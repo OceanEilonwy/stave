@@ -596,6 +596,7 @@ pub(in crate::ui) fn needs_readable_text(command: &stave_app::editing::EditComma
         | EditCommand::TypeGripValue { .. }
         | EditCommand::MakeSolved { .. }
         | EditCommand::MakePlain(_)
+        | EditCommand::ShowPatch(_)
         | EditCommand::Add => true,
     }
 }

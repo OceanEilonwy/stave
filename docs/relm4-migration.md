@@ -884,8 +884,10 @@ these (rule 8), and never put a `RefCell` round the shared answer.
 - Editing in 3D while the text doesn't read has one gate,
   `Window::refuse_while_unreadable` (a notice saying why, beside the
   block line), asked by `Window::dispatch` before every edit command
-  the session would act on (`edit_view::needs_readable_text`; only
-  Cancel, listing grips and the menu's check pass), and by the few
+  the session would act on (`edit_view::needs_readable_text`, an
+  exhaustive match; only Cancel, listing grips and the menu's check pass,
+  and a patch shown from an AI app or a version, `ShowPatch`, is refused
+  like the rest), and by the few
   steps the window takes before any command (starting an edit, which
   would drop the selection; starting a hold; the finder's verbs; Delete
   with nothing selected). An edit script's `select` used to open the
