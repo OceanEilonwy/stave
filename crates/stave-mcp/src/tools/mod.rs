@@ -16,10 +16,14 @@ use crate::{McpError, StaveServer};
 pub mod changing;
 pub mod looking;
 pub mod projects;
+pub mod revisions;
 
 /// Every tool the server offers.
 pub(crate) fn router() -> ToolRouter<StaveServer> {
-    StaveServer::projects_router() + StaveServer::looking_router() + StaveServer::changing_router()
+    StaveServer::projects_router()
+        + StaveServer::looking_router()
+        + StaveServer::changing_router()
+        + StaveServer::revisions_router()
 }
 
 /// A tool's answer: `text` for a person to read, `structured` for a

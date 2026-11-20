@@ -1,6 +1,9 @@
 //! Changing: `try_patch`, `fixes_for`. Neither writes anything: a patch
-//! is tried on a scratch copy of the project, the way `stave edit
-//! --patch` tries one, and a fix is itself a patch to try.
+//! is tried on a scratch copy of the agent's line (see
+//! [`crate::agent_line`]): main's latest files, or a suggestion's, when
+//! the project's versions are on, and the folder as it is on disk when
+//! they are off, the way `stave edit --patch` tries one. A fix is itself
+//! a patch to try.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -14,16 +17,18 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use stave_app::edit::Verdict;
 use stave_app::scratch::{EditBase, one_patch_each};
+use stave_history::SuggestionId;
 use stave_lang::{Parse, SourceMap, ast, parse_patch_file, render_diagnostics};
-use stave_modules::DiskFiles;
+use stave_modules::{DiskFiles, FileSource};
 
 use super::looking::{count_words, problem_json};
 use super::projects::{load_error, open};
 use super::{answer, blocking, finish};
+use crate::agent_line::{self, LineFiles};
 use crate::{McpError, StaveServer};
 
 /// The name a patch's own diagnostics point into.
-const PATCH_NAME: &str = "patch";
+pub(crate) const PATCH_NAME: &str = "patch";
 
 /// `try_patch`'s arguments.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -31,6 +36,11 @@ pub struct PatchArguments {
     /// One or more patches in the .stave patch grammar (see grammar
     /// "Patches"): `patch "Wider" { set cabinet_width = 950mm }`.
     pub patch: String,
+    /// The id of one of the project's suggestions (from list_suggestions)
+    /// to try the patch on top of; without it the patch is tried on the
+    /// project's main line.
+    #[serde(default)]
+    pub suggestion: Option<String>,
 }
 
 /// `fixes_for`'s arguments.
@@ -44,15 +54,18 @@ pub struct FixesArguments {
 impl StaveServer {
     /// Tries a patch on a scratch copy.
     #[tool(
-        description = "Try one or more patches on a scratch copy of the open project, in order, \
-                       each on top of the ones before it, and stop at the first that is \
-                       refused. Says for each whether it fits (checks with no new errors) or is \
+        description = "Try one or more patches on a scratch copy of the open project (its main \
+                       line, or the suggestion given), in order, each on top of the ones \
+                       before it, and stop at the first that is refused. Says for each whether it fits (checks with no new errors) or is \
                        refused and why, with the problems it causes and the files it would \
                        change. Writes nothing.",
         annotations(read_only_hint = true)
     )]
     async fn try_patch(&self, Parameters(arguments): Parameters<PatchArguments>) -> CallToolResult {
-        finish(self.try_patches(arguments.patch).await)
+        finish(
+            self.try_patches(arguments.patch, arguments.suggestion)
+                .await,
+        )
     }
 
     /// A problem's fixes.
@@ -67,9 +80,26 @@ impl StaveServer {
 }
 
 impl StaveServer {
-    async fn try_patches(&self, text: String) -> Result<CallToolResult, McpError> {
+    async fn try_patches(
+        &self,
+        text: String,
+        suggestion: Option<String>,
+    ) -> Result<CallToolResult, McpError> {
         let project = self.require_project().await?;
-        blocking(move || try_on_scratch(&project.folder, &text)).await
+        blocking(move || {
+            let folder = &project.folder;
+            if !agent_line::versions_on(folder)? {
+                if suggestion.is_some() {
+                    return Err(McpError::VersionsOff);
+                }
+                return try_on_scratch(folder, &DiskFiles, &text);
+            }
+            let history = agent_line::history(folder)?;
+            let onto = suggestion.map(SuggestionId::new);
+            let files = agent_line::line_files(&history, onto.as_ref())?;
+            try_on_scratch(folder, &LineFiles::new(folder, &files), &text)
+        })
+        .await
     }
 
     async fn fixes(&self, number: usize) -> Result<CallToolResult, McpError> {
@@ -110,13 +140,18 @@ impl StaveServer {
 }
 
 /// Tries each patch of `text` on a scratch copy of the project in
-/// `folder`, as `stave edit --patch` does, and says what happened.
-fn try_on_scratch(folder: &Path, text: &str) -> Result<CallToolResult, McpError> {
+/// `folder`, read through `files`, as `stave edit --patch` does, and says
+/// what happened.
+fn try_on_scratch(
+    folder: &Path,
+    files: &dyn FileSource,
+    text: &str,
+) -> Result<CallToolResult, McpError> {
     let text = with_header(text);
     let mut sources = SourceMap::new();
     let file = sources.add(PATCH_NAME, text.as_str())?;
     let patches = one_patch_each(file, &parse_patch_file(file, &text));
-    let mut base = EditBase::new(folder, &DiskFiles).map_err(|error| load_error(folder, error))?;
+    let mut base = EditBase::new(folder, files).map_err(|error| load_error(folder, error))?;
     let cancel = AtomicBool::new(false);
     let mut words = String::new();
     let mut tried_patches = Vec::new();
@@ -187,7 +222,7 @@ fn try_on_scratch(folder: &Path, text: &str) -> Result<CallToolResult, McpError>
 /// The patch text as a patch file: a file starts with its format line,
 /// `stave 1`, which an AI writing a patch by itself leaves out, so it is
 /// added when missing (the patch's own line numbers then count it).
-fn with_header(text: &str) -> String {
+pub(crate) fn with_header(text: &str) -> String {
     let first = text
         .lines()
         .map(str::trim)
@@ -201,7 +236,7 @@ fn with_header(text: &str) -> String {
 
 /// How a patch is named: `patch "Add a shelf"`, or `the patch text` when
 /// it isn't one readable patch.
-fn title(patch: &Parse<ast::PatchFile>) -> String {
+pub(crate) fn title(patch: &Parse<ast::PatchFile>) -> String {
     let only = match patch.ast.as_ref().map(|ast| ast.patches.as_slice()) {
         Some([only]) if !patch.has_errors() => only,
         Some(_) | None => return "the patch text".to_owned(),

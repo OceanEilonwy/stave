@@ -4,20 +4,27 @@
 //! through the same pipeline the window and `stave check` use.
 //!
 //! ```text
-//! AI app ──stdio, JSON-RPC──▶ StaveServer ──▶ tools/{projects,looking,changing}
-//!                                              └──▶ stave-app (open, check, try a patch)
+//! AI app ──stdio, JSON-RPC──▶ StaveServer ──▶ tools/{projects,looking,changing,revisions}
+//!                                              ├──▶ stave-app (open, check, try a patch)
+//!                                              └──▶ stave-history (versions, suggestions)
 //! ```
 //!
 //! One server serves one connection, and so one agent: the AI app named
 //! by its `clientInfo` plus a short id ([`Agent`]). The server holds the
-//! project the agent opened ([`OpenProject`]) and reads its files from
-//! disk afresh for every tool, so it always sees what the window last
-//! saved. Every tool answers with one text that stands on its own (Claude
-//! Code and Codex show only that) and the same facts as structured JSON.
+//! project the agent opened ([`OpenProject`]) and reads its files afresh
+//! for every tool, so it always sees what the window last saved. Every
+//! tool answers with one text that stands on its own (Claude Code and
+//! Codex show only that) and the same facts as structured JSON.
 //!
-//! Nothing here changes a project except `new_project`, which writes a
-//! new project into an empty folder. Paths are never trusted:
-//! [`project_path`] refuses one that leads out of the project folder.
+//! An agent never writes the files the person has open. With the
+//! project's versions on (`open_project` turns them on when asked), an
+//! agent's changes go into its own line (the `agent_line` module):
+//! `suggest` records a patch that fits as a suggestion, and
+//! `apply_suggestion` re-tries its patches on the project's main line and
+//! records the result there, under the project's merge policy; the window
+//! then brings the folder up to date. `new_project` writes a new project
+//! into an empty folder. Paths are never trusted: [`project_path`] refuses
+//! one that leads out of the project folder.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -31,6 +38,7 @@ use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{Peer, RoleServer, ServerHandler, ServiceExt as _, tool_handler};
 use tokio::sync::Mutex;
 
+mod agent_line;
 mod error;
 pub mod tools;
 
@@ -193,7 +201,10 @@ files that describe parts, stock, joints and hardware by their relationships. Op
 with open_project (or make one with new_project), read it with describe and check, and change \
 it by writing a patch in the .stave grammar: look the grammar up with grammar and the standard \
 kinds with std_lookup, then try the patch with try_patch, which checks it on a scratch copy and \
-writes nothing. A problem's fixes are patches too (fixes_for).";
+writes nothing. A problem's fixes are patches too (fixes_for). With the project's versions on, \
+record a patch that fits as a suggestion with suggest; the person sees it, and apply_suggestion \
+puts it into the project when the project's settings allow. list_suggestions, list_versions, \
+discard_suggestion and undo look after suggestions and versions.";
 
 /// Serves one connection over standard input and output until the AI app
 /// closes it: what `stave mcp` runs.

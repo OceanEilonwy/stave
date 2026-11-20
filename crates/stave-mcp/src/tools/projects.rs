@@ -3,22 +3,38 @@
 //! A project folder is given as a full path and used as the path really
 //! leads (symbolic links followed); everything after works inside that
 //! folder only.
+//!
+//! A project's versions are turned on only when asked: `open_project`
+//! says when they are off, and turns them on when called again with
+//! `start_versions`, recording the folder's files as the first version.
+//! `new_project` counts as applying a change, so it follows the merge
+//! policy: refused under `off`, and otherwise the new project starts with
+//! versions on and its first version recorded as the agent's.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
-use rmcp::{tool, tool_router};
+use rmcp::{Peer, RoleServer, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use stave_app::Opened;
 use stave_app::script::{parse_script, run};
+use stave_history::{MergePolicy, merge_policy};
 
 use super::looking::count_words;
 use super::{answer, blocking, finish};
+use crate::agent_line;
 use crate::{McpError, OpenProject, StaveServer};
+
+/// The message of the version that records a project's files as they
+/// were when its versions were turned on.
+const FIRST_VERSION: &str = "The project as it was when versions were turned on";
+
+/// The message of a new project's first version.
+const NEW_PROJECT_VERSION: &str = "Made the project";
 
 /// How many recent projects are listed, as the window's Open Recent menu.
 const RECENT_LIMIT: usize = 8;
@@ -34,6 +50,10 @@ const BOOKMARK_NAMESPACE: &str = "http://www.freedesktop.org/standards/desktop-b
 pub struct OpenArguments {
     /// The project folder's full path, starting with `/`.
     pub path: String,
+    /// Turn the project's versions on when they are off, so changes can
+    /// be suggested and applied. Ask the person first.
+    #[serde(default)]
+    pub start_versions: bool,
 }
 
 /// `new_project`'s arguments.
@@ -88,15 +108,20 @@ impl StaveServer {
     /// Opens a project for this session.
     #[tool(
         description = "Open a Stave project folder for this session, given its full path. Says \
-                       how many parts it has and what problems it has. The other tools work on \
-                       the project opened last.",
-        annotations(read_only_hint = true)
+                       how many parts it has, what problems it has, and whether its versions \
+                       are on (with how many versions and suggestions). Versions are needed to \
+                       suggest changes; when they are off, ask the person, then call again with \
+                       start_versions: true. The other tools work on the project opened last.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn open_project(
         &self,
         Parameters(arguments): Parameters<OpenArguments>,
     ) -> CallToolResult {
-        finish(self.open_folder(arguments.path).await)
+        finish(
+            self.open_folder(arguments.path, arguments.start_versions)
+                .await,
+        )
     }
 
     /// Makes a new project in an empty folder.
@@ -106,20 +131,38 @@ impl StaveServer {
                        new \"<title>\" <width> <height> <depth>, import std:<module>, stock \
                        <name> <species> solid <thickness> max_width <w> max_length <l>, create, \
                        then select region <name>, choose <module>.<Entry>, set <setting> = \
-                       <value>, add. Refuses a folder that isn't empty. Opens the new project.",
+                       <value>, add. Refuses a folder that isn't empty, and refuses when the \
+                       person's settings let only them make changes. Opens the new project, \
+                       with its versions on.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
-    async fn new_project(&self, Parameters(arguments): Parameters<NewArguments>) -> CallToolResult {
-        finish(self.make_project(arguments).await)
+    async fn new_project(
+        &self,
+        Parameters(arguments): Parameters<NewArguments>,
+        peer: Peer<RoleServer>,
+    ) -> CallToolResult {
+        finish(self.make_project(arguments, &peer).await)
     }
 }
 
 impl StaveServer {
-    async fn open_folder(&self, given: String) -> Result<CallToolResult, McpError> {
+    async fn open_folder(
+        &self,
+        given: String,
+        start_versions: bool,
+    ) -> Result<CallToolResult, McpError> {
         let folder = project_folder(&given)?;
         let (summary, text) = blocking(move || {
+            // A folder inside a bigger repository is refused before
+            // anything else: its versions could never be kept.
+            let mut on = agent_line::versions_on(&folder)?;
             let opened = open(&folder)?;
-            let summary = Summary::of(&folder, &opened);
+            if !on && start_versions {
+                agent_line::start(&folder, &agent_line::person(), FIRST_VERSION)?;
+                on = true;
+            }
+            let mut summary = Summary::of(&folder, &opened);
+            summary.versions = Versions::read(&folder, on)?;
             let text = summary.text();
             Ok((summary, text))
         })
@@ -131,9 +174,20 @@ impl StaveServer {
         Ok(answer(text, json!(summary)))
     }
 
-    async fn make_project(&self, arguments: NewArguments) -> Result<CallToolResult, McpError> {
+    async fn make_project(
+        &self,
+        arguments: NewArguments,
+        peer: &Peer<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
         let folder = new_folder(&arguments.folder)?;
+        // Making a project counts as applying a change: the person's own
+        // default decides, as the new folder has no settings of its own.
+        match merge_policy(&folder, &self.options().config_dir) {
+            MergePolicy::Off => return Err(McpError::NewProjectNotAllowed),
+            MergePolicy::Ask | MergePolicy::Auto => {}
+        }
         let steps = parse_script(&arguments.steps)?;
+        let actor = agent_line::actor(&self.agent(peer).await);
         let (summary, transcript) = blocking(move || {
             let made = first_missing(&folder);
             std::fs::create_dir_all(&folder).map_err(|source| McpError::Io {
@@ -161,8 +215,14 @@ impl StaveServer {
                     source,
                 })
                 .and_then(|real| open(&real).map(|opened| (real, opened)));
+            let opened = opened.and_then(|(real, opened)| {
+                agent_line::start(&real, &actor, NEW_PROJECT_VERSION)?;
+                let mut summary = Summary::of(&real, &opened);
+                summary.versions = Versions::read(&real, true)?;
+                Ok(summary)
+            });
             match opened {
-                Ok((real, opened)) => Ok((Summary::of(&real, &opened), transcript)),
+                Ok(summary) => Ok((summary, transcript)),
                 Err(McpError::NotAProject(_)) => {
                     empty_again(&folder, made.as_deref());
                     Err(McpError::NeverCreated)
@@ -210,6 +270,9 @@ struct Summary {
     warnings: usize,
     /// Each problem on one line: `error[code]: message (file:line:column)`.
     problems: Vec<String>,
+    /// Whether its versions are on, and how many there are.
+    #[serde(flatten)]
+    versions: Versions,
 }
 
 impl Summary {
@@ -247,6 +310,7 @@ impl Summary {
             errors: opened.error_count(),
             warnings,
             problems,
+            versions: Versions::OFF,
         }
     }
 
@@ -276,7 +340,64 @@ impl Summary {
         text.push_str(
             "Call check for the problems in full with their fixes, and describe for the parts.",
         );
+        text.push('\n');
+        match self.versions.versions {
+            VersionsState::On => {
+                let _ = write!(
+                    text,
+                    "Versions are on: {} and {} waiting.",
+                    count_words(self.versions.revisions, "version", "versions"),
+                    count_words(self.versions.suggestions, "suggestion", "suggestions"),
+                );
+            }
+            VersionsState::Off => text.push_str(&McpError::VersionsOff.to_string()),
+        }
         text
+    }
+}
+
+/// Whether a project's versions are on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum VersionsState {
+    /// Off: changes can be tried, not suggested.
+    Off,
+    /// On.
+    On,
+}
+
+/// What `open_project` says about a project's versions.
+#[derive(Debug, Clone, Serialize)]
+struct Versions {
+    /// On or off.
+    versions: VersionsState,
+    /// How many versions main has (counted up to [`VERSIONS_COUNTED`]).
+    revisions: usize,
+    /// How many suggestions are waiting.
+    suggestions: usize,
+}
+
+/// The most versions `open_project` counts.
+const VERSIONS_COUNTED: usize = 1000;
+
+impl Versions {
+    const OFF: Self = Self {
+        versions: VersionsState::Off,
+        revisions: 0,
+        suggestions: 0,
+    };
+
+    /// The versions of the project in `folder`, when `on`.
+    fn read(folder: &Path, on: bool) -> Result<Self, McpError> {
+        if !on {
+            return Ok(Self::OFF);
+        }
+        let history = agent_line::history(folder)?;
+        Ok(Self {
+            versions: VersionsState::On,
+            revisions: history.versions(VERSIONS_COUNTED)?.len(),
+            suggestions: history.suggestions()?.len(),
+        })
     }
 }
 
