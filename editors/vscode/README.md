@@ -39,9 +39,10 @@ The command **Stave: Restart Language Server** restarts it.
 
 Files are coloured by the TextMate grammar (`editors/textmate`) as soon as
 they open, then by the server's semantic tokens. The extension declares the
-custom token types (`unit`, `docComment`, and one per item kind: `part`,
-`joint`, `param`, `region`, `hardware`, `assembly`, `scene`, `stock`,
-`profile`, `recipe`, `let`, `require`, `role`, `label`, `member`) and
+custom token types (`unit`, and one per item kind: `component`, `kind`,
+`part`, `madePart`, `joint`, `param`, `region`, `hardware`, `assembly`,
+`scene`, `stock`, `profile`, `recipe`, `let`, `require`, `role`, `label`,
+`member`; doc comments are `comment` with the `documentation` modifier) and
 modifiers (`reference`, `unresolved`, `solvedParam`), maps each to a
 TextMate scope for themes without semantic rules, and sets these defaults:
 units in italics, references underlined, solved params bold, standard

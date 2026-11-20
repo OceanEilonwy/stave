@@ -57,8 +57,11 @@ local function link(group, target)
 end
 
 local function apply_styles()
-  link("@lsp.type.docComment.stave", "@comment.documentation")
+  link("@lsp.typemod.comment.documentation.stave", "@comment.documentation")
+  link("@lsp.type.component.stave", "@type")
+  link("@lsp.type.kind.stave", "@type")
   link("@lsp.type.part.stave", "@type")
+  link("@lsp.type.madePart.stave", "@type")
   link("@lsp.type.assembly.stave", "@type")
   link("@lsp.type.joint.stave", "@function.method")
   link("@lsp.type.hardware.stave", "@constructor")

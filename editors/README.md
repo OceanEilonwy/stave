@@ -24,7 +24,8 @@ This section binds the server and the editor configurations here. Change
 both together. The machine-readable copy of the legend is
 [`semantic-tokens.json`](semantic-tokens.json);
 `vscode/scripts/check-manifest.mjs` checks the VS Code extension against it,
-and the server's legend should be tested against it too.
+and a `stave-lsp` unit test (`legend::tests`) checks the server's legend
+against it.
 
 ### Starting
 
@@ -43,35 +44,38 @@ keep their TextMate or tree-sitter colours.
 | # | Type | Custom | Sent for (`stave_ide::TokenClass`) |
 |---|---|---|---|
 | 0 | `keyword` | | `Keyword`: keywords and contextual words in their position |
-| 1 | `comment` | | `Comment`: `// …`, `/* … */` |
-| 2 | `docComment` | yes | `DocComment`: `/// …` |
-| 3 | `string` | | `Text`: a string's quotes and text |
-| 4 | `number` | | `Number`: a number, or the number of a quantity (`18` of `18mm`, `3/4` of `3/4in`, `1-1/2` of `1-1/2in`) |
-| 5 | `unit` | yes | `Unit`: the unit of a quantity (`mm`, `in`, `deg`), always its own token right after its number |
-| 6 | `function` | | `Function`: a call head fixed by position or a built-in function (`flush`, `tenon`, `overlay`) |
-| 7 | `type` | | `Type`, and `Item(Component)`, `Item(Kind)`: components, kinds, type names |
-| 8 | `namespace` | | `Module`, `Item(Module)`: a module's name (`casework`, `hw`) |
-| 9 | `enumMember` | | `EnumWord`: a word of a closed list (`up`, `across`, `open`, `plywood`) |
-| 10 | `property` | | `Field`: a field name, a named argument, a member after `.` |
-| 11 | `part` | yes | `Item(Part)`, `Item(MadePart)` |
-| 12 | `joint` | yes | `Item(Joint)` |
-| 13 | `param` | yes | `Item(Param)` |
-| 14 | `region` | yes | `Item(Region)` |
-| 15 | `hardware` | yes | `Item(Hardware)` |
-| 16 | `assembly` | yes | `Item(Assembly)` |
+| 1 | `comment` | | `Comment`: `// …`, `/* … */`; `DocComment` (`/// …`) with the `documentation` modifier |
+| 2 | `string` | | `Text`: a string's quotes and text |
+| 3 | `number` | | `Number`: a number, or the number of a quantity (`18` of `18mm`, `3/4` of `3/4in`, `1-1/2` of `1-1/2in`) |
+| 4 | `operator` | | `Punctuation`: brackets, operators, separators |
+| 5 | `function` | | `Function`: a call head fixed by position or a built-in function (`flush`, `tenon`, `overlay`) |
+| 6 | `type` | | `Type`: type names (`Region`) |
+| 7 | `namespace` | | `Module`, `Item(Module)`: a module's name (`casework`, `hw`) |
+| 8 | `enumMember` | | `EnumWord`: a word of a closed list (`up`, `across`, `open`, `plywood`) |
+| 9 | `property` | | `Field`: a field name, a named argument, a member after `.` |
+| 10 | `variable` | | `Plain` **with** a modifier (`unresolved`): a name that resolves to nothing |
+| 11 | `unit` | yes | `Unit`: the unit of a quantity (`mm`, `in`, `deg`), always its own token right after its number |
+| 12 | `component` | yes | `Item(Component)` |
+| 13 | `kind` | yes | `Item(Kind)` |
+| 14 | `recipe` | yes | `Item(Recipe)` |
+| 15 | `stock` | yes | `Item(Stock)` |
+| 16 | `profile` | yes | `Item(Profile)` |
 | 17 | `scene` | yes | `Item(Scene)` |
-| 18 | `stock` | yes | `Item(Stock)` |
-| 19 | `profile` | yes | `Item(Profile)` |
-| 20 | `recipe` | yes | `Item(Recipe)` |
-| 21 | `let` | yes | `Item(Let)` |
-| 22 | `require` | yes | `Item(Require)` |
-| 23 | `role` | yes | `Item(Role)`: a kind's role (`piece: Part`) |
-| 24 | `label` | yes | `Item(Label)`: an array label (`bottom` in `rail[bottom, top]`) |
-| 25 | `member` | yes | `Item(Member)`: a hardware kind's member (`member cup`) |
-| 26 | `variable` | | `Plain` **with** the `unresolved` modifier: a name that resolves to nothing |
+| 18 | `param` | yes | `Item(Param)` |
+| 19 | `let` | yes | `Item(Let)` |
+| 20 | `region` | yes | `Item(Region)` |
+| 21 | `part` | yes | `Item(Part)` |
+| 22 | `joint` | yes | `Item(Joint)` |
+| 23 | `hardware` | yes | `Item(Hardware)` |
+| 24 | `assembly` | yes | `Item(Assembly)` |
+| 25 | `require` | yes | `Item(Require)` |
+| 26 | `role` | yes | `Item(Role)`: a kind's role (`piece: Part`) |
+| 27 | `madePart` | yes | `Item(MadePart)`: a part a kind makes |
+| 28 | `member` | yes | `Item(Member)`: a hardware kind's member (`member cup`) |
+| 29 | `label` | yes | `Item(Label)`: an array label (`bottom` in `rail[bottom, top]`) |
 
-`Punctuation`, `Error` and `Plain` without `unresolved` are not sent: the
-editor's own colouring (TextMate brackets and operators) stays.
+`Error` and `Plain` without a modifier are not sent: the editor's own
+colouring stays.
 
 | Bit | Modifier | Custom | Sent for (`stave_ide::TokenModifier`) |
 |---|---|---|---|
@@ -80,6 +84,7 @@ editor's own colouring (TextMate brackets and operators) stays.
 | 2 (4) | `defaultLibrary` | | `StandardLibrary`: an item from the standard library |
 | 3 (8) | `unresolved` | yes | `Unresolved`: a word where a name goes that names nothing |
 | 4 (16) | `solvedParam` | yes | `SolvedParam`: a `solved param`, declared or named |
+| 5 (32) | `documentation` | | a doc comment (`TokenClass::DocComment`), on type `comment` |
 
 The order is `TokenModifier::ALL`'s, so bit `n` of the protocol's
 modifier set is `TokenModifier::ALL[n]`: the server builds the number by

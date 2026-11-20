@@ -330,6 +330,36 @@ mod tests {
         );
     }
 
+    /// `editors/semantic-tokens.json` is the copy of the legend the editor
+    /// configurations are checked against; it must be the one sent.
+    #[test]
+    fn the_legend_matches_the_editors_copy() {
+        let copy: serde_json::Value =
+            serde_json::from_str(include_str!("../../../editors/semantic-tokens.json"))
+                .expect("editors/semantic-tokens.json is JSON");
+        let names = |key: &str| -> Vec<String> {
+            copy[key]
+                .as_array()
+                .expect("a list of names")
+                .iter()
+                .map(|name| name.as_str().expect("a name").to_owned())
+                .collect()
+        };
+        let legend = legend();
+        let types: Vec<String> = legend
+            .token_types
+            .iter()
+            .map(|t| t.as_str().to_owned())
+            .collect();
+        let modifiers: Vec<String> = legend
+            .token_modifiers
+            .iter()
+            .map(|m| m.as_str().to_owned())
+            .collect();
+        assert_eq!(types, names("tokenTypes"));
+        assert_eq!(modifiers, names("tokenModifiers"));
+    }
+
     #[test]
     fn tokens_are_relative_and_split_by_line() {
         let text = "x 18mm\n/* a\nb */ é y";
