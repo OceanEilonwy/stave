@@ -89,7 +89,7 @@ impl Window {
                 let count: usize = count
                     .parse()
                     .map_err(|_| format!("'{count}' isn't a count"))?;
-                let axis = axis.or_else(|| Some(self.editing.repeats.row.row.axis()));
+                let axis = axis.or_else(|| Some(self.editing.repeats.shown.axis()));
                 self.repeat_selected(count, axis);
             }
             "drag" => {

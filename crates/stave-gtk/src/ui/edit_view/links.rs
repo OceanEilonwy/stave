@@ -9,8 +9,6 @@ use stave_app::inspect::LinkTarget;
 use stave_app::session::{Command, Selection};
 
 use super::super::Window;
-use super::super::sections::LinkHandlers;
-use crate::ui::update::editing::EditingInput;
 
 /// What a link the pointer is on lights.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,14 +20,6 @@ pub(in crate::ui) enum Hovered {
 }
 
 impl Window {
-    /// Connects a panel's links: a click selects, the pointer lights.
-    pub(in crate::ui) fn connect_links(&self, links: &LinkHandlers) {
-        let input = self.input();
-        links.connect_click(move |target| input.emit(EditingInput::LinkClicked(target).into()));
-        let input = self.input();
-        links.connect_hover(move |target| input.emit(EditingInput::LinkHovered(target).into()));
-    }
-
     /// A link was clicked: an item is selected, a space lit.
     pub(in crate::ui) fn link_clicked(&mut self, target: LinkTarget) {
         match target {

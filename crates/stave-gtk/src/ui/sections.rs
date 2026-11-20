@@ -21,62 +21,47 @@
 //! Nothing here is a relm4 component: these are widget builders used
 //! inside the Inspector's and the Edit panel's views
 //! (docs/relm4-migration.md, the leaf table). A section keeps whether it
-//! is open in its own revealer, and [`LinkHandlers`] holds only the two
-//! callbacks every link shares, each in a [`Cell`] and cloned out before
-//! it is called, so nothing is borrowed while a callback or GTK runs.
+//! is open in its own revealer, and [`LinkHandlers`] is only where every
+//! link a panel draws sends its clicks and hovers: its owner's own input,
+//! as the owner's messages.
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
-use std::cell::Cell;
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::gdk;
 use stave_app::inspect::{LinkTarget, NameLink};
 
-/// Called with a link's target when it is clicked.
-pub(super) type LinkCallback = Rc<dyn Fn(LinkTarget)>;
-/// Called with a link's target while the pointer is on it, and with
-/// `None` when it leaves.
-pub(super) type HoverCallback = Rc<dyn Fn(Option<LinkTarget>)>;
-
-/// Where a link reports clicks and hovers; shared by every link a panel
-/// draws, set once by the window.
-#[derive(Default, Clone)]
-pub(super) struct LinkHandlers {
-    on_click: Rc<Cell<Option<LinkCallback>>>,
-    on_hover: Rc<Cell<Option<HoverCallback>>>,
+/// Where the links a component draws report: its own input, with a click
+/// and a hover each made into one of its messages. The links only send;
+/// the component decides what to tell its owner.
+pub(super) struct LinkHandlers<Message> {
+    input: relm4::Sender<Message>,
+    click: fn(LinkTarget) -> Message,
+    hover: fn(Option<LinkTarget>) -> Message,
 }
 
-/// The callback in `slot`, cloned out and put back, so the callback is
-/// free to connect another while it runs.
-fn connected<T: ?Sized>(slot: &Cell<Option<Rc<T>>>) -> Option<Rc<T>> {
-    let callback = slot.take();
-    slot.set(callback.clone());
-    callback
-}
-
-impl LinkHandlers {
-    /// Calls `callback` when a link is clicked.
-    pub(super) fn connect_click(&self, callback: impl Fn(LinkTarget) + 'static) {
-        self.on_click.set(Some(Rc::new(callback)));
-    }
-
-    /// Calls `callback` as the pointer enters (`Some`) and leaves (`None`)
-    /// a link.
-    pub(super) fn connect_hover(&self, callback: impl Fn(Option<LinkTarget>) + 'static) {
-        self.on_hover.set(Some(Rc::new(callback)));
-    }
-
-    /// Reports a click on `target`, as a link does.
-    pub(super) fn click_target(&self, target: LinkTarget) {
-        if let Some(callback) = connected(&self.on_click) {
-            callback(target);
+impl<Message> Clone for LinkHandlers<Message> {
+    fn clone(&self) -> Self {
+        LinkHandlers {
+            input: self.input.clone(),
+            click: self.click,
+            hover: self.hover,
         }
     }
+}
 
-    fn hover(&self, target: Option<LinkTarget>) {
-        if let Some(callback) = connected(&self.on_hover) {
-            callback(target);
+impl<Message: 'static> LinkHandlers<Message> {
+    /// Links that send `click(target)` when clicked and `hover(Some(target))`
+    /// / `hover(None)` as the pointer enters and leaves, to `input`.
+    pub(super) fn new(
+        input: relm4::Sender<Message>,
+        click: fn(LinkTarget) -> Message,
+        hover: fn(Option<LinkTarget>) -> Message,
+    ) -> LinkHandlers<Message> {
+        LinkHandlers {
+            input,
+            click,
+            hover,
         }
     }
 
@@ -97,15 +82,21 @@ impl LinkHandlers {
             .build();
         button.set_cursor_from_name(Some("pointer"));
         button.update_property(&[gtk::accessible::Property::Label(&link.name)]);
-        let handlers = self.clone();
-        let target = link.target.clone();
-        button.connect_clicked(move |_| handlers.click_target(target.clone()));
+        // Sending fails only once the owner has gone, when nobody needs
+        // to hear (docs/relm4-migration.md, rule 4).
+        let (input, click, target) = (self.input.clone(), self.click, link.target.clone());
+        button.connect_clicked(move |_| {
+            let _ = input.send(click(target.clone()));
+        });
         let motion = gtk::EventControllerMotion::new();
-        let handlers = self.clone();
-        let target = link.target.clone();
-        motion.connect_enter(move |_, _, _| handlers.hover(Some(target.clone())));
-        let handlers = self.clone();
-        motion.connect_leave(move |_| handlers.hover(None));
+        let (input, hover, target) = (self.input.clone(), self.hover, link.target.clone());
+        motion.connect_enter(move |_, _, _| {
+            let _ = input.send(hover(Some(target.clone())));
+        });
+        let (input, hover) = (self.input.clone(), self.hover);
+        motion.connect_leave(move |_| {
+            let _ = input.send(hover(None));
+        });
         button.add_controller(motion);
         button
     }
@@ -404,31 +395,22 @@ button.stave-footer-button { font-size: 0.818rem; font-weight: 600; min-height: 
 .stave-grip-readout .stave-readout-value { font-weight: 600; }
 "#;
 
-/// Puts the sections' stylesheet on the display, once.
+/// Puts the sections' stylesheet on the default display, once for the
+/// process (Stave uses only the default display).
 pub(super) fn install_style() {
-    thread_local! {
-        /// The displays the stylesheet is on.
-        static INSTALLED: Cell<Vec<gdk::Display>> = const { Cell::new(Vec::new()) };
-    }
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
     let Some(display) = gdk::Display::default() else {
         return;
     };
-    let new = INSTALLED.with(|installed| {
-        let mut displays = installed.take();
-        let new = !displays.contains(&display);
-        if new {
-            displays.push(display.clone());
-        }
-        installed.set(displays);
-        new
-    });
-    if !new {
-        return;
-    }
+    INSTALLED.call_once(|| add_style(&display));
+}
+
+/// Adds the sections' stylesheet to `display`.
+fn add_style(display: &gdk::Display) {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(STYLE);
     gtk::style_context_add_provider_for_display(
-        &display,
+        display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
     );
@@ -436,46 +418,55 @@ pub(super) fn install_style() {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use stave_app::session::{ProblemIndex, Selection};
 
     use super::*;
     use crate::ui::gtk_test::on_gtk_thread;
 
-    #[test]
-    fn a_link_callback_may_connect_another_from_inside() {
-        on_gtk_thread(links_reconnect_from_inside);
+    /// What a test's links send.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Heard {
+        Click(LinkTarget),
+        Hover(Option<LinkTarget>),
     }
 
-    /// A link's click and hover reach the callbacks with nothing
-    /// borrowed: a click callback that connects another (as a panel being
-    /// rebuilt under the pointer may) and clicks again from inside does
-    /// not panic, and the second click reaches the new callback.
-    fn links_reconnect_from_inside() {
-        let handlers = LinkHandlers::default();
+    #[test]
+    fn a_link_sends_its_owner_messages() {
+        on_gtk_thread(links_send_messages);
+    }
+
+    /// A link's click and its pointer entering and leaving reach the
+    /// owner's input as the owner's own messages, in order; once the
+    /// owner's input has gone, a click is let go without a panic.
+    fn links_send_messages() {
+        let (input, heard) = relm4::channel::<Heard>();
+        let handlers = LinkHandlers::new(input, Heard::Click, Heard::Hover);
         let target = LinkTarget::Select(Selection::Problem(ProblemIndex(0)));
         let link = handlers.link(&NameLink {
             name: "door_l".to_owned(),
             target: target.clone(),
         });
-        let heard: Rc<RefCell<Vec<&'static str>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let inner = handlers.clone();
-        handlers.connect_click(move |clicked| {
-            log.borrow_mut().push("first");
-            let later = Rc::clone(&log);
-            inner.connect_click(move |_| later.borrow_mut().push("second"));
-            inner.click_target(clicked);
-        });
-        let log = Rc::clone(&heard);
-        handlers.connect_hover(move |hovered| {
-            log.borrow_mut()
-                .push(if hovered.is_some() { "on" } else { "off" });
-        });
         link.emit_clicked();
-        handlers.hover(Some(target));
-        handlers.hover(None);
-        assert_eq!(*heard.borrow(), vec!["first", "second", "on", "off"]);
+        let motion = link
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|controller| controller.downcast::<gtk::EventControllerMotion>().ok())
+            .expect("the link watches the pointer");
+        motion.emit_by_name::<()>("enter", &[&1.0_f64, &1.0_f64]);
+        motion.emit_by_name::<()>("leave", &[]);
+        // Three were sent, so none of these waits.
+        let got: Vec<Heard> = (0..3).filter_map(|_| heard.recv_sync()).collect();
+        assert_eq!(
+            got,
+            vec![
+                Heard::Click(target.clone()),
+                Heard::Hover(Some(target)),
+                Heard::Hover(None),
+            ]
+        );
+        drop(heard);
+        drop(handlers);
+        link.emit_clicked();
     }
 }

@@ -12,13 +12,13 @@
 //! ```
 //!
 //! The hold card is a relm4 component ([`HoldCardComponent`]) following
-//! `docs/relm4-migration.md`; [`HoldCard`] keeps the older API in front of
-//! it while the window (`impl Window`) is old code. Where a hold stands
-//! ([`HoldStep`]) is the window's.
+//! `docs/relm4-migration.md`, whose controller the window owns ([`Hold`]),
+//! launched with its outputs forwarded to the window's input. Where a hold
+//! stands ([`HoldStep`]) is the window's.
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentController, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::editing::{EditCommand, parse_length};
 use stave_app::hold::{HoldRequest, Measured};
 use stave_app::i18n::{fill_in, tr};
@@ -26,9 +26,8 @@ use stave_app::naming::Bound;
 use stave_lang::units::Length;
 use stave_scene::Target;
 
-use super::super::Window;
-use super::super::relm4_shim::Bridge;
 use super::super::sections;
+use super::super::{Window, WindowInput};
 use crate::ui::update::editing::EditingInput;
 
 /// Where a hold stands.
@@ -331,48 +330,23 @@ impl Component for HoldCardComponent {
     }
 }
 
-/// The hold card, behind the API the window still uses: it owns the
-/// component and passes what it is told on as [`HoldCardInput`] messages.
-pub(in crate::ui) struct HoldCard {
-    /// The card, in the Edit panel; shown by [`HoldCard::show`], hidden by
-    /// its owner.
-    pub(in crate::ui) root: gtk::Box,
-    bridge: Bridge<HoldCardComponent>,
-}
-
-impl HoldCard {
-    /// The card, hidden.
-    pub(in crate::ui) fn new() -> HoldCard {
-        let bridge = Bridge::<HoldCardComponent>::launch(());
-        HoldCard {
-            root: bridge.widget().clone(),
-            bridge,
-        }
-    }
-
-    /// Shows the card at once for two things and the distance between
-    /// them now (or why it can't be measured); its fields are filled in,
-    /// and the keyboard put in the reason, when the main loop next runs.
-    fn show(&self, first: &Measured, second: &Measured, now: &Result<Length, String>) {
-        self.root.set_visible(true);
-        self.bridge.send(HoldCardInput::Show {
+impl HoldCardInput {
+    /// Ask about the distance between two things and the distance now (or
+    /// why it can't be measured).
+    fn show(first: &Measured, second: &Measured, now: &Result<Length, String>) -> HoldCardInput {
+        HoldCardInput::Show {
             title: fill_in(
                 &tr("{first} to {second}"),
                 &[("first", &first.path()), ("second", &second.path())],
             ),
             now: now.clone(),
-        });
+        }
     }
+}
 
-    /// Fills the fields as people would, when the main loop next runs.
-    fn fill(&self, fields: HoldFields) {
-        self.bridge.send(HoldCardInput::Fill(fields));
-    }
-
-    /// Calls `callback` with what people do on the card.
-    fn connect(&self, callback: impl Fn(HoldCardOutput) + 'static) {
-        self.bridge.connect(callback);
-    }
+/// What the hold card tells the window, as the window's input.
+fn hold_card_heard(output: HoldCardOutput) -> WindowInput {
+    EditingInput::HoldCard(output).into()
 }
 
 fn label(words: &str, classes: &[&str]) -> gtk::Label {
@@ -386,8 +360,9 @@ fn label(words: &str, classes: &[&str]) -> gtk::Label {
 
 /// The hold being set up, and its card.
 pub(in crate::ui) struct Hold {
-    /// The card.
-    pub(in crate::ui) card: HoldCard,
+    /// The card, in the Edit panel, launched with its outputs forwarded to
+    /// the window's input; the window shows and hides it.
+    pub(in crate::ui) card: Controller<HoldCardComponent>,
     /// Where it stands.
     pub(in crate::ui) step: HoldStep,
     /// On a space's menu: hold a distance from that space.
@@ -395,10 +370,12 @@ pub(in crate::ui) struct Hold {
 }
 
 impl Hold {
-    /// Nothing being held.
-    pub(in crate::ui) fn new() -> Hold {
+    /// Nothing being held; the card's outputs go to `input`.
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> Hold {
         Hold {
-            card: HoldCard::new(),
+            card: HoldCardComponent::builder()
+                .launch(())
+                .forward(input, hold_card_heard),
             step: HoldStep::Idle,
             from_space: gtk::Button::builder()
                 .label(tr("Hold a distance from this space…"))
@@ -412,17 +389,15 @@ impl Hold {
 }
 
 impl Window {
-    /// Connects the hold card (in the Edit panel) and the space menu's
-    /// button.
+    /// Puts the space menu's button in the menu and connects it. (The hold
+    /// card's outputs were forwarded to the window when it was launched,
+    /// `Hold::new`.)
     pub(in crate::ui) fn connect_hold(&self) {
         let hold = &self.editing.hold;
         self.editing.menu.widget().append(&hold.from_space);
         let input = self.input();
         hold.from_space
             .connect_clicked(move |_| input.emit(EditingInput::HoldFromSpace.into()));
-        let input = self.input();
-        hold.card
-            .connect(move |output| input.emit(EditingInput::HoldCard(output).into()));
     }
 
     /// The hold card asked for something.
@@ -494,7 +469,7 @@ impl Window {
             &[("first", &first.path())],
         ));
         self.editing.hold.step = HoldStep::Picking { first };
-        self.editing.hold.card.root.set_visible(false);
+        self.editing.hold.card.widget().set_visible(false);
         self.update_edit_panel();
     }
 
@@ -534,7 +509,14 @@ impl Window {
     pub(in crate::ui) fn ask_hold(&mut self, first: Measured, second: Measured) {
         let now = self.session.measure(&first, &second);
         self.show_hint("");
-        self.editing.hold.card.show(&first, &second, &now);
+        // Shown at once; its fields are filled in, and the keyboard put in
+        // the reason, when the main loop next runs.
+        let card = &self.editing.hold.card;
+        card.widget().set_visible(true);
+        // Gone only once the window is: nobody to tell.
+        let _ = card
+            .sender()
+            .send(HoldCardInput::show(&first, &second, &now));
         self.update_edit_panel();
         let fields = HoldFields {
             at_most: false,
@@ -565,7 +547,12 @@ impl Window {
             reason.clone_into(&mut fields.reason);
             fields.clone()
         };
-        self.editing.hold.card.fill(fields);
+        let _ = self
+            .editing
+            .hold
+            .card
+            .sender()
+            .send(HoldCardInput::Fill(fields));
     }
 
     /// "Try it", as a script presses it: the rule the window last filled
@@ -594,7 +581,7 @@ impl Window {
         ) {
             Ok(request) => {
                 self.editing.hold.step = HoldStep::Idle;
-                self.editing.hold.card.root.set_visible(false);
+                self.editing.hold.card.widget().set_visible(false);
                 self.update_edit_panel();
                 self.start_change(EditCommand::Hold(request));
             }
@@ -606,7 +593,7 @@ impl Window {
     pub(in crate::ui) fn cancel_hold(&mut self) -> bool {
         let was = std::mem::replace(&mut self.editing.hold.step, HoldStep::Idle) != HoldStep::Idle;
         if was {
-            self.editing.hold.card.root.set_visible(false);
+            self.editing.hold.card.widget().set_visible(false);
             self.update_edit_panel();
             self.show_hint("");
             self.show_card();
@@ -672,12 +659,12 @@ mod tests {
         found
     }
 
-    fn show_divider(card: &HoldCard) {
-        card.show(
+    fn show_divider(card: &Controller<HoldCardComponent>) {
+        let _ = card.sender().send(HoldCardInput::show(
             &Measured::Item("divider.panel".to_owned()),
             &Measured::Item("case.top".to_owned()),
             &Ok(Length::from_mm(412)),
-        );
+        ));
     }
 
     #[test]
@@ -686,19 +673,19 @@ mod tests {
     }
 
     fn hold_card_is_freed() {
-        let card = HoldCard::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        card.connect(move |_| {
-            let _ = &held;
-        });
+        let card = HoldCardComponent::builder()
+            .launch(())
+            .connect_receiver(move |_, _| {
+                let _ = &held;
+            });
         let callback = Rc::downgrade(&token);
         drop(token);
         show_divider(&card);
-        assert!(card.root.is_visible(), "shown at once");
         settle();
-        let root = card.root.downgrade();
-        let input = card.bridge.sender().clone();
+        let root = card.widget().downgrade();
+        let input = card.sender().clone();
         drop(card);
         settle();
         assert!(root.upgrade().is_none(), "the card is freed");
@@ -706,7 +693,36 @@ mod tests {
             input.send(HoldCardInput::Cancel).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the receiver is freed");
+    }
+
+    #[test]
+    fn the_windows_hold_is_freed_with_it_and_its_card_reaches_the_window() {
+        on_gtk_thread(hold_reaches_the_window);
+    }
+
+    /// Launched as the window launches it (`Hold::new`), the card's Cancel
+    /// arrives as the window's editing input, and dropping the hold frees
+    /// the card.
+    fn hold_reaches_the_window() {
+        let (input, receiver) = relm4::channel::<WindowInput>();
+        let hold = Hold::new(&input);
+        show_divider(&hold.card);
+        settle();
+        let _ = hold.card.sender().send(HoldCardInput::Cancel);
+        settle();
+        assert!(matches!(
+            receiver.recv_sync(),
+            Some(WindowInput::Editing(EditingInput::HoldCard(
+                HoldCardOutput::Cancel
+            )))
+        ));
+        let root = hold.card.widget().downgrade();
+        let card_input = hold.card.sender().clone();
+        drop(hold);
+        settle();
+        assert!(root.upgrade().is_none(), "the card is freed");
+        assert!(card_input.send(HoldCardInput::Cancel).is_err());
     }
 
     #[test]
@@ -715,42 +731,41 @@ mod tests {
     }
 
     /// Showing and filling it report nothing; "Try it" sends what the
-    /// fields hold. A Cancel pressed from inside the callback is queued
+    /// fields hold. A Cancel pressed from inside the receiver is queued
     /// behind it, not run under it.
     fn hold_card_fields() {
-        let card = Rc::new(HoldCard::new());
         let heard: Rc<RefCell<Vec<HoldCardOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&card);
-        card.connect(move |output| {
-            let Some(card) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(output);
-            if first {
-                let buttons = descendants::<gtk::Button>(card.root.upcast_ref());
-                if let Some(cancel) = buttons
-                    .iter()
-                    .find(|button| button.has_css_class("stave-footer-button"))
-                {
-                    cancel.emit_clicked();
+        let cancel: Rc<RefCell<Option<gtk::Button>>> = Rc::default();
+        let inner = Rc::clone(&cancel);
+        let card = HoldCardComponent::builder()
+            .launch(())
+            .connect_receiver(move |_, output| {
+                let first = log.borrow().is_empty();
+                log.borrow_mut().push(output);
+                if first {
+                    if let Some(cancel) = inner.borrow().as_ref() {
+                        cancel.emit_clicked();
+                    }
+                    assert_eq!(log.borrow().len(), 1, "nothing ran under the receiver");
                 }
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
-            }
-        });
+            });
+        let root: gtk::Widget = card.widget().clone().upcast();
+        *cancel.borrow_mut() = descendants::<gtk::Button>(&root)
+            .into_iter()
+            .find(|button| button.has_css_class("stave-footer-button"));
         show_divider(&card);
-        card.fill(HoldFields {
+        let _ = card.sender().send(HoldCardInput::Fill(HoldFields {
             at_most: true,
             value: "400mm".to_owned(),
             reason: "knee room".to_owned(),
-        });
+        }));
         settle();
         assert!(
             heard.borrow().is_empty(),
             "showing and filling report nothing"
         );
-        let entries = descendants::<gtk::Entry>(card.root.upcast_ref());
+        let entries = descendants::<gtk::Entry>(&root);
         let texts: Vec<String> = entries
             .iter()
             .map(|entry| entry.text().to_string())
