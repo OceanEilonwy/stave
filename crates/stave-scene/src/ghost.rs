@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use stave_model::solved::{Part, SolvedDesign};
+use stave_model::solved::{AssemblyId, Part, SolvedDesign};
 
 use crate::focus::Look;
 use crate::graph::{BuildOptions, Item, Node, NodeId, Posed, SceneGraph};
@@ -79,6 +79,84 @@ pub struct Ghosts {
     removed: Vec<NodeId>,
     /// The verdict they are drawn with.
     verdict: GhostVerdict,
+    /// Each assembly of the candidate with the base assembly of the same
+    /// name, for drawing the ghosts over the base scene.
+    assemblies: Vec<(AssemblyId, AssemblyId)>,
+}
+
+/// The ghosts drawn over the base scene, as one scene a renderer draws
+/// in one frame: the base scene's nodes first, in their own order (so a
+/// base [`NodeId`] means the same node here), then every ghost's node.
+/// What a ghost stands in for (a changed node's original, a removed
+/// node) is still drawn, faded ([`GhostOverlay::looks`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhostOverlay {
+    graph: SceneGraph,
+    /// How many of `graph`'s nodes are the base scene's.
+    base_count: usize,
+    /// Per ghost node (from `base_count` on): its node in
+    /// [`Ghosts::graph`].
+    candidate: Vec<NodeId>,
+    /// Per node of [`Ghosts::graph`]: the node here that draws it (its
+    /// ghost, or the unchanged base node at its path).
+    from_candidate: Vec<Option<NodeId>>,
+    /// The base nodes a ghost stands in for, in node order.
+    faded: Vec<NodeId>,
+}
+
+impl GhostOverlay {
+    /// The base scene with the ghosts added after its nodes.
+    pub fn graph(&self) -> &SceneGraph {
+        &self.graph
+    }
+
+    /// The ghosts' nodes here, in order.
+    pub fn ghost_nodes(&self) -> impl Iterator<Item = NodeId> + use<> {
+        (self.base_count..self.graph.nodes.len()).map(NodeId)
+    }
+
+    /// `true` when `node` is a ghost's node.
+    pub fn is_ghost(&self, node: NodeId) -> bool {
+        node.0 >= self.base_count && node.0 < self.graph.nodes.len()
+    }
+
+    /// For a ghost's node here: the node it is in [`Ghosts::graph`].
+    /// `None` for the base scene's nodes.
+    pub fn candidate_node(&self, node: NodeId) -> Option<NodeId> {
+        node.0
+            .checked_sub(self.base_count)
+            .and_then(|index| self.candidate.get(index).copied())
+    }
+
+    /// The node here that draws a node of [`Ghosts::graph`]: its ghost,
+    /// or the base node at its path when the candidate left it as it was.
+    pub fn of_candidate(&self, node: NodeId) -> Option<NodeId> {
+        self.from_candidate.get(node.0).copied().flatten()
+    }
+
+    /// The base nodes a ghost stands in for (changed or removed), in node
+    /// order.
+    pub fn faded(&self) -> &[NodeId] {
+        &self.faded
+    }
+
+    /// How each node looks: what a ghost stands in for faded
+    /// ([`Look::Ghost`]), the ghosts see-through ([`Look::XRay`], for a
+    /// view to tint by the verdict), the rest as usual.
+    pub fn looks(&self) -> Vec<Look> {
+        self.graph
+            .node_ids()
+            .map(|id| {
+                if self.is_ghost(id) {
+                    Look::XRay
+                } else if self.faded.binary_search(&id).is_ok() {
+                    Look::Ghost
+                } else {
+                    Look::Normal
+                }
+            })
+            .collect()
+    }
 }
 
 /// Which list of nodes a node is in, for matching by path.
@@ -197,11 +275,56 @@ impl Ghosts {
             .map(|(_, id)| *id)
             .collect();
         removed.sort();
+        let assemblies = candidate
+            .assemblies()
+            .iter()
+            .filter_map(|assembly| {
+                let same = base
+                    .assemblies()
+                    .iter()
+                    .find(|old| old.name == assembly.name)?;
+                Some((assembly.id, same.id))
+            })
+            .collect();
         Ghosts {
             graph,
             ghosts,
             removed,
             verdict,
+            assemblies,
+        }
+    }
+
+    /// The ghosts over the base scene `base_graph` (the scene they were
+    /// made against), as one scene to draw in one frame. A ghost moves
+    /// with the base assembly of the same name.
+    pub fn over(&self, base_graph: &SceneGraph) -> GhostOverlay {
+        let nodes: Vec<NodeId> = self.ghosts.iter().map(|ghost| ghost.node).collect();
+        let graph = base_graph.with_nodes_of(&self.graph, &nodes, |id| {
+            self.assemblies
+                .iter()
+                .find(|(candidate, _)| *candidate == id)
+                .map(|(_, base)| *base)
+        });
+        let base_count = base_graph.nodes.len();
+        let base_paths = paths(base_graph);
+        let mut from_candidate = vec![None; self.graph.nodes.len()];
+        for (path, id) in paths(&self.graph) {
+            if let Some(slot) = from_candidate.get_mut(id.0) {
+                *slot = base_paths.get(&path).copied();
+            }
+        }
+        for (index, id) in nodes.iter().enumerate() {
+            if let Some(slot) = from_candidate.get_mut(id.0) {
+                *slot = Some(NodeId(base_count + index));
+            }
+        }
+        GhostOverlay {
+            graph,
+            base_count,
+            candidate: nodes,
+            from_candidate,
+            faded: self.stands_for(),
         }
     }
 

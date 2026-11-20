@@ -120,7 +120,12 @@ fn a_suggestion_draws_its_ghosts_see_through_and_tinted() {
         .iter()
         .filter(|look| **look == Look::Normal)
         .count();
-    assert_eq!(plain + ghosts.len(), drawing.looks.len());
+    let faded = view.project().faded_nodes();
+    assert!(!faded.is_empty(), "the taller sides' originals are faded");
+    for node in faded {
+        assert_eq!(drawing.looks[node.index()], Look::Ghost);
+    }
+    assert_eq!(plain + ghosts.len() + faded.len(), drawing.looks.len());
 
     let summary: serde_json::Value = serde_json::from_str(&view.summary_json()).unwrap();
     assert_eq!(summary["suggestion"]["verdict"], "fits");
@@ -155,4 +160,94 @@ fn a_project_that_does_not_place_draws_nothing_and_says_so() {
     let summary: serde_json::Value = serde_json::from_str(&view.summary_json()).unwrap();
     assert_eq!(summary["placed"], false);
     assert!(summary["errors"].as_u64().unwrap() > 0);
+}
+
+/// The box without its bottom (and the groove that holds it), as a
+/// suggestion's files.
+fn box_without_bottom() -> Files {
+    let original = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/box/box.stave"),
+    )
+    .unwrap();
+    let start = original.find("/// The bottom floats").unwrap();
+    let end = start + original[start..].find("\n}\n").unwrap() + 3;
+    let mut text = original.clone();
+    text.replace_range(start..end, "");
+    let groove = text
+        .lines()
+        .find(|line| line.starts_with("joint bottom_groove"))
+        .unwrap()
+        .to_owned();
+    let text = text.replace(&groove, "");
+    assert!(!text.contains("part bottom"));
+    Files::new("/p", BTreeMap::from([("box.stave".to_owned(), text)])).unwrap()
+}
+
+#[test]
+fn a_part_the_suggestion_takes_out_is_still_drawn_faded() {
+    let project = Project::open(&box_files(), Some(&box_without_bottom())).unwrap();
+    let mut view = View::new(project, 400, 300);
+    let graph = view.graph().unwrap();
+    let bottom = graph
+        .node_ids()
+        .find(|id| graph.node(*id).unwrap().name == "bottom")
+        .expect("the project's bottom is still in the scene");
+    assert!(view.project().faded_nodes().contains(&bottom));
+    let drawing = view.drawing().unwrap();
+    assert_eq!(drawing.looks[bottom.index()], Look::Ghost);
+    assert!(drawing.posed.shown(bottom).is_some(), "it is drawn");
+
+    // Every node of the project is drawn, before the ghosts.
+    let alone = Project::open(&box_files(), None).unwrap();
+    let base_count = alone.graph().unwrap().nodes.len();
+    for node in view.project().ghost_nodes() {
+        assert!(node.index() >= base_count);
+    }
+    assert!(graph.nodes.len() >= base_count);
+    // The lid still opens, against the project's own assemblies.
+    assert_eq!(view.project().motions().len(), 1);
+    view.set_pose(0, 1.0).unwrap();
+}
+
+#[test]
+fn a_ghost_is_picked_as_the_suggestions() {
+    let original = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/box/box.stave"),
+    )
+    .unwrap();
+    let taller = original.replace(
+        "param box_height = 110mm within",
+        "param box_height = 150mm within",
+    );
+    let suggestion = Files::new("/p", BTreeMap::from([("box.stave".to_owned(), taller)])).unwrap();
+    let mut view = View::new(
+        Project::open(&box_files(), Some(&suggestion)).unwrap(),
+        400,
+        300,
+    );
+    // The middle of the view is on the taller box: a ghost, see-through
+    // or not, is what a ray meets first where it stands out.
+    let mut seen_ghost = false;
+    for step in 0..40 {
+        let y = 20.0 + 6.5 * step as f32;
+        if let Some(picked) = view.pick(200.0, y)
+            && picked.suggested
+        {
+            assert!(!picked.replaced);
+            assert!(
+                picked.what.starts_with("Part cut from walnut 12"),
+                "{picked:?}"
+            );
+            seen_ghost = true;
+        }
+    }
+    assert!(seen_ghost, "some click lands on a ghost");
+}
+
+#[test]
+fn what_a_part_is_is_said_in_words() {
+    let mut view = box_view();
+    let picked = view.pick(200.0, 150.0).unwrap();
+    assert!(!picked.what.contains('_'), "{picked:?}");
+    assert!(picked.what.starts_with("Part cut from"), "{picked:?}");
 }

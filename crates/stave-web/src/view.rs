@@ -30,23 +30,28 @@ pub struct NoSuchMotion {
 pub struct Picked {
     /// Its name as written: `end_l`.
     pub name: String,
-    /// What it is, in words: `Part (walnut_12)`.
+    /// What it is, in words: `Part cut from walnut 12`, `Euro hinge`.
     pub what: String,
     /// The names of what it is joined to or fitted on, sorted.
     pub joined: Vec<String>,
-    /// It is something the suggestion adds or changes.
+    /// It is something the suggestion adds or changes (a ghost).
     pub suggested: bool,
+    /// The suggestion takes it out or changes it: it is drawn faded under
+    /// the ghosts.
+    pub replaced: bool,
 }
 
 impl Picked {
     /// As JSON for the page:
-    /// `{"name": …, "what": …, "joined": […], "suggested": false}`.
+    /// `{"name": …, "what": …, "joined": […], "suggested": false,
+    /// "replaced": false}`.
     pub fn to_json(&self) -> String {
         json!({
             "name": self.name,
             "what": self.what,
             "joined": self.joined,
             "suggested": self.suggested,
+            "replaced": self.replaced,
         })
         .to_string()
     }
@@ -60,7 +65,8 @@ pub struct Drawing {
     pub posed: Posed,
     /// The camera.
     pub orbit: Orbit,
-    /// How each node is drawn: a ghost see-through.
+    /// How each node is drawn: a ghost see-through, what it stands in for
+    /// faded.
     pub looks: Vec<Look>,
     /// A ghost's verdict colour; zero alpha for every other node.
     pub tints: Vec<[f32; 4]>,
@@ -238,12 +244,18 @@ impl View {
             .ray(x, y, pixels(self.width), pixels(self.height));
         let hit = graph.pick(&posed, ray)?;
         let node = graph.node(hit.node)?;
+        // A ghost's item is the suggestion's.
+        let (design, item) = self
+            .project
+            .item_of(hit.node)
+            .unwrap_or((design, node.item));
         self.selection = Some(hit.node);
         Some(Picked {
             name: node.name.clone(),
-            what: what(design, node.item),
-            joined: joined_to(design, node.item),
+            what: what(design, item),
+            joined: joined_to(design, item),
             suggested: self.project.ghost_nodes().contains(&hit.node),
+            replaced: self.project.faded_nodes().contains(&hit.node),
         })
     }
 
@@ -253,13 +265,11 @@ impl View {
         let graph = self.project.graph()?;
         let posed = self.posed()?;
         let count = graph.nodes.len();
-        let mut looks = vec![Look::Normal; count];
+        let mut looks = self.project.looks();
+        looks.resize(count, Look::Normal);
         let mut tints = vec![[0.0; 4]; count];
         if let Some([red, green, blue]) = self.project.ghost_tint() {
             for node in self.project.ghost_nodes() {
-                if let Some(look) = looks.get_mut(node.index()) {
-                    *look = Look::XRay;
-                }
                 if let Some(tint) = tints.get_mut(node.index()) {
                     *tint = [red, green, blue, GHOST_TINT];
                 }
@@ -325,20 +335,47 @@ impl View {
     }
 }
 
-/// What an item is, in words.
+/// A name as written, in words: `walnut_12` is `walnut 12`, and a kind
+/// from a library (`hw.euro_hinge`) is named by its last part.
+fn in_words(name: &str) -> String {
+    name.rsplit('.')
+        .next()
+        .unwrap_or(name)
+        .replace('_', " ")
+        .trim()
+        .to_owned()
+}
+
+/// `text` with its first letter a capital.
+fn capitalised(text: &str) -> String {
+    let mut letters = text.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => String::new(),
+    }
+}
+
+/// What an item is, in words: `Part cut from walnut 12`, `Euro hinge`,
+/// `Piece of the dado joint shelf l`.
 fn what(design: &SolvedDesign, item: Item) -> String {
     match item {
         Item::Part(id) => design.part(id).map_or_else(
             || "Part".to_owned(),
-            |part| format!("Part ({})", part.stock.name),
+            |part| format!("Part cut from {}", in_words(&part.stock.name)),
         ),
         Item::Hardware(id) => design.hardware_piece(id).map_or_else(
             || "Hardware".to_owned(),
-            |hardware| format!("Hardware ({})", hardware.kind),
+            |hardware| capitalised(&in_words(&hardware.kind)),
         ),
         Item::Member(member) => design.joint(member.joint).map_or_else(
             || "Piece of a joint".to_owned(),
-            |joint| format!("Piece of the joint {} ({})", joint.name, joint.kind),
+            |joint| {
+                format!(
+                    "Piece of the {} joint {}",
+                    in_words(&joint.kind),
+                    in_words(&joint.name)
+                )
+            },
         ),
     }
 }
@@ -402,6 +439,14 @@ fn joined_to(design: &SolvedDesign, item: Item) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_are_put_in_words() {
+        assert_eq!(in_words("walnut_12"), "walnut 12");
+        assert_eq!(in_words("hw.euro_hinge"), "euro hinge");
+        assert_eq!(capitalised(&in_words("euro_hinge")), "Euro hinge");
+        assert_eq!(capitalised(""), "");
+    }
 
     #[test]
     fn fractions_are_clamped() {

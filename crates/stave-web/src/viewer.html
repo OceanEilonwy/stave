@@ -174,7 +174,9 @@
     section.hidden = false;
     document.getElementById("picked-name").textContent = picked.name;
     document.getElementById("picked-what").textContent =
-      picked.what + (picked.suggested ? " · changed by the suggestion" : "");
+      picked.what +
+        (picked.suggested ? " · added or changed by the suggestion" :
+         picked.replaced ? " · the suggestion takes this out or changes it" : "");
     document.getElementById("picked-joined").textContent = picked.joined.length
       ? "Joined to " + picked.joined.join(", ") + "."
       : "Not joined to anything.";

@@ -4,7 +4,9 @@
 use stave_model::solved::{AssemblyId, SolvedDesign};
 use stave_modules::LoadError;
 use stave_scene::pipeline::{self, Opened};
-use stave_scene::{GhostVerdict, Ghosts, Highlight, MotionRange, NodeId, SceneGraph};
+use stave_scene::{
+    GhostOverlay, GhostVerdict, Ghosts, Highlight, Item, Look, MotionRange, NodeId, SceneGraph,
+};
 
 use crate::files::Files;
 
@@ -46,8 +48,8 @@ pub struct Motion {
     pub range: MotionRange,
 }
 
-/// What is drawn: the project's own scene, or the scene with the
-/// suggestion made and its ghosts marked.
+/// What is drawn: the project's own scene, or the project's scene with
+/// the suggestion's ghosts over it.
 #[derive(Debug)]
 enum Drawn {
     /// Nothing placed: the project has errors before placement.
@@ -57,9 +59,19 @@ enum Drawn {
     /// The project with the suggestion made, alone: the project itself
     /// doesn't place, so there is nothing to draw it over.
     SuggestionAlone(SceneGraph),
-    /// The suggestion's scene, drawn over the project: its ghosts are
-    /// what it adds or changes.
-    Suggestion(Box<Ghosts>),
+    /// The project's scene with the suggestion's ghosts (what it adds or
+    /// changes) added after its nodes, and what they stand in for (what
+    /// it changes or takes out) faded.
+    Suggestion(Box<Suggested>),
+}
+
+/// A suggestion drawn over the project.
+#[derive(Debug)]
+struct Suggested {
+    /// What the suggestion adds or changes, in its own scene.
+    ghosts: Ghosts,
+    /// The project's scene with the ghosts over it: what is drawn.
+    overlay: GhostOverlay,
 }
 
 /// A project opened from its files, with an agent's suggestion when the
@@ -95,13 +107,15 @@ impl Project {
             (Some(base), Some((opened, verdict))) => match &opened.design {
                 Some(candidate) => {
                     let graph = pipeline::scene(base);
-                    Drawn::Suggestion(Box::new(Ghosts::new(
+                    let ghosts = Ghosts::new(
                         base,
                         &graph,
                         candidate,
                         pipeline::viewer_options(),
                         verdict.ghost(),
-                    )))
+                    );
+                    let overlay = ghosts.over(&graph);
+                    Drawn::Suggestion(Box::new(Suggested { ghosts, overlay }))
                 }
                 // The suggestion doesn't place: the project is drawn, and
                 // the verdict says why there is nothing over it.
@@ -126,44 +140,80 @@ impl Project {
         Ok(built)
     }
 
-    /// The opened files whose design is drawn: the suggestion's when its
-    /// scene is drawn, the project's otherwise.
-    fn drawn_opened(&self) -> &Opened {
-        match (&self.drawn, &self.suggestion) {
-            (Drawn::Suggestion(_) | Drawn::SuggestionAlone(_), Some((opened, _))) => opened,
-            (Drawn::Nothing | Drawn::Project(_), _)
-            | (Drawn::Suggestion(_) | Drawn::SuggestionAlone(_), None) => &self.project,
+    /// The suggestion's opened files.
+    fn suggestion_opened(&self) -> Option<&Opened> {
+        self.suggestion.as_ref().map(|(opened, _)| opened)
+    }
+
+    /// The design the drawn scene's own nodes come from: the project's,
+    /// or the suggestion's when it is drawn alone. A ghost's node comes
+    /// from the suggestion's design ([`Project::item_of`]).
+    pub fn design(&self) -> Option<&SolvedDesign> {
+        match &self.drawn {
+            Drawn::SuggestionAlone(_) => self.suggestion_opened()?.design.as_ref(),
+            Drawn::Nothing | Drawn::Project(_) | Drawn::Suggestion(_) => {
+                self.project.design.as_ref()
+            }
         }
     }
 
-    /// The design drawn, when something placed.
-    pub fn design(&self) -> Option<&SolvedDesign> {
-        self.drawn_opened().design.as_ref()
-    }
-
-    /// The scene drawn, when something placed: the suggestion's (with the
-    /// project's unchanged parts) when there is one, else the project's.
+    /// The scene drawn, when something placed: the project's, with the
+    /// suggestion's ghosts added after its own nodes when there is one.
     pub fn graph(&self) -> Option<&SceneGraph> {
         match &self.drawn {
             Drawn::Nothing => None,
             Drawn::Project(graph) | Drawn::SuggestionAlone(graph) => Some(graph),
-            Drawn::Suggestion(ghosts) => Some(ghosts.graph()),
+            Drawn::Suggestion(suggested) => Some(suggested.overlay.graph()),
         }
+    }
+
+    /// The design a node of [`Project::graph`] comes from, and what it
+    /// draws there: the suggestion's design for a ghost, else
+    /// [`Project::design`].
+    pub fn item_of(&self, node: NodeId) -> Option<(&SolvedDesign, Item)> {
+        if let Drawn::Suggestion(suggested) = &self.drawn
+            && let Some(candidate) = suggested.overlay.candidate_node(node)
+        {
+            let design = self.suggestion_opened()?.design.as_ref()?;
+            return Some((design, suggested.ghosts.graph().node(candidate)?.item));
+        }
+        Some((self.design()?, self.graph()?.node(node)?.item))
     }
 
     /// The nodes of [`Project::graph`] that are the suggestion's ghosts:
     /// what it adds or changes. Empty without a suggestion.
     pub fn ghost_nodes(&self) -> Vec<NodeId> {
         match &self.drawn {
-            Drawn::Suggestion(ghosts) => ghosts.ghosts().iter().map(|ghost| ghost.node).collect(),
+            Drawn::Suggestion(suggested) => suggested.overlay.ghost_nodes().collect(),
             Drawn::Nothing | Drawn::Project(_) | Drawn::SuggestionAlone(_) => Vec::new(),
+        }
+    }
+
+    /// The project's nodes the suggestion changes or takes out, drawn
+    /// faded under its ghosts. Empty without a suggestion.
+    pub fn faded_nodes(&self) -> &[NodeId] {
+        match &self.drawn {
+            Drawn::Suggestion(suggested) => suggested.overlay.faded(),
+            Drawn::Nothing | Drawn::Project(_) | Drawn::SuggestionAlone(_) => &[],
+        }
+    }
+
+    /// How each node of [`Project::graph`] looks: the ghosts see-through,
+    /// what they stand in for faded, the rest as usual.
+    pub fn looks(&self) -> Vec<Look> {
+        match &self.drawn {
+            Drawn::Suggestion(suggested) => suggested.overlay.looks(),
+            Drawn::Project(graph) | Drawn::SuggestionAlone(graph) => {
+                vec![Look::Normal; graph.nodes.len()]
+            }
+            Drawn::Nothing => Vec::new(),
         }
     }
 
     /// The colour the ghosts are tinted, from the suggestion's verdict.
     pub fn ghost_tint(&self) -> Option<[f32; 3]> {
         match &self.drawn {
-            Drawn::Suggestion(ghosts) => Some(ghosts.verdict().tint()),
+            Drawn::Suggestion(suggested) => Some(suggested.ghosts.verdict().tint()),
             Drawn::Nothing | Drawn::Project(_) | Drawn::SuggestionAlone(_) => None,
         }
     }
@@ -191,13 +241,15 @@ impl Project {
         self.graph().map(|graph| graph.title.as_str())
     }
 
-    /// Every assembly of the drawn design that moves, in assembly order.
+    /// Every assembly of [`Project::design`] that moves, in assembly
+    /// order. A ghost moves with the project's assembly of the same name.
     pub fn motions(&self) -> &[Motion] {
         &self.motions
     }
 
-    /// What the drawn design's problems are about, to tint in red as the
-    /// window does.
+    /// What the problems are about, to tint in red as the window does:
+    /// the suggestion's problems when there is one (on its ghosts, or on
+    /// the project's nodes it leaves as they were), else the project's.
     pub fn highlight(&self) -> &Highlight {
         &self.highlight
     }
@@ -220,14 +272,35 @@ impl Project {
     }
 
     fn find_highlight(&self) -> Highlight {
-        let Some(graph) = self.graph() else {
-            return Highlight::default();
-        };
         let mut all = Highlight::default();
-        for (_, contact) in &self.drawn_opened().contacts {
-            let one = pipeline::highlight(graph, contact);
-            all.nodes.extend(one.nodes);
-            all.volumes.extend(one.volumes);
+        match &self.drawn {
+            Drawn::Nothing => {}
+            Drawn::Project(graph) => {
+                for (_, contact) in &self.project.contacts {
+                    let one = pipeline::highlight(graph, contact);
+                    all.nodes.extend(one.nodes);
+                    all.volumes.extend(one.volumes);
+                }
+            }
+            Drawn::SuggestionAlone(graph) => {
+                for (_, contact) in self.suggestion_opened().map_or(&[][..], |o| &o.contacts) {
+                    let one = pipeline::highlight(graph, contact);
+                    all.nodes.extend(one.nodes);
+                    all.volumes.extend(one.volumes);
+                }
+            }
+            Drawn::Suggestion(suggested) => {
+                let contacts = self.suggestion_opened().map_or(&[][..], |o| &o.contacts);
+                for (_, contact) in contacts {
+                    let one = pipeline::highlight(suggested.ghosts.graph(), contact);
+                    all.nodes.extend(
+                        one.nodes
+                            .into_iter()
+                            .filter_map(|node| suggested.overlay.of_candidate(node)),
+                    );
+                    all.volumes.extend(one.volumes);
+                }
+            }
         }
         all.nodes.sort();
         all.nodes.dedup();

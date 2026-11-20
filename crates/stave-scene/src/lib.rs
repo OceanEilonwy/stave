@@ -48,7 +48,7 @@ pub use focus::{
     Anchor, GapMark, Label, LineKind, Look, MotionPlay, Note, Overlay, OverlayLine, Plan, Play,
     PlayFrame, StepPlay,
 };
-pub use ghost::{Ghost, GhostChange, GhostVerdict, Ghosts};
+pub use ghost::{Ghost, GhostChange, GhostOverlay, GhostVerdict, Ghosts};
 pub use graph::{
     BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
     RegionNode, SceneEntry, SceneGraph, Section, Wood,
