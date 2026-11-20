@@ -67,7 +67,7 @@ pub use buffers::{Buffers, OpenError, Overlay, Reload, SaveError};
 pub use document::{Document, STD_SCHEME};
 pub use index::{Symbol, SymbolId, SymbolKind, UseKind};
 pub use rename::{RenameEdit, RenameError};
-pub use tokens::{SemanticToken, TokenClass};
+pub use tokens::{SemanticToken, TokenClass, TokenModifier, TokenModifiers};
 
 /// How deep [`project_files`] looks into subfolders.
 const FOLDER_DEPTH: usize = 4;

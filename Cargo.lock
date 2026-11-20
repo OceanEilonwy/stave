@@ -2147,6 +2147,7 @@ dependencies = [
 name = "stave-ide"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "rowan",
  "stave-lang",
  "stave-modules",

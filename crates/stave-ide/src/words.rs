@@ -14,14 +14,17 @@ use stave_schema::{CutOperation, Operation};
 /// `units: mm`, `form: plywood`, `species: oak`, `measure: diameter`.
 pub(crate) const WORD_FIELDS: [&str; 5] = ["grain", "units", "form", "species", "measure"];
 
-/// `true` if `word` is in one of the closed word lists.
+/// `true` if `word` is in one of the closed word lists, or names a
+/// feature a recipe step works on (`waste`, `cheeks`).
 pub fn is_enum_word(word: &str) -> bool {
     WordSet::ALL.iter().any(|set| set.contains(word))
+        || stave_schema::operations::Feature::from_word(word).is_some()
 }
 
 /// `true` if `word` is the head of a call whose meaning is fixed by its
 /// position: a placement term, a spacing, a made part's term, an assembly
-/// step, a cut selector or operation, a recipe step or need.
+/// step, a cut selector or operation, a recipe step or need, an edge
+/// profile's `edge` or `around`, a hardware kind's `point`.
 pub fn is_fixed_call(word: &str) -> bool {
     PlacementTerm::from_word(word).is_some()
         || SpacingKind::from_word(word).is_some()
@@ -35,6 +38,9 @@ pub fn is_fixed_call(word: &str) -> bool {
         || NeedKind::from_word(word).is_some()
         || word == stave_schema::placement::EXTEND
         || word == stave_schema::operations::MARK
+        || word == stave_schema::operations::EDGE
+        || word == stave_schema::operations::AROUND
+        || word == stave_schema::functions::POINT
 }
 
 /// A built-in function's signature: `overlay(left: Length, ...) -> Mount`.

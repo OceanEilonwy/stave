@@ -1,0 +1,165 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"side_table\"))"
+---
+== table.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  10 | project "Side table" {
+     = project:keyword  ":text  Side table:text  ":text
+  11 |   goal:       "A small oak side table with a lower shelf"
+     = goal:field  ":text  A small oak side table with a lower shelf:text  ":text
+  12 |   units:      mm
+     = units:field  mm:word
+  13 |   resolution: 0.5mm
+     = resolution:field  0.5:number  mm:unit
+  14 |   style:      "shaker"
+     = style:field  ":text  shaker:text  ":text
+  18 | param table_height = 600mm within 550mm..700mm
+     = param:keyword  table_height:param+decl  600:number  mm:unit  within:keyword  550:number  mm:unit  700:number  mm:unit
+  19 | param top_size     = 500mm within 400mm..600mm      // the top is square
+     = param:keyword  top_size:param+decl  500:number  mm:unit  within:keyword  400:number  mm:unit  600:number  mm:unit
+  20 | param shelf_height = 150mm within 100mm..200mm      // floor to the top of the stretchers
+     = param:keyword  shelf_height:param+decl  150:number  mm:unit  within:keyword  100:number  mm:unit  200:number  mm:unit
+  21 | let leg_inset = 25mm                                // from the edge of the top to the outside of a leg
+     = let:keyword  leg_inset:let+decl  25:number  mm:unit
+  22 | let setback   = 5mm                                 // aprons and stretchers sit this far in from the leg faces
+     = let:keyword  setback:let+decl  5:number  mm:unit
+  23 | let slat_gap  = 15mm                                // between neighbouring slats
+     = let:keyword  slat_gap:let+decl  15:number  mm:unit
+  26 | let slat_width = (top_size - 2 * (leg_inset + oak_45_sq.width) - 4 * slat_gap) / 5
+     = let:keyword  slat_width:let+decl  top_size:param+ref  2:number  leg_inset:let+ref  oak_45_sq:stock+ref  width:plain  4:number  slat_gap:let+ref  5:number
+  29 | require knee_room    : table_height - apron_front.width - top.thickness >= 380mm "leave room under the aprons for your knees"
+     = require:keyword  knee_room:require+decl  table_height:param+ref  apron_front:part+ref  width:plain  top:part+ref  thickness:plain  380:number  mm:unit  ":text  leave room under the aprons for your knees:text  ":text
+  30 | require shelf_clear  : between(slat[0], apron_front) >= 200mm "leave room above the shelf for a stack of books"
+     = require:keyword  shelf_clear:require+decl  between:function  slat:part+ref  0:number  apron_front:part+ref  200:number  mm:unit  ":text  leave room above the shelf for a stack of books:text  ":text
+  31 | require slats_strong : slat_width >= 40mm "narrow slats bend; make the top bigger or the gaps smaller"
+     = require:keyword  slats_strong:require+decl  slat_width:let+ref  40:number  mm:unit  ":text  narrow slats bend; make the top bigger or the gaps smaller:text  ":text
+  34 | stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+     = stock:keyword  oak_19:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2700:number  mm:unit
+  35 | stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+     = stock:keyword  oak_45_sq:stock+decl  species:field  white_oak:word  form:field  solid:word  thickness:field  45:number  mm:unit  width:field  45:number  mm:unit  max_length:field  2700:number  mm:unit
+  41 | part top : oak_19 {
+     = part:keyword  top:part+decl  oak_19:stock+ref
+  42 |   length: top_size
+     = length:field  top_size:param+ref
+  43 |   width:  top_size
+     = width:field  top_size:param+ref
+  44 |   place {
+     = place:keyword
+  45 |     ground
+     = ground:function
+  50 | part leg[front_left, front_right, back_left, back_right] : oak_45_sq {
+     = part:keyword  leg:part+decl  front_left:label+decl  front_right:label+decl  back_left:label+decl  back_right:label+decl  oak_45_sq:stock+ref
+  51 |   length: table_height - top.thickness
+     = length:field  table_height:param+ref  top:part+ref  thickness:plain
+  52 |   place {
+     = place:keyword
+  53 |     orient(length: up, width: right)
+     = orient:function  length:field  up:word  width:field  right:word
+  54 |     corners(top, inset: leg_inset)
+     = corners:function  top:part+ref  inset:field  leg_inset:let+ref
+  55 |     against(top.bottom)
+     = against:function  top:part+ref  bottom:plain
+  63 | part apron_front : oak_19 {
+     = part:keyword  apron_front:part+decl  oak_19:stock+ref
+  64 |   length: fit                                      // between the legs, plus the tenons
+     = length:field  fit:keyword
+  65 |   width:  90mm
+     = width:field  90:number  mm:unit
+  66 |   place {
+     = place:keyword
+  67 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+  68 |     against(top.bottom)
+     = against:function  top:part+ref  bottom:plain
+  69 |     center(top, across)
+     = center:function  top:part+ref  across:word
+  70 |     flush(leg[front_left].front, inset: setback)
+     = flush:function  leg:part+ref  front_left:label+ref  front:plain  inset:field  setback:let+ref
+  74 | part apron_left : oak_19 {
+     = part:keyword  apron_left:part+decl  oak_19:stock+ref
+  75 |   length: fit
+     = length:field  fit:keyword
+  76 |   width:  90mm
+     = width:field  90:number  mm:unit
+  77 |   place {
+     = place:keyword
+  78 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+  79 |     against(top.bottom)
+     = against:function  top:part+ref  bottom:plain
+  80 |     flush(leg[front_left].left, inset: setback)
+     = flush:function  leg:part+ref  front_left:label+ref  left:plain  inset:field  setback:let+ref
+  81 |     center(top, deep)
+     = center:function  top:part+ref  deep:word
+  85 | part apron_back  = mirror(apron_front, about: mid(top, deep))
+     = part:keyword  apron_back:part+decl  mirror:keyword  apron_front:part+ref  about:field  mid:function  top:part+ref  deep:word
+  86 | part apron_right = mirror(apron_left, about: mid(top, across))
+     = part:keyword  apron_right:part+decl  mirror:keyword  apron_left:part+ref  about:field  mid:function  top:part+ref  across:word
+  90 | part cleat_front : oak_19 {
+     = part:keyword  cleat_front:part+decl  oak_19:stock+ref
+  91 |   length: between(leg[front_left], leg[front_right])
+     = length:field  between:function  leg:part+ref  front_left:label+ref  leg:part+ref  front_right:label+ref
+  92 |   width:  30mm
+     = width:field  30:number  mm:unit
+  93 |   note:   "Glue to the inside of the apron, flush with its top edge; slot the screw holes across the grain so the top can move"
+     = note:field  ":text  Glue to the inside of the apron, flush with its top edge; slot the screw holes across the grain so the top can move:text  ":text
+  94 |   place {
+     = place:keyword
+  95 |     against(top.bottom)
+     = against:function  top:part+ref  bottom:plain
+  96 |     center(top, across)
+     = center:function  top:part+ref  across:word
+  97 |     against(apron_front.back)
+     = against:function  apron_front:part+ref  back:plain
+ 101 | part cleat_back = mirror(cleat_front, about: mid(top, deep))
+     = part:keyword  cleat_back:part+decl  mirror:keyword  cleat_front:part+ref  about:field  mid:function  top:part+ref  deep:word
+ 105 | part stretcher_front : oak_19 {
+     = part:keyword  stretcher_front:part+decl  oak_19:stock+ref
+ 106 |   length: fit
+     = length:field  fit:keyword
+ 107 |   width:  50mm
+     = width:field  50:number  mm:unit
+ 108 |   place {
+     = place:keyword
+ 109 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+ 110 |     flush(leg[front_left].bottom, inset: shelf_height - 50mm)
+     = flush:function  leg:part+ref  front_left:label+ref  bottom:plain  inset:field  shelf_height:param+ref  50:number  mm:unit
+ 111 |     center(top, across)
+     = center:function  top:part+ref  across:word
+ 112 |     flush(leg[front_left].front, inset: setback)
+     = flush:function  leg:part+ref  front_left:label+ref  front:plain  inset:field  setback:let+ref
+ 116 | part stretcher_back = mirror(stretcher_front, about: mid(top, deep))
+     = part:keyword  stretcher_back:part+decl  mirror:keyword  stretcher_front:part+ref  about:field  mid:function  top:part+ref  deep:word
+ 120 | part slat[5] : oak_19 {
+     = part:keyword  slat:part+decl  5:number  oak_19:stock+ref
+ 121 |   length: between(stretcher_front.front, stretcher_back.back)
+     = length:field  between:function  stretcher_front:part+ref  front:plain  stretcher_back:part+ref  back:plain
+ 122 |   width:  slat_width
+     = width:field  slat_width:let+ref
+ 123 |   place {
+     = place:keyword
+ 124 |     orient(length: back, width: right)
+     = orient:function  length:field  back:word  width:field  right:word
+ 125 |     against(stretcher_front.top)
+     = against:function  stretcher_front:part+ref  top:plain
+ 126 |     spaced(gap(slat_gap), from: leg[front_left].right, to: leg[front_right].left)
+     = spaced:function  gap:function  slat_gap:let+ref  from:field  leg:part+ref  front_left:label+ref  right:plain  to:field  leg:part+ref  front_right:label+ref  left:plain
+ 127 |     flush(stretcher_front.front)
+     = flush:function  stretcher_front:part+ref  front:plain
+ 132 | joint apron_tenons     : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: leg[*], length: 20mm)
+     = joint:keyword  apron_tenons:joint+decl  mortise_tenon:type+ref+std  apron_front:part+ref  apron_back:part+ref  apron_left:part+ref  apron_right:part+ref  into:field  leg:part+ref  length:param+ref+std  20:number  mm:unit
+ 133 | joint stretcher_tenons : mortise_tenon([stretcher_front, stretcher_back], into: [leg[front_left], leg[front_right], leg[back_left], leg[back_right]], length: 25mm)
+     = joint:keyword  stretcher_tenons:joint+decl  mortise_tenon:type+ref+std  stretcher_front:part+ref  stretcher_back:part+ref  into:field  leg:part+ref  front_left:label+ref  leg:part+ref  front_right:label+ref  leg:part+ref  back_left:label+ref  leg:part+ref  back_right:label+ref  length:param+ref+std  25:number  mm:unit
+ 134 | joint top_screws       : screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
+     = joint:keyword  top_screws:joint+decl  screw:type+ref+std  cleat_front:part+ref  cleat_back:part+ref  into:field  top:word  count:param+ref+std  3:number  glue:field  false:keyword
+ 135 | joint slat_screws      : screw(slat[*], into: [stretcher_front, stretcher_back], length: 40mm)
+     = joint:keyword  slat_screws:joint+decl  screw:type+ref+std  slat:part+ref  into:field  stretcher_front:part+ref  stretcher_back:part+ref  length:param+ref+std  40:number  mm:unit
+ 136 | joint cleat_glue       : glued_face([cleat_front, cleat_back], into: [apron_front, apron_back])
+     = joint:keyword  cleat_glue:joint+decl  glued_face:type+ref+std  cleat_front:part+ref  cleat_back:part+ref  into:field  apron_front:part+ref  apron_back:part+ref
+ 139 | scene frame "Without the top" {
+     = scene:keyword  frame:scene+decl  ":text  Without the top:text  ":text
+ 140 |   hide: top
+     = hide:field  top:part+ref

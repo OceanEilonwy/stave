@@ -65,6 +65,7 @@ pub use diagnostics::{
 };
 pub use diagnostics::{Fix, FixError};
 pub use format::{FormatError, format_file};
+pub use lexer::quantity_unit_start;
 pub use lower::BrokenItem;
 pub use patch::{
     ModuleFile, ModuleKey, PatchError, PatchErrorKind, PatchTarget, PatchedFile, apply_patch,

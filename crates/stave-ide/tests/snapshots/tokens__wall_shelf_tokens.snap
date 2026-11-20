@@ -1,0 +1,71 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"wall_shelf\"))"
+---
+== shelf.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  24 | project "Wall shelf" {
+     = project:keyword  ":text  Wall shelf:text  ":text
+  25 |   goal:  "A pine shelf on two brackets, screwed to the wall"
+     = goal:field  ":text  A pine shelf on two brackets, screwed to the wall:text  ":text
+  26 |   units: mm                            // sizes are printed in millimetres
+     = units:field  mm:word
+  31 | param shelf_length = 600mm within 400mm..900mm
+     = param:keyword  shelf_length:param+decl  600:number  mm:unit  within:keyword  400:number  mm:unit  900:number  mm:unit
+  32 | param shelf_depth  = 150mm within 120mm..200mm
+     = param:keyword  shelf_depth:param+decl  150:number  mm:unit  within:keyword  120:number  mm:unit  200:number  mm:unit
+  35 | let bracket_inset = 60mm               // from each end of the shelf to the outside of a bracket
+     = let:keyword  bracket_inset:let+decl  60:number  mm:unit
+  36 | let drop          = 200mm              // how far the brackets reach down the wall
+     = let:keyword  drop:let+decl  200:number  mm:unit
+  41 | stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+     = stock:keyword  pine_19:stock+decl  species:field  pine:word  form:field  solid:word  thickness:field  19:number  mm:unit  max_width:field  300:number  mm:unit  max_length:field  2400:number  mm:unit
+  43 | stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 40mm, max_length: 2400mm }
+     = stock:keyword  pine_strip:stock+decl  species:field  pine:word  form:field  solid:word  thickness:field  19:number  mm:unit  width:field  40:number  mm:unit  max_length:field  2400:number  mm:unit
+  49 | part shelf : pine_19 {
+     = part:keyword  shelf:part+decl  pine_19:stock+ref
+  50 |   length: shelf_length                 // along the grain, left to right
+     = length:field  shelf_length:param+ref
+  51 |   width:  shelf_depth                  // front to back
+     = width:field  shelf_depth:param+ref
+  52 |   place {
+     = place:keyword
+  53 |     ground                             // a board with no orient() lies flat
+     = ground:function
+  60 | part arm[left, right] : pine_strip {
+     = part:keyword  arm:part+decl  left:label+decl  right:label+decl  pine_strip:stock+ref
+  61 |   length: shelf_depth - 10mm           // a little short of the front edge, so it hides
+     = length:field  shelf_depth:param+ref  10:number  mm:unit
+  62 |   place {
+     = place:keyword
+  65 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+  67 |     against(shelf.bottom)              // up: its top touches the underside of the shelf
+     = against:function  shelf:part+ref  bottom:plain
+  68 |     flush(shelf.back)                  // deep: its back lines up with the shelf's back (the wall)
+     = flush:function  shelf:part+ref  back:plain
+  71 |     spaced(ends(inset: bracket_inset), from: shelf.left, to: shelf.right)
+     = spaced:function  ends:function  inset:field  bracket_inset:let+ref  from:field  shelf:part+ref  left:plain  to:field  shelf:part+ref  right:plain
+  78 | part upright[left, right] : pine_strip {
+     = part:keyword  upright:part+decl  left:label+decl  right:label+decl  pine_strip:stock+ref
+  79 |   length: drop
+     = length:field  drop:let+ref
+  80 |   note:   "Drill two countersunk holes through the upright and screw it to a wall stud"
+     = note:field  ":text  Drill two countersunk holes through the upright and screw it to a wall stud:text  ":text
+  81 |   place {
+     = place:keyword
+  82 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  83 |     flush(arm[same].top)               // up: level with the top of its arm
+     = flush:function  arm:part+ref  same:keyword  top:plain
+  84 |     flush(arm[same].back)              // deep: against the wall
+     = flush:function  arm:part+ref  same:keyword  back:plain
+  85 |     flush(arm[same].left)              // across: in line with its arm
+     = flush:function  arm:part+ref  same:keyword  left:plain
+  92 | joint corner[left, right] : half_lap(upright[same], into: arm[same])
+     = joint:keyword  corner:joint+decl  left:label+decl  right:label+decl  half_lap:type+ref+std  upright:part+ref  same:keyword  into:role+ref+std  arm:part+ref  same:keyword
+  97 | joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 2, glue: false)
+     = joint:keyword  shelf_screws:joint+decl  screw:type+ref+std  shelf:part+ref  into:field  arm:part+ref  length:param+ref+std  40:number  mm:unit  count:param+ref+std  2:number  glue:field  false:keyword
+ 102 | require arm_supports : arm[left].length >= shelf_depth * 3 / 4 "the brackets should hold up most of the shelf's depth"
+     = require:keyword  arm_supports:require+decl  arm:part+ref  left:label+ref  length:plain  shelf_depth:param+ref  3:number  4:number  ":text  the brackets should hold up most of the shelf's depth:text  ":text
