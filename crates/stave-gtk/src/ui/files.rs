@@ -2647,6 +2647,12 @@ impl<Then: fmt::Debug + 'static> FilesPage<Then> {
         }
     }
 
+    /// Places the lenses and the peek on the text as it is laid out now
+    /// (they follow the text's layout for a while after each change).
+    pub fn place_overlays(&self) {
+        self.send(FilesInput::Settle);
+    }
+
     /// Puts the keyboard in the text.
     pub fn focus_text(&self) {
         self.send(FilesInput::FocusText);

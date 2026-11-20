@@ -173,6 +173,9 @@ pub(in crate::ui) struct Capture {
     paintable: gtk::WidgetPaintable,
     /// How many times the window has been looked at so far.
     waited: u32,
+    /// The window was laid out and the editor asked to place its lenses
+    /// and peek on the text as laid out: the next look takes the picture.
+    placed: bool,
 }
 
 /// How many looks the window gets to be on screen and drawn before the
@@ -840,6 +843,7 @@ impl Window {
             path,
             paintable,
             waited: 0,
+            placed: false,
         });
     }
 
@@ -863,6 +867,21 @@ impl Window {
         window.add_tick_callback(|_, _| glib::ControlFlow::Break);
         let patient = capture.waited < CAPTURE_LOOKS;
         if (!window.is_mapped() || capture.waited < CAPTURE_SETTLE_LOOKS) && patient {
+            self.capture_later(capture);
+            return;
+        }
+        // The picture is drawn now, from the widgets as they are, not on
+        // the next frame, and Broadway runs few frames without a browser,
+        // so the last layout can be well behind. Lay the window out first,
+        // at the size it has (which lays out the text on screen), and have
+        // the editor place its lenses and peek on the text as it is now
+        // (they follow the text frame by frame, and few frames came); on
+        // the next look lay it out again, so they are drawn where they
+        // were put, and take the picture.
+        window.allocate(window.width(), window.height(), -1, None);
+        if !capture.placed && patient {
+            capture.placed = true;
+            self.widgets.files.place_overlays();
             self.capture_later(capture);
             return;
         }
