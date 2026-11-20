@@ -686,6 +686,9 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | `tools` | list of `Tool` | no | the tools you have. Left out: every tool is assumed |
 | `methods` | list of `Recipe` | no | recipes to prefer, most preferred first |
 | `boards` | `Boards` | no (default: the prelude's, `joined(by: glued_edge)`) | how the boards of a part made of boards are joined, for every part that doesn't say; see [Boards](#boards) |
+| `kerf` | `Length` | no (default `3mm`) | the wood the saw turns to dust at each cut; the cut list leaves it between parts when it works out how many boards to buy. 0mm or more. A stock's own `kerf:` overrides it; see [Cut list](#cut-list) |
+| `rough_length` | `Length` | no (default `0mm`) | how much longer than its cut size, along the grain, each part of `solid` stock is first cut, before it is milled to size (for snipe, checks and squaring the ends). The cut list shows the rough size, and `max_length` is checked against it. 0mm or more. A stock's own `rough_length:` overrides it |
+| `rough_width` | `Length` | no (default `0mm`) | how much wider than its cut size, across the grain, each part of `solid` stock is first cut, before it is jointed and planed to width. 0mm or more. A stock's own `rough_width:` overrides it |
 
 ### `library "Title" { }`
 
@@ -761,7 +764,11 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
 | `width` | `Length` | no; `dowel` has none | yes | stock sold at a fixed width (a dowel's reads as its diameter) (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
-| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length along its grain (its length, or its width for `grain: width`) is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length along its grain (its length, or its width for `grain: width`) is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)). For `solid` stock the length checked is the **rough** length, the cut length plus `rough_length` (see [Cut list](#cut-list)) |
+| `sold` | `Length` | no; `solid` only | no | the thickness the boards are bought at, before they are planed to the finished `thickness:`: `sold: 1in` for 4/4 lumber, `sold: 2in` for a 2x4 whose `thickness:` is `38mm`. The cut list shows it as the rough thickness. Left out, the boards are bought at their finished thickness |
+| `kerf` | `Length` | no (default: the project's) | no | the project's `kerf:` for parts cut from this stock |
+| `rough_length` | `Length` | no (default: the project's); `solid` only | no | the project's `rough_length:` for parts cut from this stock |
+| `rough_width` | `Length` | no (default: the project's); `solid` only | no | the project's `rough_width:` for parts cut from this stock |
 
 `thickness` or `width` written on `dowel` stock, or `diameter` on any
 other, is `error[unknown-field]` at the field (`stock 'd' has no field
@@ -772,6 +779,19 @@ Every size of a stock (`thickness`, `diameter`, `width`, `max_width`,
 `max_length`) must be more than 0mm, whether or not a part is cut from it:
 `error[out-of-range]` at the field, `'max_width' must be more than 0mm, found
 -100mm`.
+
+The allowances (`kerf`, `rough_length`, `rough_width`, on a stock or on the
+project) may be 0mm but not less: `error[out-of-range]` at the field,
+`'kerf' must be 0mm or more, found -1mm`, with the help `write how much
+wood the allowance takes, 0mm or more, such as 3mm`. A `sold:` thinner than
+the stock's `thickness:` is `error[out-of-range]` at `sold:`: `oak_19 is
+sold 16mm thick, thinner than its finished thickness of 19mm`, with the help
+`write the thickness you buy, at least 19mm: 4/4 lumber is sold: 1in`.
+`sold`, `rough_length` or `rough_width` written on `plywood`, `mdf` or
+`dowel` stock is `error[unknown-field]` at the field (`stock 'ply_18' has no
+field 'sold'`), with the help `plywood is bought at its finished size and
+cut straight to it, so it has no rough size` (`mdf`, `dowel` alike). A
+project's `rough_length:` and `rough_width:` apply to `solid` stock only.
 
 A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
 `max_length` is `warning[missing-field]` at the stock, once: `oak_19 doesn't
@@ -813,6 +833,7 @@ missing both is warned about its length only.
 | `lengths` | `Splices` | no | no | where it is spliced end to end into pieces, and by what joint, when it is longer than its stock: `spliced(by: kind, at: d, from: end)`; see [Splices](#splices) |
 | `loose` | `Bool` | no (default `false`) | no | `true` for a part meant to lift out (a loose shelf, a tray), which nothing needs to hold; see [Held](#held) |
 | `edges` | edge profiles | no | no | its chamfers and roundovers: `chamfer(3mm, on: edge(top, front))`, `roundover(6mm, on: around(top))`, or a list of them; see [Edge profiles](#edge-profiles) |
+| `banding` | edge banding | no | no | a part of `plywood` or `mdf`: the edge banding glued on its edges, `edge_band(1mm, on: [front, back])`. The drawn size includes the band; the cut list takes it off. See [Edge banding](#edge-banding) |
 | `place { }` | | yes | | see [Placement](#placement) |
 
 Also readable on every part: `diameter` (round parts only), `stock`, and the
@@ -1548,6 +1569,132 @@ part shelf : pine_19 {
   together are wider than the face are not an error: each is made, and
   the face between them is planed away. Walls (see [Walls](#walls)) do not
   measure an edge profile, as they don't measure an `outline`.
+
+---
+
+## Cut list
+
+The cut list is what you take to the saw: every piece of wood to cut, at
+the size to cut it, and what to buy. It is derived from the solved design,
+never written (principle 6), and `stave cut-list` prints it.
+
+```
+project "Bookcase" {
+  kerf:         3mm     // the default
+  rough_length: 25mm    // cut every solid part 25mm long, then trim to length
+  rough_width:  5mm     // and 5mm wide, then joint and plane to width
+}
+stock oak_19  { species: white_oak, form: solid, thickness: 19mm, sold: 1in,
+                max_width: 200mm, max_length: 1800mm }
+stock ply_18  { species: birch, form: plywood, thickness: 18mm, kerf: 4mm,
+                max_width: 1220mm, max_length: 2440mm }
+part shelf : ply_18 {
+  length:  760mm
+  width:   280mm
+  banding: edge_band(1mm, on: front)
+  ...
+}
+```
+
+### Rows
+
+One row for every part there is to cut: declared parts, mirror images,
+parts of mirrored assemblies, parts joints make (a spline, a loose tenon),
+and every piece of a spliced part. A part made of boards (see
+[Boards](#boards)) is one row per board, `top.board[1]`, `top.board[2]`,
+..., each the part's size with the board's width across the grain. Rows come
+in the order the parts are in the solved design. Each row gives:
+
+- **the cut size**: the part's cut size (see [Sizes](#sizes)), length by
+  width by thickness, less its edge banding. A round part's width and
+  thickness are its diameter; a turned part's are its blank's.
+- **the rough size**, for a part of `solid` stock: the cut size plus
+  `rough_length` along the grain and `rough_width` across it, and the
+  stock's `sold:` thickness (its finished thickness when it doesn't say).
+  This is the size to cut the piece from the board before milling it.
+  Sheets and dowels are cut straight to their cut size: their rough size is
+  their cut size.
+- **edge banding**: the band's thickness and the edges it is on.
+- the stock, and the part it is the mirror image of, if any.
+
+**Exact until it is printed.** Every size is worked out exactly, and each
+printed size is rounded once, to the project's `resolution:` (half away
+from zero), from its exact value: a rough length is the exact cut length
+plus the exact allowance, rounded, never a rounded length plus an
+allowance. A size that moved when it was rounded is marked, with how far
+it moved.
+
+### Allowances
+
+| Allowance | Written on | Default | Applies to |
+|---|---|---|---|
+| `kerf` | project, stock | `3mm` | every stock: what each saw cut takes, counted when boards are counted |
+| `rough_length` | project, `solid` stock | `0mm` | `solid` parts: extra along the grain, trimmed off when the part is cut to length |
+| `rough_width` | project, `solid` stock | `0mm` | `solid` parts: extra across the grain, jointed and planed off |
+| `sold` | `solid` stock | its `thickness` | the thickness bought, planed down to `thickness` |
+
+A stock's own value is used for the parts cut from it; the project's for a
+stock that doesn't say. Allowances change only the cut list and the length
+check: placement, joints, the 3D view and every other check use the drawn
+and cut sizes as before.
+
+**The length check uses the rough length.** A part of `solid` stock fits
+its stock when its rough length along the grain (its cut length plus
+`rough_length`) is within `max_length`; otherwise it is
+`error[type-mismatch]` at its length: `rail: its rough length works out as
+1825mm (its cut length of 1800mm and 25mm rough_length), which is more than
+its stock's max_length of 1800mm`, with the help to splice it or buy longer
+stock, as for a cut length (see [Splices](#splices); each piece of a spliced
+part is checked the same way). With `rough_length: 0mm` the message is the
+cut length's, as in the [stock](#stock-name--) table.
+
+### Boards to buy
+
+For each stock of `solid` or `dowel` form with a `max_length`, the cut list
+says how many boards to buy. The rough lengths along the grain of its rows
+are laid end to end, longest first, each into the first board it still fits
+in, with one `kerf` between neighbouring pieces: four parts 450mm long fit
+an 1800mm board with no kerf, but take two boards with a 3mm one. Each piece
+is counted as taking a board's whole width, so the count is never short;
+ripping narrow parts side by side from one wide board can save boards, and
+the cut list says so. Sheets (`plywood`, `mdf`) are not laid out yet: their
+rows are listed, without a count.
+
+### Edge banding
+
+A part of `plywood` or `mdf` may have edge banding glued on its edges:
+
+```
+banding: edge_band(1mm, on: [front, left, right])
+```
+
+- `edge_band(thickness, on: ...)`: the band's `thickness`, a `Length`
+  written first or named (`edge_band(thickness: 1mm, ...)`), and the faces
+  it is glued to, one face or a list, named as they face once the part is
+  placed (as `face_side:` and `edges:` name them). A mirror image has its
+  source's banding on the mirrored faces.
+- **Write the size you see.** The drawn size, and the cut size every check
+  and the 3D view use, include the band: a shelf banded on its front is as
+  deep as it is drawn. The cut list's cut size takes the band off, once for
+  each banded face along each axis: a 280mm shelf banded 1mm on its front
+  is cut 279mm wide.
+- The cut list adds up the banding to buy for each thickness: the length of
+  every banded edge (the part's cut size along it).
+- **Checks.**
+  - Banding on a part of `solid` or `dowel` stock is `error[type-mismatch]`
+    at `banding:`: `shelf is cut from solid wood, so it takes no edge
+    banding`, with the help `edge banding covers the edges of plywood and
+    MDF; take banding: off shelf`.
+  - A face across the part's thickness is `error[type-mismatch]` at the
+    face: `top is a broad face of shelf, not an edge`, with the help
+    `band the edges: the faces at the ends of shelf's length and width`.
+    A word that isn't a face is `error[type-mismatch]`, and a call other
+    than `edge_band` is `error[unknown-name]`.
+  - A face banded twice is `error[duplicate-name]` at the second: `the
+    front edge is banded twice`, with the first as a secondary place.
+  - A thickness of 0mm or less is `error[out-of-range]` (`edge banding must
+    be more than 0mm thick, found 0mm`), and so is one that leaves nothing
+    to cut: `shelf is only 2mm wide, and its edge banding takes 2mm of it`.
 
 ---
 

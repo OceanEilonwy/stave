@@ -2100,6 +2100,7 @@ dependencies = [
  "stave-model",
  "stave-modules",
  "stave-schema",
+ "stave-solve",
 ]
 
 [[package]]

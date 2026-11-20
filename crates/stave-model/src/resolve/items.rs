@@ -339,6 +339,14 @@ impl<'a> Resolver<'a> {
                 let boards = found
                     .get("boards")
                     .map(|f| self.field_value(&cx, f, fields::PROJECT));
+                let mut length = |name: &str| {
+                    found
+                        .get(name)
+                        .map(|f| self.field_value(&cx, f, fields::PROJECT))
+                };
+                let kerf = length("kerf");
+                let rough_length = length("rough_length");
+                let rough_width = length("rough_width");
                 (
                     Some(ProjectDef {
                         title,
@@ -349,6 +357,9 @@ impl<'a> Resolver<'a> {
                         tools,
                         methods,
                         boards,
+                        kerf,
+                        rough_length,
+                        rough_width,
                         file,
                         span: item.span,
                     }),
@@ -668,6 +679,32 @@ impl<'a> Resolver<'a> {
         let width = length("width");
         let max_width = length("max_width");
         let max_length = length("max_length");
+        let sold = length("sold");
+        let kerf = length("kerf");
+        let rough_length = length("rough_length");
+        let rough_width = length("rough_width");
+        // A sheet or a dowel is bought at its finished size and cut
+        // straight to it (grammar, "stock").
+        if form != StockForm::Solid {
+            for (name, written) in [
+                ("sold", &sold),
+                ("rough_length", &rough_length),
+                ("rough_width", &rough_width),
+            ] {
+                if let Some(written) = written {
+                    self.error_help(
+                        Code::UnknownField,
+                        format!("{what} has no field '{name}'"),
+                        cx.file,
+                        written.span,
+                        format!(
+                            "{} is bought at its finished size and cut straight to it, so it has no rough size",
+                            form.word()
+                        ),
+                    );
+                }
+            }
+        }
         let misspelt = |name| misspells(&syntax.body.fields, fields::STOCK, name);
         let section = if form == StockForm::Dowel {
             for (name, written) in [("thickness", &thickness), ("width", &width)] {
@@ -721,6 +758,10 @@ impl<'a> Resolver<'a> {
             section,
             max_width,
             max_length,
+            sold: sold.filter(|_| form == StockForm::Solid),
+            kerf,
+            rough_length: rough_length.filter(|_| form == StockForm::Solid),
+            rough_width: rough_width.filter(|_| form == StockForm::Solid),
         }
     }
 
@@ -940,6 +981,9 @@ impl<'a> Resolver<'a> {
             .get("edges")
             .map(|f| self.lower_edges(cx, &f.value))
             .unwrap_or_default();
+        let banding = found
+            .get("banding")
+            .and_then(|f| self.lower_banding(cx, &f.value));
         (
             PartBodyDef {
                 stock: stock_expr,
@@ -955,6 +999,7 @@ impl<'a> Resolver<'a> {
                 lengths,
                 loose,
                 edges,
+                banding,
                 place: Vec::new(),
                 place_span: None,
                 span: body.span,

@@ -1,0 +1,19 @@
+// expect: error[type-mismatch] shelf is cut from solid wood, so it takes no edge banding
+stave 1
+
+// Solid wood shows its own edge.
+
+project "Banding on solid wood" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part shelf : pine_19 {
+  length:  600mm
+  width:   200mm
+  banding: edge_band(1mm, on: front)
+  place {
+    ground
+  }
+}

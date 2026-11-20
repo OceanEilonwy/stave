@@ -849,9 +849,12 @@ impl Solver<'_> {
             .map_or(Grain::Length, |body| body.grain);
         let axis = grain_axis(grain);
         let cut_length = geom.cut_size(axis)?;
-        if cut_length <= max_length {
+        // A solid part is first cut long, and that is what must fit the
+        // board (grammar, "Cut list").
+        let rough = self.rough_length_of(stock)?;
+        let Some((which, said)) = Self::rough_over(cut_length, rough, max_length)? else {
             return Ok(());
-        }
+        };
         let across = geom.cut_size(match axis {
             PartAxis::Length => PartAxis::Width,
             PartAxis::Width | PartAxis::Thickness => PartAxis::Length,
@@ -879,16 +882,15 @@ impl Solver<'_> {
                 };
                 (
                     format!(
-                        "{name}: its cut length works out as {}, which is more than its stock's max_length of {max}",
-                        stave_model::value::format_length(cut_length)
+                        "{name}: its {which} length works out as {said}, which is more than its stock's max_length of {max}"
                     ),
                     help,
                 )
             }
             Grain::Width => (
                 format!(
-                    "{name}: its grain runs across its width, and its width works out as {}, which is more than its stock's max_length of {max}",
-                    stave_model::value::format_length(cut_length)
+                    "{name}: its grain runs across its width, and its {}width works out as {said}, which is more than its stock's max_length of {max}",
+                    if which == "rough" { "rough " } else { "" }
                 ),
                 format!(
                     "stock '{stock_name}' comes no longer than {max}, measured along the grain: make the part narrower, let its grain run along its length, or buy longer stock"

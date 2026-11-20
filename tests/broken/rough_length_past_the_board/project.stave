@@ -1,0 +1,20 @@
+// expect: error[type-mismatch] rail: its rough length works out as 1825mm (its cut length of 1800mm and 25mm rough_length), which is more than its stock's max_length of 1800mm
+stave 1
+
+// The rail is exactly as long as the boards, but every solid part is first
+// cut 25mm long and trimmed: it doesn't fit a real board.
+
+project "Rough length past the board" {
+  units:        mm
+  rough_length: 25mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 1800mm }
+
+part rail : oak_19 {
+  length: 1800mm
+  width:  90mm
+  place {
+    ground
+  }
+}

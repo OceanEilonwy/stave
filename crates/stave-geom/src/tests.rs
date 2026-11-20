@@ -2,8 +2,9 @@ use glam::Vec3;
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{
-    Body, BodyCarrier, BodyOwner, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation,
-    Part, PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, StockSection, WorldBox,
+    Allowances, Body, BodyCarrier, BodyOwner, BodyRef, End, HardwareId, LocalFace, MemberShape,
+    Orientation, Part, PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, StockSection,
+    WorldBox,
 };
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, StockForm};
@@ -50,6 +51,12 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
             },
             max_width: None,
             max_length: None,
+            allowances: Allowances {
+                kerf: Length::from_mm(3),
+                rough_length: Length::ZERO,
+                rough_width: Length::ZERO,
+                sold: None,
+            },
         },
         drawn: cut,
         cut,
@@ -74,6 +81,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         boards: None,
         loose: false,
         pieces: None,
+        banding: None,
     }
 }
 
@@ -466,6 +474,9 @@ fn design_of_all(parts: Vec<Part>) -> SolvedDesign {
             style: None,
             tools: None,
             methods: Vec::new(),
+            kerf: Length::from_mm(3),
+            rough_length: Length::ZERO,
+            rough_width: Length::ZERO,
         },
         parts,
         hardware: Vec::new(),

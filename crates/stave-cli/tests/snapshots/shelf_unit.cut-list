@@ -1,0 +1,19 @@
+Cut list: sizes in mm, length x width x thickness, rounded to 0.5mm (* where rounding moved a size)
+
+part                         stock          cut to                     rough                      banding
+side_l                       oak_19         760 x 280 x 19             785 x 285 x 25.5*
+side_r                       oak_19         760 x 280 x 19             785 x 285 x 25.5*
+shelf[0]                     ply_18         874 x 279 x 18             874 x 279 x 18             1mm on front
+shelf[1]                     ply_18         874 x 279 x 18             874 x 279 x 18             1mm on front
+shelf[2]                     ply_18         874 x 279 x 18             874 x 279 x 18             1mm on front
+
+Rounded:
+  side_l rough: moved by 0mm, 0mm, 0.1mm
+  side_r rough: moved by 0mm, 0mm, 0.1mm
+
+To buy:
+  oak_19         2 pieces: 1 board 1800mm long, with 3mm kerf between pieces, one piece to a board's width (ripping narrow parts side by side can save boards)
+  ply_18         3 pieces: sheets are not laid out yet: cut the parts above
+
+Edge banding:
+  1mm thick: 2622mm
