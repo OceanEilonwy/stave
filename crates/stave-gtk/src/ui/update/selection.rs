@@ -152,12 +152,6 @@ pub(in crate::ui) fn wire(window: &mut Window) {
             .into(),
         );
     });
-    let sender = input.clone();
-    widgets.dock.connect_outputs(move |output| match output {
-        DockOutput::Move(assembly) => {
-            sender.emit(SelectionInput::Select(Some(Selection::Assembly(assembly))).into());
-        }
-    });
     // A link the inspector draws is the editing group's: a click selects
     // or lights what it names.
     let sender = input.clone();
@@ -237,21 +231,34 @@ pub(in crate::ui) fn wire(window: &mut Window) {
             .into(),
         );
     });
+    // The dock's chips, From above and the motion slider send their
+    // outputs as `SelectionInput`s, forwarded when `build_widgets`
+    // launched them.
+}
 
-    // From above and the motion slider are set by their components with
-    // their handlers blocked, so these hear people alone.
-    let sender = input.clone();
-    widgets
-        .plan_switch
-        .connect_outputs(move |output| match output {
-            PlanSwitchOutput::FromAbove(plan) => {
-                sender.emit(SelectionInput::FocusPlan(plan).into())
-            }
-        });
-    let sender = input;
-    widgets.motion.connect_outputs(move |output| match output {
-        MotionBarOutput::Moved(value) => sender.emit(SelectionInput::MotionMoved(value).into()),
-    });
+/// The motion bar's outputs as the window's messages (forwarded at
+/// launch). It is set with its handler blocked, so they are people's.
+pub(in crate::ui) fn motion_said(output: MotionBarOutput) -> WindowInput {
+    match output {
+        MotionBarOutput::Moved(value) => SelectionInput::MotionMoved(value).into(),
+    }
+}
+
+/// The plan switch's outputs as the window's messages.
+pub(in crate::ui) fn plan_switch_said(output: PlanSwitchOutput) -> WindowInput {
+    match output {
+        PlanSwitchOutput::FromAbove(plan) => SelectionInput::FocusPlan(plan).into(),
+    }
+}
+
+/// The dock's outputs as the window's messages: a chip selects its
+/// assembly.
+pub(in crate::ui) fn dock_said(output: DockOutput) -> WindowInput {
+    match output {
+        DockOutput::Move(assembly) => {
+            SelectionInput::Select(Some(Selection::Assembly(assembly))).into()
+        }
+    }
 }
 
 impl Window {

@@ -13,41 +13,43 @@
 //! Ctrl+Page Up / Ctrl+Page Down show the previous and next tab while the
 //! keyboard is anywhere in the frame.
 //!
-//! A panel can show its own tabs in place of its one tab, given that
-//! window's panel widget, so each window's panel shows its own: the Code
+//! A panel can show its own tabs in place of its one tab: the Code
 //! panel's open files appear this way, one tab each (name, and a yellow ●
-//! while unsaved), beside the Model's tab in the frame they share. Its
-//! owner registers where a chosen tab goes once ([`set_page_tabs`], a
-//! function that only sends a message) and hands over the tabs as data
-//! whenever they change ([`show_page_tabs`]); nothing here asks the owner
-//! for them. Clicking one shows the panel on that file.
+//! while unsaved), beside the Model's tab in the frame they share.
+//! Clicking one shows the panel on that file. The window's workbench
+//! keeps every panel's own tabs ([`OwnTabs`], data, by panel) for its
+//! dock and hands each of its strips a copy whenever they change; a
+//! strip's chosen own tab goes back to the workbench as
+//! [`TabStripOutput::Show`], forwarded when the strip is made. Nothing
+//! is kept anywhere else: every window's workbench has its own strips and
+//! its own copy.
 //!
 //! The strip is a GObject subclass, [`TabStrip`], because libpanel takes a
 //! frame's header as a widget implementing `PanelFrameHeader`. Its tabs
 //! are a relm4 component, [`TabStripComponent`] (docs/relm4-migration.md):
 //! the component's model is the only state, the tabs' buttons and keys
 //! only send [`TabStripInput`] messages, and showing one of a panel's own
-//! tabs is a [`TabStripOutput`]. The subclass owns the component: it
-//! gathers the tabs, from the frame's pages and the panels' own tabs
-//! (data, as last handed over), when the main loop next runs, never
-//! inside whatever changed them, and sends them as
-//! [`TabStripInput::SetTabs`]; another page
-//! shown is only [`TabStripInput::PageChanged`], which restyles the tabs
-//! already made.
+//! tabs is a [`TabStripOutput`]. The subclass owns the component's
+//! controller. The component gathers its tabs, from the frame's pages and
+//! its copy of the panels' own tabs, in its own update: when the frame's
+//! pages change ([`TabStripInput::Gather`], queued by the pages' handler)
+//! or the own tabs do ([`TabStripInput::SetOwnTabs`]), never inside
+//! whatever changed them; another page shown is only
+//! [`TabStripInput::PageChanged`], which restyles the tabs already made.
 
 use stave_app::i18n::{fill_in, tr};
-use std::cell::{Cell, OnceCell, RefCell};
-use std::rc::Rc;
+use std::cell::OnceCell;
+use std::collections::BTreeMap;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 use panel::prelude::*;
 use panel::subclass::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use super::icons::{self, PathIcon};
-use super::relm4_shim::Bridge;
+use super::workbench::PanelId;
 
 /// The icon name that gives a tab the Model's cube.
 pub const MODEL_ICON: &str = "stave-model";
@@ -67,117 +69,19 @@ pub struct PageTab {
     pub active: bool,
 }
 
-/// A panel's own tabs, as last handed over, and where a chosen one goes.
-struct PageTabs {
-    /// The tabs.
-    tabs: Vec<PageTab>,
-    /// Shows the tab at this place among them (the panel is brought to
-    /// the front first): it only sends its owner a message.
-    show: Rc<dyn Fn(usize)>,
+/// Every panel's own tabs, by panel, as its owner last handed them over:
+/// a panel missing (or with none) shows its one tab.
+pub type OwnTabs = BTreeMap<PanelId, Vec<PageTab>>;
+
+/// Which panel a page is, read from its id.
+fn panel_of(page: &panel::Widget) -> Option<PanelId> {
+    // Read as a property: `id()` asserts on a panel that has none.
+    let id = page.property::<Option<String>>("id");
+    id.as_deref().and_then(PanelId::from_word)
 }
 
-thread_local! {
-    /// Each panel's own tabs, by the panel widget itself: every window has
-    /// its own Code panel, so an id ("code") would let the last window
-    /// opened answer for all of them. A closed window's entry is pruned.
-    /// Borrowed only to add an entry or clone one out, never across a
-    /// call.
-    static PAGE_TABS: RefCell<Vec<(glib::WeakRef<panel::Widget>, PageTabs)>> =
-        const { RefCell::new(Vec::new()) };
-    /// Every strip, to gather their tabs again when a panel's tabs change.
-    static STRIPS: RefCell<Vec<glib::WeakRef<TabStrip>>> = const { RefCell::new(Vec::new()) };
-    /// The strips' tabs are already to be gathered when the main loop next
-    /// runs.
-    static GATHER_QUEUED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Lets this panel show its own tabs (once [`show_page_tabs`] hands any
-/// over) in place of its one tab, in whatever frame holds it; choosing
-/// one calls `show` with its place among them. `show` should only send a
-/// message: it is called after the strip's update, from the main loop.
-pub fn set_page_tabs(panel: &panel::Widget, show: impl Fn(usize) + 'static) {
-    PAGE_TABS.with(|all| {
-        let mut all = all.borrow_mut();
-        all.retain(|(widget, _)| widget.upgrade().is_some_and(|widget| widget != *panel));
-        all.push((
-            panel.downgrade(),
-            PageTabs {
-                tabs: Vec::new(),
-                show: Rc::new(show),
-            },
-        ));
-    });
-    page_tabs_changed();
-}
-
-/// This panel's own tabs are now `tabs`: every strip shows them when the
-/// main loop next runs. A panel never given to [`set_page_tabs`] is left
-/// as it is.
-pub fn show_page_tabs(panel: &panel::Widget, tabs: Vec<PageTab>) {
-    let changed = PAGE_TABS.with(|all| {
-        let mut all = all.borrow_mut();
-        match all
-            .iter_mut()
-            .find(|(widget, _)| widget.upgrade().is_some_and(|widget| widget == *panel))
-        {
-            Some((_, own)) if own.tabs != tabs => {
-                own.tabs = tabs;
-                true
-            }
-            Some(_) | None => false,
-        }
-    });
-    if changed {
-        page_tabs_changed();
-    }
-}
-
-/// A panel's own tabs changed: every strip gathers its tabs again when
-/// the main loop next runs (so a caller in the middle of a change is
-/// never asked for its tabs from inside it).
-pub fn page_tabs_changed() {
-    if GATHER_QUEUED.replace(true) {
-        return;
-    }
-    // Before GTK lays out and draws (its frame clock runs at a lower
-    // priority), so a tab never shows stale for a frame.
-    glib::idle_add_local_full(glib::Priority::HIGH_IDLE, || {
-        GATHER_QUEUED.set(false);
-        let strips: Vec<TabStrip> = STRIPS.with(|strips| {
-            let mut strips = strips.borrow_mut();
-            strips.retain(|strip| strip.upgrade().is_some());
-            strips.iter().filter_map(glib::WeakRef::upgrade).collect()
-        });
-        for strip in strips {
-            strip.send_tabs();
-        }
-        glib::ControlFlow::Break
-    });
-}
-
-/// A panel's own tabs, if it has any: a copy, so nothing is borrowed.
-fn page_tabs(panel: &panel::Widget) -> Vec<PageTab> {
-    PAGE_TABS.with(|all| {
-        all.borrow()
-            .iter()
-            .find(|(widget, _)| widget.upgrade().is_some_and(|widget| widget == *panel))
-            .map(|(_, own)| own.tabs.clone())
-            .unwrap_or_default()
-    })
-}
-
-/// Where a panel's chosen own tab goes, cloned out of the registry.
-fn page_tab_route(panel: &panel::Widget) -> Option<Rc<dyn Fn(usize)>> {
-    PAGE_TABS.with(|all| {
-        all.borrow()
-            .iter()
-            .find(|(widget, _)| widget.upgrade().is_some_and(|widget| widget == *panel))
-            .map(|(_, own)| Rc::clone(&own.show))
-    })
-}
-
-/// One of a panel's own tabs as the strip shows it: [`PageTab`]'s words,
-/// without its `show`.
+/// One of a panel's own tabs as the strip shows it: [`PageTab`]'s words
+/// and its place among its panel's own tabs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnTabLabel {
     /// Where it is among its panel's own tabs.
@@ -227,7 +131,12 @@ pub enum TabKind {
         closing: Closing,
     },
     /// One of the panel's own tabs (an open file).
-    Own(OwnTabLabel),
+    Own {
+        /// The panel whose tab it is.
+        panel: PanelId,
+        /// The tab.
+        tab: OwnTabLabel,
+    },
 }
 
 /// One tab of the strip, as owned data.
@@ -265,7 +174,8 @@ impl MadeTab {
     }
 }
 
-/// The strip's tabs: the frame they follow and the tabs last gathered.
+/// The strip's tabs: the frame they follow, the panels' own tabs as last
+/// handed over, and the tabs last gathered.
 pub struct TabStripComponent {
     /// The frame whose pages are the tabs.
     frame: glib::WeakRef<panel::Frame>,
@@ -273,6 +183,8 @@ pub struct TabStripComponent {
     watch: Option<(gtk::SelectionModel, glib::SignalHandlerId)>,
     /// Ctrl+Page Up / Down on the frame, and the frame it is on.
     keys: Option<(glib::WeakRef<panel::Frame>, gtk::ShortcutController)>,
+    /// The panels' own tabs, the strip's copy.
+    own: OwnTabs,
     /// The tabs, as shown.
     tabs: Vec<PageTabLabel>,
     /// The tabs' widgets, one per entry of `tabs`.
@@ -287,6 +199,8 @@ pub struct TabStripInit {
     /// The menu button at the strip's end, which shows the shown panel's
     /// menu.
     pub menu: gtk::MenuButton,
+    /// The panels' own tabs as they are now.
+    pub own: OwnTabs,
 }
 
 /// What the strip's tabs are told.
@@ -294,10 +208,11 @@ pub struct TabStripInit {
 pub enum TabStripInput {
     /// Follow this frame's pages (or none).
     SetFrame(Option<panel::Frame>),
-    /// Show these tabs (pages came or went, or a panel's own tabs
-    /// changed): the tabs are made again, and the one at the place the
-    /// keyboard was takes it back.
-    SetTabs(Vec<PageTabLabel>),
+    /// The panels' own tabs are these now: the tabs are gathered again.
+    SetOwnTabs(OwnTabs),
+    /// The frame's pages came or went: the tabs are gathered again, made
+    /// again, and the one at the place the keyboard was takes it back.
+    Gather,
     /// The frame shows another page: the tabs already made are restyled
     /// in place, so the tab with the keyboard keeps it.
     PageChanged,
@@ -316,7 +231,7 @@ pub enum TabStripOutput {
     /// panel): show it.
     Show {
         /// The panel.
-        page: glib::WeakRef<panel::Widget>,
+        panel: PanelId,
         /// Where the tab is among the panel's own tabs.
         index: usize,
     },
@@ -330,14 +245,17 @@ impl TabStripComponent {
         self.frame.set(frame);
         if let Some(frame) = frame {
             let pages = frame.pages();
-            // Captures nothing: whichever strips are alive gather again.
-            let handler = pages.connect_items_changed(|_, _, _, _| page_tabs_changed());
+            // Only sends: the tabs are gathered when the main loop next
+            // runs, never inside the change.
+            let input = sender.input_sender().clone();
+            let handler =
+                pages.connect_items_changed(move |_, _, _, _| input.emit(TabStripInput::Gather));
             self.watch = Some((pages, handler));
             let keys = step_keys(sender);
             frame.add_controller(keys.clone());
             self.keys = Some((frame.downgrade(), keys));
         }
-        page_tabs_changed();
+        sender.input_sender().emit(TabStripInput::Gather);
     }
 
     /// Stops watching the frame's pages and takes the keys off it.
@@ -350,6 +268,13 @@ impl TabStripComponent {
         {
             frame.remove_controller(&keys);
         }
+    }
+
+    /// Gathers the tabs from the frame and the own tabs, and makes them
+    /// again.
+    fn gather(&mut self, root: &gtk::Box, sender: &ComponentSender<Self>) {
+        self.tabs = gather(self.frame.upgrade().as_ref(), &self.own);
+        self.show_tabs(root, sender);
     }
 
     /// Makes the tabs again: one per page (or one per own tab), the shown
@@ -371,7 +296,7 @@ impl TabStripComponent {
                     icon,
                     closing,
                 } => panel_tab(place, title, icon.as_deref(), *closing, &page, sender),
-                TabKind::Own(own) => own_tab(place, own, &page, sender),
+                TabKind::Own { tab, .. } => own_tab(place, tab, &page, sender),
             };
             root.append(&made.root);
             self.made.push(made);
@@ -400,7 +325,7 @@ impl TabStripComponent {
                 tab.page_shown
                     && match &tab.kind {
                         TabKind::Panel { .. } => true,
-                        TabKind::Own(own) => own.active,
+                        TabKind::Own { tab, .. } => tab.active,
                     }
             });
             made.mark(marked);
@@ -432,12 +357,13 @@ impl Component for TabStripComponent {
         root: Self::Root,
         _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let TabStripInit { menu } = init;
+        let TabStripInit { menu, own } = init;
         menu.set_visible(false);
         let model = TabStripComponent {
             frame: glib::WeakRef::new(),
             watch: None,
             keys: None,
+            own,
             tabs: Vec::new(),
             made: Vec::new(),
             menu,
@@ -449,10 +375,13 @@ impl Component for TabStripComponent {
     fn update(&mut self, message: TabStripInput, sender: ComponentSender<Self>, root: &Self::Root) {
         match message {
             TabStripInput::SetFrame(frame) => self.follow(frame.as_ref(), &sender),
-            TabStripInput::SetTabs(tabs) => {
-                self.tabs = tabs;
-                self.show_tabs(root, &sender);
+            TabStripInput::SetOwnTabs(own) => {
+                if own != self.own {
+                    self.own = own;
+                    self.gather(root, &sender);
+                }
             }
+            TabStripInput::Gather => self.gather(root, &sender),
             TabStripInput::PageChanged => self.mark_shown(),
             TabStripInput::Step(step) => {
                 // The frame's page-changed only queues `PageChanged`.
@@ -464,18 +393,18 @@ impl Component for TabStripComponent {
                 let Some(tab) = self.tabs.get(place) else {
                     return;
                 };
-                // The frame's page-changed only has the tabs gathered
-                // again, later: nothing comes back in here.
+                // The frame's page-changed only queues `PageChanged`:
+                // nothing comes back in here.
                 if let (Some(frame), Some(page)) = (self.frame.upgrade(), tab.page.upgrade()) {
                     frame.set_visible_child(&page);
                 }
                 match &tab.kind {
                     TabKind::Panel { .. } => {}
-                    TabKind::Own(own) => {
+                    TabKind::Own { panel, tab } => {
                         // Nobody listening is not a mistake.
                         let _ = sender.output(TabStripOutput::Show {
-                            page: tab.page.clone(),
-                            index: own.index,
+                            panel: *panel,
+                            index: tab.index,
                         });
                     }
                 }
@@ -493,26 +422,9 @@ impl Component for TabStripComponent {
     }
 }
 
-/// Shows one of a panel's own tabs: its owner is told which, outside any
-/// borrow of the registry.
-fn show_own_tab(output: TabStripOutput) {
-    match output {
-        TabStripOutput::Show { page, index } => {
-            let Some(page) = page.upgrade() else {
-                return;
-            };
-            if let Some(show) = page_tab_route(&page) {
-                show(index);
-            }
-        }
-    }
-}
-
 /// Whether a panel's tab has a ×: the 3D view's has none.
 fn closing_of(page: &panel::Widget) -> Closing {
-    // Read as a property: `id()` asserts on a panel that has none.
-    let id = page.property::<Option<String>>("id");
-    if id.as_deref() == Some(super::workbench::PanelId::View.word()) {
+    if panel_of(page) == Some(PanelId::View) {
         Closing::Fixed
     } else {
         Closing::Closable
@@ -520,7 +432,7 @@ fn closing_of(page: &panel::Widget) -> Closing {
 }
 
 /// The tabs, from a frame's pages and the panels' own tabs.
-fn gather(frame: Option<&panel::Frame>) -> Vec<PageTabLabel> {
+fn gather(frame: Option<&panel::Frame>, own_tabs: &OwnTabs) -> Vec<PageTabLabel> {
     let Some(frame) = frame else {
         return Vec::new();
     };
@@ -531,8 +443,10 @@ fn gather(frame: Option<&panel::Frame>) -> Vec<PageTabLabel> {
             continue;
         };
         let page_shown = shown.as_ref() == Some(&page);
-        let own = page_tabs(&page);
-        if own.is_empty() {
+        let owned = panel_of(&page)
+            .and_then(|panel| Some((panel, own_tabs.get(&panel)?)))
+            .filter(|(_, own)| !own.is_empty());
+        let Some((panel, own)) = owned else {
             tabs.push(PageTabLabel {
                 page: page.downgrade(),
                 page_shown,
@@ -545,24 +459,23 @@ fn gather(frame: Option<&panel::Frame>) -> Vec<PageTabLabel> {
                     closing: closing_of(&page),
                 },
             });
-        } else {
-            tabs.extend(
-                own.into_iter()
-                    .enumerate()
-                    .map(|(index, own)| PageTabLabel {
-                        page: page.downgrade(),
-                        page_shown,
-                        kind: TabKind::Own(OwnTabLabel {
-                            index,
-                            title: own.title,
-                            tooltip: own.tooltip,
-                            unsaved: own.unsaved,
-                            mark: own.mark,
-                            active: own.active,
-                        }),
-                    }),
-            );
-        }
+            continue;
+        };
+        tabs.extend(own.iter().enumerate().map(|(index, own)| PageTabLabel {
+            page: page.downgrade(),
+            page_shown,
+            kind: TabKind::Own {
+                panel,
+                tab: OwnTabLabel {
+                    index,
+                    title: own.title.clone(),
+                    tooltip: own.tooltip.clone(),
+                    unsaved: own.unsaved,
+                    mark: own.mark,
+                    active: own.active,
+                },
+            },
+        }));
     }
     tabs
 }
@@ -579,8 +492,9 @@ mod imp {
         pub end: gtk::Box,
         /// The shown panel's menu.
         pub menu: gtk::MenuButton,
-        /// The tabs: the one owner of their component.
-        pub(crate) tabs: OnceCell<Bridge<TabStripComponent>>,
+        /// The tabs: the one owner of their component, set once, by
+        /// [`super::TabStrip::new`].
+        pub(crate) tabs: OnceCell<Controller<TabStripComponent>>,
     }
 
     #[glib::object_subclass]
@@ -609,9 +523,7 @@ mod imp {
             if pspec.name() == "frame" {
                 let frame = value.get::<Option<panel::Frame>>().ok().flatten();
                 self.frame.set(frame.as_ref());
-                if let Some(tabs) = self.tabs.get() {
-                    tabs.send(TabStripInput::SetFrame(frame));
-                }
+                self.send(TabStripInput::SetFrame(frame));
             }
         }
 
@@ -634,26 +546,26 @@ mod imp {
             self.menu.add_css_class("flat");
             self.menu.add_css_class("stave-tab-menu");
             self.end.append(&self.menu);
-            let tabs = Bridge::<TabStripComponent>::launch(TabStripInit {
-                menu: self.menu.clone(),
-            });
-            tabs.connect(show_own_tab);
-            tabs.widget().set_parent(&*obj);
             self.end.set_parent(&*obj);
-            tabs.send(TabStripInput::SetFrame(self.frame.upgrade()));
-            // Set once, here: constructed runs once.
-            let _ = self.tabs.set(tabs);
-            let weak = obj.downgrade();
-            STRIPS.with(|strips| strips.borrow_mut().push(weak));
         }
 
         fn dispose(&self) {
             // The component shuts down when the strip is freed and drops
-            // its bridge; its shutdown stops watching the frame.
+            // its controller; its shutdown stops watching the frame.
             if let Some(tabs) = self.tabs.get() {
                 tabs.widget().unparent();
             }
             self.end.unparent();
+        }
+    }
+
+    impl TabStrip {
+        /// Queues `input` for the tabs (once they are launched; once they
+        /// have shut down there is nobody to tell).
+        pub(super) fn send(&self, input: TabStripInput) {
+            if let Some(tabs) = self.tabs.get() {
+                let _ = tabs.sender().send(input);
+            }
         }
     }
 
@@ -662,9 +574,7 @@ mod imp {
     impl FrameHeaderImpl for TabStrip {
         fn page_changed(&self, _widget: Option<&panel::Widget>) {
             // Only restyled: the tab the keyboard is on stays where it is.
-            if let Some(tabs) = self.tabs.get() {
-                tabs.send(TabStripInput::PageChanged);
-            }
+            self.send(TabStripInput::PageChanged);
         }
 
         fn can_drop(&self, _widget: &panel::Widget) -> bool {
@@ -689,24 +599,38 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, panel::FrameHeader;
 }
 
-impl Default for TabStrip {
-    fn default() -> Self {
-        glib::Object::new()
-    }
-}
-
 impl TabStrip {
-    /// A strip, given to a frame with `Frame::set_header`.
-    pub fn new() -> TabStrip {
-        TabStrip::default()
+    /// A strip, given to a frame with `Frame::set_header`, showing the
+    /// panels' own tabs as `own` has them. A chosen own tab goes to
+    /// `owner` as `message(output)`.
+    pub fn new<M: 'static>(
+        own: OwnTabs,
+        owner: &relm4::Sender<M>,
+        message: impl Fn(TabStripOutput) -> M + 'static,
+    ) -> TabStrip {
+        let strip: TabStrip = glib::Object::new();
+        let imp = strip.imp();
+        let tabs = TabStripComponent::builder()
+            .launch(TabStripInit {
+                menu: imp.menu.clone(),
+                own,
+            })
+            .forward(owner, message);
+        // Before the menu, as the strip lays them out.
+        tabs.widget()
+            .insert_before(&strip, Some(imp.end.upcast_ref::<gtk::Widget>()));
+        let _ = tabs
+            .sender()
+            .send(TabStripInput::SetFrame(imp.frame.upgrade()));
+        // Set once: the strip was made just now.
+        let _ = imp.tabs.set(tabs);
+        strip
     }
 
-    /// Gathers the tabs from the frame and sends them to the component.
-    fn send_tabs(&self) {
-        let imp = self.imp();
-        if let Some(tabs) = imp.tabs.get() {
-            tabs.send(TabStripInput::SetTabs(gather(imp.frame.upgrade().as_ref())));
-        }
+    /// The panels' own tabs are these now: the strip shows them when the
+    /// main loop next runs.
+    pub fn show_own_tabs(&self, own: OwnTabs) {
+        self.imp().send(TabStripInput::SetOwnTabs(own));
     }
 }
 
@@ -885,9 +809,32 @@ fn carry_on_drag(root: &gtk::Box, page: &panel::Widget) {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle, unnamed_buttons};
+    use crate::ui::gtk_test::{handle_each, on_gtk_thread, recorder, settle, unnamed_buttons};
+
+    /// A strip with no own tabs, whose outputs nobody hears.
+    fn strip() -> TabStrip {
+        let (owner, _) = recorder();
+        TabStrip::new(OwnTabs::new(), &owner, std::convert::identity)
+    }
+
+    /// Two open files as the Code panel's own tabs, the first current.
+    fn two_files() -> OwnTabs {
+        OwnTabs::from([(
+            PanelId::Code,
+            (0..2)
+                .map(|index| PageTab {
+                    title: format!("file{index}.stave"),
+                    tooltip: String::new(),
+                    unsaved: index == 1,
+                    mark: None,
+                    active: index == 0,
+                })
+                .collect(),
+        )])
+    }
 
     /// The strip's tab boxes, in order.
     fn tab_boxes(strip: &TabStrip) -> Vec<gtk::Widget> {
@@ -915,18 +862,26 @@ mod tests {
         button
     }
 
-    /// A frame headed by a strip, holding two panels.
-    fn frame_with_two_panels() -> (panel::Frame, TabStrip, panel::Widget, panel::Widget) {
+    /// A frame headed by `strip`, holding two panels: the Model and the
+    /// Code panel.
+    fn frame_with_two_panels_under(
+        strip: TabStrip,
+    ) -> (panel::Frame, TabStrip, panel::Widget, panel::Widget) {
         panel::init();
         let frame = panel::Frame::new();
-        let strip = TabStrip::new();
         frame.set_header(Some(&strip));
         let model = panel::Widget::builder().title("Model").build();
         let code = panel::Widget::builder().title("Code").build();
+        code.set_id(PanelId::Code.word());
         frame.add(&model);
         frame.add(&code);
         frame.set_visible_child(&model);
         (frame, strip, model, code)
+    }
+
+    /// A frame headed by a strip nobody hears, holding two panels.
+    fn frame_with_two_panels() -> (panel::Frame, TabStrip, panel::Widget, panel::Widget) {
+        frame_with_two_panels_under(strip())
     }
 
     #[test]
@@ -935,7 +890,7 @@ mod tests {
     }
 
     /// Dropping the frame drops its strip, which drops the component's
-    /// bridge: the strip, the tabs' widget and the component's runtime
+    /// controller: the strip, the tabs' widget and the component's runtime
     /// (and with it the model) are all freed. The frame's pages are
     /// watched by a handler that holds nothing of the strip.
     fn strip_is_freed() {
@@ -957,7 +912,7 @@ mod tests {
         assert!(weak.upgrade().is_none(), "the strip is freed");
         assert!(root.upgrade().is_none(), "the tabs' widget is freed");
         assert!(
-            input.send(TabStripInput::SetTabs(Vec::new())).is_err(),
+            input.send(TabStripInput::Gather).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
     }
@@ -970,37 +925,33 @@ mod tests {
     /// The old strip showed a panel and called its own tab's `show` from
     /// inside the click, and showing the panel remade the strip from
     /// inside it too. Now a click only queues a message; the frame shows
-    /// the panel when it is handled, the own tab's `show` runs after that
-    /// update has returned, and a click GTK fires from inside `show` is
-    /// queued in turn.
+    /// the panel when it is handled, the chosen own tab reaches the owner
+    /// after that update has returned, and a click GTK fires while the
+    /// owner handles it is queued in turn.
     fn clicks_are_queued() {
-        let (frame, strip, model, code) = frame_with_two_panels();
-        // (which own tab was shown, how many tabs the strip had then)
-        let shown: Rc<RefCell<Vec<usize>>> = Rc::default();
+        let (owner, outputs) = relm4::channel();
+        let (frame, strip, model, code) = frame_with_two_panels_under(TabStrip::new(
+            OwnTabs::new(),
+            &owner,
+            std::convert::identity,
+        ));
+        // (which panel's own tab was shown, and which)
+        let shown: Rc<RefCell<Vec<(PanelId, usize)>>> = Rc::default();
         let weak_strip = strip.downgrade();
         let log = Rc::clone(&shown);
-        set_page_tabs(&code, move |index| {
+        handle_each(outputs, move |TabStripOutput::Show { panel, index }| {
             let first = log.borrow().is_empty();
-            log.borrow_mut().push(index);
+            log.borrow_mut().push((panel, index));
             if first && let Some(strip) = weak_strip.upgrade() {
                 // GTK firing another tab's click from in here only queues
                 // a message.
                 show_button(&strip, 2).emit_clicked();
             }
         });
-        show_page_tabs(
-            &code,
-            (0..2)
-                .map(|index| PageTab {
-                    title: format!("file{index}.stave"),
-                    tooltip: String::new(),
-                    unsaved: index == 1,
-                    mark: None,
-                    active: index == 0,
-                })
-                .collect(),
-        );
-        assert!(tab_boxes(&strip).is_empty(), "gathered only on the loop");
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 2, "one tab per panel");
+        strip.show_own_tabs(two_files());
+        assert_eq!(tab_boxes(&strip).len(), 2, "gathered only on the loop");
         settle();
         assert_eq!(tab_boxes(&strip).len(), 3, "the Model, then two files");
 
@@ -1016,9 +967,34 @@ mod tests {
         assert_eq!(frame.visible_child().as_ref(), Some(&code));
         assert_eq!(
             *shown.borrow(),
-            vec![0, 1],
+            vec![(PanelId::Code, 0), (PanelId::Code, 1)],
             "each after its update, the inner click after the first"
         );
+    }
+
+    #[test]
+    fn a_strip_shows_the_own_tabs_it_starts_with_and_drops_them() {
+        on_gtk_thread(own_tabs_come_and_go);
+    }
+
+    /// A strip made while a panel has own tabs shows them at once (a
+    /// frame made later, a panel dragged somewhere new); handed none, the
+    /// panel shows its one tab again. Own tabs of a panel the frame
+    /// doesn't hold change nothing.
+    fn own_tabs_come_and_go() {
+        let (owner, _) = recorder::<TabStripOutput>();
+        let (_frame, strip, _model, _code) =
+            frame_with_two_panels_under(TabStrip::new(two_files(), &owner, std::convert::identity));
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 3, "the Model, then two files");
+        let mut others = OwnTabs::new();
+        others.insert(
+            PanelId::Details,
+            two_files().remove(&PanelId::Code).unwrap_or_default(),
+        );
+        strip.show_own_tabs(others);
+        settle();
+        assert_eq!(tab_boxes(&strip).len(), 2, "the Model and the Code panel");
     }
 
     #[test]
@@ -1054,7 +1030,7 @@ mod tests {
     fn model_tab_is_fixed() {
         panel::init();
         let frame = panel::Frame::new();
-        let strip = TabStrip::new();
+        let strip = strip();
         frame.set_header(Some(&strip));
         let model = panel::Widget::builder().title("Model").build();
         model.set_id(super::super::workbench::PanelId::View.word());
@@ -1088,7 +1064,7 @@ mod tests {
     fn tabs_stay_put() {
         panel::init();
         let frame = panel::Frame::new();
-        let strip = TabStrip::new();
+        let strip = strip();
         frame.set_header(Some(&strip));
         let pages: Vec<panel::Widget> = ["Parts", "Problems", "Details"]
             .into_iter()
@@ -1142,7 +1118,7 @@ mod tests {
         assert_eq!(frame.visible_child().as_ref(), Some(&pages[2]));
         // The keys reach the frame by message; nothing happens until it
         // is handled.
-        tabs.send(TabStripInput::Step(Step::Next));
+        let _ = tabs.sender().send(TabStripInput::Step(Step::Next));
         settle();
         assert_eq!(frame.visible_child().as_ref(), Some(&pages[0]));
         // The × is not a Tab stop.
