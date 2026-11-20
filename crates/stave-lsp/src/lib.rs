@@ -27,6 +27,29 @@
 //!   result is dropped and the next check starts when it ends.
 //! - **Navigation:** definition, references, hover, rename (with
 //!   `prepareRename`; a name declared outside the project is refused).
+//! - **Worked-out values.** The background check also works out the
+//!   design's values ([`stave_app::editor_check`]) in the project's
+//!   units: hover adds what a param, `let`, size or `between(...)` works
+//!   out to, and inlay hints put it after the text (`length: fit` shows
+//!   `= 844mm`, a size a joint adds to `= 844mm, cut 862mm`; a literal is
+//!   not repeated). The values are kept while typing, each shown only
+//!   while the text it was worked out for is unchanged at the same place;
+//!   when a check brings new ones, a client that offers
+//!   `workspace.inlayHint.refreshSupport` is asked to refresh its hints.
+//! - **Document symbols and folding** from the lossless tree, on every
+//!   change: items, and the blocks inside them (`place`, `roles`, `cut`,
+//!   ...); every block, comment run and import run over several lines
+//!   folds.
+//! - **Formatting:** `textDocument/formatting` lays the buffer out as
+//!   `stave fmt` does ([`stave_app::format::format_edits`]), as the
+//!   smallest edits; a file with syntax errors is refused with why, and a
+//!   standard library document is left alone.
+//! - **Quick fixes** (`textDocument/codeAction`, kind `quickfix`): each
+//!   slow diagnostic's fixes as workspace edits made by applying their
+//!   patches to the checked text (the first is preferred), and on every
+//!   keystroke the fast diagnostics' help lines that say exactly what to
+//!   write ([`stave_ide::Analysis::help_fixes`]: `add ")" at the end of
+//!   line 7`, `write ')' here`, an `as` name for an import).
 //! - **Semantic tokens** (full), with the legend below.
 //! - **Completion** and **signature help** from
 //!   [`stave_ide::Analysis::completions`] and
@@ -35,8 +58,9 @@
 //!   component and kind, running the client command `stave.showUses`
 //!   (arguments: the document URI and the name's position), and "show in
 //!   3D" on what the 3D view can show, running `stave.showIn3d` (argument:
-//!   the item's name). Editors that don't know the commands show the
-//!   lenses as text.
+//!   the item's name), and "show work card" on parts, running
+//!   `stave.showWorkCard` (argument: the part's name). Editors that don't
+//!   know the commands show the lenses as text.
 //! - **The standard library** is served read-only as
 //!   `stave-std:///joinery/dado.stave` documents, so go-to-definition
 //!   reaches `dado` and every built-in kind. An editor that can't open a
@@ -111,6 +135,13 @@
 //!   so `$/cancelRequest` has nothing to cancel.
 //! - Files changed on disk by another program are read when the next
 //!   change to an open file of the project loads it again.
+//! - A fix that creates a file is not offered as a quick fix: it needs a
+//!   resource operation not every editor takes. The GTK app and `stave`
+//!   apply it.
+//! - Values need the design solved, so they come with the background
+//!   check, which solves the design a second time to read them off the
+//!   solver ([`stave_solve::values`]); no value is shown for an item
+//!   whose design does not solve.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -125,7 +156,9 @@ use std::time::Duration;
 
 use lsp_server::{Connection, ProtocolError};
 
-pub use convert::{DIAGNOSTIC_SOURCE, SHOW_IN_3D_COMMAND, SHOW_USES_COMMAND};
+pub use convert::{
+    DIAGNOSTIC_SOURCE, SHOW_IN_3D_COMMAND, SHOW_USES_COMMAND, SHOW_WORK_CARD_COMMAND,
+};
 pub use uri::{document_uri, uri_document};
 
 /// The request that gives a standard library document's text.

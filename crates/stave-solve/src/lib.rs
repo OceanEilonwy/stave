@@ -50,6 +50,7 @@ mod place;
 mod rules;
 mod signature;
 pub mod trace;
+pub mod values;
 mod walls;
 
 use std::collections::HashMap;

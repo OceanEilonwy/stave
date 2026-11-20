@@ -16,13 +16,19 @@ use lsp_types::notification::{
     LogMessage, Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeLensRequest, Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References,
-    Rename, Request as _, SemanticTokensFullRequest, SignatureHelpRequest,
+    CodeActionRequest, CodeLensRequest, Completion, DocumentSymbolRequest, FoldingRangeRequest,
+    Formatting, GotoDefinition, HoverRequest, InlayHintRefreshRequest, InlayHintRequest,
+    PrepareRenameRequest, References, Rename, Request as _, SemanticTokensFullRequest,
+    SignatureHelpRequest,
 };
 use lsp_types::{
-    CodeLens, CodeLensOptions, CodeLensParams, CompletionOptions, CompletionParams,
-    CompletionResponse, DocumentChanges, GotoDefinitionParams, GotoDefinitionResponse, HoverParams,
-    HoverProviderCapability, InitializeParams, Location, LogMessageParams, MessageType, OneOf,
+    CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CodeLens, CodeLensOptions, CodeLensParams,
+    CompletionOptions, CompletionParams, CompletionResponse, DocumentChanges,
+    DocumentFormattingParams, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, GotoDefinitionParams,
+    GotoDefinitionResponse, HoverParams, HoverProviderCapability, InitializeParams, InlayHint,
+    InlayHintParams, Location, LogMessageParams, MessageType, OneOf,
     OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse, PublishDiagnosticsParams,
     ReferenceParams, RenameOptions, RenameParams, SaveOptions, SemanticTokens,
     SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
@@ -31,7 +37,7 @@ use lsp_types::{
     TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Uri,
     WorkDoneProgressOptions, WorkspaceEdit,
 };
-use stave_ide::{Analysis, AnalysisHost, Buffers, Document, FilePosition, Overlay};
+use stave_ide::{Analysis, AnalysisHost, Buffers, Document, FilePosition, Overlay, WorkedValues};
 use stave_lang::ast::Span;
 use stave_lang::{FileId, SourceMap};
 
@@ -64,6 +70,13 @@ pub(crate) fn run(connection: &Connection, config: Config) -> Result<(), ServerE
         .and_then(|workspace| workspace.workspace_edit.as_ref())
         .and_then(|edit| edit.document_changes)
         .unwrap_or(false);
+    let inlay_refresh = params
+        .capabilities
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.inlay_hint.as_ref())
+        .and_then(|inlay| inlay.refresh_support)
+        .unwrap_or(false);
     let result = serde_json::json!({
         "capabilities": capabilities(encoding),
         "serverInfo": { "name": "stave-lsp", "version": env!("CARGO_PKG_VERSION") },
@@ -75,6 +88,8 @@ pub(crate) fn run(connection: &Connection, config: Config) -> Result<(), ServerE
         config,
         encoding,
         document_changes,
+        inlay_refresh,
+        refreshes: 0,
         buffers: Buffers::new(),
         versions: BTreeMap::new(),
         documents: BTreeMap::new(),
@@ -129,15 +144,47 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         code_lens_provider: Some(CodeLensOptions {
             resolve_provider: Some(false),
         }),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+            resolve_provider: Some(false),
+        })),
         ..ServerCapabilities::default()
     }
 }
 
-/// A slow check's diagnostics for one generation of a project.
+/// A slow check's diagnostics, fixes and values for one generation of a
+/// project.
 struct SlowResult {
     folder: PathBuf,
     generation: u64,
+    check: SlowCheck,
+}
+
+/// What the background check found.
+#[derive(Default)]
+struct SlowCheck {
     diagnostics: BTreeMap<Document, Vec<lsp_types::Diagnostic>>,
+    /// Each diagnostic's fixes, by the document the diagnostic is in.
+    fixes: BTreeMap<Document, Vec<Fix>>,
+    values: WorkedValues,
+}
+
+/// A diagnostic's fix, as edits to the text the check read.
+#[derive(Debug, Clone)]
+struct Fix {
+    /// The diagnostic it fixes, as published.
+    diagnostic: lsp_types::Diagnostic,
+    /// Its label: "Use 300mm".
+    title: String,
+    /// The first fix a diagnostic gives is the one its help recommends.
+    preferred: bool,
+    /// The edits, by document.
+    edits: Vec<(Document, Vec<TextEdit>)>,
 }
 
 /// One project folder with at least one open document.
@@ -153,6 +200,12 @@ struct Project {
     generation: u64,
     /// The slow tier's diagnostics for the current generation.
     slow: BTreeMap<Document, Vec<lsp_types::Diagnostic>>,
+    /// The slow tier's fixes for the current generation.
+    fixes: BTreeMap<Document, Vec<Fix>>,
+    /// The values the last slow check worked out. Kept across changes:
+    /// each is shown only while the text it was worked out for is
+    /// unchanged ([`WorkedValues`]).
+    values: WorkedValues,
     /// When the next slow check starts, once typing has paused.
     due: Option<Instant>,
     /// What was last published for each file of the project.
@@ -181,6 +234,10 @@ struct Server {
     encoding: PositionEncoding,
     /// The client applies `documentChanges` in a workspace edit.
     document_changes: bool,
+    /// The client asks for inlay hints again when told to.
+    inlay_refresh: bool,
+    /// How many refresh requests the server has sent, for their ids.
+    refreshes: u64,
     buffers: Buffers,
     /// Each open document's version, as the client numbers them.
     versions: BTreeMap<Document, i32>,
@@ -441,6 +498,7 @@ impl Server {
             let loaded = project.host.analyse(folder, &overlay);
             project.generation = generation;
             project.slow.clear();
+            project.fixes.clear();
             project.due = Some(Instant::now() + delay);
             match loaded {
                 Ok(analysis) => {
@@ -568,12 +626,12 @@ impl Server {
             let generation = project.generation;
             let sender = self.slow_sender.clone();
             std::thread::spawn(move || {
-                let diagnostics = slow_diagnostics(&folder, &overlay, encoding);
+                let check = slow_check(&folder, &overlay, encoding);
                 // The server may have stopped; nothing waits for this then.
                 let _ = sender.send(SlowResult {
                     folder,
                     generation,
-                    diagnostics,
+                    check,
                 });
             });
         }
@@ -590,8 +648,26 @@ impl Server {
         if result.generation != project.generation {
             return Ok(());
         }
-        project.slow = result.diagnostics;
-        self.publish(&result.folder)
+        project.slow = result.check.diagnostics;
+        project.fixes = result.check.fixes;
+        project.values = result.check.values;
+        self.publish(&result.folder)?;
+        self.refresh_inlay_hints()
+    }
+
+    /// Asks the client to ask for inlay hints again, when it can: new
+    /// values have been worked out.
+    fn refresh_inlay_hints(&mut self) -> Result<(), ServerError> {
+        if !self.inlay_refresh {
+            return Ok(());
+        }
+        self.refreshes = self.refreshes.wrapping_add(1);
+        let id = lsp_server::RequestId::from(format!("stave-refresh-{}", self.refreshes));
+        self.send(Request::new(
+            id,
+            InlayHintRefreshRequest::METHOD.to_owned(),
+            serde_json::Value::Null,
+        ))
     }
 
     // ---- requests ----
@@ -614,6 +690,17 @@ impl Server {
                 self.call::<SignatureHelpRequest>(request, Server::signature_help)
             }
             CodeLensRequest::METHOD => self.call::<CodeLensRequest>(request, Server::code_lens),
+            InlayHintRequest::METHOD => self.call::<InlayHintRequest>(request, Server::inlay_hints),
+            DocumentSymbolRequest::METHOD => {
+                self.call::<DocumentSymbolRequest>(request, Server::document_symbols)
+            }
+            FoldingRangeRequest::METHOD => {
+                self.call::<FoldingRangeRequest>(request, Server::folding_ranges)
+            }
+            Formatting::METHOD => self.call::<Formatting>(request, Server::formatting),
+            CodeActionRequest::METHOD => {
+                self.call::<CodeActionRequest>(request, Server::code_actions)
+            }
             STANDARD_DOCUMENT_REQUEST => standard_document(request.params),
             _ => Err(failure(
                 ErrorCode::MethodNotFound,
@@ -734,14 +821,27 @@ impl Server {
     fn hover(&mut self, params: HoverParams) -> Result<Option<lsp_types::Hover>, ResponseError> {
         let encoding = self.encoding;
         let position = params.text_document_position_params;
-        let Some(target) = self.locate(&position.text_document.uri) else {
+        let uri = &position.text_document.uri;
+        let Some(folder) = self.prepare(uri) else {
+            return Ok(None);
+        };
+        let Some(target) = self.target(uri, &folder) else {
             return Ok(None);
         };
         let at = target.position(position.position, encoding);
-        Ok(target
-            .analysis
-            .hover(at)
-            .map(|found| convert::hover(&found, &target.index, encoding)))
+        let found = target.analysis.hover_with_values(at, self.values(&folder));
+        Ok(found.map(|found| convert::hover(&found, &target.index, encoding)))
+    }
+
+    /// The values worked out for the project in `folder`, which a
+    /// request was answered from ([`Server::prepare`]): a standard
+    /// library document is answered from an open project, whose values
+    /// include those of the std items its design uses.
+    fn values(&self, folder: &Path) -> &WorkedValues {
+        static NONE: std::sync::OnceLock<WorkedValues> = std::sync::OnceLock::new();
+        self.projects
+            .get(folder)
+            .map_or_else(|| NONE.get_or_init(WorkedValues::default), |p| &p.values)
     }
 
     fn prepare_rename(
@@ -785,7 +885,6 @@ impl Server {
 
     fn rename(&mut self, params: RenameParams) -> Result<Option<WorkspaceEdit>, ResponseError> {
         let encoding = self.encoding;
-        let document_changes = self.document_changes;
         let position = params.text_document_position;
         let Some(folder) = self.prepare(&position.text_document.uri) else {
             return Ok(None);
@@ -801,12 +900,9 @@ impl Server {
             .analysis
             .rename(symbol, &params.new_name)
             .map_err(|error| failure(ErrorCode::RequestFailed, error.to_string()))?;
-        let mut files: Vec<(Uri, Option<i32>, Vec<TextEdit>)> = Vec::new();
+        let mut files: Vec<(Document, Vec<TextEdit>)> = Vec::new();
         for file in &renamed {
             let Some(text) = target.analysis.text(file.file) else {
-                continue;
-            };
-            let Some(uri) = document_uri(&file.document) else {
                 continue;
             };
             let index = LineIndex::new(text);
@@ -822,10 +918,22 @@ impl Server {
                     ))
                 })
                 .collect();
-            let version = self.versions.get(&file.document).copied();
-            files.push((uri, version, edits));
+            files.push((file.document.clone(), edits));
         }
-        if document_changes {
+        Ok(Some(self.workspace_edit(files)))
+    }
+
+    /// Edits to documents as a workspace edit, with each open document's
+    /// version when the client takes `documentChanges`.
+    fn workspace_edit(&self, edits: Vec<(Document, Vec<TextEdit>)>) -> WorkspaceEdit {
+        let files: Vec<(Uri, Option<i32>, Vec<TextEdit>)> = edits
+            .into_iter()
+            .filter_map(|(document, edits)| {
+                let uri = document_uri(&document)?;
+                Some((uri, self.versions.get(&document).copied(), edits))
+            })
+            .collect();
+        if self.document_changes {
             let edits = files
                 .into_iter()
                 .map(|(uri, version, edits)| TextDocumentEdit {
@@ -833,11 +941,11 @@ impl Server {
                     edits: edits.into_iter().map(OneOf::Left).collect(),
                 })
                 .collect();
-            Ok(Some(WorkspaceEdit {
+            WorkspaceEdit {
                 changes: None,
                 document_changes: Some(DocumentChanges::Edits(edits)),
                 change_annotations: None,
-            }))
+            }
         } else {
             #[expect(
                 clippy::mutable_key_type,
@@ -847,7 +955,7 @@ impl Server {
                 .into_iter()
                 .map(|(uri, _, edits)| (uri, edits))
                 .collect();
-            Ok(Some(WorkspaceEdit::new(changes)))
+            WorkspaceEdit::new(changes)
         }
     }
 
@@ -916,6 +1024,150 @@ impl Server {
             encoding,
         )))
     }
+
+    fn inlay_hints(
+        &mut self,
+        params: InlayHintParams,
+    ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
+        let encoding = self.encoding;
+        let uri = params.text_document.uri;
+        let Some(folder) = self.prepare(&uri) else {
+            return Ok(None);
+        };
+        let Some(target) = self.target(&uri, &folder) else {
+            return Ok(None);
+        };
+        let hints = self
+            .values(&folder)
+            .inlay_hints(target.analysis, target.file);
+        let wanted = params.range;
+        let hints = convert::inlay_hints(&hints, &target.index, encoding)
+            .into_iter()
+            .filter(|hint| wanted.start <= hint.position && hint.position <= wanted.end)
+            .collect();
+        Ok(Some(hints))
+    }
+
+    fn document_symbols(
+        &mut self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>, ResponseError> {
+        let encoding = self.encoding;
+        let Some(target) = self.locate(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let outline = target.analysis.outline(target.file);
+        Ok(Some(DocumentSymbolResponse::Nested(
+            convert::document_symbols(&outline, &target.index, encoding),
+        )))
+    }
+
+    fn folding_ranges(
+        &mut self,
+        params: FoldingRangeParams,
+    ) -> Result<Option<Vec<FoldingRange>>, ResponseError> {
+        let encoding = self.encoding;
+        let Some(target) = self.locate(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let folds = target.analysis.folds(target.file);
+        Ok(Some(convert::folding_ranges(
+            &folds,
+            &target.index,
+            encoding,
+        )))
+    }
+
+    /// `stave fmt` on the document's text, as edits. A standard library
+    /// document is not changed; a file with syntax errors is refused with
+    /// why.
+    fn formatting(
+        &mut self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
+        let encoding = self.encoding;
+        let Some(target) = self.locate(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        if target.document.is_read_only() {
+            return Ok(None);
+        }
+        let path = target.document.source_path();
+        let edits = stave_app::format::format_edits(&path, target.index.text())
+            .map_err(|error| failure(ErrorCode::RequestFailed, error.to_string()))?;
+        Ok(convert::text_edits(&edits, &target.index, encoding))
+    }
+
+    /// Quick fixes for the diagnostics in a range: each slow diagnostic's
+    /// fixes, and the fast ones' mechanical help lines.
+    fn code_actions(
+        &mut self,
+        params: CodeActionParams,
+    ) -> Result<Option<CodeActionResponse>, ResponseError> {
+        let encoding = self.encoding;
+        let uri = params.text_document.uri;
+        let wanted = params.range;
+        let overlaps =
+            |range: &lsp_types::Range| range.start <= wanted.end && wanted.start <= range.end;
+        let Some(folder) = self.prepare(&uri) else {
+            return Ok(None);
+        };
+        let Some(target) = self.target(&uri, &folder) else {
+            return Ok(None);
+        };
+        let mut actions: Vec<Fix> = Vec::new();
+        let sources = AnalysisSources(target.analysis);
+        for fix in target.analysis.help_fixes(target.file) {
+            let Some((_, diagnostic)) = convert::diagnostic(&fix.diagnostic, &sources, encoding)
+            else {
+                continue;
+            };
+            let Some(range) = target.index.range(fix.span, encoding) else {
+                continue;
+            };
+            if overlaps(&diagnostic.range) {
+                actions.push(Fix {
+                    diagnostic,
+                    title: fix.label,
+                    preferred: true,
+                    edits: vec![(
+                        target.document.clone(),
+                        vec![TextEdit::new(range, fix.text)],
+                    )],
+                });
+            }
+        }
+        let document = target.document.clone();
+        if let Some(fixes) = self
+            .projects
+            .get(&folder)
+            .and_then(|project| project.fixes.get(&document))
+        {
+            actions.extend(
+                fixes
+                    .iter()
+                    .filter(|fix| overlaps(&fix.diagnostic.range))
+                    .cloned(),
+            );
+        }
+        Ok(Some(
+            actions
+                .into_iter()
+                .map(|fix| {
+                    CodeActionOrCommand::CodeAction(CodeAction {
+                        title: fix.title,
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        diagnostics: Some(vec![fix.diagnostic]),
+                        edit: Some(self.workspace_edit(fix.edits)),
+                        command: None,
+                        is_preferred: Some(fix.preferred),
+                        disabled: None,
+                        data: None,
+                    })
+                })
+                .collect(),
+        ))
+    }
 }
 
 /// A location as the protocol gives it.
@@ -959,25 +1211,58 @@ fn standard_document(params: serde_json::Value) -> Result<serde_json::Value, Res
     Ok(serde_json::json!({ "text": text }))
 }
 
-/// The slow tier: the whole pipeline on a snapshot of the buffers, its
-/// diagnostics by document. A folder that can't be loaded gives none
-/// (the fast tier already says why).
-fn slow_diagnostics(
-    folder: &Path,
-    overlay: &Overlay,
-    encoding: PositionEncoding,
-) -> BTreeMap<Document, Vec<lsp_types::Diagnostic>> {
-    let mut diagnostics: BTreeMap<Document, Vec<lsp_types::Diagnostic>> = BTreeMap::new();
-    let Ok(opened) = stave_app::open_with(folder, overlay) else {
-        return diagnostics;
+/// The slow tier: the whole pipeline on a snapshot of the buffers
+/// ([`stave_app::editor_check::editor_check`]), its diagnostics and their
+/// fixes by document, and the values it worked out. A folder that can't
+/// be loaded gives none (the fast tier already says why).
+fn slow_check(folder: &Path, overlay: &Overlay, encoding: PositionEncoding) -> SlowCheck {
+    let mut check = SlowCheck::default();
+    let Ok(checked) = stave_app::editor_check::editor_check(folder, overlay) else {
+        return check;
     };
+    let opened = &checked.opened;
     let sources = CheckSources(&opened.sources);
-    for found in &opened.diagnostics {
-        if let Some((document, shown)) = convert::diagnostic(found, &sources, encoding) {
-            diagnostics.entry(document).or_default().push(shown);
+    for (found, fixes) in opened.diagnostics.iter().zip(&checked.fixes) {
+        let Some((document, shown)) = convert::diagnostic(found, &sources, encoding) else {
+            continue;
+        };
+        for (place, fix) in fixes.iter().enumerate() {
+            if let Some(edits) = fix_edits(fix, &opened.sources, encoding) {
+                check.fixes.entry(document.clone()).or_default().push(Fix {
+                    diagnostic: shown.clone(),
+                    title: fix.label.clone(),
+                    preferred: place == 0,
+                    edits,
+                });
+            }
         }
+        check.diagnostics.entry(document).or_default().push(shown);
     }
-    diagnostics
+    check.values = checked.values;
+    check
+}
+
+/// A fix's edits as protocol edits, by document. A fix that creates a
+/// file is left out: it needs a resource operation an editor may not
+/// take, and the GTK app or `stave` applies it.
+fn fix_edits(
+    fix: &stave_app::editor_check::FixEdits,
+    sources: &SourceMap,
+    encoding: PositionEncoding,
+) -> Option<Vec<(Document, Vec<TextEdit>)>> {
+    fix.files
+        .iter()
+        .map(|file| {
+            if file.created {
+                return None;
+            }
+            let path = file.path.to_str()?;
+            let (_, source) = sources.files().find(|(_, source)| source.path() == path)?;
+            let index = LineIndex::new(source.text());
+            let edits = convert::text_edits(&file.edits, &index, encoding)?;
+            Some((Document::File(file.path.clone()), edits))
+        })
+        .collect()
 }
 
 /// The project a file belongs to: the nearest folder at or above the
@@ -1042,6 +1327,8 @@ mod tests {
             config: Config::default(),
             encoding: PositionEncoding::Utf16,
             document_changes: false,
+            inlay_refresh: false,
+            refreshes: 0,
             buffers: Buffers::new(),
             versions: BTreeMap::new(),
             documents: BTreeMap::new(),
@@ -1088,7 +1375,10 @@ mod tests {
             .slow_finished(SlowResult {
                 folder: cabinet.clone(),
                 generation: first,
-                diagnostics: BTreeMap::from([(Document::File(doors.clone()), vec![stale])]),
+                check: SlowCheck {
+                    diagnostics: BTreeMap::from([(Document::File(doors.clone()), vec![stale])]),
+                    ..SlowCheck::default()
+                },
             })
             .unwrap();
         assert!(server.projects[&cabinet].slow.is_empty());
