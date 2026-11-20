@@ -829,27 +829,18 @@ impl Server {
             return Ok(None);
         };
         let at = target.position(position.position, encoding);
-        let found = target
-            .analysis
-            .hover_with_values(at, self.values(&position.text_document.uri));
+        let found = target.analysis.hover_with_values(at, self.values(&folder));
         Ok(found.map(|found| convert::hover(&found, &target.index, encoding)))
     }
 
-    /// The values worked out for the project a file's requests are
-    /// answered from; none for a standard library document.
-    fn values(&self, uri: &Uri) -> &WorkedValues {
+    /// The values worked out for the project in `folder`, which a
+    /// request was answered from ([`Server::prepare`]): a standard
+    /// library document is answered from an open project, whose values
+    /// include those of the std items its design uses.
+    fn values(&self, folder: &Path) -> &WorkedValues {
         static NONE: std::sync::OnceLock<WorkedValues> = std::sync::OnceLock::new();
-        let folder = uri_document(uri).and_then(|document| match &document {
-            Document::File(path) => Some(
-                self.documents
-                    .get(&document)
-                    .cloned()
-                    .unwrap_or_else(|| project_folder(path)),
-            ),
-            Document::Std { .. } => None,
-        });
-        folder
-            .and_then(|folder| self.projects.get(&folder))
+        self.projects
+            .get(folder)
             .map_or_else(|| NONE.get_or_init(WorkedValues::default), |p| &p.values)
     }
 
@@ -1046,7 +1037,9 @@ impl Server {
         let Some(target) = self.target(&uri, &folder) else {
             return Ok(None);
         };
-        let hints = self.values(&uri).inlay_hints(target.analysis, target.file);
+        let hints = self
+            .values(&folder)
+            .inlay_hints(target.analysis, target.file);
         let wanted = params.range;
         let hints = convert::inlay_hints(&hints, &target.index, encoding)
             .into_iter()

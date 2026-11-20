@@ -146,29 +146,38 @@ impl WorkedValues {
         hints
     }
 
-    /// The value shown for a position: the innermost value whose text
-    /// holds it, or whose param or `let` the name there declares or names.
+    /// The value shown for a position: on a param's or `let`'s name
+    /// (where it is declared or where it is named), its value; on any
+    /// other name, none, since the value of the expression around it is
+    /// not that name's value; elsewhere, the innermost value whose text
+    /// holds the position (`fit`, a literal, `between(...)`).
     pub fn at<'a>(
         &'a self,
         analysis: &'a Analysis,
         position: FilePosition,
     ) -> Option<&'a ValueNote> {
         let inside = |span: Span| span.start() <= position.offset && position.offset <= span.end();
-        let own = self
+        let declared_here = self
             .current(analysis, position.file)
-            .filter(|note| inside(note.span) || note.name.as_ref().is_some_and(|n| inside(n.0)))
-            .min_by_key(|note| note.span.end().saturating_sub(note.span.start()));
-        if own.is_some() {
-            return own;
+            .find(|note| note.name.as_ref().is_some_and(|(span, _)| inside(*span)));
+        if declared_here.is_some() {
+            return declared_here;
         }
-        // A name of a param or `let` declared elsewhere.
-        let declaration = analysis.definition(position)?;
-        let text = analysis.text(declaration.file).unwrap_or_default();
-        self.notes(&declaration.document).iter().find(|note| {
-            note.name.as_ref().is_some_and(|(span, name)| {
-                *span == declaration.span && covered(text, *span) == Some(name.as_str())
-            })
-        })
+        if let Some(declaration) = analysis.definition(position) {
+            // A name of a param or `let`, here or in another file; a name
+            // of anything else has no value of its own.
+            let text = analysis.text(declaration.file).unwrap_or_default();
+            return self.notes(&declaration.document).iter().find(|note| {
+                note.name.as_ref().is_some_and(|(span, name)| {
+                    *span == declaration.span
+                        && covered(text, *span) == Some(name.as_str())
+                        && covered(text, note.span) == Some(note.covers.as_str())
+                })
+            });
+        }
+        self.current(analysis, position.file)
+            .filter(|note| inside(note.span))
+            .min_by_key(|note| note.span.end().saturating_sub(note.span.start()))
     }
 }
 

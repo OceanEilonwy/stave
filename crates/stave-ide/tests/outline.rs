@@ -139,6 +139,22 @@ fn half_typed_text_still_has_an_outline_and_folds() {
 }
 
 #[test]
+fn a_blank_line_or_code_ends_a_run_of_comments() {
+    let text = "stave 1\n\n// One.\n// Two.\n\n// Three.\n// Four.\nproject \"Box\" {\n  units: mm // mm\n  // inside\n}\n";
+    let (_folder, analysis, file) = one_file(text);
+    let text = analysis.text(file).unwrap();
+    let comments: Vec<&str> = analysis
+        .folds(file)
+        .iter()
+        .filter(|fold| fold.kind == FoldKind::Comment)
+        .map(|fold| &text[fold.span.start() as usize..fold.span.end() as usize])
+        .collect();
+    // The comment after `units: mm` belongs to its line, so it starts no
+    // run with the comment below it.
+    assert_eq!(comments, ["// One.\n// Two.", "// Three.\n// Four."]);
+}
+
+#[test]
 fn a_help_line_that_names_the_text_is_a_fix() {
     let text = "stave 1\n\nproject \"Box\" {\n  units: mm\n}\n\nlet width = mid(base, up\n";
     let (_folder, analysis, file) = one_file(text);
@@ -208,4 +224,61 @@ fn values_are_shown_only_where_their_text_is_unchanged() {
     let changed = Analysis::load(&folder, &overlay).unwrap();
     let file = changed.file(&document).unwrap();
     assert_eq!(values.inlay_hints(&changed, file), Vec::new());
+}
+
+#[test]
+fn a_name_in_an_expression_shows_its_own_value_not_the_expressions() {
+    let text = "stave 1\n\nproject \"Box\" {\n  units: mm\n}\n\nparam width = 600mm\nlet half = width / 2\n";
+    let (folder, analysis, file) = one_file(text);
+    let document = Document::File(folder.path().join("box.stave"));
+    let span_of = |needle: &str, from: usize| {
+        let start = text[from..].find(needle).unwrap() + from;
+        Span::new(start as u32, (start + needle.len()) as u32)
+    };
+    let let_line = text.find("let half").unwrap();
+    let note = |span: Span, name: Span, kind: ValueKind, covers: &str, value: &str| ValueNote {
+        document: document.clone(),
+        span,
+        covers: covers.to_owned(),
+        name: Some((
+            name,
+            text[name.start() as usize..name.end() as usize].to_owned(),
+        )),
+        kind,
+        literal: false,
+        text: value.to_owned(),
+    };
+    let values = WorkedValues::new([
+        note(
+            span_of("600mm", 0),
+            span_of("width", 0),
+            ValueKind::Param,
+            "600mm",
+            "600mm",
+        ),
+        note(
+            span_of("width / 2", let_line),
+            span_of("half", let_line),
+            ValueKind::Let,
+            "width / 2",
+            "300mm",
+        ),
+    ]);
+    let hover_at = |offset: u32| {
+        analysis
+            .hover_with_values(FilePosition { file, offset }, &values)
+            .and_then(|hover| hover.value)
+    };
+    // `width` inside `half`'s value is the param, worth 600mm.
+    let reference = span_of("width", let_line);
+    assert_eq!(hover_at(reference.start() + 1).as_deref(), Some("= 600mm"));
+    // `half` itself, and the `/` between, are the `let`, worth 300mm.
+    assert_eq!(
+        hover_at(span_of("half", let_line).start() + 1).as_deref(),
+        Some("= 300mm")
+    );
+    assert_eq!(
+        hover_at(span_of("/", let_line).start()).as_deref(),
+        Some("= 300mm")
+    );
 }

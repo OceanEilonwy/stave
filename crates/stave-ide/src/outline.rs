@@ -100,8 +100,14 @@ impl Analysis {
         };
         let mut folds = Vec::new();
         let mut open: Vec<(SyntaxKind, u32)> = Vec::new();
-        // Comment lines in a row: the first's start and the last's end.
+        // Comment lines in a row: the first's start, the last's end and
+        // how many lines.
         let mut comments: Option<(u32, u32, usize)> = None;
+        // Line ends since the last comment: two end a run (a blank line).
+        let mut line_ends: usize = 0;
+        // Code is written on this line before the token: a comment after
+        // it is the line's own, not part of a run of comment lines.
+        let mut code_on_line = false;
         let close_comments = |comments: &mut Option<(u32, u32, usize)>, folds: &mut Vec<Fold>| {
             if let Some((start, end, lines)) = comments.take()
                 && lines > 1
@@ -125,10 +131,12 @@ impl Analysis {
             match token.kind() {
                 SyntaxKind::L_BRACE | SyntaxKind::L_PAREN | SyntaxKind::L_BRACK => {
                     close_comments(&mut comments, &mut folds);
+                    code_on_line = true;
                     open.push((token.kind(), start));
                 }
                 SyntaxKind::R_BRACE | SyntaxKind::R_PAREN | SyntaxKind::R_BRACK => {
                     close_comments(&mut comments, &mut folds);
+                    code_on_line = true;
                     let opening = match token.kind() {
                         SyntaxKind::R_BRACE => SyntaxKind::L_BRACE,
                         SyntaxKind::R_PAREN => SyntaxKind::L_PAREN,
@@ -148,19 +156,31 @@ impl Analysis {
                     }
                 }
                 SyntaxKind::LINE_COMMENT | SyntaxKind::DOC => {
-                    comments = Some(match comments {
-                        Some((first, _, lines)) => (first, end, lines.saturating_add(1)),
-                        None => (start, end, 1),
-                    });
-                }
-                SyntaxKind::WHITESPACE => {}
-                SyntaxKind::NEWLINE => {
-                    // A blank line ends a run of comments.
-                    if token.text().matches('\n').count() > 1 {
+                    if code_on_line {
                         close_comments(&mut comments, &mut folds);
+                    } else {
+                        comments = Some(match comments {
+                            Some((first, _, lines)) => (first, end, lines.saturating_add(1)),
+                            None => (start, end, 1),
+                        });
+                    }
+                    line_ends = 0;
+                }
+                // A line end inside brackets is lexed as whitespace.
+                SyntaxKind::NEWLINE | SyntaxKind::WHITESPACE => {
+                    let ends = token.text().matches('\n').count();
+                    if ends > 0 {
+                        code_on_line = false;
+                        line_ends = line_ends.saturating_add(ends);
+                        if line_ends > 1 {
+                            close_comments(&mut comments, &mut folds);
+                        }
                     }
                 }
-                _ => close_comments(&mut comments, &mut folds),
+                _ => {
+                    close_comments(&mut comments, &mut folds);
+                    code_on_line = true;
+                }
             }
         }
         close_comments(&mut comments, &mut folds);
