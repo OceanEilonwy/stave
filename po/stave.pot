@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-20 12:19+0800\n"
+"POT-Creation-Date: 2026-11-20 12:45+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1646,11 +1646,11 @@ msgid ""
 "File: {file}"
 msgstr ""
 
-#: crates/stave-app/src/scratch.rs:645 crates/stave-app/src/versions.rs:620
+#: crates/stave-app/src/scratch.rs:645 crates/stave-app/src/versions.rs:767
 msgid "the edit was refused, so nothing was written"
 msgstr ""
 
-#: crates/stave-app/src/session.rs:60 crates/stave-gtk/src/ui/mod.rs:1186
+#: crates/stave-app/src/session.rs:60 crates/stave-gtk/src/ui/mod.rs:1187
 msgid "Design"
 msgstr ""
 
@@ -1795,31 +1795,55 @@ msgstr ""
 msgid "the search was cancelled"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:353
+#: crates/stave-app/src/versions.rs:401
 msgid "Saved"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:354 crates/stave-gtk/src/ui/files.rs:1066
+#: crates/stave-app/src/versions.rs:402 crates/stave-gtk/src/ui/files.rs:1066
 #, rust-format
 msgid "Saved {file}"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:356
+#: crates/stave-app/src/versions.rs:404
 #, rust-format
 msgid "Saved {count} file"
 msgid_plural "Saved {count} files"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/stave-app/src/versions.rs:399
+#: crates/stave-app/src/versions.rs:447
 msgid "Turned on versions"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:586
+#: crates/stave-app/src/versions.rs:638
+#, rust-format
+msgid "Undid “{change}”"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:640
+#, rust-format
+msgid "Undid applying “{title}”"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:643
+#, rust-format
+msgid "Brought back the suggestion “{title}”"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:647
+#, rust-format
+msgid "Took back the suggestion “{title}”"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:650
+msgid "Undid the last change"
+msgstr ""
+
+#: crates/stave-app/src/versions.rs:726
 msgid "the patch couldn't be read"
 msgstr ""
 
-#: crates/stave-app/src/versions.rs:595
+#: crates/stave-app/src/versions.rs:735
 msgid "checking it was stopped"
 msgstr ""
 
@@ -3673,119 +3697,119 @@ msgstr ""
 msgid "The text is the source of truth. Positions are worked out from these relationships; none are stored."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1149
+#: crates/stave-gtk/src/ui/mod.rs:1150
 #: crates/stave-gtk/src/ui/start_page.rs:136
 msgid "New Project…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1150
+#: crates/stave-gtk/src/ui/mod.rs:1151
 #: crates/stave-gtk/src/ui/start_page.rs:137
 msgid "Open Project…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1152
+#: crates/stave-gtk/src/ui/mod.rs:1153
 msgid "Open Recent"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1157
+#: crates/stave-gtk/src/ui/mod.rs:1158
 msgid "Save"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1158
+#: crates/stave-gtk/src/ui/mod.rs:1159
 msgid "Check Again"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1159
+#: crates/stave-gtk/src/ui/mod.rs:1160
 msgid "Build Plan"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1164
+#: crates/stave-gtk/src/ui/mod.rs:1165
 msgid "Export 3D Model…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1170
+#: crates/stave-gtk/src/ui/mod.rs:1171
 msgid "Find…"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1171
+#: crates/stave-gtk/src/ui/mod.rs:1172
 msgid "Find in the Text"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1172
+#: crates/stave-gtk/src/ui/mod.rs:1173
 msgid "Format the Text"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1178
+#: crates/stave-gtk/src/ui/mod.rs:1179
 msgid "Next Problem"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1179
+#: crates/stave-gtk/src/ui/mod.rs:1180
 msgid "Previous Problem"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1187
+#: crates/stave-gtk/src/ui/mod.rs:1188
 msgid "Cut List"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1193
+#: crates/stave-gtk/src/ui/mod.rs:1194
 msgid "Back"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1194
+#: crates/stave-gtk/src/ui/mod.rs:1195
 msgid "Forward"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1195
+#: crates/stave-gtk/src/ui/mod.rs:1196
 msgid "Frame Everything"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1208
+#: crates/stave-gtk/src/ui/mod.rs:1209
 #: crates/stave-gtk/src/ui/workbench.rs:1170
 msgid "Reset Layout"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1209
+#: crates/stave-gtk/src/ui/mod.rs:1210
 #: crates/stave-gtk/src/ui/workbench.rs:1173
 msgid "Panels"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1210
+#: crates/stave-gtk/src/ui/mod.rs:1211
 #: crates/stave-gtk/src/ui/start_page.rs:139
 msgid "Style"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1212
+#: crates/stave-gtk/src/ui/mod.rs:1213
 #: crates/stave-gtk/src/ui/new_project.rs:263
 msgid "Project"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1213 crates/stave-gtk/src/ui/workbench.rs:129
+#: crates/stave-gtk/src/ui/mod.rs:1214 crates/stave-gtk/src/ui/workbench.rs:129
 msgid "Edit"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1214
+#: crates/stave-gtk/src/ui/mod.rs:1215
 msgid "View"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1215
+#: crates/stave-gtk/src/ui/mod.rs:1216
 msgid "Help"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1287
+#: crates/stave-gtk/src/ui/mod.rs:1288
 msgid "Show the problem off screen"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1443
+#: crates/stave-gtk/src/ui/mod.rs:1444
 #, rust-format
 msgid "{project} — Stave"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1537
+#: crates/stave-gtk/src/ui/mod.rs:1538
 #, rust-format
 msgid "{title} selected. {problems}."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/mod.rs:1541
+#: crates/stave-gtk/src/ui/mod.rs:1542
 #, rust-format
 msgid "Nothing selected. {problems}."
 msgstr ""
@@ -4328,60 +4352,55 @@ msgstr ""
 msgid "This project is inside another project's history, at {folder}. A copy of the project in a folder of its own can have versions."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:793
+#: crates/stave-gtk/src/ui/versions.rs:819
 msgid "Turn on versions for this project?"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:795
+#: crates/stave-gtk/src/ui/versions.rs:821
 msgid "Stave then keeps every saved version of the project in its folder, so any change can be undone, and shows suggestions from AI apps in the Versions panel."
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:800
+#: crates/stave-gtk/src/ui/versions.rs:826
 msgid "_Not Now"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:801
+#: crates/stave-gtk/src/ui/versions.rs:827
 msgid "_Turn On"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:834
+#: crates/stave-gtk/src/ui/versions.rs:869
 msgid "the work on the project's versions stopped"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:874
+#: crates/stave-gtk/src/ui/versions.rs:914
 #, rust-format
 msgid "The save wasn't recorded in the project's versions: {reason}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:880
+#: crates/stave-gtk/src/ui/versions.rs:920
 msgid "Versions are on for this project"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:884
+#: crates/stave-gtk/src/ui/versions.rs:924
 #, rust-format
 msgid "Versions couldn't be turned on: {reason}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:890
+#: crates/stave-gtk/src/ui/versions.rs:930
 #, rust-format
 msgid "Applied “{title}”"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:896
+#: crates/stave-gtk/src/ui/versions.rs:936
 msgid "Discarded the suggestion"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:901
-#, rust-format
-msgid "Undid “{change}”"
-msgstr ""
-
-#: crates/stave-gtk/src/ui/versions.rs:926
+#: crates/stave-gtk/src/ui/versions.rs:966
 #, rust-format
 msgid "Your changes and another change to the same lines clash in {files}: both are kept, between marker lines"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/versions.rs:939
+#: crates/stave-gtk/src/ui/versions.rs:979
 #, rust-format
 msgid "{files} changed in the project; your unsaved changes are kept, and the two meet when you save"
 msgstr ""

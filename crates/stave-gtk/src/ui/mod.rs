@@ -846,6 +846,7 @@ impl Component for Window {
         update::selection::wire(&mut window);
         update::rendering::wire(&mut window);
         update::editing::wire(&mut window);
+        versions::wire(&window);
         if let Some(showcase) = options.edit_fixture {
             // The fixture's card takes the Edit panel's place of the
             // session's own; the window keeps what it shows.

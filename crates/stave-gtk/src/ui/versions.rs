@@ -26,13 +26,13 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::glib;
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::editing::EditCommand;
 use stave_app::session::Command;
 use stave_app::versions::{
     self as history, Actor, CaughtUp, Declined, HistoryWatcher, OnSave, Shown, SuggestionId,
-    VersionsStatus,
+    UndoneChange, VersionsStatus, Worker,
 };
 
 use super::{Window, WindowInput, workbench};
@@ -102,7 +102,7 @@ impl PanelShown {
                     .into_iter()
                     .map(|suggestion| SuggestionRow {
                         clashing: !suggestion.conflicted.is_empty(),
-                        patches: suggestion.patches.join("\n"),
+                        patches: history::shown_patch(&suggestion.patches),
                         id: suggestion.id,
                         title: suggestion.title,
                         by: suggestion.agent.name,
@@ -502,6 +502,9 @@ impl VersionsPanel {
 pub(in crate::ui) struct WindowVersions {
     /// Watches the versions' folder while they are on.
     watcher: Option<HistoryWatcher>,
+    /// Runs the work on the versions one job at a time, so a save never
+    /// overlaps a catch-up.
+    worker: Worker,
     /// The files the Code panel holds unsaved, as it last said.
     unsaved: BTreeSet<PathBuf>,
     /// Versions as last read.
@@ -526,6 +529,9 @@ pub(in crate::ui) enum VersionsInput {
     /// Someone changed the project's versions (the window itself, or an AI
     /// app): catch up and read them again.
     Changed,
+    /// The window came to the front: versions not watched yet may have
+    /// been turned on meanwhile (by an AI app opening the project).
+    Focused,
     /// People answered "Turn on versions for this project?".
     Answered(TurnOnAnswer),
     /// Work done off the main thread for this folder came back.
@@ -581,7 +587,7 @@ pub(in crate::ui) enum Done {
     /// A suggestion was discarded.
     Discarded(Result<(), String>),
     /// The last change was undone: what it was.
-    Undone(Result<(String, CaughtUp), String>),
+    Undone(Result<(UndoneChange, CaughtUp), String>),
 }
 
 /// The person using the window, as their versions name them: their full
@@ -616,6 +622,21 @@ impl From<VersionsInput> for WindowInput {
     fn from(message: VersionsInput) -> WindowInput {
         WindowInput::Versions(message)
     }
+}
+
+/// Tells the window when it comes to the front ([`VersionsInput::Focused`]),
+/// so versions turned on by an AI app while it was open are noticed
+/// without a save.
+pub(in crate::ui) fn wire(window: &Window) {
+    let input = window.input();
+    window
+        .widgets
+        .window
+        .connect_is_active_notify(move |shown| {
+            if shown.is_active() {
+                input.emit(VersionsInput::Focused.into());
+            }
+        });
 }
 
 /// The Versions panel's outputs as the window's messages (forwarded at
@@ -659,6 +680,11 @@ impl Window {
             }
             VersionsInput::Saved(files) => self.versions_saved(files),
             VersionsInput::Changed => self.read_versions(),
+            VersionsInput::Focused => {
+                if self.versions.watcher.is_none() {
+                    self.read_versions();
+                }
+            }
             VersionsInput::Answered(answer) => {
                 self.versions.asking = false;
                 self.versions.asked = true;
@@ -826,12 +852,21 @@ impl Window {
     ) {
         let folder = self.session.folder().to_path_buf();
         let input = self.input();
+        let (sender, receiver) = async_channel::bounded(1);
+        let working = folder.clone();
+        let queued = self.versions.worker.run(move || {
+            let result = work(&working).map_err(|error| error.to_string());
+            // The window may be gone; then nobody needs to know.
+            let _ = sender.send_blocking(result);
+        });
+        if let Err(stopped) = queued {
+            eprintln!("warning: {stopped}");
+        }
         glib::spawn_future_local(async move {
-            let working = folder.clone();
-            let result =
-                gio::spawn_blocking(move || work(&working).map_err(|error| error.to_string()))
-                    .await
-                    .unwrap_or_else(|_| Err(tr("the work on the project's versions stopped")));
+            let result = receiver
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err(tr("the work on the project's versions stopped")));
             let _ = input.send(
                 VersionsInput::Done {
                     folder,
@@ -861,6 +896,11 @@ impl Window {
                 }
                 match shown {
                     Ok(shown) => {
+                        // Versions turned on by someone else (an AI app
+                        // opening the project) are watched from now on.
+                        if shown.status == VersionsStatus::On && self.versions.watcher.is_none() {
+                            self.watch_versions();
+                        }
                         self.versions.status = Some(shown.status.clone());
                         self.widgets.versions.show(PanelShown::of(shown));
                     }
@@ -898,7 +938,7 @@ impl Window {
             },
             Done::Undone(result) => match result {
                 Ok((what, caught_up)) => {
-                    self.toast(&fill_in(&tr("Undid “{change}”"), &[("change", &what)]));
+                    self.toast(&what.said());
                     self.caught_up(&caught_up);
                 }
                 Err(error) => self.toast(&error),
@@ -948,6 +988,7 @@ impl Window {
 mod tests {
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
+    use gtk::gio;
 
     fn on() -> PanelShown {
         PanelShown::On {
@@ -1278,6 +1319,59 @@ mod tests {
             settle_until(|| std::fs::read_to_string(folder.join("notes.txt"))
                 .is_ok_and(|text| text == "from an AI app\n")),
             "the window wrote the applied change into the folder"
+        );
+
+        root.destroy();
+        drop(controller);
+        settle();
+        drop(application);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn versions_an_ai_app_turns_on_are_watched_once_noticed() {
+        on_gtk_thread(turned_on_elsewhere);
+    }
+
+    /// An AI app turns versions on while the window is open: once the
+    /// window comes to the front it lists them and watches them, so a
+    /// change the app applies reaches the folder without a save.
+    fn turned_on_elsewhere() {
+        let (application, controller, folder) =
+            open_copy("org.stave.VersionsTest.TurnedOnElsewhere");
+        let root = controller.widget().clone();
+        assert!(
+            settle_until(|| controller.model().widgets.versions.shown() == PanelShown::Off),
+            "an off project offers to turn versions on"
+        );
+        let agent = Actor {
+            kind: history::ActorKind::Agent,
+            name: "Claude Desktop".to_owned(),
+            id: "3f2a".to_owned(),
+        };
+        history::turn_on(&folder, &agent).unwrap();
+        let _ = controller.sender().send(VersionsInput::Focused.into());
+        assert!(
+            settle_until(|| matches!(
+                controller.model().widgets.versions.shown(),
+                PanelShown::On { .. }
+            )),
+            "the panel shows the versions"
+        );
+
+        let mut history = history::History::open(&folder).unwrap();
+        let main = history.main().unwrap();
+        let mut files = history.files_at(&main).unwrap();
+        let notes = history::RelativePath::new(Path::new("notes.txt")).unwrap();
+        files.insert(notes, b"from an AI app\n".to_vec());
+        let id = history
+            .suggest(&agent, None, &files, "a patch", "Add notes")
+            .unwrap();
+        history.apply(&id, &agent, &main, &files).unwrap();
+        assert!(
+            settle_until(|| std::fs::read_to_string(folder.join("notes.txt"))
+                .is_ok_and(|text| text == "from an AI app\n")),
+            "the window watches the versions and catches up"
         );
 
         root.destroy();

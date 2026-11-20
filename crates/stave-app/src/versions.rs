@@ -23,7 +23,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use stave_lang::{Severity, SourceMap, parse_patch_file, render_diagnostics};
+use stave_lang::{Code, Severity, SourceMap, parse_patch_file, render_diagnostics};
 use stave_modules::MemoryFiles;
 
 use crate::edit::Verdict;
@@ -65,6 +65,13 @@ pub enum VersionsError {
         /// What the system said.
         #[source]
         source: std::io::Error,
+    },
+    /// Catching up would write or remove a file through a symbolic link,
+    /// which may lead out of the project: nothing was written.
+    #[error("{}", fill_in(&tr("{file} is a link, which may lead out of the project, so the project's changes weren't written into its folder"), &[("file", &path.display())]))]
+    Link {
+        /// The link, inside the project.
+        path: PathBuf,
     },
     /// The project as main holds it couldn't be read as a design.
     #[error("{}", fill_in(&tr("the project couldn't be read: {reason}"), &[("reason", source)]))]
@@ -290,15 +297,23 @@ fn catch_up_with(
             conflicted,
         } => {
             let folder = history.folder().to_path_buf();
-            let mut written = Vec::with_capacity(files.len());
+            // Every path is checked before anything is written, so a link
+            // leaves the folder as it was.
+            let mut writes = Vec::with_capacity(files.len());
             for (relative, contents) in files.iter() {
-                let full = folder.join(relative.as_path());
+                writes.push((inside(&folder, relative)?, contents));
+            }
+            let mut removals = Vec::with_capacity(removed.len());
+            for relative in &removed {
+                removals.push(inside(&folder, relative)?);
+            }
+            let mut written = Vec::with_capacity(writes.len());
+            for (full, contents) in writes {
                 write_file(&full, contents)?;
                 written.push(full);
             }
-            let mut gone = Vec::with_capacity(removed.len());
-            for relative in &removed {
-                let full = folder.join(relative.as_path());
+            let mut gone = Vec::with_capacity(removals.len());
+            for full in removals {
                 match std::fs::remove_file(&full) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -315,6 +330,26 @@ fn catch_up_with(
             })
         }
     }
+}
+
+/// `relative`'s full path in `folder`, or [`VersionsError::Link`] when it,
+/// or a folder on the way to it, is a symbolic link: writing through it
+/// could change a file outside the project. Parts not there yet are fine;
+/// they are made as plain folders.
+fn inside(folder: &Path, relative: &RelativePath) -> Result<PathBuf, VersionsError> {
+    let mut full = folder.to_path_buf();
+    for component in relative.as_path().components() {
+        full.push(component);
+        match std::fs::symlink_metadata(&full) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(VersionsError::Link { path: full });
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(source) => return Err(VersionsError::Io { path: full, source }),
+        }
+    }
+    Ok(folder.join(relative.as_path()))
 }
 
 fn write_file(full: &Path, contents: &[u8]) -> Result<(), VersionsError> {
@@ -338,15 +373,28 @@ pub struct Saved {
     pub caught_up: CaughtUp,
 }
 
-/// The message a save is recorded with: the files saved, by name.
+/// The message a save is recorded with: the files saved, by their path in
+/// `folder` (the window's folder, as the saved paths are given; failing
+/// that, both made free of links). A file found in neither is named by its
+/// file name alone, so no full path reaches the versions, which AI apps
+/// read too.
 fn save_message(folder: &Path, saved: &[PathBuf]) -> String {
+    let canonical_folder = canonical(folder);
     let names: Vec<String> = saved
         .iter()
         .map(|file| {
-            file.strip_prefix(folder)
-                .unwrap_or(file)
-                .display()
-                .to_string()
+            let name = file
+                .strip_prefix(folder)
+                .map(Path::to_path_buf)
+                .or_else(|_| {
+                    canonical(file)
+                        .strip_prefix(&canonical_folder)
+                        .map(Path::to_path_buf)
+                })
+                .ok()
+                .or_else(|| file.file_name().map(PathBuf::from))
+                .unwrap_or_default();
+            name.display().to_string()
         })
         .collect();
     match names.as_slice() {
@@ -377,7 +425,7 @@ pub fn save(
     let mut history = History::open(folder)?;
     let before = history.main()?;
     let files = history.read_folder()?;
-    let message = save_message(history.folder(), saved);
+    let message = save_message(folder, saved);
     let main = history.save(&files, actor, &message)?;
     let caught_up = catch_up_with(&mut history, unsaved)?;
     Ok(Saved {
@@ -467,26 +515,37 @@ pub fn apply(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<Applied,
         .ok_or_else(|| VersionsError::UnknownSuggestion { id: id.clone() })?;
     let base = history.main()?;
     let base_files = history.files_at(&base)?;
-    let merged = match replay(history.folder(), &base_files, &suggestion.patches)? {
-        Replayed::Clean(merged) => merged,
-        Replayed::NotApplied(why) => {
-            let conflicted = history.rebase_suggestion(id)?;
-            if conflicted.is_empty() {
-                return Err(VersionsError::Refused {
-                    title: suggestion.title,
-                    why,
-                });
-            }
-            return Err(VersionsError::Clashes {
-                title: suggestion.title,
-                conflicted,
-            });
-        }
+    let (base, merged) = match replay(history.folder(), &base_files, &suggestion.patches)? {
+        Replayed::Clean(merged) => (base, merged),
         Replayed::Errors(why) => {
             return Err(VersionsError::Refused {
                 title: suggestion.title,
                 why,
             });
+        }
+        // What a patch names is no longer there: the suggestion's own
+        // files are moved onto main, and applied when that is clean.
+        Replayed::DoesNotFit => {
+            let conflicted = history.rebase_suggestion(id)?;
+            if !conflicted.is_empty() {
+                return Err(VersionsError::Clashes {
+                    title: suggestion.title,
+                    conflicted,
+                });
+            }
+            let rebased = history
+                .suggestions()?
+                .into_iter()
+                .find(|suggestion| &suggestion.id == id)
+                .ok_or_else(|| VersionsError::UnknownSuggestion { id: id.clone() })?;
+            let files = history.suggestion_files(id)?;
+            if let Some(why) = errors_in(history.folder(), &files)? {
+                return Err(VersionsError::Refused {
+                    title: suggestion.title,
+                    why,
+                });
+            }
+            (rebased.base, files)
         }
     };
     let revision = history.apply(id, actor, &base, &merged)?;
@@ -510,8 +569,8 @@ pub fn discard(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<(), Ve
 /// What the window's Undo did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Undone {
-    /// What was undone, as the versions describe it.
-    pub what: String,
+    /// What was undone.
+    pub what: UndoneChange,
     /// Catching up after it.
     pub caught_up: CaughtUp,
 }
@@ -529,9 +588,68 @@ pub fn undo(
     unsaved: &BTreeSet<RelativePath>,
 ) -> Result<Undone, VersionsError> {
     let mut history = History::open(folder)?;
-    let what = history.undo(actor, stave_history::UndoScope::Any)?;
+    let action = history.undo(actor, stave_history::UndoScope::Any)?;
     let caught_up = catch_up_with(&mut history, unsaved)?;
-    Ok(Undone { what, caught_up })
+    Ok(Undone {
+        what: UndoneChange::of(&action),
+        caught_up,
+    })
+}
+
+/// A change Undo undid, by kind, with the words its revision carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UndoneChange {
+    /// A save, with its message ("Saved shelf.stave").
+    Save(String),
+    /// Applying a suggestion, with its title.
+    Applied(String),
+    /// Discarding a suggestion (which is back), with its title.
+    Discarded(String),
+    /// Making a suggestion (which is gone), with its title.
+    Suggested(String),
+    /// A change the versions describe in no way the window knows.
+    Other,
+}
+
+impl UndoneChange {
+    /// The kind of change from the versions' own description of it ("save:
+    /// First cut", "apply suggestion: Widen the dresser").
+    fn of(action: &str) -> UndoneChange {
+        type Kind = fn(String) -> UndoneChange;
+        let kinds: [(&str, Kind); 4] = [
+            ("save: ", UndoneChange::Save),
+            ("apply suggestion: ", UndoneChange::Applied),
+            ("discard suggestion: ", UndoneChange::Discarded),
+            ("suggest: ", UndoneChange::Suggested),
+        ];
+        kinds
+            .into_iter()
+            .find_map(|(prefix, kind)| {
+                action
+                    .strip_prefix(prefix)
+                    .map(|words| kind(words.to_owned()))
+            })
+            .unwrap_or(UndoneChange::Other)
+    }
+
+    /// What the window says after undoing it, in plain words.
+    pub fn said(&self) -> String {
+        match self {
+            UndoneChange::Save(message) => fill_in(&tr("Undid “{change}”"), &[("change", message)]),
+            UndoneChange::Applied(title) => {
+                fill_in(&tr("Undid applying “{title}”"), &[("title", title)])
+            }
+            UndoneChange::Discarded(title) => fill_in(
+                &tr("Brought back the suggestion “{title}”"),
+                &[("title", title)],
+            ),
+            UndoneChange::Suggested(title) => fill_in(
+                &tr("Took back the suggestion “{title}”"),
+                &[("title", title)],
+            ),
+            UndoneChange::Other => tr("Undid the last change"),
+        }
+    }
 }
 
 /// How replaying a suggestion's patches went.
@@ -539,9 +657,11 @@ enum Replayed {
     /// Every patch fit and the design has no errors: the whole project
     /// after them.
     Clean(ProjectFiles),
-    /// A patch no longer applies, or causes errors: why.
-    NotApplied(String),
-    /// Every patch fit, but the design still has errors: which.
+    /// A patch no longer fits: something it changes isn't in the project
+    /// as it is now (renamed, removed, or added meanwhile).
+    DoesNotFit,
+    /// A patch can't be read, causes errors, or the design has errors
+    /// after them: why.
     Errors(String),
 }
 
@@ -562,6 +682,31 @@ fn with_header(text: &str) -> String {
     }
 }
 
+/// A suggestion's patches as one patch file, for showing it as a ghost:
+/// one format line, then each patch with its own format line (which an
+/// AI's patch may or may not have) left out.
+pub fn shown_patch(patches: &[String]) -> String {
+    let mut text = format!("stave {}\n", stave_lang::FORMAT_VERSION);
+    for patch in patches {
+        let headed = with_header(patch);
+        let mut lines = headed.lines();
+        // `with_header` makes sure the first line that isn't blank or a
+        // comment is the format line: everything before it, and it, goes.
+        for line in lines.by_ref() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with("//") {
+                break;
+            }
+        }
+        text.push('\n');
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text
+}
+
 /// Replays `patches` in order on `files` (the project in `folder`), on a
 /// scratch copy in memory: nothing is written.
 fn replay(
@@ -569,12 +714,7 @@ fn replay(
     files: &ProjectFiles,
     patches: &[String],
 ) -> Result<Replayed, VersionsError> {
-    let mut memory = MemoryFiles::new();
-    for (relative, contents) in files.iter() {
-        if let Ok(text) = std::str::from_utf8(contents) {
-            memory.insert(folder.join(relative.as_path()), text);
-        }
-    }
+    let memory = in_memory(folder, files);
     let mut base =
         EditBase::new(folder, &memory).map_err(|source| VersionsError::Load { source })?;
     let cancel = AtomicBool::new(false);
@@ -583,7 +723,7 @@ fn replay(
         let text = with_header(patch);
         let mut sources = SourceMap::new();
         let Ok(file) = sources.add(PATCH_NAME, text.as_str()) else {
-            return Ok(Replayed::NotApplied(tr("the patch couldn't be read")));
+            return Ok(Replayed::Errors(tr("the patch couldn't be read")));
         };
         for one in one_patch_each(file, &parse_patch_file(file, &text)) {
             let tried = match base.try_patch(PATCH_NAME, &one, &cancel) {
@@ -592,14 +732,21 @@ fn replay(
                     return Err(VersionsError::Load { source });
                 }
                 Err(crate::scratch::TryError::Cancelled(_)) => {
-                    return Ok(Replayed::NotApplied(tr("checking it was stopped")));
+                    return Ok(Replayed::Errors(tr("checking it was stopped")));
                 }
             };
             match tried.verdict() {
                 Verdict::Fits(_) => {}
                 Verdict::Refused(_) | Verdict::Checking => {
                     let shown = tried.shown();
-                    return Ok(Replayed::NotApplied(
+                    // Not applied at all, for a reason other than its own
+                    // syntax: what it names isn't there any more.
+                    if tried.opened().is_none()
+                        && !shown.iter().any(|problem| problem.code == Code::Syntax)
+                    {
+                        return Ok(Replayed::DoesNotFit);
+                    }
+                    return Ok(Replayed::Errors(
                         render_diagnostics(tried.sources(), &shown)
                             .trim_end()
                             .to_owned(),
@@ -616,27 +763,117 @@ fn replay(
             // It fits, so the base always moves; were it not to, the
             // patch didn't apply.
             if base.advance(tried).is_err() {
-                return Ok(Replayed::NotApplied(tr(
+                return Ok(Replayed::Errors(tr(
                     "the edit was refused, so nothing was written",
                 )));
             }
         }
     }
-    let opened = base.opened();
+    Ok(match errors_of(base.opened()) {
+        None => Replayed::Clean(merged),
+        Some(why) => Replayed::Errors(why),
+    })
+}
+
+/// `files` (the project in `folder`) as files in memory, for a scratch
+/// copy; files that aren't text are left out, as the design never reads
+/// them.
+fn in_memory(folder: &Path, files: &ProjectFiles) -> MemoryFiles {
+    let mut memory = MemoryFiles::new();
+    for (relative, contents) in files.iter() {
+        if let Ok(text) = std::str::from_utf8(contents) {
+            memory.insert(folder.join(relative.as_path()), text);
+        }
+    }
+    memory
+}
+
+/// The errors of `files` (the project in `folder`) as a design, rendered;
+/// `None` when it has none.
+fn errors_in(folder: &Path, files: &ProjectFiles) -> Result<Option<String>, VersionsError> {
+    let memory = in_memory(folder, files);
+    let base = EditBase::new(folder, &memory).map_err(|source| VersionsError::Load { source })?;
+    Ok(errors_of(base.opened()))
+}
+
+/// The errors of an opened design, rendered; `None` when it has none.
+fn errors_of(opened: &crate::Opened) -> Option<String> {
     let errors: Vec<_> = opened
         .diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.severity == Severity::Error)
         .cloned()
         .collect();
-    if errors.is_empty() {
-        Ok(Replayed::Clean(merged))
-    } else {
-        Ok(Replayed::Errors(
-            render_diagnostics(&opened.sources, &errors)
-                .trim_end()
-                .to_owned(),
-        ))
+    (!errors.is_empty()).then(|| {
+        render_diagnostics(&opened.sources, &errors)
+            .trim_end()
+            .to_owned()
+    })
+}
+
+/// A job for a window's versions, run on its [`Worker`].
+type Job = Box<dyn FnOnce() + Send>;
+
+/// Runs a window's versions jobs (saving, catching up, applying,
+/// discarding, undoing) one at a time, in the order they were given, on
+/// one background thread.
+///
+/// They must never overlap: a save reads the folder and records it, and a
+/// catch-up moves the window in step with main and then writes main's
+/// changes into the folder. A save that read the folder before a catch-up
+/// wrote it, and recorded after, would record the old files on top of
+/// main and quietly undo the change it caught up with.
+///
+/// The thread starts with the first job and ends once the worker is
+/// dropped and the jobs given have run.
+#[derive(Default)]
+pub struct Worker {
+    sender: std::sync::OnceLock<mpsc::Sender<Job>>,
+}
+
+impl std::fmt::Debug for Worker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Worker").finish_non_exhaustive()
+    }
+}
+
+/// The worker's thread couldn't be started, or has stopped: the job
+/// didn't run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{}", tr("the work on the project's versions stopped"))]
+pub struct WorkerStopped;
+
+impl Worker {
+    /// A worker; its thread starts with the first job.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Runs `job` after every job given before it.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkerStopped`] when the thread can't be started or has stopped.
+    pub fn run(&self, job: impl FnOnce() + Send + 'static) -> Result<(), WorkerStopped> {
+        let sender = match self.sender.get() {
+            Some(sender) => sender,
+            None => {
+                let (sender, receiver) = mpsc::channel::<Job>();
+                std::thread::Builder::new()
+                    .name("stave-versions-work".to_owned())
+                    .spawn(move || {
+                        for job in receiver {
+                            // A job that panics ends alone (whoever waits
+                            // on it hears nothing back); the ones after it
+                            // still run.
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                        }
+                    })
+                    .map_err(|_| WorkerStopped)?;
+                self.sender.get_or_init(|| sender)
+            }
+        };
+        sender.send(Box::new(job)).map_err(|_| WorkerStopped)
     }
 }
 
@@ -708,6 +945,102 @@ mod tests {
             ),
             "Saved 2 files"
         );
+        // A file the folder doesn't hold is named by its file name, never
+        // its full path.
+        assert_eq!(
+            save_message(folder, &[PathBuf::from("/elsewhere/home/shelf.stave")]),
+            "Saved shelf.stave"
+        );
+    }
+
+    #[test]
+    fn a_save_through_a_linked_folder_is_named_inside_it() {
+        let real = tempfile::tempdir().expect("temporary folder");
+        let links = tempfile::tempdir().expect("temporary folder");
+        std::fs::write(real.path().join("shelf.stave"), "").expect("write");
+        let linked = links.path().join("project");
+        std::os::unix::fs::symlink(real.path(), &linked).expect("link");
+        // The saved path through the link, the folder without it.
+        assert_eq!(
+            save_message(real.path(), &[linked.join("shelf.stave")]),
+            "Saved shelf.stave"
+        );
+        assert_eq!(
+            save_message(&linked, &[real.path().join("shelf.stave")]),
+            "Saved shelf.stave"
+        );
+    }
+
+    #[test]
+    fn a_suggestion_is_shown_as_one_patch_file() {
+        let shown = shown_patch(&[
+            "patch \"One\" {\n  set a = 1mm\n}\n".to_owned(),
+            "stave 1\n\npatch \"Two\" {\n  set b = 2mm\n}\n".to_owned(),
+            "// by an AI\nstave 1\npatch \"Three\" {\n  set c = 3mm\n}\n".to_owned(),
+        ]);
+        assert_eq!(shown.matches("stave ").count(), 1, "{shown}");
+        assert!(shown.starts_with("stave "), "{shown}");
+        for title in ["One", "Two", "Three"] {
+            assert!(shown.contains(&format!("patch \"{title}\"")), "{shown}");
+        }
+        let mut sources = SourceMap::new();
+        let file = sources.add(PATCH_NAME, shown.as_str()).expect("added");
+        let parsed = parse_patch_file(file, &shown);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert!(parsed.ast.is_some());
+        assert_eq!(one_patch_each(file, &parsed).len(), 3);
+    }
+
+    #[test]
+    fn what_undo_undid_is_said_plainly() {
+        assert_eq!(
+            UndoneChange::of("save: Saved shelf.stave"),
+            UndoneChange::Save("Saved shelf.stave".to_owned())
+        );
+        assert_eq!(
+            UndoneChange::of("apply suggestion: Widen the drawer").said(),
+            "Undid applying “Widen the drawer”"
+        );
+        assert_eq!(
+            UndoneChange::of("discard suggestion: Widen").said(),
+            "Brought back the suggestion “Widen”"
+        );
+        assert_eq!(UndoneChange::of("something new"), UndoneChange::Other);
+    }
+
+    #[test]
+    fn the_worker_runs_jobs_one_at_a_time_in_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        let worker = Worker::new();
+        let running = Arc::new(AtomicUsize::new(0));
+        let overlapped = Arc::new(AtomicBool::new(false));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (done, finished) = mpsc::channel();
+        for index in 0..8 {
+            let running = Arc::clone(&running);
+            let overlapped = Arc::clone(&overlapped);
+            let order = Arc::clone(&order);
+            let done = done.clone();
+            worker
+                .run(move || {
+                    if running.fetch_add(1, Ordering::SeqCst) != 0 {
+                        overlapped.store(true, Ordering::SeqCst);
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                    order.lock().expect("lock").push(index);
+                    running.fetch_sub(1, Ordering::SeqCst);
+                    done.send(()).expect("send");
+                })
+                .expect("run");
+        }
+        for _ in 0..8 {
+            finished
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a job finished");
+        }
+        assert!(!overlapped.load(Ordering::SeqCst));
+        assert_eq!(*order.lock().expect("lock"), (0..8).collect::<Vec<_>>());
     }
 
     #[test]

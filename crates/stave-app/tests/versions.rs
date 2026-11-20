@@ -383,7 +383,11 @@ fn window_undo_reverts_the_last_change_by_anyone() {
     assert_eq!(read(folder.path(), "b.txt"), "two, from the agent\n");
 
     let undone = versions::undo(folder.path(), &user(), &BTreeSet::new()).expect("undo");
-    assert!(undone.what.contains("A change"), "{}", undone.what);
+    assert_eq!(
+        undone.what,
+        versions::UndoneChange::Applied("A change".to_owned())
+    );
+    assert_eq!(undone.what.said(), "Undid applying “A change”");
     assert_eq!(read(folder.path(), "b.txt"), "two\n");
 }
 
@@ -396,4 +400,150 @@ fn discarding_removes_the_suggestion() {
     let shown = versions::read(folder.path(), 10).expect("read");
     assert!(shown.suggestions.is_empty());
     assert_eq!(read(folder.path(), "a.txt"), "one\n");
+}
+
+#[test]
+fn a_suggestion_whose_patch_no_longer_fits_is_applied_once_moved_cleanly() {
+    let folder = box_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    let original = read(folder.path(), "box.stave");
+    // The suggestion changes the right end's width line.
+    let (head, tail) = original.split_at(original.find("part end_r").expect("end_r"));
+    let wider = format!(
+        "{head}{}",
+        tail.replacen("width:  box_height", "width:  box_height + 0mm", 1)
+    );
+    let id = suggest_patch(
+        folder.path(),
+        "patch \"Same width\" {\n  set end_r.width = box_height + 0mm\n}\n",
+        &[("box.stave", &wider)],
+    );
+    // Meanwhile the person renamed the part the patch names, on other
+    // lines, and saved: the patch no longer fits, its files still do.
+    let renamed = original.replace("end_r", "end_right");
+    write(folder.path(), "box.stave", &renamed);
+    versions::save(
+        folder.path(),
+        &user(),
+        &[folder.path().join("box.stave")],
+        &BTreeSet::new(),
+    )
+    .expect("save");
+
+    let applied = versions::apply(folder.path(), &id, &user()).expect("apply");
+    assert_eq!(applied.title, "Make the box longer");
+    let history = History::open(folder.path()).expect("open");
+    let main = text(
+        &history
+            .files_at(&history.main().expect("main"))
+            .expect("files"),
+        "box.stave",
+    );
+    assert!(main.contains("part end_right"), "{main}");
+    assert!(!main.contains("end_r."), "{main}");
+    assert!(main.contains("width:  box_height + 0mm"), "{main}");
+    assert!(history.suggestions().expect("suggestions").is_empty());
+}
+
+#[test]
+fn a_patch_that_fits_but_breaks_the_design_leaves_the_suggestion_alone() {
+    let folder = box_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    let id = suggest_patch(
+        folder.path(),
+        "patch \"Too short\" {\n  set box_height = 60mm\n}\n",
+        &[],
+    );
+    // Main moves, so a rebase would rewrite the suggestion.
+    let original = read(folder.path(), "box.stave");
+    write(
+        folder.path(),
+        "box.stave",
+        &original.replace("box_depth  = 200mm", "box_depth  = 210mm"),
+    );
+    versions::save(
+        folder.path(),
+        &user(),
+        &[folder.path().join("box.stave")],
+        &BTreeSet::new(),
+    )
+    .expect("save");
+    let before = History::open(folder.path())
+        .expect("open")
+        .suggestions()
+        .expect("suggestions");
+
+    let refused = versions::apply(folder.path(), &id, &user());
+    assert!(
+        matches!(refused, Err(VersionsError::Refused { .. })),
+        "{refused:?}"
+    );
+    let after = History::open(folder.path())
+        .expect("open")
+        .suggestions()
+        .expect("suggestions");
+    assert_eq!(before, after, "the suggestion wasn't moved");
+}
+
+#[test]
+fn catching_up_never_writes_through_a_link() {
+    let folder = two_file_project();
+    let elsewhere = tempfile::tempdir().expect("temporary folder");
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    agent_changes(folder.path(), "parts/x.txt", "from the agent\n");
+    std::os::unix::fs::symlink(elsewhere.path(), folder.path().join("parts")).expect("link");
+
+    let caught_up = versions::catch_up(folder.path(), &BTreeSet::new());
+    assert!(
+        matches!(caught_up, Err(VersionsError::Link { .. })),
+        "{caught_up:?}"
+    );
+    assert!(
+        !elsewhere.path().join("x.txt").exists(),
+        "nothing written outside the project"
+    );
+}
+
+#[test]
+fn a_save_after_catching_up_keeps_the_agent_s_change() {
+    // The window's jobs run one at a time, so a save always reads the
+    // folder after a catch-up wrote it: the agent's change survives.
+    let folder = two_file_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    agent_changes(folder.path(), "b.txt", "two, from the agent\n");
+    let worker = versions::Worker::new();
+    let (done, finished) = std::sync::mpsc::channel();
+    let working: PathBuf = folder.path().to_path_buf();
+    let catching = done.clone();
+    worker
+        .run(move || {
+            let result = versions::catch_up(&working, &BTreeSet::new());
+            catching.send(result.map(|_| ())).expect("send");
+        })
+        .expect("run");
+    let working: PathBuf = folder.path().to_path_buf();
+    worker
+        .run(move || {
+            write(&working, "a.txt", "one, from the person\n");
+            let saved = versions::save(
+                &working,
+                &user(),
+                &[working.join("a.txt")],
+                &BTreeSet::new(),
+            );
+            done.send(saved.map(|_| ())).expect("send");
+        })
+        .expect("run");
+    for _ in 0..2 {
+        finished
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("a job finished")
+            .expect("it worked");
+    }
+    let history = History::open(folder.path()).expect("open");
+    let main = history
+        .files_at(&history.main().expect("main"))
+        .expect("files");
+    assert_eq!(text(&main, "b.txt"), "two, from the agent\n");
+    assert_eq!(text(&main, "a.txt"), "one, from the person\n");
 }

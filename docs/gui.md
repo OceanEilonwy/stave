@@ -838,24 +838,36 @@ window's line is the folder.
   (`stave_app::versions::when_to_catch_up`). Where both changed the same
   lines, the file is written with both kept between conflict marker lines
   (`docs/grammar.md`, "Conflicts"), and a toast says so. Opening a project
-  catches it up too.
+  catches it up too, and so does the window coming to the front while its
+  versions aren't watched yet (an AI app turned them on meanwhile), after
+  which they are. Catching up never writes or removes a file through a
+  symbolic link, which could lead out of the project: it then writes
+  nothing and says which link stood in the way. The window's work on its
+  versions (saving, catching up, Apply, Discard, Undo) runs one job at a
+  time, in order (`stave_app::versions::Worker`), so a save never records
+  files read before a catch-up wrote main's changes.
 - **The Versions panel** (`VersionsPanel`, at the bottom beside Output on
   the compact board): "Suggestions" with Undo beside the heading, each
   suggestion its title over "From Claude Desktop" and three buttons:
-  **Show** tries its patches on the design and shows the result as a
-  ghost over the model, a change in progress like any other (nothing is
-  written unless it is added); **Apply** tries its patches again on the
-  main line as it is now and, when every one fits and the design checks
-  with no errors, makes the result the main line's latest version, by the
-  person (refused otherwise, saying why; when a patch no longer fits, the
-  suggestion is moved onto the main line, and one whose changes then
-  clash says so and can't be applied until they are resolved); **Discard**
+  **Show** tries its patches, as one patch file with one format line
+  (`stave_app::versions::shown_patch`), on the design and shows the
+  result as a ghost over the model, a change in progress like any other
+  (nothing is written unless it is added); **Apply** tries its patches
+  again on the main line as it is now and, when every one fits and the
+  design checks with no errors, makes the result the main line's latest
+  version, by the person. A patch that fits but leaves errors is refused,
+  saying why, and the suggestion is left as it is. When something a patch
+  names is no longer there, the suggestion's own files are moved onto the
+  main line: if that is clean and the design then checks with no errors,
+  they are applied; one whose changes clash says so and can't be applied
+  until they are resolved. **Discard**
   throws it away. Then "Versions": each its message over who made it and
   when ("Henry, 2026-11-20 10:00"), the latest 50. **Undo** undoes the
   last change to the project by anyone, the person or an AI app (an AI
   app's own undo reaches only its own changes), and the folder catches
-  up. Each ends in a toast ("Applied “Widen the drawer”", "Undid “save:
-  Saved shelf.stave”") or says why not.
+  up. Each ends in a toast in plain words ("Applied “Widen the drawer”",
+  "Undid “Saved shelf.stave”", "Undid applying “Widen the drawer”",
+  "Brought back the suggestion “Widen the drawer”") or says why not.
 
 ## Focus mode
 
