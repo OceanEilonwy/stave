@@ -13,6 +13,8 @@
 //! A lost device is reported ([`RenderError::DeviceLost`]), not mended:
 //! the caller opens a new renderer and uploads its scene again.
 
+#![forbid(unsafe_code)]
+
 mod convert;
 mod meshes;
 mod present;

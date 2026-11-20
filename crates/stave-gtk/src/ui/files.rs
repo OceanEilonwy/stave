@@ -697,7 +697,12 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             FilesInput::Format => self.format(),
             FilesInput::SaveAll { then } => {
                 let dirty: Vec<Document> = self.buffers.dirty().cloned().collect();
-                let result = self.buffers.save_all();
+                let result = self.buffers.save_all(&stave_app::versions::merge_for_save);
+                let result = result.map(|merged| {
+                    for (document, conflicted) in merged {
+                        self.show_merged(&document, conflicted);
+                    }
+                });
                 self.refresh_markers();
                 // Every file saved, even when a later one failed.
                 let saved: Vec<PathBuf> = dirty
@@ -1007,11 +1012,51 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
             ));
             return;
         }
-        let result = self.buffers.save(&document);
+        let result = self
+            .buffers
+            .save(&document, &stave_app::versions::merge_for_save);
         self.refresh_markers();
         match result {
-            Ok(()) => self.tell_saved(&document),
+            Ok(saved) => {
+                if let stave_ide::Saved::Merged { conflicted } = saved {
+                    self.show_merged(&document, conflicted);
+                }
+                self.tell_saved(&document);
+            }
             Err(error) => self.save_failed(&error),
+        }
+    }
+
+    /// A save merged unsaved changes with a change made on disk meanwhile:
+    /// the editor shows what was written, and says so.
+    fn show_merged(&mut self, document: &Document, conflicted: bool) {
+        self.show_buffer_text(document);
+        let said = if conflicted {
+            tr(
+                "{file} changed on disk while you edited it; both changes are saved, and where they touch the same lines both are kept, between marker lines",
+            )
+        } else {
+            tr("{file} changed on disk while you edited it; both changes are saved")
+        };
+        self.notice(fill_in(&said, &[("file", &document.file_name())]));
+    }
+
+    /// Puts a document's text, as the buffers hold it, into its tab,
+    /// keeping the cursor on its line.
+    fn show_buffer_text(&self, document: &Document) {
+        let tab = self.tabs.iter().find(|tab| &tab.document == document);
+        let text = self.buffers.text(document);
+        if let (Some(tab), Some(text)) = (tab, text) {
+            let buffer = &tab.buffer;
+            let line = buffer.iter_at_mark(&buffer.get_insert()).line();
+            buffer.block_signal(&tab.cursor_handler);
+            buffer.set_text(text);
+            if let Some(iter) = buffer.iter_at_line(line) {
+                buffer.place_cursor(&iter);
+            }
+            buffer.unblock_signal(&tab.cursor_handler);
+            // The file's own text: nothing unsaved.
+            buffer.set_modified(false);
         }
     }
 
@@ -1057,10 +1102,15 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
 
     /// Tries a failed save again; a second failure says so again.
     fn save_again(&mut self, document: &Document) {
-        let result = self.buffers.save(document);
+        let result = self
+            .buffers
+            .save(document, &stave_app::versions::merge_for_save);
         self.refresh_markers();
         match result {
-            Ok(()) => {
+            Ok(saved) => {
+                if let stave_ide::Saved::Merged { conflicted } = saved {
+                    self.show_merged(document, conflicted);
+                }
                 self.tell_saved(document);
                 self.notice(fill_in(
                     &tr("Saved {file}"),
@@ -2061,25 +2111,12 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         for document in documents {
             match self.buffers.reload(&document) {
                 Ok(stave_ide::Reload::Reloaded) => {
-                    let tab = self.tabs.iter().find(|tab| tab.document == document);
-                    let text = self.buffers.text(&document);
-                    if let (Some(tab), Some(text)) = (tab, text) {
-                        let buffer = &tab.buffer;
-                        let line = buffer.iter_at_mark(&buffer.get_insert()).line();
-                        buffer.block_signal(&tab.cursor_handler);
-                        buffer.set_text(text);
-                        if let Some(iter) = buffer.iter_at_line(line) {
-                            buffer.place_cursor(&iter);
-                        }
-                        buffer.unblock_signal(&tab.cursor_handler);
-                        // The file's own text: nothing unsaved.
-                        buffer.set_modified(false);
-                    }
+                    self.show_buffer_text(&document);
                     changed = true;
                 }
                 Ok(stave_ide::Reload::KeptChanges) => {
                     self.notice(fill_in(
-                        &tr("{file} changed on disk; your unsaved changes are kept"),
+                        &tr("{file} changed on disk; your unsaved changes are kept, and saving merges the two"),
                         &[("file", &document.file_name())],
                     ));
                 }

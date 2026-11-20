@@ -369,6 +369,11 @@ impl StaveServer {
                         // The ghost is drawn over the project as the
                         // suggestion found it, so the person's later
                         // edits aren't shown as the suggestion undoing them.
+                        // Only the files outside the folder (libraries
+                        // beside it, keyed by full path) stay from the
+                        // folder as it is now; everything inside it is
+                        // the base's, so a file added since isn't shown.
+                        files.retain(|key, _| Path::new(key).is_absolute());
                         files.extend(text_files(base));
                         fields.insert("suggestion_over".to_owned(), json!("base"));
                         fields.insert("suggestion_base".to_owned(), json!(revision.as_str()));

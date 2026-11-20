@@ -175,6 +175,9 @@ fn reason(host: Host, error: &LinkError) -> String {
         LinkError::NotUtf8(_) => tr(
             "Stave is installed in a folder whose name can't be written into the app's settings.",
         ),
+        LinkError::NotAbsolute(_) => {
+            tr("Stave couldn't find the full path to its own program to give the app.")
+        }
         LinkError::Read { path, .. } => fill_in(
             &tr("Its settings file couldn't be read ({path})."),
             &[("path", &path.display())],

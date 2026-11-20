@@ -95,6 +95,10 @@ pub enum LinkError {
     /// A path that the settings file can't hold: not UTF-8.
     #[error("the path '{}' isn't UTF-8, so it can't be written into a settings file", .0.display())]
     NotUtf8(PathBuf),
+    /// The `stave` to set up isn't a full path, so the app would run
+    /// whatever `stave` its own working folder leads to.
+    #[error("the path '{}' isn't a full path, so it can't be written into a settings file", .0.display())]
+    NotAbsolute(PathBuf),
     /// A settings file couldn't be read.
     #[error("can't read '{}': {source}", path.display())]
     Read {
@@ -227,10 +231,14 @@ impl Places {
     }
 
     /// Where a command is found: the first executable file of that name
-    /// in the search path.
+    /// in the search path. Folders on the path that aren't absolute (`.`,
+    /// `bin`, an empty entry) are skipped: what they find depends on the
+    /// folder a program happens to run in, so another app could later run
+    /// a different program than the one found.
     pub fn find_program(&self, name: &str) -> Option<PathBuf> {
         self.search_path
             .iter()
+            .filter(|folder| folder.is_absolute())
             .map(|folder| folder.join(name))
             .find(|candidate| {
                 candidate.metadata().is_ok_and(|metadata| {
@@ -279,6 +287,12 @@ pub fn install_in(
     hosts: &[Host],
     stave: &Path,
 ) -> Vec<Result<Installed, LinkError>> {
+    if !stave.is_absolute() {
+        return hosts
+            .iter()
+            .map(|_| Err(LinkError::NotAbsolute(stave.to_path_buf())))
+            .collect();
+    }
     hosts
         .iter()
         .map(|host| match host {

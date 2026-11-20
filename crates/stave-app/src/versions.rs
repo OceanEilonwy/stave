@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use stave_lang::{Code, Severity, SourceMap, parse_patch_file, render_diagnostics};
@@ -32,7 +32,7 @@ use crate::scratch::{EditBase, one_patch_each};
 
 pub use stave_history::{
     Actor, ActorKind, CatchUp, History, HistoryError, PathError, ProjectFiles, RelativePath,
-    RevisionId, Suggestion, SuggestionId, Version, VersionsStatus,
+    RevisionId, Suggestion, SuggestionId, Version, VersionsStatus, Written,
 };
 
 /// The id the person's revisions carry: there is one window per person.
@@ -54,8 +54,9 @@ pub fn user_actor(name: &str) -> Actor {
 /// Why something the window asked of the versions didn't happen.
 #[derive(Debug, thiserror::Error)]
 pub enum VersionsError {
-    /// The revision system said no, or couldn't read or write.
-    #[error(transparent)]
+    /// The revision system said no, or couldn't read or write. Worded
+    /// here, for the window.
+    #[error("{}", history_words(.0))]
     History(#[from] HistoryError),
     /// A file in the folder couldn't be written or removed.
     #[error("{}", fill_in(&tr("couldn't write {file}: {reason}"), &[("file", &path.display()), ("reason", source)]))]
@@ -106,6 +107,62 @@ pub enum VersionsError {
         /// The id asked for.
         id: SuggestionId,
     },
+}
+
+/// What the revision system said, in the window's words: translated, and
+/// never naming the tools underneath. What the store itself said stays on
+/// the error's source, out of the toast.
+fn history_words(error: &HistoryError) -> String {
+    match error {
+        HistoryError::Nested { repository_root } => fill_in(
+            &tr(
+                "this project is inside another project's versions (at {folder}); versions can't be turned on here, but a copy of the project in a folder of its own can have them",
+            ),
+            &[("folder", &repository_root.display())],
+        ),
+        HistoryError::Off => tr("versions are off for this project; turn them on first"),
+        HistoryError::Io { path, source } => fill_in(
+            &tr("couldn't use {file}: {reason}"),
+            &[("file", &path.display()), ("reason", source)],
+        ),
+        HistoryError::Path(_) => tr("a file's name isn't a name inside the project"),
+        HistoryError::Store(_) => tr("the project's versions couldn't be read or written"),
+        HistoryError::UnknownRevision(id) => {
+            fill_in(&tr("there is no version {id}"), &[("id", id)])
+        }
+        HistoryError::UnknownSuggestion(id) => fill_in(
+            &tr("there is no suggestion {id}; it may have been applied or discarded already"),
+            &[("id", id)],
+        ),
+        HistoryError::SuggestionConflicted { files, .. } => fill_in(
+            &tr("the suggestion has clashing changes in {files}; resolve them before applying it"),
+            &[("files", &list(files))],
+        ),
+        HistoryError::MainMoved { files } => fill_in(
+            &tr(
+                "the project changed while this was being prepared, and the changes clash in {files}; try again",
+            ),
+            &[("files", &list(files))],
+        ),
+        HistoryError::MainMovedSince { .. } => {
+            tr("the project changed while this was being checked; try again")
+        }
+        HistoryError::SuggestionMoved { .. } => {
+            tr("the suggestion changed while this was being prepared; try again")
+        }
+        HistoryError::SettingsProtected { path } => fill_in(
+            &tr("a suggestion can't change {file}: the project's settings are changed only by you"),
+            &[("file", path)],
+        ),
+        HistoryError::BranchMoved { .. } => {
+            tr("the project's folder changed while this was being recorded; try again")
+        }
+        HistoryError::NothingToUndo => tr("there is nothing to undo"),
+        HistoryError::UndoBlocked { undone, later } => fill_in(
+            &tr("can't undo “{undone}”: {later} came after it and builds on it"),
+            &[("undone", undone), ("later", later)],
+        ),
+    }
 }
 
 fn list(files: &[RelativePath]) -> String {
@@ -263,73 +320,179 @@ pub fn unsaved_inside(folder: &Path, unsaved: &BTreeSet<PathBuf>) -> BTreeSet<Re
         .collect()
 }
 
-/// Catches the window up with main when no unsaved edit stands in the way
-/// (see [`when_to_catch_up`]), writing main's changes into the folder.
+/// The files the window holds unsaved, as a catch-up reads them: once to
+/// decide, under the versions' lock, and again just before it writes.
+pub trait UnsavedFiles {
+    /// The unsaved files inside `folder`, as they are now.
+    fn inside(&self, folder: &Path) -> BTreeSet<RelativePath>;
+}
+
+impl UnsavedFiles for BTreeSet<RelativePath> {
+    fn inside(&self, _folder: &Path) -> BTreeSet<RelativePath> {
+        self.clone()
+    }
+}
+
+/// The files the window holds unsaved, shared between the window, which
+/// keeps it up to date as people type and save, and the work done off its
+/// main thread, which reads it when it is about to write. A copy taken
+/// when the work was queued could be stale by the time it runs.
+#[derive(Debug, Clone, Default)]
+pub struct Unsaved(Arc<Mutex<BTreeSet<PathBuf>>>);
+
+impl Unsaved {
+    /// None yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The window now holds `files` unsaved (full paths).
+    pub fn set(&self, files: BTreeSet<PathBuf>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = files;
+    }
+
+    /// The full paths held unsaved now.
+    pub fn files(&self) -> BTreeSet<PathBuf> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl UnsavedFiles for Unsaved {
+    fn inside(&self, folder: &Path) -> BTreeSet<RelativePath> {
+        let files = self.files();
+        let mut inside = unsaved_inside(folder, &files);
+        // The window may name the folder through a link; the versions
+        // name it free of links.
+        inside.extend(unsaved_inside(&canonical(folder), &files));
+        inside
+    }
+}
+
+/// Catches the window up with main when no unsaved edit stands in the way,
+/// writing main's changes into the folder. The decision and the writing
+/// happen under the versions' lock, so main can't move in between; a file
+/// that changed on disk, or became unsaved, since the folder was read is
+/// never written over (the catch-up waits instead).
 ///
 /// # Errors
 ///
 /// [`VersionsError::History`] when the versions can't be read or written;
 /// [`VersionsError::Io`] when a file can't be written.
-pub fn catch_up(
-    folder: &Path,
-    unsaved: &BTreeSet<RelativePath>,
-) -> Result<CaughtUp, VersionsError> {
+pub fn catch_up(folder: &Path, unsaved: &impl UnsavedFiles) -> Result<CaughtUp, VersionsError> {
     let mut history = History::open(folder)?;
-    catch_up_with(&mut history, unsaved)
+    catch_up_with(&mut history, folder, unsaved)
 }
 
 fn catch_up_with(
     history: &mut History,
-    unsaved: &BTreeSet<RelativePath>,
+    given: &Path,
+    unsaved: &impl UnsavedFiles,
 ) -> Result<CaughtUp, VersionsError> {
+    let folder = history.folder().to_path_buf();
     let folder_files = history.read_folder()?;
-    let main_files = history.files_at(&history.main()?)?;
-    if let CatchUpWhen::AtNextSave { waiting } =
-        when_to_catch_up(&main_files, &folder_files, unsaved)
-    {
-        return Ok(CaughtUp::Waiting { files: waiting });
-    }
-    match history.catch_up(&folder_files)? {
-        CatchUp::UpToDate => Ok(CaughtUp::UpToDate),
+    let now = unsaved.inside(given);
+    let caught_up = history.catch_up(&folder_files, &now, |decided| {
+        write_caught_up(&folder, given, &folder_files, unsaved, decided)
+    })?;
+    Ok(match caught_up {
+        CatchUp::UpToDate => CaughtUp::UpToDate,
+        CatchUp::Waiting { files } => CaughtUp::Waiting { files },
         CatchUp::Write {
             files,
             removed,
             conflicted,
         } => {
-            let folder = history.folder().to_path_buf();
-            // Every path is checked before anything is written, so a link
-            // leaves the folder as it was.
-            let mut writes = Vec::with_capacity(files.len());
-            for (relative, contents) in files.iter() {
-                writes.push((inside(&folder, relative)?, contents));
-            }
-            let mut removals = Vec::with_capacity(removed.len());
-            for relative in &removed {
-                removals.push(inside(&folder, relative)?);
-            }
-            let mut written = Vec::with_capacity(writes.len());
-            for (full, contents) in writes {
-                write_file(&full, contents)?;
-                written.push(full);
-            }
-            let mut gone = Vec::with_capacity(removals.len());
-            for full in removals {
-                match std::fs::remove_file(&full) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => return Err(VersionsError::Io { path: full, source }),
-                }
-                gone.push(full);
-            }
+            let mut written: Vec<PathBuf> = files
+                .paths()
+                .map(|relative| folder.join(relative.as_path()))
+                .collect();
+            let mut gone: Vec<PathBuf> = removed
+                .iter()
+                .map(|relative| folder.join(relative.as_path()))
+                .collect();
             written.sort();
             gone.sort();
-            Ok(CaughtUp::Wrote {
+            CaughtUp::Wrote {
                 written,
                 removed: gone,
                 conflicted,
-            })
+            }
+        }
+    })
+}
+
+/// Writes what a catch-up decided into `folder`, under the versions' lock.
+/// Every path is checked first, so a link leaves the folder as it was; and
+/// so is every file's contents, so a file saved (or made unsaved) since
+/// `folder_files` was read holds the whole catch-up back rather than being
+/// written over.
+fn write_caught_up(
+    folder: &Path,
+    given: &Path,
+    folder_files: &ProjectFiles,
+    unsaved: &impl UnsavedFiles,
+    decided: &CatchUp,
+) -> Result<Written, VersionsError> {
+    let CatchUp::Write { files, removed, .. } = decided else {
+        return Ok(Written::All);
+    };
+    let mut writes = Vec::with_capacity(files.len());
+    for (relative, contents) in files.iter() {
+        writes.push((relative, inside(folder, relative)?, contents));
+    }
+    let mut removals = Vec::with_capacity(removed.len());
+    for relative in removed {
+        removals.push((relative, inside(folder, relative)?));
+    }
+    let now = unsaved.inside(given);
+    let mut changed = Vec::new();
+    let targets = writes
+        .iter()
+        .map(|(relative, full, _)| (*relative, full))
+        .chain(removals.iter().map(|(relative, full)| (*relative, full)));
+    for (relative, full) in targets {
+        if now.contains(relative) {
+            changed.push(relative.clone());
+            continue;
+        }
+        // A file the folder doesn't show (one `.gitignore` excludes) was
+        // never read, so there is nothing to compare it with.
+        let Some(read) = folder_files.get(relative) else {
+            continue;
+        };
+        let on_disk = match std::fs::read(full) {
+            Ok(contents) => Some(contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(VersionsError::Io {
+                    path: full.clone(),
+                    source,
+                });
+            }
+        };
+        if on_disk.as_deref() != Some(read) {
+            changed.push(relative.clone());
         }
     }
+    if !changed.is_empty() {
+        changed.sort();
+        changed.dedup();
+        return Ok(Written::HeldBack { files: changed });
+    }
+    for (_, full, contents) in writes {
+        write_file(&full, contents)?;
+    }
+    for (_, full) in removals {
+        match std::fs::remove_file(&full) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(VersionsError::Io { path: full, source }),
+        }
+    }
+    Ok(Written::All)
 }
 
 /// `relative`'s full path in `folder`, or [`VersionsError::Link`] when it,
@@ -420,14 +583,14 @@ pub fn save(
     folder: &Path,
     actor: &Actor,
     saved: &[PathBuf],
-    unsaved: &BTreeSet<RelativePath>,
+    unsaved: &impl UnsavedFiles,
 ) -> Result<Saved, VersionsError> {
     let mut history = History::open(folder)?;
     let before = history.main()?;
     let files = history.read_folder()?;
     let message = save_message(folder, saved);
     let main = history.save(&files, actor, &message)?;
-    let caught_up = catch_up_with(&mut history, unsaved)?;
+    let caught_up = catch_up_with(&mut history, folder, unsaved)?;
     Ok(Saved {
         revision: (main != before).then_some(main),
         caught_up,
@@ -504,10 +667,30 @@ pub struct Applied {
 /// [`VersionsError::UnknownSuggestion`]; [`VersionsError::Refused`] when
 /// the result has errors; [`VersionsError::Clashes`] when the patch no
 /// longer fits and moving the suggestion left clashes;
-/// [`VersionsError::History`] when the versions say no (main moved and
-/// clashes, the suggestion still holds clashes).
+/// [`VersionsError::History`] when the versions say no (the suggestion
+/// still holds clashes, or main kept moving while it was checked).
 pub fn apply(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<Applied, VersionsError> {
     let mut history = History::open(folder)?;
+    let mut attempts = APPLY_ATTEMPTS;
+    loop {
+        attempts = attempts.saturating_sub(1);
+        match apply_once(&mut history, id, actor) {
+            // Main moved while the result was checked: check again on main
+            // as it is now.
+            Err(VersionsError::History(HistoryError::MainMovedSince { .. })) if attempts > 0 => {}
+            result => return result,
+        }
+    }
+}
+
+/// How many times applying reads main again when it moved meanwhile.
+const APPLY_ATTEMPTS: u32 = 3;
+
+fn apply_once(
+    history: &mut History,
+    id: &SuggestionId,
+    actor: &Actor,
+) -> Result<Applied, VersionsError> {
     let suggestion = history
         .suggestions()?
         .into_iter()
@@ -526,7 +709,7 @@ pub fn apply(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<Applied,
         // What a patch names is no longer there: the suggestion's own
         // files are moved onto main, and applied when that is clean.
         Replayed::DoesNotFit => {
-            let conflicted = history.rebase_suggestion(id)?;
+            let conflicted = history.rebase_suggestion(id, actor)?;
             if !conflicted.is_empty() {
                 return Err(VersionsError::Clashes {
                     title: suggestion.title,
@@ -538,7 +721,7 @@ pub fn apply(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<Applied,
                 .into_iter()
                 .find(|suggestion| &suggestion.id == id)
                 .ok_or_else(|| VersionsError::UnknownSuggestion { id: id.clone() })?;
-            let files = history.suggestion_files(id)?;
+            let files = history.files_at(&rebased.tip)?;
             if let Some(why) = errors_in(history.folder(), &files)? {
                 return Err(VersionsError::Refused {
                     title: suggestion.title,
@@ -553,6 +736,78 @@ pub fn apply(folder: &Path, id: &SuggestionId, actor: &Actor) -> Result<Applied,
         title: suggestion.title,
         revision,
     })
+}
+
+/// A suggestion's files, read to settle its clashes in the editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToResolve {
+    /// The suggestion.
+    pub id: SuggestionId,
+    /// Its title.
+    pub title: String,
+    /// The latest revision the files were read from: saving them back is
+    /// refused when the suggestion moved on since.
+    pub tip: RevisionId,
+    /// Its files; those with clashes hold conflict markers.
+    pub files: ProjectFiles,
+    /// The files with clashes.
+    pub conflicted: Vec<RelativePath>,
+}
+
+/// Reads suggestion `id`'s files to resolve them in the editor.
+///
+/// # Errors
+///
+/// [`VersionsError::UnknownSuggestion`]; [`VersionsError::History`] when
+/// the versions can't be read.
+pub fn to_resolve(folder: &Path, id: &SuggestionId) -> Result<ToResolve, VersionsError> {
+    let history = History::open(folder)?;
+    let suggestion = history
+        .suggestions()?
+        .into_iter()
+        .find(|suggestion| &suggestion.id == id)
+        .ok_or_else(|| VersionsError::UnknownSuggestion { id: id.clone() })?;
+    let files = history.files_at(&suggestion.tip)?;
+    Ok(ToResolve {
+        id: suggestion.id,
+        title: suggestion.title,
+        tip: suggestion.tip,
+        files,
+        conflicted: suggestion.conflicted,
+    })
+}
+
+/// Saves resolved files back to the suggestion they were read from (never
+/// to the folder), as `actor`; `resolved.files` hold the edited files.
+/// Returns the files still holding clashes, and the new latest revision.
+///
+/// # Errors
+///
+/// [`VersionsError::History`]: [`HistoryError::SuggestionMoved`] when the
+/// suggestion moved on since it was read, [`HistoryError::UnknownSuggestion`]
+/// when it is gone.
+pub fn save_resolved(
+    folder: &Path,
+    resolved: &ToResolve,
+    actor: &Actor,
+) -> Result<ToResolve, VersionsError> {
+    let mut history = History::open(folder)?;
+    history.write_suggestion_files(&resolved.id, &resolved.tip, &resolved.files, actor)?;
+    drop(history);
+    to_resolve(folder, &resolved.id)
+}
+
+/// Merges a file's text as the person changed it (`yours`, edited from
+/// `before`) with the text it has on disk now (changed meanwhile by
+/// someone else, from the same `before`), for saving: where both changed
+/// the same lines, both are kept between conflict markers. Returns the
+/// merged text and whether it holds markers.
+pub fn merge_for_save(before: &str, yours: &str, on_disk: &str) -> (String, bool) {
+    let merged = stave_history::merge_text(before.as_bytes(), yours.as_bytes(), on_disk.as_bytes());
+    (
+        String::from_utf8_lossy(&merged.contents).into_owned(),
+        merged.conflicted,
+    )
 }
 
 /// Discards a suggestion, as `actor`.
@@ -585,11 +840,11 @@ pub struct Undone {
 pub fn undo(
     folder: &Path,
     actor: &Actor,
-    unsaved: &BTreeSet<RelativePath>,
+    unsaved: &impl UnsavedFiles,
 ) -> Result<Undone, VersionsError> {
     let mut history = History::open(folder)?;
     let action = history.undo(actor, stave_history::UndoScope::Any)?;
-    let caught_up = catch_up_with(&mut history, unsaved)?;
+    let caught_up = catch_up_with(&mut history, folder, unsaved)?;
     Ok(Undone {
         what: UndoneChange::of(&action),
         caught_up,

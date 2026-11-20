@@ -76,7 +76,7 @@ fn agent_changes(folder: &Path, relative: &str, text: &str) {
     let files = history.files_at(&main).expect("files");
     let changed = with(&files, relative, text);
     let id = history
-        .suggest(&agent(), None, &changed, "a patch", "A change")
+        .suggest(&agent(), None, &main, &changed, "a patch", "A change")
         .expect("suggest");
     history
         .apply(&id, &agent(), &main, &changed)
@@ -302,7 +302,7 @@ fn suggest_patch(folder: &Path, patch: &str, after: &[(&str, &str)]) -> versions
         files = with(&files, relative, text);
     }
     history
-        .suggest(&agent(), None, &files, patch, "Make the box longer")
+        .suggest(&agent(), None, &main, &files, patch, "Make the box longer")
         .expect("suggest")
 }
 
@@ -546,4 +546,178 @@ fn a_save_after_catching_up_keeps_the_agent_s_change() {
         .expect("files");
     assert_eq!(text(&main, "b.txt"), "two, from the agent\n");
     assert_eq!(text(&main, "a.txt"), "one, from the person\n");
+}
+
+/// Unsaved files that change between the decision and the write: the first
+/// reading says nothing is unsaved, every later one runs `then` first and
+/// says `later`.
+struct ChangesMeanwhile<F: Fn()> {
+    readings: std::cell::Cell<u32>,
+    later: BTreeSet<RelativePath>,
+    then: F,
+}
+
+impl<F: Fn()> versions::UnsavedFiles for ChangesMeanwhile<F> {
+    fn inside(&self, _folder: &Path) -> BTreeSet<RelativePath> {
+        let readings = self.readings.get();
+        self.readings.set(readings + 1);
+        if readings == 0 {
+            BTreeSet::new()
+        } else {
+            (self.then)();
+            self.later.clone()
+        }
+    }
+}
+
+#[test]
+fn catch_up_never_writes_over_a_file_made_unsaved_meanwhile() {
+    let folder = two_file_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    agent_changes(folder.path(), "b.txt", "two, from the agent\n");
+    let meanwhile = ChangesMeanwhile {
+        readings: std::cell::Cell::new(0),
+        later: unsaved(&["b.txt"]),
+        then: || {},
+    };
+    let caught_up = versions::catch_up(folder.path(), &meanwhile).expect("catch up");
+    assert_eq!(
+        caught_up,
+        CaughtUp::Waiting {
+            files: vec![path("b.txt")]
+        }
+    );
+    assert_eq!(read(folder.path(), "b.txt"), "two\n", "nothing written");
+    // The window is still behind, so the agent's change comes in later.
+    versions::catch_up(folder.path(), &BTreeSet::new()).expect("catch up");
+    assert_eq!(read(folder.path(), "b.txt"), "two, from the agent\n");
+}
+
+#[test]
+fn catch_up_never_writes_over_a_file_saved_meanwhile() {
+    let folder = two_file_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    agent_changes(folder.path(), "b.txt", "two, from the agent\n");
+    let place = folder.path().to_path_buf();
+    let meanwhile = ChangesMeanwhile {
+        readings: std::cell::Cell::new(0),
+        later: BTreeSet::new(),
+        then: move || write(&place, "b.txt", "two, saved by the person\n"),
+    };
+    let caught_up = versions::catch_up(folder.path(), &meanwhile).expect("catch up");
+    assert_eq!(
+        caught_up,
+        CaughtUp::Waiting {
+            files: vec![path("b.txt")]
+        }
+    );
+    assert_eq!(read(folder.path(), "b.txt"), "two, saved by the person\n");
+    // The person's save then meets the agent's change in main.
+    versions::save(
+        folder.path(),
+        &user(),
+        &[folder.path().join("b.txt")],
+        &BTreeSet::new(),
+    )
+    .expect("save");
+    let history = History::open(folder.path()).expect("open");
+    let main = history
+        .files_at(&history.main().expect("main"))
+        .expect("files");
+    let b = text(&main, "b.txt");
+    assert!(
+        b.contains("saved by the person") && b.contains("from the agent"),
+        "both are kept: {b}"
+    );
+}
+
+#[test]
+fn a_suggestion_is_resolved_and_then_applies() {
+    let folder = box_project();
+    versions::turn_on(folder.path(), &user()).expect("turn on");
+    let original = read(folder.path(), "box.stave");
+    let (head, tail) = original.split_at(original.find("part end_r").expect("end_r"));
+    let plus = format!(
+        "{head}{}",
+        tail.replacen("width:  box_height", "width:  box_height + 0mm", 1)
+    );
+    let id = suggest_patch(
+        folder.path(),
+        "patch \"Same width\" {\n  set end_r.width = box_height + 0mm\n}\n",
+        &[("box.stave", &plus)],
+    );
+    // The person renames the part and changes the same line: the patch no
+    // longer fits, and moving the suggestion leaves a clash.
+    let minus = format!(
+        "{head}{}",
+        tail.replacen("width:  box_height", "width:  box_height - 0mm", 1)
+    );
+    write(
+        folder.path(),
+        "box.stave",
+        &minus.replace("end_r", "end_right"),
+    );
+    versions::save(
+        folder.path(),
+        &user(),
+        &[folder.path().join("box.stave")],
+        &BTreeSet::new(),
+    )
+    .expect("save");
+    let error = versions::apply(folder.path(), &id, &user()).expect_err("clashes");
+    assert!(matches!(error, VersionsError::Clashes { .. }), "{error:?}");
+
+    // Resolved in the editor and saved back to the suggestion.
+    let mut resolving = versions::to_resolve(folder.path(), &id).expect("to resolve");
+    assert_eq!(resolving.conflicted, vec![path("box.stave")]);
+    let settled = plus.replace("end_r", "end_right");
+    resolving.files = with(&resolving.files, "box.stave", &settled);
+    let resolved = versions::save_resolved(folder.path(), &resolving, &user()).expect("save");
+    assert!(resolved.conflicted.is_empty());
+    assert_eq!(
+        read(folder.path(), "box.stave"),
+        minus.replace("end_r", "end_right")
+    );
+
+    versions::apply(folder.path(), &id, &user()).expect("applies once resolved");
+    let history = History::open(folder.path()).expect("open");
+    let main = history
+        .files_at(&history.main().expect("main"))
+        .expect("files");
+    assert_eq!(text(&main, "box.stave"), settled);
+}
+
+#[test]
+fn what_the_versions_say_never_names_the_tools_underneath() {
+    use versions::{HistoryError, RevisionId, SuggestionId};
+    let errors = [
+        HistoryError::Nested {
+            repository_root: PathBuf::from("/home/a/projects"),
+        },
+        HistoryError::Off,
+        HistoryError::Store(Box::new(std::io::Error::other(
+            "jj: git backend refused the MCP thing",
+        ))),
+        HistoryError::UnknownRevision(RevisionId::new("abc")),
+        HistoryError::UnknownSuggestion(SuggestionId::new("abc")),
+        HistoryError::MainMoved {
+            files: vec![path("a.txt")],
+        },
+        HistoryError::MainMovedSince {
+            main: RevisionId::new("abc"),
+        },
+        HistoryError::SuggestionMoved {
+            id: SuggestionId::new("abc"),
+        },
+        HistoryError::BranchMoved {
+            branch: "main".to_owned(),
+        },
+        HistoryError::NothingToUndo,
+    ];
+    for error in errors {
+        let said = VersionsError::from(error).to_string();
+        for word in ["git", "jj", "MCP", "branch"] {
+            assert!(!said.contains(word), "{said:?} names {word}");
+        }
+    }
 }

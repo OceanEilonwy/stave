@@ -63,6 +63,22 @@ pub enum HistoryError {
         /// The files where the changes clash.
         files: Vec<RelativePath>,
     },
+    /// Main moved after the result was checked: it was checked on a project
+    /// that is gone, so nothing was recorded. Read main again and retry.
+    #[error(
+        "the project changed while this was being checked; try again on the project as it is now"
+    )]
+    MainMovedSince {
+        /// Main's latest revision now.
+        main: RevisionId,
+    },
+    /// A suggestion moved on (someone added to it or resolved it) after
+    /// its files were read: nothing was recorded. Read it again and retry.
+    #[error("suggestion {id} changed while this was being prepared; try again")]
+    SuggestionMoved {
+        /// The suggestion.
+        id: SuggestionId,
+    },
     /// A suggestion would change the project's settings in `.stave/`, which
     /// only the person using Stave may change.
     #[error(

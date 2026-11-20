@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use stave_link::{Host, Places, found_hosts_in, install_in, uninstall_in};
+use stave_link::{Host, LinkError, Places, found_hosts_in, install_in, uninstall_in};
 
 /// Held by each test's `Home` for the whole test. If one test writes its
 /// fake `claude` while another test's thread starts a program, that
@@ -69,6 +69,7 @@ case "$1 $2" in
   "mcp get") grep -qx "$3" "$servers" || grep -qsx "$3" "$here/project_servers" ;;
   "mcp add")
     name="$5"
+    if [ "$7" = "/refused/stave" ]; then echo "refused" >&2; exit 1; fi
     if grep -qx "$name" "$servers"; then echo "already exists" >&2; exit 1; fi
     echo "$name" >> "$servers" ;;
   "mcp remove")
@@ -437,4 +438,67 @@ fn a_new_settings_file_is_the_owners_alone() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn a_relative_folder_on_the_path_is_never_searched() {
+    let home = Home::new();
+    home.fake_claude();
+    // `bin`, relative, would find the fake from the home folder; only the
+    // absolute folder counts.
+    let places = Places::new(home.path().to_path_buf(), vec![PathBuf::from("bin")]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(home.path()).unwrap();
+    let found = places.find_program("claude");
+    std::env::set_current_dir(previous).unwrap();
+    assert_eq!(found, None);
+    // And a `stave` that isn't a full path is never written anywhere.
+    let results = install_in(&home.places(), &[Host::ClaudeCode], Path::new("bin/stave"));
+    let error = results.into_iter().next().unwrap().unwrap_err();
+    assert!(matches!(error, LinkError::NotAbsolute(_)), "{error:?}");
+    assert_eq!(home.claude_log(), "");
+}
+
+#[test]
+fn claude_code_set_up_already_is_left_alone() {
+    let home = Home::new();
+    home.fake_claude();
+    fs::write(
+        home.path().join(".claude.json"),
+        format!(r#"{{"mcpServers": {{"stave": {{"command": "{STAVE}", "args": ["mcp"]}}}}}}"#),
+    )
+    .unwrap();
+    let installed = install_in(&home.places(), &[Host::ClaudeCode], Path::new(STAVE))
+        .remove(0)
+        .unwrap();
+    assert!(installed.how.contains("already"), "{}", installed.how);
+    assert_eq!(home.claude_log(), "", "nothing was run");
+}
+
+#[test]
+fn a_failed_add_puts_the_old_entry_back() {
+    let home = Home::new();
+    home.fake_claude();
+    fs::write(home.bin.join("servers"), "stave\n").unwrap();
+    fs::write(
+        home.path().join(".claude.json"),
+        r#"{"mcpServers": {"stave": {"command": "/old/stave", "args": ["mcp"]}}}"#,
+    )
+    .unwrap();
+    // The fake refuses to add this one.
+    let error = install_in(
+        &home.places(),
+        &[Host::ClaudeCode],
+        Path::new("/refused/stave"),
+    )
+    .remove(0)
+    .unwrap_err();
+    assert!(error.to_string().contains("put back"), "{error}");
+    assert_eq!(home.claude_servers(), "stave\n");
+    assert!(
+        home.claude_log()
+            .contains("mcp add --scope user stave -- /old/stave mcp"),
+        "{}",
+        home.claude_log()
+    );
 }

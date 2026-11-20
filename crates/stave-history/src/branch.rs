@@ -131,7 +131,8 @@ pub(crate) fn remember(repo: &mut MutableRepo, branch: &GitRefNameBuf, id: &Comm
 /// Moves `branch` to main as it is in `repo`, a transaction about to be
 /// committed; `before` is the repository the transaction started from.
 /// When git's `HEAD` is on the branch, git's index is set to main's files
-/// too, so `git status` shows the folder against the new main.
+/// too, so `git status` shows the folder against the new main. While
+/// main holds clashes the branch is left where it is.
 ///
 /// # Errors
 ///
@@ -146,6 +147,16 @@ pub(crate) fn export(
         // Main is back before the first revision; git has no such commit.
         return Ok(());
     };
+    // A revision with clashes has no tree git's tools could show: the
+    // branch stays where it is (and is remembered there) until main is
+    // clean again, and the next clean move of main moves it.
+    let main_commit = repo
+        .store()
+        .get_commit(&main)
+        .map_err(HistoryError::store)?;
+    if main_commit.tree_ids().as_resolved().is_none() {
+        return Ok(());
+    }
     let known = before
         .view()
         .get_git_ref(branch.as_ref())

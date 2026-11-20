@@ -30,6 +30,10 @@ fn viewer_html_is_self_contained() {
     assert!(page.contains("AGFzbQEAAAA="), "the module is inlined");
     assert!(page.contains("window.staveViewer"));
     assert!(page.contains(NEEDS_WEBGPU));
+    assert!(
+        page.contains("Ask your AI app for a picture of the design instead."),
+        "without WebGPU the page points to the pictures"
+    );
     assert!(page.contains(WASM_BLOCKED));
 
     // The page tools/build-viewer.sh built, when it has been run.

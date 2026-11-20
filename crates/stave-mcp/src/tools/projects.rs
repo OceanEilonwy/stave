@@ -134,7 +134,7 @@ impl StaveServer {
                        <value>, add. Refuses a folder that isn't empty, and refuses when the \
                        person's settings let only them make changes. Opens the new project, \
                        with its versions on.",
-        annotations(read_only_hint = false, destructive_hint = false)
+        annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn new_project(
         &self,

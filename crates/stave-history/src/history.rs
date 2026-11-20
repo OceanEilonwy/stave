@@ -92,25 +92,42 @@ impl History {
             VersionsStatus::Off => {}
         }
         let history_directory = folder.join(HISTORY_DIRECTORY);
-        let made_stave_directory = !folder.join(".stave").exists();
-        let result = Self::make(&folder, &history_directory);
-        if result.is_err() {
-            // Leave the folder as it was. Failing to tidy up is not worth
-            // hiding the error that caused it.
-            let tidy = if made_stave_directory {
-                folder.join(".stave")
-            } else {
-                history_directory
-            };
-            let _ignored = std::fs::remove_dir_all(tidy);
+        std::fs::create_dir_all(&history_directory)
+            .map_err(|error| HistoryError::io(&history_directory, error))?;
+        // One start at a time (the window and an agent may turn versions on
+        // at once); whoever comes second finds them on.
+        let _lock =
+            FileLock::lock(history_directory.join("start.lock")).map_err(HistoryError::store)?;
+        if folder::status(&folder) == VersionsStatus::On {
+            return Self::open(&folder);
         }
-        result
+        // The repository is made beside its place and moved there whole, so
+        // versions read as on only once it is complete. It sits as deep as
+        // its place, so the paths it keeps relative still hold.
+        let making = history_directory.join(format!("repo.making-{}", std::process::id()));
+        let _ignored = std::fs::remove_dir_all(&making);
+        let made = Self::make(&folder, &history_directory, &making).and_then(|()| {
+            let repo_directory = history_directory.join("repo");
+            std::fs::rename(&making, &repo_directory)
+                .map_err(|error| HistoryError::io(&repo_directory, error))
+        });
+        if let Err(error) = made {
+            // Only what this start made goes; failing to tidy up is not
+            // worth hiding the error that caused it.
+            let _ignored = std::fs::remove_dir_all(&making);
+            return Err(error);
+        }
+        Self::open(&folder)
     }
 
-    fn make(folder: &Path, history_directory: &Path) -> Result<Self, HistoryError> {
-        let repo_directory = history_directory.join("repo");
-        std::fs::create_dir_all(&repo_directory)
-            .map_err(|error| HistoryError::io(&repo_directory, error))?;
+    /// Makes the repository in `repo_directory`, for `history_directory`.
+    fn make(
+        folder: &Path,
+        history_directory: &Path,
+        repo_directory: &Path,
+    ) -> Result<(), HistoryError> {
+        std::fs::create_dir_all(repo_directory)
+            .map_err(|error| HistoryError::io(repo_directory, error))?;
         // Keep the repository out of any git repository around the files,
         // the folder's own included.
         let ignore = history_directory.join(".gitignore");
@@ -136,7 +153,7 @@ impl History {
         let signer = signer_from_settings(&settings).map_err(HistoryError::store)?;
         let repo = block_on(ReadonlyRepo::init(
             &settings,
-            &repo_directory,
+            repo_directory,
             &initializer,
             signer,
             default_workspace_store_initializer(),
@@ -175,7 +192,7 @@ impl History {
                 Ok::<(), HistoryError>(())
             })?;
         }
-        Self::open(folder)
+        Ok(())
     }
 
     /// Opens the versions of `folder`.

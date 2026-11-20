@@ -35,25 +35,25 @@ fn suggestion_survives_reopen() {
         let mut agent_history = History::open(folder.path()).expect("open");
         let files = agent_history.files_at(&main).expect("files");
         let wider = with(&files, "dresser.stave", WIDER);
-        let id = agent_history
-            .suggest(
-                &agent(),
-                None,
-                &wider,
-                "set width = 1000mm\n",
-                "Widen the dresser",
-            )
-            .expect("suggest");
+        let id = common::suggest(
+            &mut agent_history,
+            &agent(),
+            None,
+            &wider,
+            "set width = 1000mm\n",
+            "Widen the dresser",
+        )
+        .expect("suggest");
         let taller = with(&files, "dresser.stave", WIDER_TALLER);
-        let onto = agent_history
-            .suggest(
-                &agent(),
-                Some(&id),
-                &taller,
-                "set height = 1300mm\n",
-                "Taller too",
-            )
-            .expect("suggest onto");
+        let onto = common::suggest(
+            &mut agent_history,
+            &agent(),
+            Some(&id),
+            &taller,
+            "set height = 1300mm\n",
+            "Taller too",
+        )
+        .expect("suggest onto");
         assert_eq!(onto, id);
         id
     };
@@ -83,15 +83,15 @@ fn apply_moves_main() {
     let main = history.main().expect("main");
     let files = history.files_at(&main).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &wider,
-            "set width = 1000mm\n",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen the dresser",
+    )
+    .expect("suggest");
 
     let applied = history.apply(&id, &agent(), &main, &wider).expect("apply");
 
@@ -120,15 +120,15 @@ fn apply_refused_while_suggestion_has_clashes() {
     let main = history.main().expect("main");
     let files = history.files_at(&main).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &wider,
-            "set width = 1000mm\n",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen the dresser",
+    )
+    .expect("suggest");
     // The person changes the same line on main.
     let narrower = with(
         &files,
@@ -137,7 +137,7 @@ fn apply_refused_while_suggestion_has_clashes() {
     );
     history.save(&narrower, &user(), "Narrower").expect("save");
 
-    let conflicted = history.rebase_suggestion(&id).expect("rebase");
+    let conflicted = history.rebase_suggestion(&id, &agent()).expect("rebase");
     assert_eq!(conflicted, [path("dresser.stave")]);
     let suggestion = &history.suggestions().expect("suggestions")[0];
     assert_eq!(suggestion.conflicted, [path("dresser.stave")]);
@@ -158,9 +158,7 @@ fn apply_refused_while_suggestion_has_clashes() {
 
     // Resolving writes the suggestion's files; then it applies.
     let resolved = with(&files, "dresser.stave", WIDER);
-    history
-        .write_suggestion_files(&id, &resolved)
-        .expect("resolve");
+    common::write_suggestion_files(&mut history, &id, &resolved).expect("resolve");
     assert!(
         history.suggestions().expect("suggestions")[0]
             .conflicted
@@ -196,15 +194,15 @@ fn concurrent_save_and_apply_both_land() {
             let main = history.main().expect("main");
             let files = history.files_at(&main).expect("files");
             let wider = with(&files, "dresser.stave", WIDER);
-            let id = history
-                .suggest(
-                    &agent(),
-                    None,
-                    &wider,
-                    "set width = 1000mm\n",
-                    "Widen the dresser",
-                )
-                .expect("suggest");
+            let id = common::suggest(
+                &mut history,
+                &agent(),
+                None,
+                &wider,
+                "set width = 1000mm\n",
+                "Widen the dresser",
+            )
+            .expect("suggest");
             agent_barrier.wait();
             history.apply(&id, &agent(), &main, &wider).expect("apply");
         });
@@ -239,15 +237,15 @@ fn agent_undo_only_reverts_own() {
     let mut history = History::open(folder.path()).expect("agent opens");
     let files = history.files_at(&first).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &wider,
-            "set width = 1000mm\n",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen the dresser",
+    )
+    .expect("suggest");
     history.apply(&id, &agent(), &first, &wider).expect("apply");
 
     // Another agent can't undo it: it isn't theirs.
@@ -280,19 +278,20 @@ fn undo_reverts_own_apply_and_window_catches_up() {
     let mut history = History::open(folder.path()).expect("agent opens");
     let files = history.files_at(&first).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &wider,
-            "set width = 1000mm\n",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen the dresser",
+    )
+    .expect("suggest");
     history.apply(&id, &agent(), &first, &wider).expect("apply");
     // The window caught up with the apply and wrote it.
     let folder_files = window.read_folder().expect("read folder");
-    let CatchUp::Write { files: written, .. } = window.catch_up(&folder_files).expect("catch up")
+    let CatchUp::Write { files: written, .. } =
+        common::catch_up(&mut window, &folder_files).expect("catch up")
     else {
         panic!("the apply is new to the window");
     };
@@ -308,7 +307,8 @@ fn undo_reverts_own_apply_and_window_catches_up() {
 
     // The window catches up with the undo: the width goes back.
     let folder_files = window.read_folder().expect("read folder");
-    let CatchUp::Write { files: written, .. } = window.catch_up(&folder_files).expect("catch up")
+    let CatchUp::Write { files: written, .. } =
+        common::catch_up(&mut window, &folder_files).expect("catch up")
     else {
         panic!("the undo is new to the window");
     };
@@ -338,15 +338,15 @@ fn discard_removes_suggestion() {
     let main = history.main().expect("main");
     let files = history.files_at(&main).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &wider,
-            "set width = 1000mm\n",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen the dresser",
+    )
+    .expect("suggest");
 
     history.discard(&id, &user()).expect("discard");
 

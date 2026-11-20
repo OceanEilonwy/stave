@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicBool;
 
 use stave_app::scratch::{EditBase, one_patch_each};
 use stave_history::{
-    Actor, ActorKind, History, HistoryError, ProjectFiles, RelativePath, SuggestionId,
+    Actor, ActorKind, History, HistoryError, ProjectFiles, RelativePath, RevisionId, SuggestionId,
     VersionsStatus,
 };
 use stave_lang::{SourceMap, parse_patch_file, render_diagnostics};
@@ -97,16 +97,25 @@ pub(crate) fn start(folder: &Path, actor: &Actor, message: &str) -> Result<Histo
     Ok(history)
 }
 
-/// The files of the agent's line: suggestion `onto`'s latest files, or
-/// main's latest.
+/// The files of the agent's line, with the revision they are read from:
+/// suggestion `onto`'s latest, or main's latest.
 pub(crate) fn line_files(
     history: &History,
     onto: Option<&SuggestionId>,
-) -> Result<ProjectFiles, McpError> {
-    Ok(match onto {
-        Some(id) => history.suggestion_files(id)?,
-        None => history.files_at(&history.main()?)?,
-    })
+) -> Result<(RevisionId, ProjectFiles), McpError> {
+    let revision = match onto {
+        Some(id) => {
+            history
+                .suggestions()?
+                .into_iter()
+                .find(|suggestion| &suggestion.id == id)
+                .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?
+                .tip
+        }
+        None => history.main()?,
+    };
+    let files = history.files_at(&revision)?;
+    Ok((revision, files))
 }
 
 /// A project's files held in memory, as the loader reads them: a path

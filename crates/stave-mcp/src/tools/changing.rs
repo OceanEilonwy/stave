@@ -6,7 +6,8 @@
 //! a patch to try.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -92,11 +93,11 @@ impl StaveServer {
                 if suggestion.is_some() {
                     return Err(McpError::VersionsOff);
                 }
-                return try_on_scratch(folder, &DiskFiles, &text);
+                return try_on_scratch(folder, &NoLinks::new(folder, &DiskFiles), &text);
             }
             let history = agent_line::history(folder)?;
             let onto = suggestion.map(SuggestionId::new);
-            let files = agent_line::line_files(&history, onto.as_ref())?;
+            let (_revision, files) = agent_line::line_files(&history, onto.as_ref())?;
             try_on_scratch(folder, &LineFiles::new(folder, &files), &text)
         })
         .await
@@ -159,11 +160,33 @@ fn try_on_scratch(
     for patch in &patches {
         let tried = base.try_patch(PATCH_NAME, patch, &cancel)?;
         let title = title(patch);
-        let fits = match tried.verdict() {
-            Verdict::Fits(_) => true,
-            Verdict::Refused(_) | Verdict::Checking => false,
-        };
+        // A file the patch would write that is a link (or lies through
+        // one) may lead out of the project: never a file of the project.
+        let linked: Vec<String> = tried
+            .changed()
+            .iter()
+            .filter(|file| goes_through_link(folder, &file.path))
+            .map(|file| {
+                file.path
+                    .strip_prefix(folder)
+                    .unwrap_or(&file.path)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        let fits = linked.is_empty()
+            && match tried.verdict() {
+                Verdict::Fits(_) => true,
+                Verdict::Refused(_) | Verdict::Checking => false,
+            };
         let _ = writeln!(words, "{title}: {}", if fits { "fits" } else { "refused" });
+        for name in &linked {
+            let _ = writeln!(
+                words,
+                "  '{name}' is not a file name in the project's folder: it is a link, which \
+                 may lead out of the project"
+            );
+        }
         let mut changed = Vec::new();
         let mut created = Vec::new();
         if fits {
@@ -217,6 +240,64 @@ fn try_on_scratch(
         words,
         json!({ "fits": refused == 0, "patches": tried_patches }),
     ))
+}
+
+/// `true` when `path`, inside `folder`, is a symbolic link or lies under
+/// one: reading or writing it could reach outside the project. A path
+/// outside `folder` (a library beside it) is not the patch's to write.
+fn goes_through_link(folder: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(folder) else {
+        return false;
+    };
+    let mut at = folder.to_path_buf();
+    for part in relative.components() {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// Files read through another source, but never through a symbolic link
+/// inside the project folder: such a file isn't listed, and reading it
+/// fails, so nothing outside the project is read in its name.
+struct NoLinks<'a> {
+    folder: PathBuf,
+    inner: &'a dyn FileSource,
+}
+
+impl<'a> NoLinks<'a> {
+    fn new(folder: &Path, inner: &'a dyn FileSource) -> Self {
+        Self {
+            folder: folder.to_path_buf(),
+            inner,
+        }
+    }
+}
+
+impl FileSource for NoLinks<'_> {
+    fn list_stave_files(&self, folder: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut files = self.inner.list_stave_files(folder)?;
+        files.retain(|file| !goes_through_link(&self.folder, file));
+        Ok(files)
+    }
+
+    fn read(&self, path: &Path) -> io::Result<String> {
+        if goes_through_link(&self.folder, path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "a link, which may lead out of the project",
+            ));
+        }
+        self.inner.read(path)
+    }
+
+    fn canonical(&self, folder: &Path) -> io::Result<PathBuf> {
+        self.inner.canonical(folder)
+    }
 }
 
 /// The patch text as a patch file: a file starts with its format line,

@@ -44,3 +44,19 @@ async fn initialize_lists_tools() {
         ]
     );
 }
+
+/// Applying, and making a project (which counts as an apply), are marked
+/// as changing the project, so under the `ask` policy the host asks first.
+#[tokio::test(flavor = "multi_thread")]
+async fn tools_that_apply_are_marked_as_changing_the_project() {
+    let connection = common::connect(common::options("tools_that_apply")).await;
+    let tools = connection.client.list_all_tools().await.unwrap();
+    for name in ["apply_suggestion", "new_project", "resolve_conflict"] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} is listed"));
+        let annotations = tool.annotations.as_ref().expect("annotated");
+        assert_eq!(annotations.destructive_hint, Some(true), "{name}");
+    }
+}

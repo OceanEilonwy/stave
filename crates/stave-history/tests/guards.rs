@@ -95,7 +95,8 @@ fn trees_made_outside_stave_never_hand_out_repository_paths() {
     let paths: Vec<&RelativePath> = files.paths().collect();
     assert_eq!(paths, [&path("dresser.stave")]);
 
-    let CatchUp::Write { files, removed, .. } = window_again.catch_up(&before).expect("catch up")
+    let CatchUp::Write { files, removed, .. } =
+        common::catch_up(&mut window_again, &before).expect("catch up")
     else {
         panic!("main moved");
     };
@@ -135,28 +136,31 @@ fn agents_cannot_change_the_settings() {
 
     // A suggestion that raises its own rights is refused.
     let raised = with(&files, ".stave/agents.toml", "merge_policy = \"auto\"\n");
-    let error = history
-        .suggest(&agent(), None, &raised, "", "More rights")
+    let error = common::suggest(&mut history, &agent(), None, &raised, "", "More rights")
         .expect_err("refused");
     assert!(is_protected(&error), "{error:?}");
     // So is one that deletes the settings.
     let mut deleted = files.clone();
     deleted.remove(&path(".stave/agents.toml"));
-    let error = history
-        .suggest(&agent(), None, &deleted, "", "No settings")
+    let error = common::suggest(&mut history, &agent(), None, &deleted, "", "No settings")
         .expect_err("refused");
     assert!(is_protected(&error), "{error:?}");
 
     // A suggestion that leaves them alone is recorded; resolving it or
     // applying it can't change them either.
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(&agent(), None, &wider, "set width = 1000mm\n", "Widen")
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen",
+    )
+    .expect("suggest");
     let raised_wider = with(&wider, ".stave/agents.toml", "merge_policy = \"auto\"\n");
-    let error = history
-        .write_suggestion_files(&id, &raised_wider)
-        .expect_err("refused");
+    let error =
+        common::write_suggestion_files(&mut history, &id, &raised_wider).expect_err("refused");
     assert!(is_protected(&error), "{error:?}");
     let error = history
         .apply(&id, &agent(), &main, &raised_wider)
@@ -171,7 +175,7 @@ fn agents_cannot_change_the_settings() {
     // The person changes them by saving.
     let mut window = history;
     let now = window.read_folder().expect("read folder");
-    let catch_up = window.catch_up(&now).expect("catch up");
+    let catch_up = common::catch_up(&mut window, &now).expect("catch up");
     assert!(matches!(catch_up, CatchUp::Write { .. }));
     let off = with(&wider, ".stave/agents.toml", "merge_policy = \"off\"\n");
     let saved = window.save(&off, &user(), "Agents off").expect("save");
@@ -185,7 +189,7 @@ fn agents_cannot_change_the_settings() {
 }
 
 #[test]
-fn apply_merges_from_the_base_given_even_after_main_was_read_again() {
+fn apply_on_a_main_that_moved_since_the_check_is_refused() {
     let folder = dresser_folder();
     let mut window = History::start(folder.path()).expect("start");
     let first = window.read_folder().expect("read folder");
@@ -196,23 +200,42 @@ fn apply_merges_from_the_base_given_even_after_main_was_read_again() {
     let base = agent_history.main().expect("main");
     let files = agent_history.files_at(&base).expect("files");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = agent_history
-        .suggest(&agent(), None, &wider, "set width = 1000mm\n", "Widen")
-        .expect("suggest");
+    let id = common::suggest(
+        &mut agent_history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen",
+    )
+    .expect("suggest");
 
-    // Meanwhile the person saves, and another call on the agent's handle
-    // reads main again.
+    // Meanwhile the person saves.
     window
         .save(&with(&first, "dresser.stave", DEEPER), &user(), "Deeper")
         .expect("save");
     let newer = agent_history.main().expect("main");
     assert_ne!(newer, base);
 
-    let applied = agent_history
+    // What was checked on `base` is not recorded on another main.
+    let error = agent_history
         .apply(&id, &agent(), &base, &wider)
-        .expect("apply");
+        .expect_err("main moved");
+    assert!(
+        matches!(&error, HistoryError::MainMovedSince { main } if *main == newer),
+        "{error:?}"
+    );
+    assert_eq!(agent_history.main().expect("main"), newer);
 
-    // The person's save is kept: the change from `base` was merged.
+    // Done again on main as it is now, it goes in and keeps the save.
+    let again = with(
+        &agent_history.files_at(&newer).expect("files"),
+        "dresser.stave",
+        "width = 1000mm\nheight = 1200mm\ndepth = 500mm\n",
+    );
+    let applied = agent_history
+        .apply(&id, &agent(), &newer, &again)
+        .expect("apply");
     assert_eq!(
         text(
             &agent_history.files_at(&applied).expect("files"),
@@ -230,9 +253,15 @@ fn apply_with_an_unknown_base_is_refused() {
     let files = history.read_folder().expect("read folder");
     history.save(&files, &user(), "First cut").expect("save");
     let wider = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(&agent(), None, &wider, "set width = 1000mm\n", "Widen")
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &wider,
+        "set width = 1000mm\n",
+        "Widen",
+    )
+    .expect("suggest");
     let error = history
         .apply(
             &id,

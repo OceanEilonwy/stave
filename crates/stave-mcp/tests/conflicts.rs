@@ -271,6 +271,7 @@ fn clashing_suggestion(folder: &Path) -> SuggestionId {
         .suggest(
             &agent,
             None,
+            &history.main().unwrap(),
             &suggested,
             "patch \"Longer\" { set box_length = 350mm }",
             "Make the box longer",
@@ -279,7 +280,7 @@ fn clashing_suggestion(folder: &Path) -> SuggestionId {
     let mut saved = history.read_folder().unwrap();
     saved.insert(box_stave, with_length(&original, "320mm").into_bytes());
     history.save(&saved, &person, "A little longer").unwrap();
-    let conflicted = history.rebase_suggestion(&id).unwrap();
+    let conflicted = history.rebase_suggestion(&id, &agent).unwrap();
     assert_eq!(conflicted.len(), 1);
     id
 }

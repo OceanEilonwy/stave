@@ -15,15 +15,15 @@ fn agent_widens(folder: &std::path::Path) {
     let main = history.main().expect("main");
     let files = history.files_at(&main).expect("files at main");
     let changed = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(
-            &agent(),
-            None,
-            &changed,
-            "set width = 1000mm",
-            "Widen the dresser",
-        )
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &changed,
+        "set width = 1000mm",
+        "Widen the dresser",
+    )
+    .expect("suggest");
     history
         .apply(&id, &agent(), &main, &changed)
         .expect("apply");
@@ -65,7 +65,7 @@ fn catch_up_after_agent_apply_writes_files() {
     let files = window.read_folder().expect("read folder");
     window.save(&files, &user(), "First cut").expect("save");
     assert_eq!(
-        window.catch_up(&files).expect("catch up"),
+        common::catch_up(&mut window, &files).expect("catch up"),
         CatchUp::UpToDate
     );
 
@@ -75,7 +75,7 @@ fn catch_up_after_agent_apply_writes_files() {
         files: written,
         removed,
         conflicted,
-    } = window.catch_up(&files).expect("catch up")
+    } = common::catch_up(&mut window, &files).expect("catch up")
     else {
         panic!("main moved, so there is something to write");
     };
@@ -85,7 +85,10 @@ fn catch_up_after_agent_apply_writes_files() {
 
     // Once written, the window is in step with main.
     let now = with(&files, "dresser.stave", WIDER);
-    assert_eq!(window.catch_up(&now).expect("catch up"), CatchUp::UpToDate);
+    assert_eq!(
+        common::catch_up(&mut window, &now).expect("catch up"),
+        CatchUp::UpToDate
+    );
 }
 
 #[test]
@@ -107,7 +110,7 @@ fn catch_up_with_unsaved_clash_reports_conflict() {
         files: written,
         conflicted,
         ..
-    } = window.catch_up(&unsaved).expect("catch up")
+    } = common::catch_up(&mut window, &unsaved).expect("catch up")
     else {
         panic!("main moved, so there is something to write");
     };
@@ -161,7 +164,9 @@ fn save_after_main_moved_merges_both() {
     assert_eq!(versions.len(), 3, "{messages:?}");
 
     // Catching up now brings the agent's width into the folder.
-    let CatchUp::Write { files: written, .. } = window.catch_up(&deeper).expect("catch up") else {
+    let CatchUp::Write { files: written, .. } =
+        common::catch_up(&mut window, &deeper).expect("catch up")
+    else {
         panic!("the folder lacks the agent's change");
     };
     assert_eq!(

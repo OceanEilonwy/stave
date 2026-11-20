@@ -3,6 +3,8 @@
 //! template ([`stave_web::page::assemble`]). `tools/build-viewer.sh` runs
 //! it after building the WASM.
 
+#![forbid(unsafe_code)]
+
 use std::fs;
 use std::path::PathBuf;
 

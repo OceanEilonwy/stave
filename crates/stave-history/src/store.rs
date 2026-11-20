@@ -47,6 +47,8 @@ pub(crate) const ACTION_ATTRIBUTE: &str = "stave-action";
 pub(crate) const UNDOES_ATTRIBUTE: &str = "stave-undoes";
 /// The operation attribute set when an operation moved main.
 pub(crate) const MOVED_MAIN_ATTRIBUTE: &str = "stave-moved-main";
+/// The operation attribute naming the suggestion an operation changed.
+pub(crate) const SUGGESTION_ATTRIBUTE: &str = "stave-suggestion";
 
 /// The settings Stave runs jj with: jj's defaults only, nothing read from
 /// the user's own jj configuration.

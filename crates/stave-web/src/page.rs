@@ -8,7 +8,7 @@
 //! for its host: `files` maps each file's path to its text, `suggestion`
 //! (optional) maps the files an agent's suggestion changes to their new
 //! text, and `folder` is the project folder (`/p`). Without WebGPU the
-//! page says "This preview needs WebGPU." and does nothing else, and where
+//! page says so and points to a picture instead ([`NEEDS_WEBGPU`]), and where
 //! its host forbids WebAssembly it says so ([`WASM_BLOCKED`]).
 
 /// The page, with the places the glue and the WASM go marked.
@@ -28,7 +28,8 @@ const CURRENT_SCRIPT_WITH_SOURCE: &str =
     "document.currentScript !== null && document.currentScript.src";
 
 /// The message a browser without WebGPU shows.
-pub const NEEDS_WEBGPU: &str = "This preview needs WebGPU.";
+pub const NEEDS_WEBGPU: &str =
+    "This preview needs WebGPU. Ask your AI app for a picture of the design instead.";
 
 /// The message a page shows when its host won't let it compile
 /// WebAssembly: an MCP App page under the MCP Apps default Content

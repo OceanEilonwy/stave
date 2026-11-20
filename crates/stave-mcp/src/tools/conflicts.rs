@@ -191,7 +191,7 @@ impl StaveServer {
             let target = Target::find(&place, &project, &arguments)?;
             match &place.suggestion {
                 Some(suggestion) => {
-                    write_to_suggestion(&place, suggestion, &target, arguments.conflict)
+                    write_to_suggestion(&place, suggestion, &target, &actor, arguments.conflict)
                 }
                 None => write_to_project(&place, &target, &actor, &config_dir, arguments.conflict),
             }
@@ -247,7 +247,7 @@ impl Place {
             .into_iter()
             .find(|suggestion| suggestion.id == id)
             .ok_or_else(|| stave_history::HistoryError::UnknownSuggestion(id.clone()))?;
-        let files = history.suggestion_files(&id)?;
+        let files = history.files_at(&suggestion.tip)?;
         let mut texts = BTreeMap::new();
         let mut memory = MemoryFiles::new();
         for (path, bytes) in &files {
@@ -713,13 +713,21 @@ fn write_to_suggestion(
     place: &Place,
     suggestion: &SuggestionPlace,
     target: &Target,
+    actor: &Actor,
     number: usize,
 ) -> Result<CallToolResult, McpError> {
     let tried = target.try_on(place)?;
     let mut history = History::open(&place.folder)?;
     let mut files = suggestion.files.clone();
     files.insert(target.relative.clone(), tried.text.clone().into_bytes());
-    history.write_suggestion_files(&suggestion.suggestion.id, &files)?;
+    // Refused when the suggestion moved on since it was read, so a rebase
+    // or another resolution made meanwhile is never undone.
+    history.write_suggestion_files(
+        &suggestion.suggestion.id,
+        &suggestion.suggestion.tip,
+        &files,
+        actor,
+    )?;
     let mut text = format!(
         "Settled clash {number} in {} in suggestion {}: {}.\n",
         target.shown,
@@ -860,6 +868,13 @@ fn write_to_project(
         "Settled clash {number} in {}: {}.\n",
         target.shown,
         verdict(&tried.opened, &tried.text)
+    );
+    // The window can't be asked about its buffers from here; it merges a
+    // file changed on disk into unsaved changes when the person saves.
+    text.push_str(
+        "If the person has this file open in Stave with unsaved changes, their next save \
+         merges them with this settlement; where both changed the same lines, both are kept \
+         between marker lines.\n",
     );
     if left > 0 {
         let _ = writeln!(

@@ -17,7 +17,8 @@ use crate::actor::Actor;
 use crate::error::HistoryError;
 use crate::history::{History, block_on};
 use crate::store::{
-    self, ACTION_ATTRIBUTE, ACTOR_ATTRIBUTE, MOVED_MAIN_ATTRIBUTE, UNDOES_ATTRIBUTE, WINDOW,
+    self, ACTION_ATTRIBUTE, ACTOR_ATTRIBUTE, MOVED_MAIN_ATTRIBUTE, SUGGESTION_ATTRIBUTE,
+    UNDOES_ATTRIBUTE, WINDOW,
 };
 
 /// Whose changes an undo may reach.
@@ -41,6 +42,11 @@ fn tags(operation: &Operation) -> (Option<Actor>, String) {
         .cloned()
         .unwrap_or_else(|| operation.metadata().description.clone());
     (actor, action)
+}
+
+/// The suggestion an operation changed, if any.
+fn suggestion_of(operation: &Operation) -> Option<&String> {
+    operation.metadata().attributes.get(SUGGESTION_ATTRIBUTE)
 }
 
 fn moved_main(operation: &Operation) -> bool {
@@ -94,6 +100,23 @@ impl History {
 
             if moved_main(&target)
                 && let Some(later) = later_by_others.iter().rev().find(|later| moved_main(later))
+            {
+                let (later_maker, later_action) = tags(later);
+                let who = later_maker.map_or_else(|| "someone".to_owned(), |maker| maker.name);
+                return Err(HistoryError::UndoBlocked {
+                    undone: action,
+                    later: format!("{who}'s {later_action}"),
+                });
+            }
+
+            // Someone else changed the same suggestion since (moved it onto
+            // main, resolved it): undoing under them would leave its
+            // bookmark pointing two ways.
+            if let Some(suggestion) = suggestion_of(&target)
+                && let Some(later) = later_by_others
+                    .iter()
+                    .rev()
+                    .find(|later| suggestion_of(later) == Some(suggestion))
             {
                 let (later_maker, later_action) = tags(later);
                 let who = later_maker.map_or_else(|| "someone".to_owned(), |maker| maker.name);

@@ -505,8 +505,10 @@ pub(in crate::ui) struct WindowVersions {
     /// Runs the work on the versions one job at a time, so a save never
     /// overlaps a catch-up.
     worker: Worker,
-    /// The files the Code panel holds unsaved, as it last said.
-    unsaved: BTreeSet<PathBuf>,
+    /// The files the Code panel holds unsaved, as it last said, shared
+    /// with the work on the versions so a catch-up reads them as they are
+    /// when it writes.
+    unsaved: history::Unsaved,
     /// Versions as last read.
     status: Option<VersionsStatus>,
     /// The question about turning versions on was answered (or put away)
@@ -614,7 +616,7 @@ fn declined() -> Declined {
 impl WindowVersions {
     /// Keeps the files the Code panel holds unsaved, as it said.
     pub(in crate::ui) fn set_unsaved(&mut self, unsaved: BTreeSet<PathBuf>) {
-        self.unsaved = unsaved;
+        self.unsaved.set(unsaved);
     }
 }
 
@@ -651,7 +653,7 @@ impl Window {
         match message {
             VersionsInput::Panel(VersionsPanelOutput::TurnOn) => self.turn_versions_on(),
             VersionsInput::Panel(VersionsPanelOutput::Undo) => {
-                let unsaved = self.unsaved_inside();
+                let unsaved = self.unsaved();
                 self.in_background(
                     move |folder| history::undo(folder, &person(), &unsaved),
                     |result| Done::Undone(result.map(|undone| (undone.what, undone.caught_up))),
@@ -662,7 +664,7 @@ impl Window {
                 self.dispatch(Command::Edit(EditCommand::ShowPatch(patches)));
             }
             VersionsInput::Panel(VersionsPanelOutput::Apply(id)) => {
-                let unsaved = self.unsaved_inside();
+                let unsaved = self.unsaved();
                 self.in_background(
                     move |folder| {
                         let applied = history::apply(folder, &id, &person())?;
@@ -714,7 +716,7 @@ impl Window {
         self.versions.watcher = None;
         self.versions.status = None;
         self.versions.asked = false;
-        self.versions.unsaved.clear();
+        self.versions.unsaved.set(BTreeSet::new());
         self.widgets.versions.show(PanelShown::Nothing);
         self.watch_versions();
         self.read_versions();
@@ -743,9 +745,10 @@ impl Window {
         });
     }
 
-    /// The files the Code panel holds unsaved, inside the project.
-    fn unsaved_inside(&self) -> BTreeSet<history::RelativePath> {
-        history::unsaved_inside(self.session.folder(), &self.versions.unsaved)
+    /// The files the Code panel holds unsaved, read when the work uses
+    /// them rather than when it is queued.
+    fn unsaved(&self) -> history::Unsaved {
+        self.versions.unsaved.clone()
     }
 
     /// Catches the folder up (when versions are on) and reads the versions
@@ -753,7 +756,7 @@ impl Window {
     fn read_versions(&mut self) {
         self.versions.reading = self.versions.reading.wrapping_add(1);
         let reading = self.versions.reading;
-        let unsaved = self.unsaved_inside();
+        let unsaved = self.unsaved();
         self.in_background(
             move |folder| {
                 let caught_up = match history::History::status(folder) {
@@ -795,7 +798,7 @@ impl Window {
         self.versions.status = Some(status.clone());
         match history::on_save(&status, declined) {
             OnSave::Record => {
-                let unsaved = self.unsaved_inside();
+                let unsaved = self.unsaved();
                 self.in_background(
                     move |folder| {
                         history::save(folder, &person(), &files, &unsaved)
@@ -1312,7 +1315,7 @@ mod tests {
         };
         let mut history = history;
         let id = history
-            .suggest(&agent, None, &files, "a patch", "Add notes")
+            .suggest(&agent, None, &main, &files, "a patch", "Add notes")
             .unwrap();
         history.apply(&id, &agent, &main, &files).unwrap();
         assert!(
@@ -1365,7 +1368,7 @@ mod tests {
         let notes = history::RelativePath::new(Path::new("notes.txt")).unwrap();
         files.insert(notes, b"from an AI app\n".to_vec());
         let id = history
-            .suggest(&agent, None, &files, "a patch", "Add notes")
+            .suggest(&agent, None, &main, &files, "a patch", "Add notes")
             .unwrap();
         history.apply(&id, &agent, &main, &files).unwrap();
         assert!(

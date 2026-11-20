@@ -649,3 +649,51 @@ fn project_path_rejects_escape() {
         folder.join("hardware/hinges.stave")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn try_patch_refuses_a_file_that_links_out_of_the_project() {
+    let folder = example_copy(
+        "clothing_cabinet",
+        "try_patch_refuses_a_file_that_links_out_of_the_project",
+    );
+    let outside = std::env::temp_dir().join(format!(
+        "stave-mcp-test-{}-linked-outside.stave",
+        std::process::id()
+    ));
+    let secret = "stave 1\n// a file outside the project: never read\n";
+    std::fs::write(&outside, secret).unwrap();
+    std::os::unix::fs::symlink(&outside, folder.join("link.stave")).unwrap();
+    let connection = connect(options(
+        "try_patch_refuses_a_file_that_links_out_of_the_project",
+    ))
+    .await;
+    connection
+        .call("open_project", json!({ "path": path_text(&folder) }))
+        .await;
+    let patch = SHOE_SHELF.replace("in \"carcass.stave\"", "in \"link.stave\"");
+    // Versions off, the folder is read from disk; on, from the versions.
+    for versions_on in [false, true] {
+        if versions_on {
+            let mut history = stave_history::History::start(&folder).unwrap();
+            let files = history.read_folder().unwrap();
+            let person = stave_history::Actor {
+                kind: stave_history::ActorKind::User,
+                name: "Tester".to_owned(),
+                id: "window".to_owned(),
+            };
+            history.save(&files, &person, "First version").unwrap();
+        }
+        let result = connection
+            .call("try_patch", json!({ "patch": patch }))
+            .await;
+        let words = text(&result);
+        assert_eq!(structured(&result)["fits"], json!(false), "{words}");
+        assert!(
+            words.contains("'link.stave' is not a file name in the project's folder"),
+            "versions on: {versions_on}: {words}"
+        );
+        assert!(!words.contains("never read"), "{words}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), secret);
+    }
+    let _ = std::fs::remove_file(&outside);
+}

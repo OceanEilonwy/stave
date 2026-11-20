@@ -171,7 +171,7 @@ impl StaveServer {
             let folder = &project.folder;
             let mut history = agent_line::history(folder)?;
             let onto = arguments.onto.map(SuggestionId::new);
-            let files = agent_line::line_files(&history, onto.as_ref())?;
+            let (base, files) = agent_line::line_files(&history, onto.as_ref())?;
             let after =
                 match agent_line::replay(folder, &files, std::slice::from_ref(&arguments.patch))? {
                     Replay::Fits {
@@ -194,7 +194,14 @@ impl StaveServer {
                 .map(|(path, _)| path.to_string())
                 .collect();
             let title = arguments.title.trim();
-            let id = history.suggest(&actor, onto.as_ref(), &after, &arguments.patch, title)?;
+            let id = history.suggest(
+                &actor,
+                onto.as_ref(),
+                &base,
+                &after,
+                &arguments.patch,
+                title,
+            )?;
             let mut text = match &onto {
                 Some(onto) => format!("Added \"{title}\" to suggestion {onto}."),
                 None => format!("Suggested \"{title}\" as suggestion {id}."),
@@ -320,57 +327,17 @@ impl StaveServer {
                 MergePolicy::Ask | MergePolicy::Auto => {}
             }
             let id = SuggestionId::new(id);
-            let suggestion = history
-                .suggestions()?
-                .into_iter()
-                .find(|suggestion| suggestion.id == id)
-                .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?;
-            if !suggestion.conflicted.is_empty() {
-                return Err(HistoryError::SuggestionConflicted {
-                    id,
-                    files: suggestion.conflicted,
-                }
-                .into());
-            }
-
-            // Re-try the patches on main as it is now.
-            let base = history.main()?;
-            let main_files = history.files_at(&base)?;
-            let (base, merged) = match agent_line::replay(folder, &main_files, &suggestion.patches)?
-            {
-                Replay::Fits {
-                    files, errors: 0, ..
-                } => (base, files),
-                Replay::Fits { problems, .. } => return Err(McpError::NotClean(problems)),
-                Replay::Refused { title, problems } => {
-                    // A patch no longer fits: move the line onto main and
-                    // check its files, merged as text, instead.
-                    let clashes = history.rebase_suggestion(&id)?;
-                    if !clashes.is_empty() {
-                        return Err(McpError::Clashes {
-                            files: clashes.iter().map(ToString::to_string).collect(),
-                        });
+            // Main may move while the result is checked; it is then checked
+            // again on main as it is now, a few times at most.
+            let mut attempts = APPLY_ATTEMPTS;
+            let (suggestion, main) = loop {
+                attempts = attempts.saturating_sub(1);
+                match apply_once(folder, &mut history, &id, &actor) {
+                    Err(McpError::History(HistoryError::MainMovedSince { .. })) if attempts > 0 => {
                     }
-                    let (base, files) = rebased_line(&history, &id)?;
-                    match agent_line::replay(folder, &files, &[])? {
-                        Replay::Fits {
-                            files, errors: 0, ..
-                        } => (base, files),
-                        Replay::Fits {
-                            problems: merged, ..
-                        } => {
-                            return Err(McpError::NotClean(format!(
-                                "{title} no longer fits:\n{problems}\nThe suggestion's files, \
-                                 moved onto the project, check with:\n{merged}"
-                            )));
-                        }
-                        Replay::Refused { problems, .. } => {
-                            return Err(McpError::NotClean(problems));
-                        }
-                    }
+                    result => break result?,
                 }
             };
-            let main = history.apply(&id, &actor, &base, &merged)?;
             let short = main.as_str().get(..SHORT_ID).unwrap_or(main.as_str());
             let text = format!(
                 "Applied \"{}\": it is now in the project as version {short}. Stave brings the \
@@ -388,7 +355,6 @@ impl StaveServer {
         })
         .await
     }
-
     async fn discard(
         &self,
         id: String,
@@ -436,6 +402,70 @@ impl StaveServer {
 /// and undoes whatever landed in between). The base is read before the
 /// files, so a second rebase between the two reads can only leave the
 /// files newer than the base, which merges cleanly, never older.
+/// How many times applying reads main again when it moved meanwhile.
+const APPLY_ATTEMPTS: u32 = 3;
+
+/// One try at applying suggestion `id`: its patches replayed and checked
+/// on main as it is now, then recorded on that same main.
+fn apply_once(
+    folder: &std::path::Path,
+    history: &mut History,
+    id: &SuggestionId,
+    actor: &Actor,
+) -> Result<(stave_history::Suggestion, RevisionId), McpError> {
+    let suggestion = history
+        .suggestions()?
+        .into_iter()
+        .find(|suggestion| &suggestion.id == id)
+        .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?;
+    if !suggestion.conflicted.is_empty() {
+        return Err(HistoryError::SuggestionConflicted {
+            id: id.clone(),
+            files: suggestion.conflicted,
+        }
+        .into());
+    }
+
+    // Re-try the patches on main as it is now.
+    let base = history.main()?;
+    let main_files = history.files_at(&base)?;
+    let (base, merged) = match agent_line::replay(folder, &main_files, &suggestion.patches)? {
+        Replay::Fits {
+            files, errors: 0, ..
+        } => (base, files),
+        Replay::Fits { problems, .. } => return Err(McpError::NotClean(problems)),
+        Replay::Refused { title, problems } => {
+            // A patch no longer fits: move the line onto main and
+            // check its files, merged as text, instead.
+            let clashes = history.rebase_suggestion(id, actor)?;
+            if !clashes.is_empty() {
+                return Err(McpError::Clashes {
+                    files: clashes.iter().map(ToString::to_string).collect(),
+                });
+            }
+            let (base, files) = rebased_line(history, id)?;
+            match agent_line::replay(folder, &files, &[])? {
+                Replay::Fits {
+                    files, errors: 0, ..
+                } => (base, files),
+                Replay::Fits {
+                    problems: merged, ..
+                } => {
+                    return Err(McpError::NotClean(format!(
+                        "{title} no longer fits:\n{problems}\nThe suggestion's files, \
+                             moved onto the project, check with:\n{merged}"
+                    )));
+                }
+                Replay::Refused { problems, .. } => {
+                    return Err(McpError::NotClean(problems));
+                }
+            }
+        }
+    };
+    let main = history.apply(id, actor, &base, &merged)?;
+    Ok((suggestion, main))
+}
+
 fn rebased_line(
     history: &History,
     id: &SuggestionId,
@@ -444,10 +474,9 @@ fn rebased_line(
         .suggestions()?
         .into_iter()
         .find(|suggestion| &suggestion.id == id)
-        .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?
-        .base;
-    let files = history.suggestion_files(id)?;
-    Ok((base, files))
+        .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?;
+    let files = history.files_at(&base.tip)?;
+    Ok((base.base, files))
 }
 
 fn who(actor: &Actor) -> String {
@@ -516,10 +545,11 @@ mod tests {
             .unwrap();
     }
 
-    /// Main moves between the rebase and the apply: the apply merges onto
-    /// it, so neither that change nor the suggestion's is lost.
+    /// Main moves between the rebase and the apply: the files checked on
+    /// the rebased line are not recorded on a main they were never checked
+    /// on, so the change that landed is kept and the caller tries again.
     #[test]
-    fn apply_after_a_rebase_keeps_what_landed_since() {
+    fn apply_after_a_rebase_onto_a_main_that_moved_is_refused() {
         let folder = scratch_folder("rebased_line");
         for name in ["a", "b", "c"] {
             std::fs::write(folder.join(format!("{name}.stave")), format!("{name}\n")).unwrap();
@@ -531,11 +561,18 @@ mod tests {
         let mut suggested = first.clone();
         suggested.insert(relative("a.stave"), b"a, suggested\n".to_vec());
         let id = history
-            .suggest(&agent(), None, &suggested, "patch", "Change a")
+            .suggest(
+                &agent(),
+                None,
+                &history.main().unwrap(),
+                &suggested,
+                "patch",
+                "Change a",
+            )
             .unwrap();
 
         main_changes(&folder, "b.stave", "b, before the rebase\n");
-        assert!(history.rebase_suggestion(&id).unwrap().is_empty());
+        assert!(history.rebase_suggestion(&id, &agent()).unwrap().is_empty());
         let rebased_onto = history.main().unwrap();
         main_changes(&folder, "c.stave", "c, after the rebase\n");
 
@@ -543,11 +580,15 @@ mod tests {
         assert_eq!(base, rebased_onto, "the base is where it was rebased onto");
         assert_ne!(base, history.main().unwrap(), "main moved since");
 
-        let main = history.apply(&id, &agent(), &base, &files).unwrap();
-        let applied = history.files_at(&main).unwrap();
-        assert_eq!(text(&applied, "a.stave"), "a, suggested\n");
-        assert_eq!(text(&applied, "b.stave"), "b, before the rebase\n");
-        assert_eq!(text(&applied, "c.stave"), "c, after the rebase\n");
+        let main = history.main().unwrap();
+        let error = history.apply(&id, &agent(), &base, &files).unwrap_err();
+        assert!(
+            matches!(error, stave_history::HistoryError::MainMovedSince { .. }),
+            "{error:?}"
+        );
+        assert_eq!(history.main().unwrap(), main, "nothing recorded");
+        let kept = history.files_at(&main).unwrap();
+        assert_eq!(text(&kept, "c.stave"), "c, after the rebase\n");
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

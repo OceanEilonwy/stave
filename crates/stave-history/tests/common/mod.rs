@@ -141,3 +141,53 @@ pub fn git_dresser_folder() -> tempfile::TempDir {
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonical path")
 }
+
+/// Records a suggestion on main as it is now, or on the end of `onto`'s
+/// line as it is now.
+pub fn suggest(
+    history: &mut stave_history::History,
+    agent: &Actor,
+    onto: Option<&stave_history::SuggestionId>,
+    files: &ProjectFiles,
+    patch: &str,
+    title: &str,
+) -> Result<stave_history::SuggestionId, stave_history::HistoryError> {
+    let base = match onto {
+        Some(id) => tip(history, id)?,
+        None => history.main()?,
+    };
+    history.suggest(agent, onto, &base, files, patch, title)
+}
+
+/// A suggestion's latest revision.
+pub fn tip(
+    history: &stave_history::History,
+    id: &stave_history::SuggestionId,
+) -> Result<stave_history::RevisionId, stave_history::HistoryError> {
+    history
+        .suggestions()?
+        .into_iter()
+        .find(|suggestion| &suggestion.id == id)
+        .map(|suggestion| suggestion.tip)
+        .ok_or_else(|| stave_history::HistoryError::UnknownSuggestion(id.clone()))
+}
+
+/// Replaces a suggestion's files as they are now, as the agent.
+pub fn write_suggestion_files(
+    history: &mut stave_history::History,
+    id: &stave_history::SuggestionId,
+    files: &ProjectFiles,
+) -> Result<(), stave_history::HistoryError> {
+    let tip = tip(history, id)?;
+    history.write_suggestion_files(id, &tip, files, &agent())
+}
+
+/// Catches the window up with nothing unsaved, writing nothing.
+pub fn catch_up(
+    history: &mut stave_history::History,
+    folder_files: &ProjectFiles,
+) -> Result<stave_history::CatchUp, stave_history::HistoryError> {
+    history.catch_up(folder_files, &std::collections::BTreeSet::new(), |_| {
+        Ok::<_, stave_history::HistoryError>(stave_history::Written::All)
+    })
+}

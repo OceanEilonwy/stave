@@ -47,9 +47,15 @@ fn saves_and_applies_move_the_folder_branch() {
     // An agent's apply moves it too.
     let base = history.main().expect("main");
     let changed = with(&files, "dresser.stave", WIDER);
-    let id = history
-        .suggest(&agent(), None, &changed, "set width = 1000mm\n", "Widen")
-        .expect("suggest");
+    let id = common::suggest(
+        &mut history,
+        &agent(),
+        None,
+        &changed,
+        "set width = 1000mm\n",
+        "Widen",
+    )
+    .expect("suggest");
     let applied = history
         .apply(&id, &agent(), &base, &changed)
         .expect("apply");

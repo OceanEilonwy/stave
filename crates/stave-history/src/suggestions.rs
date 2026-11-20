@@ -9,7 +9,7 @@ use crate::actor::{Actor, ActorKind, Description};
 use crate::error::HistoryError;
 use crate::history::{History, block_on};
 use crate::paths::{ProjectFiles, RelativePath};
-use crate::store::{self, SUGGESTION_PREFIX};
+use crate::store::{self, SUGGESTION_ATTRIBUTE, SUGGESTION_PREFIX};
 use crate::{RevisionId, SuggestionId};
 use jj_lib::rewrite::rebase_commit;
 
@@ -89,6 +89,8 @@ pub struct Suggestion {
     pub patches: Vec<String>,
     /// The revision on main it starts from.
     pub base: RevisionId,
+    /// Its latest revision.
+    pub tip: RevisionId,
     /// Files where it clashes with main since a rebase; it can't be applied
     /// until they are resolved.
     pub conflicted: Vec<RelativePath>,
@@ -96,19 +98,26 @@ pub struct Suggestion {
 
 impl History {
     /// Records a suggestion by `agent`: `files` are the whole project after
-    /// `patch`, which checked clean. With `onto`, the revision goes on the
-    /// end of that suggestion's line; otherwise a new suggestion starts from
-    /// main's latest revision, titled `title`. Main is never touched.
+    /// `patch`, which checked clean, made from the files of revision
+    /// `base`. With `onto`, the revision goes on the end of that
+    /// suggestion's line, whose latest revision must still be `base`;
+    /// otherwise a new suggestion starts from `base` (main as the caller
+    /// read it: an older main is fine, applying replays the patches),
+    /// titled `title`. Main is never touched.
     ///
     /// # Errors
     ///
     /// [`HistoryError::UnknownSuggestion`] when `onto` names none;
+    /// [`HistoryError::SuggestionMoved`] when `onto`'s line moved on since
+    /// `base` (read it again and retry);
+    /// [`HistoryError::UnknownRevision`] when `base` names no revision;
     /// [`HistoryError::SettingsProtected`] when `files` change a file in
     /// `.stave/` (the project's settings, which only the person changes).
     pub fn suggest(
         &mut self,
         agent: &Actor,
         onto: Option<&SuggestionId>,
+        base: &RevisionId,
         files: &ProjectFiles,
         patch: &str,
         title: &str,
@@ -117,16 +126,17 @@ impl History {
         block_on(async {
             let repo = self.head().await?;
             let store = repo.store().clone();
-            let (id, parent) = match onto {
+            let parent = self.resolve(&repo, base)?;
+            let id = match onto {
                 Some(id) => {
                     let tip = store::bookmark(&repo, &suggestion_bookmark(id))
                         .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?;
-                    (id.clone(), tip)
+                    if tip != parent {
+                        return Err(HistoryError::SuggestionMoved { id: id.clone() });
+                    }
+                    id.clone()
                 }
-                None => {
-                    let id = SuggestionId(self.settings.get_rng().new_change_id(6).hex());
-                    (id, store::main_id(&repo)?)
-                }
+                None => SuggestionId(self.settings.get_rng().new_change_id(6).hex()),
             };
             let parent_tree = store::commit(&store, &parent).await?.tree();
             let tree = store::tree_over(&store, &parent_tree, files).await?;
@@ -140,6 +150,7 @@ impl History {
             };
             let action = format!("suggest: {title}");
             let mut transaction = Self::transaction(&repo, Some(agent), &action);
+            transaction.set_attribute(SUGGESTION_ATTRIBUTE.to_owned(), id.as_str().to_owned());
             let revision =
                 store::record(transaction.repo_mut(), &parent, tree, &description, agent).await?;
             store::set_bookmark(
@@ -206,6 +217,7 @@ impl History {
                     title: line.title,
                     patches: line.patches,
                     base: RevisionId(store::hex(&line.base)),
+                    tip: RevisionId(store::hex(line.tip.id())),
                     conflicted,
                 });
             }
@@ -219,12 +231,15 @@ impl History {
     /// suggestion, with conflict markers; returns those files (empty when
     /// the rebase was clean). Main is never touched.
     ///
+    /// The step is `actor`'s, as undo sees it.
+    ///
     /// # Errors
     ///
     /// [`HistoryError::UnknownSuggestion`] when there is none.
     pub fn rebase_suggestion(
         &mut self,
         id: &SuggestionId,
+        actor: &Actor,
     ) -> Result<Vec<RelativePath>, HistoryError> {
         let _lock = self.lock_main()?;
         block_on(async {
@@ -238,7 +253,8 @@ impl History {
                 return Err(HistoryError::UnknownSuggestion(id.clone()));
             };
             let action = format!("rebase suggestion: {}", line.title);
-            let mut transaction = Self::transaction(&repo, None, &action);
+            let mut transaction = Self::transaction(&repo, Some(actor), &action);
+            transaction.set_attribute(SUGGESTION_ATTRIBUTE.to_owned(), id.as_str().to_owned());
             rebase_commit(transaction.repo_mut(), oldest.clone(), vec![main])
                 .await
                 .map_err(HistoryError::store)?;
@@ -258,26 +274,36 @@ impl History {
     }
 
     /// Replaces the files of a suggestion's latest revision, as when its
-    /// clashes are resolved. Main is never touched.
+    /// clashes are resolved, as `actor`. `tip` is the latest revision the
+    /// caller read `files` from ([`Suggestion::tip`]). Main is never
+    /// touched.
     ///
     /// # Errors
     ///
-    /// [`HistoryError::UnknownSuggestion`] when there is none.
+    /// [`HistoryError::UnknownSuggestion`] when there is none;
+    /// [`HistoryError::SuggestionMoved`] when its latest revision is no
+    /// longer `tip` (read it again and retry).
     pub fn write_suggestion_files(
         &mut self,
         id: &SuggestionId,
+        tip: &RevisionId,
         files: &ProjectFiles,
+        actor: &Actor,
     ) -> Result<(), HistoryError> {
         let _lock = self.lock_main()?;
         block_on(async {
             let repo = self.head().await?;
             let line = line(&repo, id).await?;
+            if store::hex(line.tip.id()) != tip.as_str() {
+                return Err(HistoryError::SuggestionMoved { id: id.clone() });
+            }
             let store = repo.store().clone();
             let tip_tree = line.tip.tree();
             let tree = store::tree_over(&store, &tip_tree, files).await?;
             store::refuse_settings_changes(&tip_tree, &tree).await?;
             let action = format!("resolve suggestion: {}", line.title);
-            let mut transaction = Self::transaction(&repo, None, &action);
+            let mut transaction = Self::transaction(&repo, Some(actor), &action);
+            transaction.set_attribute(SUGGESTION_ATTRIBUTE.to_owned(), id.as_str().to_owned());
             let resolved = transaction
                 .repo_mut()
                 .rewrite_commit(&line.tip)
@@ -316,6 +342,7 @@ impl History {
             let line = line(&repo, id).await?;
             let action = format!("discard suggestion: {}", line.title);
             let mut transaction = Self::transaction(&repo, Some(actor), &action);
+            transaction.set_attribute(SUGGESTION_ATTRIBUTE.to_owned(), id.as_str().to_owned());
             store::set_bookmark(transaction.repo_mut(), &suggestion_bookmark(id), None);
             for commit in &line.commits {
                 transaction.repo_mut().record_abandoned_commit(commit);

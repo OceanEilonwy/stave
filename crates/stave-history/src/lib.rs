@@ -39,7 +39,7 @@ pub use actor::{Actor, ActorKind};
 pub use error::HistoryError;
 pub use folder::VersionsStatus;
 pub use history::History;
-pub use merging::CatchUp;
+pub use merging::{CatchUp, MergedText, Written, merge_text};
 pub use paths::{PathError, ProjectFiles, RelativePath};
 pub use policy::{MergePolicy, merge_policy};
 pub use suggestions::Suggestion;
