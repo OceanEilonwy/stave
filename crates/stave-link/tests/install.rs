@@ -41,15 +41,18 @@ impl Home {
     }
 
     /// Puts a fake `claude` on the `PATH`: `mcp get|add|remove` over a
-    /// file of server names, every call logged.
+    /// file of the user's server names, every call logged with the folder
+    /// it ran in. `get` also finds the names in `project_servers` (a
+    /// project's `.mcp.json`), which `remove --scope user` can't remove.
     fn fake_claude(&self) {
         let script = r#"#!/bin/sh
 here="$(dirname "$0")"
 echo "$@" >> "$here/claude.log"
+pwd >> "$here/claude.folders"
 servers="$here/servers"
 touch "$servers"
 case "$1 $2" in
-  "mcp get") grep -qx "$3" "$servers" ;;
+  "mcp get") grep -qx "$3" "$servers" || grep -qsx "$3" "$here/project_servers" ;;
   "mcp add")
     name="$5"
     if grep -qx "$name" "$servers"; then echo "already exists" >&2; exit 1; fi
@@ -303,4 +306,121 @@ fn found_hosts_are_the_apps_in_the_home_and_on_the_path() {
         found_hosts_in(&home.places()),
         [Host::ClaudeDesktop, Host::ClaudeCode, Host::Codex]
     );
+}
+
+#[test]
+fn claude_code_with_a_project_entry_alone_still_installs_for_the_user() {
+    let home = Home::new();
+    home.fake_claude();
+    // `claude mcp get stave` finds the project's entry; there is no
+    // user entry, so `remove --scope user` fails.
+    fs::write(home.bin.join("project_servers"), "stave\n").unwrap();
+    let installed = install_in(&home.places(), &[Host::ClaudeCode], Path::new(STAVE))
+        .remove(0)
+        .unwrap();
+    assert_eq!(installed.host, Host::ClaudeCode);
+    assert_eq!(home.claude_servers(), "stave\n");
+    let removed = uninstall_in(&home.places(), &[Host::ClaudeCode])
+        .remove(0)
+        .unwrap();
+    assert!(removed.how.contains("removed"), "{}", removed.how);
+    assert_eq!(home.claude_servers(), "");
+    // With the project's entry still there, there is no user entry to
+    // take out, and that is what is said.
+    let removed = uninstall_in(&home.places(), &[Host::ClaudeCode])
+        .remove(0)
+        .unwrap();
+    assert!(removed.how.contains("wasn't set up"), "{}", removed.how);
+    // Every call ran in the home folder, away from any project.
+    let home_folder = fs::canonicalize(home.path()).unwrap();
+    let folders = fs::read_to_string(home.bin.join("claude.folders")).unwrap();
+    assert!(!folders.is_empty());
+    for folder in folders.lines() {
+        assert_eq!(fs::canonicalize(folder).unwrap(), home_folder);
+    }
+}
+
+#[test]
+fn installs_codex_with_inline_servers() {
+    let home = Home::new();
+    let config = home.codex_config();
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(
+        &config,
+        "model = \"o4\"\nmcp_servers = { files = { command = \"npx\" } }\n",
+    )
+    .unwrap();
+    install_in(&home.places(), &[Host::Codex], Path::new(STAVE))
+        .remove(0)
+        .unwrap();
+    let table: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert_eq!(table["model"].as_str(), Some("o4"));
+    assert_eq!(
+        table["mcp_servers"]["files"]["command"].as_str(),
+        Some("npx")
+    );
+    assert_eq!(
+        table["mcp_servers"]["stave"]["command"].as_str(),
+        Some(STAVE)
+    );
+    uninstall_in(&home.places(), &[Host::Codex])
+        .remove(0)
+        .unwrap();
+    let table: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert!(table["mcp_servers"].get("stave").is_none());
+    assert_eq!(
+        table["mcp_servers"]["files"]["command"].as_str(),
+        Some("npx")
+    );
+}
+
+#[test]
+fn installing_through_a_symlinked_config_keeps_the_symlink() {
+    let home = Home::new();
+    let dotfiles = home.path().join("dotfiles");
+    fs::create_dir_all(&dotfiles).unwrap();
+    let real = dotfiles.join("codex.toml");
+    fs::write(&real, "model = \"o4\"\n").unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+    let config = home.codex_config();
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &config).unwrap();
+    install_in(&home.places(), &[Host::Codex], Path::new(STAVE))
+        .remove(0)
+        .unwrap();
+    assert!(
+        fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let written = fs::read_to_string(&real).unwrap();
+    assert!(written.contains("model = \"o4\""), "{written}");
+    assert!(written.contains(STAVE), "{written}");
+    assert_eq!(
+        fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    // No temporary file is left beside either.
+    for folder in [dotfiles, home.path().join(".codex")] {
+        let names: Vec<_> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+}
+
+#[test]
+fn a_new_settings_file_is_the_owners_alone() {
+    let home = Home::new();
+    fs::create_dir_all(home.path().join(".config/Claude")).unwrap();
+    install_in(&home.places(), &[Host::ClaudeDesktop], Path::new(STAVE))
+        .remove(0)
+        .unwrap();
+    let mode = fs::metadata(home.claude_desktop_config())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
 }

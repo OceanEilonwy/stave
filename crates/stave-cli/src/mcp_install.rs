@@ -59,6 +59,14 @@ impl HostFlags {
     }
 }
 
+/// Runs bare `stave mcp`, the command the apps are set up to start. The
+/// server itself comes with Lane D (`stave-mcp`), which replaces this
+/// body; until then it says so and fails.
+pub(crate) fn serve() -> Result<bool> {
+    eprintln!("The server isn't built into this stave yet.");
+    Ok(false)
+}
+
 /// Runs `stave mcp install` or `stave mcp uninstall`: `true` when every
 /// app was done.
 pub(crate) fn run(command: &McpCommand) -> Result<bool> {

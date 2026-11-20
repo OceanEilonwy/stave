@@ -271,7 +271,9 @@ pub enum EditCommand {
     MakePlain(Ident),
     /// Start a change from a whole patch file's text (`stave 1` and one
     /// or more `patch` blocks), as an AI app's suggestion is shown: tried
-    /// and ghosted like any change, written only on `Add`.
+    /// and ghosted like any change, written only on `Add`. Refused
+    /// ([`Rejection::ChangeInProgress`]) while an edit or change is in
+    /// progress, which it would otherwise throw away.
     ShowPatch(String),
     /// Write the candidate, or the change, into the text (only when it
     /// fits).
@@ -372,6 +374,9 @@ pub enum Rejection {
     NotDragging,
     /// The param picked is not one the grip could change.
     NotAChoice,
+    /// [`EditCommand::ShowPatch`] came while an edit or a change was in
+    /// progress: the user's own is kept.
+    ChangeInProgress,
 }
 
 impl Rejection {
@@ -413,6 +418,9 @@ impl Rejection {
             ),
             Rejection::NotDragging => tr("no grip is being dragged"),
             Rejection::NotAChoice => tr("that is not one of the sizes this grip could change"),
+            Rejection::ChangeInProgress => tr(
+                "a suggested change came while you were making one, so yours was kept: add or cancel it, then ask for the suggestion again",
+            ),
         }
     }
 }

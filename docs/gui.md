@@ -285,7 +285,9 @@ forward); a patch is then started in that window as a change of the
 design (`EditCommand::ShowPatch`, see [`docs/editing.md`](editing.md),
 "Changes of the design"): tried on a scratch copy and shown as a ghost
 with its card, its words "a suggested change", written only if the user
-presses Add. Nothing an AI app sends is ever written by itself.
+presses Add. Nothing an AI app sends is ever written by itself, and it
+never replaces what the user is making: while an edit or change is in
+progress there the patch is refused with a toast and theirs is kept.
 
 Help's **Use with an AI App…** (`app.use-with-ai-app`, also on the start
 page's menu) sets Stave up in every AI app found on the computer
@@ -294,7 +296,10 @@ page's menu) sets Stave up in every AI app found on the computer
 done in each ("Claude Desktop: ready. Start Claude Desktop again to use
 Stave there.") or why not. The apps run the `stave` program found beside
 `stave-gtk` or on `PATH`; with none found, or no app found, the dialog
-says so and what to install. The window's words never name the protocol.
+says so and what to install. The window's words never name the protocol:
+why an app couldn't be set up is said in plain words (its settings file
+couldn't be read, or isn't laid out the way the app writes it; its own
+setup command failed), and the full error goes to standard error.
 
 Started with no folder (from the app grid or the dock), Stave shows the
 **start page** (`ui/start_page.rs`): an `AdwStatusPage` with Open

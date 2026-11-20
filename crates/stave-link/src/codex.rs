@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use toml_edit::{Array, DocumentMut, Item, Table, value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
 
 use crate::{Host, Installed, LinkError, Places, SERVER_ARGUMENT, SERVER_NAME, files, utf8};
 
@@ -73,13 +73,20 @@ fn parse(path: &Path, text: &str) -> Result<DocumentMut, LinkError> {
 }
 
 /// The servers table, made when missing (as a table with no header of
-/// its own: `[mcp_servers.stave]` alone is written).
+/// its own: `[mcp_servers.stave]` alone is written). An inline table
+/// (`mcp_servers = { files = { … } }`, which Codex reads too) becomes a
+/// table of its own, its servers kept.
 fn servers<'d>(document: &'d mut DocumentMut, path: &Path) -> Result<&'d mut Table, LinkError> {
     let servers = document.entry(SERVERS).or_insert_with(|| {
         let mut table = Table::new();
         table.set_implicit(true);
         Item::Table(table)
     });
+    if servers.is_inline_table()
+        && let Item::Value(Value::InlineTable(inline)) = std::mem::take(servers)
+    {
+        *servers = Item::Table(inline.into_table());
+    }
     servers
         .as_table_mut()
         .ok_or_else(|| not_settings(path, "its mcp_servers isn't a table"))

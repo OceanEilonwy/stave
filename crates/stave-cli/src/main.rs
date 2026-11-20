@@ -156,10 +156,11 @@ enum Command {
         commit: bool,
     },
     /// Use Stave from an AI app (Claude Desktop, Claude Code, Codex):
-    /// set it up there, or take it out.
+    /// set it up there, or take it out. With no subcommand, run the server
+    /// the apps start.
     Mcp {
         #[command(subcommand)]
-        command: mcp_install::McpCommand,
+        command: Option<mcp_install::McpCommand>,
     },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
@@ -178,7 +179,10 @@ fn main() -> ExitCode {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
-        Command::Mcp { command } => mcp_install::run(&command),
+        Command::Mcp {
+            command: Some(command),
+        } => mcp_install::run(&command),
+        Command::Mcp { command: None } => mcp_install::serve(),
         Command::Edit {
             path,
             patch,

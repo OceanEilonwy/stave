@@ -659,7 +659,10 @@ impl Shell {
 
     /// An AI app asked to show a project: its window opens (or comes
     /// forward) and the patch, if any, is tried there and shown as a
-    /// ghost, a change in progress the user may add or cancel.
+    /// ghost, a change in progress the user may add or cancel. When the
+    /// user is already making an edit or change there, the session
+    /// refuses the patch and keeps theirs (`Rejection::ChangeInProgress`,
+    /// shown as a toast).
     fn show_project(&mut self, request: ShowProject) {
         let Some(id) = self.open_folder(&request.folder) else {
             return;

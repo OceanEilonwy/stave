@@ -1342,6 +1342,13 @@ impl Session {
                 },
                 events,
             ),
+            // A suggestion from another program never throws away what
+            // the user is making.
+            EditCommand::ShowPatch(_) if self.edit.is_some() || self.change.is_some() => {
+                events.push(Event::Edit(EditEvent::Rejected(
+                    Rejection::ChangeInProgress,
+                )));
+            }
             EditCommand::ShowPatch(text) => {
                 self.start_change(ChangeRequest::Patch { text }, events);
             }

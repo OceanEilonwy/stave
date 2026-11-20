@@ -81,6 +81,11 @@ pub(super) fn install_found() -> Installing {
         return Installing::NoProgram;
     };
     let results = stave_link::install(&hosts, &program);
+    for (host, result) in hosts.iter().zip(&results) {
+        if let Err(error) = result {
+            eprintln!("error: setting Stave up in {host}: {error}");
+        }
+    }
     Installing::Done(hosts.into_iter().zip(results).collect())
 }
 
@@ -139,8 +144,8 @@ pub(super) fn report(installing: &Installing) -> Report {
                         &[("app", host)],
                     ),
                     Err(error) => fill_in(
-                        &tr("{app}: not set up. {error}"),
-                        &[("app", host), ("error", error)],
+                        &tr("{app}: not set up. {reason}"),
+                        &[("app", host), ("reason", &reason(*host, error))],
                     ),
                 })
                 .collect();
@@ -153,6 +158,46 @@ pub(super) fn report(installing: &Installing) -> Report {
                 },
                 body: lines.join("\n"),
             }
+        }
+    }
+}
+
+/// Why an app couldn't be set up, in the window's plain, translated
+/// words: never the commands run or the settings' own key names (the
+/// full error goes to standard error, from [`install_found`]).
+fn reason(host: Host, error: &LinkError) -> String {
+    let app: &dyn std::fmt::Display = &host;
+    match error {
+        LinkError::NoHome => fill_in(
+            &tr("Stave can't find your home folder, so it can't find {app}'s settings."),
+            &[("app", app)],
+        ),
+        LinkError::NotUtf8(_) => tr(
+            "Stave is installed in a folder whose name can't be written into the app's settings.",
+        ),
+        LinkError::Read { path, .. } => fill_in(
+            &tr("Its settings file couldn't be read ({path})."),
+            &[("path", &path.display())],
+        ),
+        LinkError::Write { path, .. } => fill_in(
+            &tr("Its settings file couldn't be written ({path})."),
+            &[("path", &path.display())],
+        ),
+        LinkError::Settings { path, .. } => fill_in(
+            &tr(
+                "Its settings file isn't laid out the way {app} writes it, so it was left as it is ({path}).",
+            ),
+            &[("app", app), ("path", &path.display())],
+        ),
+        LinkError::NoCommand { program, .. } => fill_in(
+            &tr("Its command, {program}, wasn't found. Is {app} installed?"),
+            &[("program", program), ("app", app)],
+        ),
+        LinkError::Run { .. } | LinkError::Failed { .. } => {
+            fill_in(&tr("{app}'s own setup command failed."), &[("app", app)])
+        }
+        LinkError::Folder { .. } | LinkError::NoSessionBus(_) | LinkError::Bus(_) => {
+            fill_in(&tr("Stave couldn't reach {app}."), &[("app", app)])
         }
     }
 }
@@ -250,6 +295,67 @@ mod tests {
             let report = super::report(&installing);
             assert!(!report.body.contains("MCP") && !report.heading.contains("MCP"));
         }
+    }
+
+    /// Errors whose own text names the commands run or the settings' key
+    /// names come out in plain words, with no "mcp" in any case.
+    #[test]
+    fn the_report_puts_every_error_in_plain_words() {
+        let failed = |host: Host, error: LinkError| (host, Err(error));
+        let done = Installing::Done(vec![
+            failed(
+                Host::ClaudeCode,
+                LinkError::Failed {
+                    command: "claude mcp add --scope user stave -- /usr/bin/stave mcp".to_owned(),
+                    output: "mcp add: already exists".to_owned(),
+                },
+            ),
+            failed(
+                Host::ClaudeDesktop,
+                LinkError::Settings {
+                    path: PathBuf::from("/home/me/.config/Claude/claude_desktop_config.json"),
+                    message: "its mcpServers isn't a JSON object".to_owned(),
+                },
+            ),
+            failed(
+                Host::Codex,
+                LinkError::Settings {
+                    path: PathBuf::from("/home/me/.codex/config.toml"),
+                    message: "its mcp_servers isn't a table".to_owned(),
+                },
+            ),
+            failed(Host::Codex, LinkError::NoHome),
+            failed(
+                Host::ClaudeCode,
+                LinkError::NoCommand {
+                    host: Host::ClaudeCode,
+                    program: "claude",
+                },
+            ),
+        ]);
+        let report = report(&done);
+        let lines: Vec<&str> = report.body.lines().collect();
+        assert_eq!(lines.len(), 5, "{}", report.body);
+        for line in &lines {
+            assert!(
+                !line.to_lowercase().contains("mcp"),
+                "names the protocol: {line}"
+            );
+            assert!(line.contains(": not set up. "), "{line}");
+        }
+        assert_eq!(
+            lines[0],
+            "Claude Code: not set up. Claude Code's own setup command failed."
+        );
+        assert!(lines[1].contains("left as it is"), "{}", lines[1]);
+        assert!(
+            lines[1].contains("claude_desktop_config.json"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].contains("config.toml"), "{}", lines[2]);
+        assert!(lines[3].contains("home folder"), "{}", lines[3]);
+        assert!(lines[4].contains("claude"), "{}", lines[4]);
     }
 
     #[test]

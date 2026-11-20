@@ -84,6 +84,23 @@ fn a_patch_added_is_written() {
 }
 
 #[test]
+fn a_patch_that_comes_while_a_change_is_in_progress_keeps_the_users_change() {
+    let folder = copy_of("chest_of_drawers", "busy");
+    let mut session = Session::new(folder);
+    send(&mut session, EditCommand::ShowPatch(WIDER.to_owned()));
+    assert!(session.change().is_some());
+    let other = "stave 1\n\npatch \"Make the chest taller\" {\n  set overall_height = 1200mm\n}\n";
+    let events = send(&mut session, EditCommand::ShowPatch(other.to_owned()));
+    assert_eq!(
+        events,
+        [EditEvent::Rejected(Rejection::ChangeInProgress)],
+        "nothing was cancelled"
+    );
+    let change = session.change().expect("the change in progress is kept");
+    assert_eq!(change.summary(), "Make the chest wider");
+}
+
+#[test]
 fn a_patch_that_does_not_read_cannot_start() {
     let folder = copy_of("chest_of_drawers", "unreadable");
     let mut session = Session::new(folder);

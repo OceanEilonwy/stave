@@ -83,3 +83,24 @@ fn an_app_that_fails_fails_the_command_but_not_the_others() {
     assert!(text(&output.stdout).contains("Codex: added Stave"));
     assert!(home.path().join(".codex/config.toml").is_file());
 }
+
+#[test]
+fn mcp_help_lists_install_and_uninstall() {
+    let home = tempfile::tempdir().unwrap();
+    let output = stave(home.path(), &["mcp", "--help"]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let said = text(&output.stdout);
+    assert!(said.contains("install"), "{said}");
+    assert!(said.contains("uninstall"), "{said}");
+}
+
+/// Bare `stave mcp` is what every app is set up to start: it parses (no
+/// usage error, exit code 2), and runs the server's place.
+#[test]
+fn bare_mcp_parses() {
+    let home = tempfile::tempdir().unwrap();
+    let output = stave(home.path(), &["mcp"]);
+    let said = text(&output.stderr);
+    assert_ne!(output.status.code(), Some(2), "{said}");
+    assert!(!said.contains("Usage:"), "{said}");
+}

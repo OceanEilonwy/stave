@@ -1,7 +1,10 @@
 //! Claude Code: its own command, `claude mcp add --scope user stave --
-//! <stave> mcp`, run only when `claude` is on the path. Installing again
-//! removes the entry first, so a moved `stave` is picked up; `claude mcp
-//! get stave` says whether there is one.
+//! <stave> mcp`, run only when `claude` is on the path. Installing first
+//! removes the user's entry (`claude mcp remove --scope user stave`), so
+//! a moved `stave` is picked up; that removal failing just means there
+//! was none. Nothing is decided from `claude mcp get`, which also finds
+//! a project's or a folder's own `stave` entry, and every command runs
+//! in the home folder, so a project's `.mcp.json` doesn't come into it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,18 +16,16 @@ use crate::{
 /// The command.
 pub(crate) const PROGRAM: &str = "claude";
 
+/// The arguments that remove the user's entry.
+const REMOVE: [&str; 5] = ["mcp", "remove", "--scope", "user", SERVER_NAME];
+
 /// Adds Stave as a server for the user (every project).
 pub(crate) fn install(places: &Places, stave: &Path) -> Result<Installed, LinkError> {
     let program = program(places)?;
     let stave = utf8(stave)?;
-    if run(places, &program, &["mcp", "get", SERVER_NAME])?.is_ok() {
-        run(
-            places,
-            &program,
-            &["mcp", "remove", "--scope", "user", SERVER_NAME],
-        )?
-        .map_err(|failed| failed.error())?;
-    }
+    // An older entry goes first; when there is none this fails, and that
+    // is fine.
+    let _none_before = run(places, &program, &REMOVE)?;
     let arguments = [
         "mcp",
         "add",
@@ -45,22 +46,20 @@ pub(crate) fn install(places: &Places, stave: &Path) -> Result<Installed, LinkEr
     })
 }
 
-/// Removes Stave's server, when there is one.
+/// Removes the user's Stave server, when there is one.
 pub(crate) fn uninstall(places: &Places) -> Result<Installed, LinkError> {
     let program = program(places)?;
-    if run(places, &program, &["mcp", "get", SERVER_NAME])?.is_err() {
+    if run(places, &program, &REMOVE)?.is_err() {
         return Ok(Installed {
             host: Host::ClaudeCode,
             how: "Stave wasn't set up in Claude Code".to_owned(),
         });
     }
-    let arguments = ["mcp", "remove", "--scope", "user", SERVER_NAME];
-    run(places, &program, &arguments)?.map_err(|failed| failed.error())?;
     Ok(Installed {
         host: Host::ClaudeCode,
         how: format!(
             "removed Stave from Claude Code (`{}`)",
-            command_line(&arguments)
+            command_line(&REMOVE)
         ),
     })
 }
@@ -88,8 +87,8 @@ impl Failed {
     }
 }
 
-/// Runs the command with the home of `places`: `Err` when it can't be
-/// run at all, `Ok(Err)` when it ran and failed.
+/// Runs the command in, and with, the home of `places`: `Err` when it
+/// can't be run at all, `Ok(Err)` when it ran and failed.
 fn run(
     places: &Places,
     program: &Path,
@@ -98,6 +97,7 @@ fn run(
     let (name, home) = home_variable(places);
     let output = Command::new(program)
         .args(arguments)
+        .current_dir(&places.home)
         .env(name, home)
         .output()
         .map_err(|source| LinkError::Run {
