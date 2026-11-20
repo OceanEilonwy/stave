@@ -111,7 +111,7 @@ pub(in crate::ui) enum ProjectInput {
         then: Option<Box<WindowInput>>,
     },
     /// The Code panel's open documents and their buffers.
-    FilesOpened(Vec<(stave_ide::Document, gtk::TextBuffer)>),
+    FilesOpened(files::Documents),
     /// The files with unsaved changes, for the Details panel's ●.
     Unsaved(std::collections::BTreeSet<PathBuf>),
     /// The Code panel's open files as tabs, for the strip beside the
@@ -1187,7 +1187,9 @@ mod tests {
         fn change_a_file(&self) {
             let path = self.folder.join("shelf.stave");
             self.controller
-                .model()
+                .state()
+                .get_mut()
+                .model
                 .widgets
                 .files
                 .open_document(&stave_ide::Document::File(path.clone()));
@@ -1294,7 +1296,9 @@ mod tests {
         let path = opened.folder.join("shelf.stave");
         opened
             .controller
-            .model()
+            .state()
+            .get_mut()
+            .model
             .widgets
             .files
             .open_document(&stave_ide::Document::File(path.clone()));
