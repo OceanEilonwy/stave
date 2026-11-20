@@ -49,6 +49,7 @@
 #![warn(missing_docs)]
 
 pub mod ast;
+pub mod conflict;
 pub mod diagnostics;
 pub mod format;
 mod lexer;
@@ -120,10 +121,15 @@ pub fn is_patch_source(text: &str) -> bool {
     if u32::try_from(text.len()).is_err() {
         return false;
     }
-    lexer::lex(FileId::DETACHED, text)
+    let lexed = lexer::lex(FileId::DETACHED, text);
+    lexed
         .tokens
         .iter()
-        .filter(|token| !token.kind.is_trivia() && token.kind != SyntaxKind::NEWLINE)
+        .filter(|token| {
+            !token.kind.is_trivia()
+                && token.kind != SyntaxKind::NEWLINE
+                && !lexer::in_conflict(&lexed.conflicts, token.span)
+        })
         .nth(2)
         .is_some_and(|token| token.kind == SyntaxKind::KW_PATCH)
 }
@@ -156,7 +162,8 @@ fn parse_with<T>(
         };
     }
     let lexed = lexer::lex(file, text);
-    let (green, parse_diagnostics) = parser::parse(file, text, &lexed.tokens, entry);
+    let (green, parse_diagnostics) =
+        parser::parse(file, text, &lexed.tokens, &lexed.conflicts, entry);
     let mut diagnostics = lexed.diagnostics;
     diagnostics.extend(parse_diagnostics);
     let root = SyntaxNode::new_root(green.clone());

@@ -273,6 +273,80 @@ go-to-definition'd like any other name. In any other string (`goal:`, a scene
 title, an import source), an `interp` is `error[syntax]` with the help
 "write \{ for a literal brace".
 
+### Conflicts
+
+When two changes to a project touch the same lines (the window's saved
+work and an agent's suggestion, or the user's own work outside Stave), the
+file holds both versions between **conflict marker lines** until someone
+chooses. A file with conflicts still opens, round-trips byte for byte and
+is checked once for each side.
+
+```ebnf
+CONFLICT_MARKER = ? at the start of a line ? , marker_run , [ " " , { ? any char except LF ? } ] ;
+marker_run      = 7 * marker_char , { marker_char } ;   (* one character, repeated *)
+marker_char     = "<" | "|" | "=" | "%" | "+" | "-" | "\" | ">" ;
+```
+
+- **The marker rule.** A line that starts with a run of 7 or more of one
+  of `<`, `|`, `=`, `%`, `+`, `-`, `\`, `>`, followed by a space or the
+  end of the line (a carriage return before the line feed counts as the
+  end), is one `CONFLICT_MARKER` token; the text after the space is the
+  marker's **label**. Only at the start of a line, and no other `.stave`
+  line can start that way, so nothing valid changes. Any run of 7 or more
+  is a marker (jj lengthens every marker of a conflict when the file
+  holds a run of 7), and inside one conflict the marker lines that shape
+  it have the length of its opening line; a marker line of another length
+  is text of the side it is in. A `CONFLICT_MARKER` is trivia to the rest
+  of the grammar.
+- **Snapshot style** (jj's `snapshot` style, the one Stave's own
+  repositories write): `<<<<<<<` opens; each side starts with a
+  `+++++++` line and the base (what both changed) with a `-------` line,
+  every one written in full; `>>>>>>>` closes. The first marker line comes
+  right after the opening line, and a conflict has at least two sides.
+  When several bases are written, the first one is the conflict's base.
+
+  ```
+  <<<<<<< conflict 1 of 1
+  +++++++ your saved work
+  part shelf : pine { ... }
+  ------- base
+  part shelf : oak { ... }
+  +++++++ Claude Desktop: make the shelf from pine
+  part shelf : walnut { ... }
+  >>>>>>> conflict 1 of 1 ends
+  ```
+
+- **Git style** (two sides): `<<<<<<< label` opens the first side,
+  `||||||| label` optionally opens the base, `=======` opens the second
+  side and `>>>>>>> label` closes. The first side is labelled by the
+  opening line, the second by the closing line.
+- A conflict is the lines from its opening marker to its closing marker,
+  both included. A side's text is the lines between its marker line and
+  the next one, newline included, and may be empty. Any other shape (a
+  `%%%%%%%` diff section, a missing closing line, a `+++++++` in a git
+  conflict) is not a conflict Stave can read: its marker lines are each
+  `error[conflict]` and the lines between them are read as ordinary text.
+- **In the syntax tree** a conflict is one `CONFLICT` node, wherever it
+  stands, holding its marker tokens and a `CONFLICT_SIDE` node for each
+  side and for the base, in the order they are written. A side's text is
+  kept as tokens but not parsed with the rest of the file; the rest of the
+  file is parsed as if the conflict were not there.
+- **Checking.** The file is read once per side, that side chosen in every
+  conflict, so each side parses, solves and checks. Each conflict is
+  `error[conflict]` at its opening marker line, naming the clashing
+  changes by their labels (`'your saved work' and 'Claude Desktop' change
+  the same lines`), with the help "This file holds two versions of the
+  same lines. Keep one, keep both, or edit between the marker lines."
+- **Choosing.** A conflict is resolved as a text edit, not a patch (it is
+  a layer 1 problem; see [Fixes](#fixes)): keep one side, keep both (the
+  sides one after the other, in order), or write new text in its place.
+  Editors offer "Keep this side" (the first side), "Keep the other side"
+  (the second; a third side and on is "Keep side 3"), and "Keep both" only
+  when every side is whole items, at least one, and no two sides declare
+  the same name. Deleting the marker lines by hand resolves it too.
+- **Formatting.** The formatter leaves a file with conflicts as it is, as
+  it leaves any file with a syntax error.
+
 ---
 
 ## Syntactic grammar

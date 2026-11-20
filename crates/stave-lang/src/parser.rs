@@ -25,8 +25,9 @@
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder};
 
 use crate::ast::Span;
+use crate::conflict::Conflict;
 use crate::diagnostics::{Code, Diagnostic, FileId, Label};
-use crate::lexer::Token;
+use crate::lexer::{Token, in_conflict};
 use crate::syntax::SyntaxKind::{self, *};
 
 /// Expressions nested deeper than this are rejected instead of risking the
@@ -53,12 +54,13 @@ pub(crate) fn parse(
     file: FileId,
     text: &str,
     tokens: &[Token],
+    conflicts: &[Conflict],
     entry: Entry,
 ) -> (GreenNode, Vec<Diagnostic>) {
     let significant: Vec<usize> = tokens
         .iter()
         .enumerate()
-        .filter(|(_, token)| !token.kind.is_trivia())
+        .filter(|(_, token)| !token.kind.is_trivia() && !in_conflict(conflicts, token.span))
         .map(|(index, _)| index)
         .collect();
     let mut parser = Parser {

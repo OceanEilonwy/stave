@@ -17,6 +17,14 @@
 //!
 //! The parser therefore never sees an unbalanced `(` or `[`, and a forgotten
 //! `)` costs one error instead of the rest of the file.
+//!
+//! **Conflicts** (grammar, "Conflicts") are found before either pass. A
+//! marker line is one [`SyntaxKind::CONFLICT_MARKER`] token, trivia to the
+//! parser. Each side of a conflict is lexed on its own, as if the file ended
+//! where the side does (so a comment left open in one side can't swallow
+//! the next marker), and its tokens skip the second pass: they belong to no
+//! line of the rest of the file. Diagnostics from inside a side are dropped;
+//! each side is checked on its own, through [`crate::conflict::side_text`].
 
 #![expect(
     clippy::wildcard_enum_match_arm,
@@ -24,6 +32,7 @@
 )]
 
 use crate::ast::{Decimal, Fraction, Magnitude, Number, Quantity, Span, Unit};
+use crate::conflict::{self, Conflict};
 use crate::diagnostics::{Code, Diagnostic, FileId, Label};
 use crate::syntax::SyntaxKind;
 
@@ -40,10 +49,14 @@ pub(crate) struct Token {
 pub(crate) struct Lexed {
     pub tokens: Vec<Token>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The conflicts in the file, in order; the tokens inside them are not
+    /// significant.
+    pub conflicts: Vec<Conflict>,
 }
 
 /// Lexes a whole file. `text` must be at most `u32::MAX` bytes long.
 pub(crate) fn lex(file: FileId, text: &str) -> Lexed {
+    let conflicts = conflict::find_conflicts(text);
     let mut raw = RawLexer {
         file,
         text,
@@ -51,6 +64,8 @@ pub(crate) fn lex(file: FileId, text: &str) -> Lexed {
         position: 0,
         tokens: Vec::with_capacity(text.len() / 3),
         diagnostics: Vec::new(),
+        conflicts: &conflicts,
+        next_conflict: 0,
     };
     raw.run();
     let RawLexer {
@@ -58,11 +73,43 @@ pub(crate) fn lex(file: FileId, text: &str) -> Lexed {
         mut diagnostics,
         ..
     } = raw;
-    let tokens = cook(file, text, tokens, &mut diagnostics);
+    let (inside, outside): (Vec<Token>, Vec<Token>) = tokens
+        .into_iter()
+        .partition(|token| in_conflict(&conflicts, token.span));
+    let cooked = cook(file, text, outside, &mut diagnostics);
     Lexed {
-        tokens,
+        tokens: merge(cooked, inside),
         diagnostics,
+        conflicts,
     }
+}
+
+/// `true` if `span` lies inside one of `conflicts` (sorted, apart).
+pub(crate) fn in_conflict(conflicts: &[Conflict], span: Span) -> bool {
+    let start = usize::try_from(span.start()).unwrap_or(usize::MAX);
+    let after = conflicts.partition_point(|conflict| conflict.range.start <= start);
+    after
+        .checked_sub(1)
+        .and_then(|index| conflicts.get(index))
+        .is_some_and(|conflict| conflict.range.contains(&start))
+}
+
+/// Merges two token lists sorted by position; at the same position the
+/// cooked token (a zero-width closing bracket) comes first.
+fn merge(cooked: Vec<Token>, inside: Vec<Token>) -> Vec<Token> {
+    if inside.is_empty() {
+        return cooked;
+    }
+    let mut out = Vec::with_capacity(cooked.len() + inside.len());
+    let mut inside = inside.into_iter().peekable();
+    for token in cooked {
+        while let Some(next) = inside.next_if(|next| next.span.start() < token.span.start()) {
+            out.push(next);
+        }
+        out.push(token);
+    }
+    out.extend(inside);
+    out
 }
 
 fn offset(position: usize) -> u32 {
@@ -97,6 +144,10 @@ struct RawLexer<'a> {
     position: usize,
     tokens: Vec<Token>,
     diagnostics: Vec<Diagnostic>,
+    /// The conflicts in `text`, lexed side by side.
+    conflicts: &'a [Conflict],
+    /// Index into `conflicts` of the next one to reach.
+    next_conflict: usize,
 }
 
 impl RawLexer<'_> {
@@ -139,12 +190,22 @@ impl RawLexer<'_> {
 
     fn run(&mut self) {
         // A byte-order mark some editors write is whitespace.
-        if self.text.starts_with('\u{feff}') {
+        if self.position == 0 && self.text.starts_with('\u{feff}') {
             self.position = '\u{feff}'.len_utf8();
             self.push(SyntaxKind::WHITESPACE, 0, self.position);
         }
         while self.position < self.bytes.len() {
             let start = self.position;
+            if let Some(conflict) = self.conflicts.get(self.next_conflict)
+                && conflict.range.start == start
+            {
+                self.next_conflict += 1;
+                self.conflict(conflict);
+                continue;
+            }
+            if self.at_line_start(start) && self.marker_line(start) {
+                continue;
+            }
             let byte = self.byte(start);
             match byte {
                 b'\n' => {
@@ -181,6 +242,96 @@ impl RawLexer<'_> {
                 _ => self.punctuation(start),
             }
         }
+    }
+
+    /// `true` if `position` starts a line (a byte-order mark before it
+    /// doesn't count).
+    fn at_line_start(&self, position: usize) -> bool {
+        let before = self.text.get(..position).unwrap_or("");
+        before.is_empty() || before == "\u{feff}" || before.ends_with('\n')
+    }
+
+    /// Lexes a marker line at `start` as one token, without its line
+    /// ending; `false` if the line is not one.
+    fn marker_line(&mut self, start: usize) -> bool {
+        let rest = self.text.get(start..).unwrap_or("");
+        let line = rest.split('\n').next().unwrap_or("");
+        if conflict::marker(line).is_none() {
+            return false;
+        }
+        let end = start + line.strip_suffix('\r').unwrap_or(line).len();
+        self.position = end;
+        self.push(SyntaxKind::CONFLICT_MARKER, start, end);
+        true
+    }
+
+    /// Lexes a conflict: its marker lines, and each side on its own.
+    fn conflict(&mut self, conflict: &Conflict) {
+        let mut sides: Vec<&std::ops::Range<usize>> = conflict
+            .sides
+            .iter()
+            .chain(&conflict.base)
+            .map(|side| &side.range)
+            .collect();
+        sides.sort_by_key(|range| range.start);
+        let mut position = conflict.range.start;
+        for side in sides {
+            self.marker_lines(position, side.start);
+            self.side(side.clone());
+            position = side.end;
+        }
+        self.marker_lines(position, conflict.range.end);
+        self.position = conflict.range.end;
+    }
+
+    /// Lexes the marker lines between `start` and `end`, which hold nothing
+    /// else.
+    fn marker_lines(&mut self, start: usize, end: usize) {
+        self.position = start;
+        while self.position < end {
+            let at = self.position;
+            match self.byte(at) {
+                b'\n' => {
+                    self.position += 1;
+                    self.push(SyntaxKind::NEWLINE, at, self.position);
+                }
+                b'\r' => {
+                    self.position += 1;
+                    self.push(SyntaxKind::WHITESPACE, at, self.position);
+                }
+                _ => {
+                    if !self.marker_line(at) {
+                        // Not reached: the lines between a conflict's sides
+                        // are its marker lines. Keep every byte regardless.
+                        let line_end = self
+                            .text
+                            .get(at..end)
+                            .and_then(|rest| rest.find('\n'))
+                            .map_or(end, |found| at + found);
+                        self.position = line_end;
+                        self.push(SyntaxKind::ERROR_TOKEN, at, line_end);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lexes one side of a conflict as if the file ended with it; its
+    /// diagnostics are dropped.
+    fn side(&mut self, range: std::ops::Range<usize>) {
+        let text = self.text.get(..range.end).unwrap_or("");
+        let mut side = RawLexer {
+            file: self.file,
+            text,
+            bytes: text.as_bytes(),
+            position: range.start,
+            tokens: Vec::new(),
+            diagnostics: Vec::new(),
+            conflicts: &[],
+            next_conflict: 0,
+        };
+        side.run();
+        self.tokens.append(&mut side.tokens);
     }
 
     fn block_comment(&mut self, start: usize) {
@@ -1460,5 +1611,104 @@ mod tests {
             .map(|t| t.kind)
             .collect();
         assert_eq!(closers, [R_PAREN, R_BRACK]);
+    }
+
+    /// Every token with its text, trivia and conflicts included.
+    fn all_tokens(text: &str) -> Vec<(SyntaxKind, String)> {
+        lex_text(text)
+            .tokens
+            .iter()
+            .map(|token| {
+                let range = usize::try_from(token.span.start()).unwrap()
+                    ..usize::try_from(token.span.end()).unwrap();
+                (token.kind, text[range].to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_marker_line_is_one_trivia_token() {
+        let text = "let a = 1\n>>>>>>> stray label\r\nlet b = 2\n";
+        let tokens = all_tokens(text);
+        assert!(
+            tokens.contains(&(CONFLICT_MARKER, ">>>>>>> stray label".to_owned())),
+            "{tokens:?}"
+        );
+        assert!(CONFLICT_MARKER.is_trivia());
+        assert_eq!(
+            significant(text)
+                .iter()
+                .filter(|(kind, _)| *kind == IDENT)
+                .count(),
+            2
+        );
+        let rebuilt: String = tokens.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(rebuilt, text);
+    }
+
+    #[test]
+    fn a_marker_needs_seven_characters_at_the_start_of_a_line() {
+        for text in ["======\n", "a =======\n", "<<<<<<<x\n"] {
+            assert!(
+                all_tokens(text)
+                    .iter()
+                    .all(|(kind, _)| *kind != CONFLICT_MARKER),
+                "{text:?}"
+            );
+        }
+        assert_eq!(all_tokens("==========")[0].0, CONFLICT_MARKER);
+    }
+
+    #[test]
+    fn a_conflict_keeps_every_byte_and_its_sides_out_of_the_line_rules() {
+        // The open bracket in the first side would otherwise close at the
+        // next item and drop the newlines after it.
+        let text =
+            "let a = f(\n<<<<<<< one\nlet b = (1\n=======\n/* open\n>>>>>>> two\nlet c = 3\n";
+        let lexed = lex_text(text);
+        assert_eq!(lexed.conflicts.len(), 1);
+        let rebuilt: String = lexed
+            .tokens
+            .iter()
+            .map(|token| {
+                &text[usize::try_from(token.span.start()).unwrap()
+                    ..usize::try_from(token.span.end()).unwrap()]
+            })
+            .collect();
+        assert_eq!(rebuilt, text);
+        let markers: Vec<String> = all_tokens(text)
+            .into_iter()
+            .filter(|(kind, _)| *kind == CONFLICT_MARKER)
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(markers, ["<<<<<<< one", "=======", ">>>>>>> two"]);
+        // The block comment left open in the second side ends with it.
+        assert!(
+            all_tokens(text).contains(&(BLOCK_COMMENT, "/* open\n".to_owned())),
+            "{:?}",
+            all_tokens(text)
+        );
+        // `let c` still starts a line of its own: the `(` before the
+        // conflict is closed there, once.
+        assert_eq!(lexed.diagnostics.len(), 1, "{:?}", lexed.diagnostics);
+        assert_eq!(lexed.diagnostics[0].code, Code::UnclosedBracket);
+    }
+
+    #[test]
+    fn tokens_inside_a_conflict_are_in_order() {
+        let text = "<<<<<<< a\n+++++++ one\nlet x = 1\n------- base\n+++++++ two\nlet x = 2\n>>>>>>> end\n";
+        let lexed = lex_text(text);
+        assert!(
+            lexed
+                .tokens
+                .windows(2)
+                .all(|pair| pair[0].span.end() <= pair[1].span.start())
+        );
+        assert!(
+            lexed
+                .tokens
+                .iter()
+                .all(|token| in_conflict(&lexed.conflicts, token.span))
+        );
     }
 }
