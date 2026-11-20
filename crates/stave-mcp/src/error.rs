@@ -144,6 +144,12 @@ pub enum McpError {
     /// A patch to suggest doesn't fit, so nothing was recorded.
     #[error("The patch doesn't fit, so nothing was suggested. What Stave found:\n{0}")]
     SuggestionRefused(String),
+    /// A patch to suggest fits but leaves the design with errors, so it
+    /// could never be applied; nothing was recorded.
+    #[error(
+        "The patch fits, but the design doesn't check clean afterwards, so it couldn't be applied and nothing was suggested. Fix these errors first, in the same patch or an earlier suggestion:\n{0}"
+    )]
+    SuggestionNotClean(String),
     /// A suggestion, tried on the project as it is now, leaves errors.
     #[error(
         "The suggestion doesn't check clean on the project as it is now, so it wasn't applied. What Stave found:\n{0}"

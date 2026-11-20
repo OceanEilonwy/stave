@@ -343,9 +343,14 @@ impl Summary {
         text.push('\n');
         match self.versions.versions {
             VersionsState::On => {
+                let at_least = if self.versions.revisions_capped {
+                    "at least "
+                } else {
+                    ""
+                };
                 let _ = write!(
                     text,
-                    "Versions are on: {} and {} waiting.",
+                    "Versions are on: {at_least}{} and {} waiting.",
                     count_words(self.versions.revisions, "version", "versions"),
                     count_words(self.versions.suggestions, "suggestion", "suggestions"),
                 );
@@ -371,8 +376,11 @@ enum VersionsState {
 struct Versions {
     /// On or off.
     versions: VersionsState,
-    /// How many versions main has (counted up to [`VERSIONS_COUNTED`]).
+    /// How many versions main has, counted up to [`VERSIONS_COUNTED`].
     revisions: usize,
+    /// Whether main has more versions than [`VERSIONS_COUNTED`], so
+    /// `revisions` is only a lower bound.
+    revisions_capped: bool,
     /// How many suggestions are waiting.
     suggestions: usize,
 }
@@ -384,6 +392,7 @@ impl Versions {
     const OFF: Self = Self {
         versions: VersionsState::Off,
         revisions: 0,
+        revisions_capped: false,
         suggestions: 0,
     };
 
@@ -393,9 +402,12 @@ impl Versions {
             return Ok(Self::OFF);
         }
         let history = agent_line::history(folder)?;
+        // Counting one past the cap tells whether there are more.
+        let counted = history.versions(VERSIONS_COUNTED.saturating_add(1))?.len();
         Ok(Self {
             versions: VersionsState::On,
-            revisions: history.versions(VERSIONS_COUNTED)?.len(),
+            revisions: counted.min(VERSIONS_COUNTED),
+            revisions_capped: counted > VERSIONS_COUNTED,
             suggestions: history.suggestions()?.len(),
         })
     }

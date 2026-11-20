@@ -357,6 +357,42 @@ async fn apply_refused_when_not_clean() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn suggest_refused_when_the_design_has_errors() {
+    let (folder, connection) = opened_with_versions("suggest_refused_when_not_clean").await;
+    // The person saves a shelf that runs through the divider: the design
+    // still places, with an overlap error. The shoe shelf adds no new
+    // error, so it fits, but a suggestion that can never be applied isn't
+    // recorded.
+    person_saves(
+        &folder,
+        "carcass.stave",
+        "joint shelf_dados  :",
+        "part shelf_3 : oak_19 {\n  length: fit\n  width:  cabinet_depth - back.thickness\n  \
+         place {\n    against(base.top, gap: drawer_zone - 10mm)\n    center(base, across)\n    \
+         flush(side_l.front)\n  }\n}\n\njoint shelf_3_dados : dado(shelf_3, into: [side_l, \
+         side_r], depth: 9mm)\njoint shelf_dados  :",
+    );
+    let result = connection
+        .call(
+            "suggest",
+            json!({ "patch": SHOE_SHELF, "title": "Add a shoe shelf" }),
+        )
+        .await;
+    assert!(is_error(&result), "{}", text(&result));
+    assert!(
+        text(&result).contains("The patch fits, but the design doesn't check clean"),
+        "{}",
+        text(&result)
+    );
+    assert!(text(&result).contains("overlap"), "{}", text(&result));
+    let history = History::open(&folder).unwrap();
+    assert!(
+        history.suggestions().unwrap().is_empty(),
+        "nothing recorded"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn apply_replays_after_main_moved() {
     let (folder, connection) = opened_with_versions("apply_replays_after_main_moved").await;
     let id = suggest_shoe_shelf(&connection).await;

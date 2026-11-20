@@ -2,8 +2,8 @@
 //! `apply_suggestion`, `discard_suggestion`, `undo`.
 //!
 //! An agent's changes go into its own line, never straight into the
-//! project: `suggest` records a patch that fits as a suggestion (main is
-//! not touched). `apply_suggestion` is the merge: it re-tries the
+//! project: `suggest` records a patch that fits and checks clean as a
+//! suggestion (main is not touched). `apply_suggestion` is the merge: it re-tries the
 //! suggestion's patches, in order, on main's latest files, and records the
 //! result on main only when the design then checks with no errors; when a
 //! patch no longer fits, the suggestion's line is moved onto main instead
@@ -22,7 +22,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use stave_history::{
-    Actor, ActorKind, HistoryError, MergePolicy, SuggestionId, UndoScope, merge_policy,
+    Actor, ActorKind, History, HistoryError, MergePolicy, ProjectFiles, RevisionId, SuggestionId,
+    UndoScope, merge_policy,
 };
 
 use super::looking::count_words;
@@ -75,7 +76,8 @@ impl StaveServer {
     #[tool(
         description = "Record one or more patches as a suggestion for the open project, once \
                        they fit: they are tried on the project's main line (or on top of the \
-                       suggestion given as onto) and recorded only when they fit. The project \
+                       suggestion given as onto) and recorded only when they fit and the design \
+                       then checks with no errors. The project \
                        itself doesn't change: the person sees the suggestion in Stave, and \
                        apply_suggestion puts it in. Needs the project's versions on.",
         annotations(read_only_hint = false, destructive_hint = false)
@@ -172,7 +174,14 @@ impl StaveServer {
             let files = agent_line::line_files(&history, onto.as_ref())?;
             let after =
                 match agent_line::replay(folder, &files, std::slice::from_ref(&arguments.patch))? {
-                    Replay::Fits { files, .. } => files,
+                    Replay::Fits {
+                        files, errors: 0, ..
+                    } => files,
+                    // apply_suggestion needs a design with no errors, so
+                    // a suggestion that leaves any could never go in.
+                    Replay::Fits { problems, .. } => {
+                        return Err(McpError::SuggestionNotClean(problems));
+                    }
                     Replay::Refused { title, problems } => {
                         return Err(McpError::SuggestionRefused(format!(
                             "{title}: refused\n{problems}"
@@ -342,8 +351,7 @@ impl StaveServer {
                             files: clashes.iter().map(ToString::to_string).collect(),
                         });
                     }
-                    let base = history.main()?;
-                    let files = history.suggestion_files(&id)?;
+                    let (base, files) = rebased_line(&history, &id)?;
                     match agent_line::replay(folder, &files, &[])? {
                         Replay::Fits {
                             files, errors: 0, ..
@@ -418,6 +426,30 @@ impl StaveServer {
 }
 
 /// Who made a change, in words: the person's name, or the app's.
+/// A suggestion's base and latest files, read after it was moved onto
+/// main.
+///
+/// The base is the revision the suggestion was moved onto, not main as it
+/// is now: main may have moved since the rebase let go of the lock, and
+/// [`History::apply`] merges the suggestion onto a later main only when it
+/// is given the older base (given main itself, it lays the files over main
+/// and undoes whatever landed in between). The base is read before the
+/// files, so a second rebase between the two reads can only leave the
+/// files newer than the base, which merges cleanly, never older.
+fn rebased_line(
+    history: &History,
+    id: &SuggestionId,
+) -> Result<(RevisionId, ProjectFiles), McpError> {
+    let base = history
+        .suggestions()?
+        .into_iter()
+        .find(|suggestion| &suggestion.id == id)
+        .ok_or_else(|| HistoryError::UnknownSuggestion(id.clone()))?
+        .base;
+    let files = history.suggestion_files(id)?;
+    Ok((base, files))
+}
+
 fn who(actor: &Actor) -> String {
     match actor.kind {
         ActorKind::User => actor.name.clone(),
@@ -431,4 +463,91 @@ fn actor_json(actor: &Actor) -> Value {
         ActorKind::Agent => "agent",
     };
     json!({ "kind": kind, "name": actor.name, "id": actor.id })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use stave_history::{Actor, ActorKind, History, ProjectFiles, RelativePath};
+
+    use super::rebased_line;
+
+    fn person() -> Actor {
+        Actor {
+            kind: ActorKind::User,
+            name: "Ann".to_owned(),
+            id: "window".to_owned(),
+        }
+    }
+
+    fn agent() -> Actor {
+        Actor {
+            kind: ActorKind::Agent,
+            name: "Helper".to_owned(),
+            id: "helper-1".to_owned(),
+        }
+    }
+
+    fn relative(path: &str) -> RelativePath {
+        RelativePath::new(Path::new(path)).unwrap()
+    }
+
+    fn text(files: &ProjectFiles, path: &str) -> String {
+        String::from_utf8(files.get(&relative(path)).unwrap().to_vec()).unwrap()
+    }
+
+    fn scratch_folder(name: &str) -> PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("stave-mcp-unit-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder.canonicalize().unwrap()
+    }
+
+    /// Saves main's files with `path` replaced by `contents`, through a
+    /// handle of its own, as the window or another agent would.
+    fn main_changes(folder: &Path, path: &str, contents: &str) {
+        let mut history = History::open(folder).unwrap();
+        let mut files = history.files_at(&history.main().unwrap()).unwrap();
+        files.insert(relative(path), contents.as_bytes().to_vec());
+        history
+            .save(&files, &person(), "Someone else's change")
+            .unwrap();
+    }
+
+    /// Main moves between the rebase and the apply: the apply merges onto
+    /// it, so neither that change nor the suggestion's is lost.
+    #[test]
+    fn apply_after_a_rebase_keeps_what_landed_since() {
+        let folder = scratch_folder("rebased_line");
+        for name in ["a", "b", "c"] {
+            std::fs::write(folder.join(format!("{name}.stave")), format!("{name}\n")).unwrap();
+        }
+        let mut history = History::start(&folder).unwrap();
+        let first = history.read_folder().unwrap();
+        history.save(&first, &person(), "First version").unwrap();
+
+        let mut suggested = first.clone();
+        suggested.insert(relative("a.stave"), b"a, suggested\n".to_vec());
+        let id = history
+            .suggest(&agent(), None, &suggested, "patch", "Change a")
+            .unwrap();
+
+        main_changes(&folder, "b.stave", "b, before the rebase\n");
+        assert!(history.rebase_suggestion(&id).unwrap().is_empty());
+        let rebased_onto = history.main().unwrap();
+        main_changes(&folder, "c.stave", "c, after the rebase\n");
+
+        let (base, files) = rebased_line(&history, &id).unwrap();
+        assert_eq!(base, rebased_onto, "the base is where it was rebased onto");
+        assert_ne!(base, history.main().unwrap(), "main moved since");
+
+        let main = history.apply(&id, &agent(), &base, &files).unwrap();
+        let applied = history.files_at(&main).unwrap();
+        assert_eq!(text(&applied, "a.stave"), "a, suggested\n");
+        assert_eq!(text(&applied, "b.stave"), "b, before the rebase\n");
+        assert_eq!(text(&applied, "c.stave"), "c, after the rebase\n");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 }
