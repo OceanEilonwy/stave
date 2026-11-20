@@ -24,8 +24,10 @@
 //! agent's changes go into its own line (the `agent_line` module):
 //! `suggest` records a patch that fits as a suggestion, and
 //! `apply_suggestion` re-tries its patches on the project's main line and
-//! records the result there, under the project's merge policy; the window
-//! then brings the folder up to date. `new_project` writes a new project
+//! records the result there, under the project's merge policy. The
+//! running window then brings the folder up to date, keeping the person's
+//! unsaved edits; when no window is running there are none, and the
+//! server brings the folder up to date itself. `new_project` writes a new project
 //! into an empty folder. Paths are never trusted: [`project_path`] refuses
 //! one that leads out of the project folder.
 //!
@@ -68,6 +70,11 @@ pub struct ServerOptions {
     /// The desktop's list of recently used files, where the window
     /// records the projects it opened: `~/.local/share/recently-used.xbel`.
     pub recent_projects: PathBuf,
+    /// The Stave window's name on the session bus
+    /// ([`stave_link::APPLICATION_ID`]; a test's own name in tests). While
+    /// a window by this name runs, it brings the project folder up to date
+    /// with main; while none does, the server does.
+    pub window_bus_name: String,
 }
 
 impl ServerOptions {
@@ -91,6 +98,7 @@ impl ServerOptions {
             config_dir: base("XDG_CONFIG_HOME", ".config")?.join("stave"),
             cache_dir: base("XDG_CACHE_HOME", ".cache")?.join("stave"),
             recent_projects: base("XDG_DATA_HOME", ".local/share")?.join("recently-used.xbel"),
+            window_bus_name: stave_link::APPLICATION_ID.to_owned(),
         })
     }
 }

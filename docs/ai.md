@@ -132,7 +132,9 @@ folder in `.stave/history/`. The folder itself stays plain files.
   it never touches the files you have open. The main line moves only by
   merges, one at a time. When an app applies a suggestion, the window
   catches up: your clean files are updated at once, and unsaved edits are
-  kept until you save, when the two meet.
+  kept until you save, when the two meet. When the window isn't running
+  there are no unsaved edits, so the app updates the project's files
+  itself (and again when it undoes the apply).
 - **Undo.** In the window, Undo takes back the last change by anyone. An
   AI app's `undo` takes back only that app's own last change (a
   suggestion, an apply or a discard), and is refused when you or another
