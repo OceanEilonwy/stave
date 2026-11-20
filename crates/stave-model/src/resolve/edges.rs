@@ -1,5 +1,6 @@
 //! Lowering a part's `edges:` (grammar, "Edge profiles"): chamfers and
-//! roundovers on the edges where two of its faces meet.
+//! roundovers on the edges where two of its faces meet; and its
+//! `banding:` (grammar, "Edge banding"), the band glued on its edges.
 
 use std::collections::BTreeMap;
 
@@ -7,11 +8,12 @@ use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::Face;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::CutOperation;
+use stave_schema::fields::EDGE_BAND;
 use stave_schema::operations::{AROUND, EDGE, cut_operation};
 
 use super::expr::Expect;
 use super::{Cx, Resolver};
-use crate::defs::{EdgeDef, EdgeProfileDef, RExpr};
+use crate::defs::{BandingDef, EdgeDef, EdgeProfileDef, RExpr};
 use crate::types::Ty;
 
 /// The help every malformed `edges:` gets.
@@ -20,6 +22,10 @@ const EDGES_HELP: &str =
 
 /// The help for an edge that isn't two faces that meet.
 const EDGE_HELP: &str = "name two faces of the part that meet, as edge(top, front), or every edge of one face with around(top)";
+
+/// The help every malformed `banding:` gets.
+const BANDING_HELP: &str =
+    "write banding: edge_band(1mm, on: front), or a list of faces: on: [front, left, right]";
 
 /// The word an expression is, when it is a bare name.
 fn bare_name(expr: &ast::Expr) -> Option<&str> {
@@ -77,6 +83,94 @@ impl Resolver<'_> {
             profiles.push(profile);
         }
         profiles
+    }
+
+    /// A part's `banding:`: `edge_band(thickness, on: faces)`, each face
+    /// once.
+    pub(super) fn lower_banding(&mut self, cx: &Cx, value: &ast::Expr) -> Option<BandingDef> {
+        let call = if let ExprKind::Call { callee, args } = &value.kind {
+            Some((bare_name(callee).unwrap_or("this"), callee.span, args))
+        } else {
+            None
+        };
+        let Some((head, head_span, args)) = call else {
+            self.error_help(
+                Code::TypeMismatch,
+                "'banding' needs edge_band(...)",
+                cx.file,
+                value.span,
+                BANDING_HELP,
+            );
+            return None;
+        };
+        if head != EDGE_BAND {
+            self.unknown(
+                Code::UnknownName,
+                format!("unknown name '{head}'"),
+                cx.file,
+                head_span,
+                head,
+                [EDGE_BAND],
+                BANDING_HELP,
+            );
+            return None;
+        }
+        let parsed = self.split_args(cx, head, args, &["thickness", "on"], 1);
+        let thickness = match (parsed.positional.first().copied(), parsed.get("thickness")) {
+            (Some(_), Some(named)) => {
+                self.error_help(
+                    Code::DuplicateName,
+                    "'thickness' is declared twice",
+                    cx.file,
+                    named.span,
+                    "give 'thickness' once; remove one of them",
+                );
+                return None;
+            }
+            (Some(expr), None) | (None, Some(expr)) => expr,
+            (None, None) => {
+                self.missing_argument(cx, head, "thickness:", value.span);
+                return None;
+            }
+        };
+        let thickness: RExpr =
+            self.value(cx, thickness, &Expect::ty(Ty::Length).named("thickness"));
+        let Some(on) = parsed.get("on") else {
+            self.missing_argument(cx, head, "on:", value.span);
+            return None;
+        };
+        let mut faces: Vec<(Face, Span)> = Vec::new();
+        for item in one_or_list(on) {
+            let Some(face) = bare_name(item).and_then(Face::from_word) else {
+                self.error_help(
+                    Code::TypeMismatch,
+                    "'on' needs faces of the part: top, bottom, left, right, front or back",
+                    cx.file,
+                    item.span,
+                    BANDING_HELP,
+                );
+                continue;
+            };
+            if let Some((_, first)) = faces.iter().find(|(seen, _)| *seen == face) {
+                let first = *first;
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("the {} edge is banded twice", face.word()),
+                        Label::new(cx.file, item.span),
+                    )
+                    .with_label(Label::with_message(cx.file, first, "first banded here"))
+                    .with_help("name each face once in on:"),
+                );
+                continue;
+            }
+            faces.push((face, item.span));
+        }
+        Some(BandingDef {
+            thickness,
+            faces,
+            span: value.span,
+        })
     }
 
     /// One `chamfer(size, on: ...)` or `roundover(radius, on: ...)`.

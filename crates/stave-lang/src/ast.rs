@@ -603,6 +603,10 @@ pub enum BaseKind {
     /// A shelf support: hardware a part rests on without being joined to
     /// it, such as the pins under an adjustable shelf.
     Support,
+    /// A fitting: any other mounted hardware, such as a tabletop fastener,
+    /// a knock-down fitting or a catch. Its words are neutral ("fitted");
+    /// everything else is in the kind.
+    Fitting,
     /// A dowel pin, screw or other fastener that joints consume.
     Fastener,
     /// A tool that recipes need.
@@ -611,12 +615,13 @@ pub enum BaseKind {
 
 impl BaseKind {
     /// Every base kind, in the order the grammar lists them.
-    pub const ALL: [BaseKind; 7] = [
+    pub const ALL: [BaseKind; 8] = [
         BaseKind::Joint,
         BaseKind::Slide,
         BaseKind::Hinge,
         BaseKind::Pull,
         BaseKind::Support,
+        BaseKind::Fitting,
         BaseKind::Fastener,
         BaseKind::Tool,
     ];
@@ -629,6 +634,7 @@ impl BaseKind {
             BaseKind::Hinge => "hinge",
             BaseKind::Pull => "pull",
             BaseKind::Support => "support",
+            BaseKind::Fitting => "fitting",
             BaseKind::Fastener => "fastener",
             BaseKind::Tool => "tool",
         }
@@ -643,7 +649,11 @@ impl BaseKind {
     /// declaration.
     pub fn is_mounted_hardware(self) -> bool {
         match self {
-            BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull | BaseKind::Support => true,
+            BaseKind::Slide
+            | BaseKind::Hinge
+            | BaseKind::Pull
+            | BaseKind::Support
+            | BaseKind::Fitting => true,
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => false,
         }
     }
@@ -1979,7 +1989,7 @@ pub enum TypeName {
     Direction,
     /// `overlay(...)` or `inset(...)`.
     Mount,
-    /// `turned(profile)`.
+    /// `turned(profile)`, `tapered(...)` or `arched(...)`.
     Shape,
     /// `joined(by: ...)`: how the boards of a part are joined.
     Boards,
@@ -1996,7 +2006,7 @@ pub enum TypeName {
     Patch,
     /// A kind value of base `joint`.
     JointKind,
-    /// A kind value of base `slide`, `hinge`, `pull` or `support`.
+    /// A kind value of base `slide`, `hinge`, `pull`, `support` or `fitting`.
     HardwareKind,
     /// A kind value of base `slide`.
     SlideKind,
@@ -2006,6 +2016,8 @@ pub enum TypeName {
     PullKind,
     /// A kind value of base `support`.
     SupportKind,
+    /// A kind value of base `fitting`.
+    FittingKind,
     /// A kind value of base `fastener`.
     FastenerKind,
     /// A kind of base `tool`.
@@ -2016,7 +2028,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 31] = [
+    pub const ALL: [TypeName; 32] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -2045,6 +2057,7 @@ impl TypeName {
         TypeName::HingeKind,
         TypeName::PullKind,
         TypeName::SupportKind,
+        TypeName::FittingKind,
         TypeName::FastenerKind,
         TypeName::Tool,
         TypeName::Recipe,
@@ -2081,6 +2094,7 @@ impl TypeName {
             TypeName::HingeKind => "HingeKind",
             TypeName::PullKind => "PullKind",
             TypeName::SupportKind => "SupportKind",
+            TypeName::FittingKind => "FittingKind",
             TypeName::FastenerKind => "FastenerKind",
             TypeName::Tool => "Tool",
             TypeName::Recipe => "Recipe",
@@ -2101,6 +2115,7 @@ impl TypeName {
             BaseKind::Hinge => Some(TypeName::HingeKind),
             BaseKind::Pull => Some(TypeName::PullKind),
             BaseKind::Support => Some(TypeName::SupportKind),
+            BaseKind::Fitting => Some(TypeName::FittingKind),
             BaseKind::Fastener => Some(TypeName::FastenerKind),
             BaseKind::Tool => None,
         }

@@ -43,7 +43,14 @@ pub enum Special {
     /// `edges: [chamfer(3mm, on: edge(top, front)), roundover(6mm, on:
     /// around(top))]`: a part's edge profiles.
     Edges,
+    /// `banding: edge_band(1mm, on: [front, back])`: the edge banding on
+    /// a sheet part's edges.
+    Banding,
 }
+
+/// The call a part's `banding:` is written with: `edge_band(thickness,
+/// on: faces)`.
+pub const EDGE_BAND: &str = "edge_band";
 
 /// Whether a field must be written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,6 +106,9 @@ pub const PROJECT: &[FieldSpec] = &[
     field("tools", ListOf(&TOOL), Optional, false),
     field("methods", ListOf(&RECIPE), Optional, false),
     field("boards", Type(TypeName::Boards), Optional, false),
+    field("kerf", Type(TypeName::Length), Optional, false),
+    field("rough_length", Type(TypeName::Length), Optional, false),
+    field("rough_width", Type(TypeName::Length), Optional, false),
 ];
 
 /// `library "Title" { }`
@@ -127,6 +137,25 @@ pub const STOCK: &[FieldSpec] = &[
     field("width", Type(TypeName::Length), Optional, true),
     field("max_width", Type(TypeName::Length), Optional, true),
     field("max_length", Type(TypeName::Length), Optional, true),
+    field(
+        "sold",
+        Type(TypeName::Length),
+        Conditional("no; solid only"),
+        false,
+    ),
+    field("kerf", Type(TypeName::Length), Optional, false),
+    field(
+        "rough_length",
+        Type(TypeName::Length),
+        Conditional("no; solid only"),
+        false,
+    ),
+    field(
+        "rough_width",
+        Type(TypeName::Length),
+        Conditional("no; solid only"),
+        false,
+    ),
 ];
 
 /// `part name : stock { }` and `makes part name : stock { }`. `place { }`
@@ -149,7 +178,16 @@ pub const PART: &[FieldSpec] = &[
     field("lengths", Type(TypeName::Splices), Optional, false),
     field("loose", Type(TypeName::Bool), Optional, false),
     field("edges", ValueType::Special(Special::Edges), Optional, false),
+    field(
+        "banding",
+        ValueType::Special(Special::Banding),
+        Optional,
+        false,
+    ),
 ];
+
+/// The default `kerf:` of a project, in nanometres (3mm).
+pub const DEFAULT_KERF_NM: i64 = 3_000_000;
 
 /// Members readable on every part besides its readable fields.
 pub const PART_EXTRA_MEMBERS: &[&str] = &["diameter", "stock"];

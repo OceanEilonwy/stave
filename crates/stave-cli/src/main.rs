@@ -45,6 +45,7 @@ use stave_lang::ast;
 use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, render_diagnostics};
 use stave_modules::DiskFiles;
 
+mod cut_list;
 mod dump;
 mod script;
 
@@ -76,6 +77,13 @@ enum Command {
         /// Print JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+    /// Print the cut list: every piece to cut, at its cut size and the
+    /// rough size to cut it from the board at, how many boards to buy and
+    /// how much edge banding.
+    CutList {
+        /// The project folder.
+        path: PathBuf,
     },
     /// Open the design in the 3D viewer. The viewer reloads when a file
     /// changes.
@@ -168,6 +176,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
+        Command::CutList { path } => cut_list(&path),
         Command::Fmt { path, check } => fmt(&path, check),
         Command::Edit {
             path,
@@ -354,6 +363,26 @@ fn dump(path: &Path, json: bool) -> Result<bool> {
     } else {
         write!(stdout, "{}", dump::table(design, opened.model.as_ref()))?;
     }
+    Ok(true)
+}
+
+fn cut_list(path: &Path) -> Result<bool> {
+    let opened = open(path)?;
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    )?;
+    let Some(design) = &opened.design else {
+        if opened.error_count() == 0 {
+            bail!("'{}' is a library: it has nothing to cut", path.display());
+        }
+        return Ok(false);
+    };
+    let list = stave_solve::cut_list::cut_list(design)?;
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "{}", cut_list::table(design, &list))?;
     Ok(true)
 }
 

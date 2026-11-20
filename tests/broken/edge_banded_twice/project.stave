@@ -1,0 +1,17 @@
+// expect: error[duplicate-name] the front edge is banded twice
+stave 1
+
+project "Edge banded twice" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }
+
+part shelf : ply_18 {
+  length:  600mm
+  width:   300mm
+  banding: edge_band(1mm, on: [front, back, front])
+  place {
+    ground
+  }
+}

@@ -1,0 +1,19 @@
+// expect: error[type-mismatch] rod is round, so it can't be tapered
+stave 1
+
+// A dowel is round: it has no flat faces to plane a taper on.
+
+project "Taper on a dowel" {
+  units: mm
+}
+
+stock rod_28 { species: beech, form: dowel, diameter: 28mm, max_length: 1200mm }
+
+part rod : rod_28 {
+  length: 600mm
+  shape:  tapered(to: 20mm, toward: bottom, on: right)
+  place {
+    orient(length: up, width: right)
+    ground
+  }
+}

@@ -87,6 +87,7 @@ fn takes_setting(kind: &KindDef, name: &str) -> bool {
         | BaseKind::Hinge
         | BaseKind::Pull
         | BaseKind::Support
+        | BaseKind::Fitting
         | BaseKind::Fastener
         | BaseKind::Tool) => {
             base.is_mounted_hardware() && name == stave_schema::kinds::FACE_SETTING

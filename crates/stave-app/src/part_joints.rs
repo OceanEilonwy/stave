@@ -279,7 +279,7 @@ fn hardware_glyph(hardware: &Hardware) -> Glyph {
         HardwareBase::Hinge => Glyph::Hinge,
         HardwareBase::Slide => Glyph::Slide,
         HardwareBase::Pull => Glyph::Pull,
-        HardwareBase::Support => Glyph::Pins,
+        HardwareBase::Support | HardwareBase::Fitting => Glyph::Pins,
     }
 }
 

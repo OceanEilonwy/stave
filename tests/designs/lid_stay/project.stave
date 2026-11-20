@@ -81,7 +81,7 @@ scene lid_open "Lid open" {
 /// A sliding lid stay: an arm pinned to a bracket under the lid, its lower
 /// end running in a slot in a bracket screwed inside the back. It has no
 /// drive: it follows the lid as the hinges turn it, and stops it upright.
-kind sliding_stay : hinge {
+kind sliding_stay : fitting {
   roles {
     piece: Part                      // the lid
     on:    Part                      // the back the slot is screwed to

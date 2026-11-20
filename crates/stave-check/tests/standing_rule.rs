@@ -163,7 +163,7 @@ fn std_words() -> BTreeSet<String> {
                 if let Some(name) = after(line, "kind") {
                     words.insert(name);
                     let base = line.split(':').nth(1).unwrap_or("").trim();
-                    hardware = ["hinge", "slide", "pull", "support", "fastener"]
+                    hardware = ["hinge", "slide", "pull", "support", "fitting", "fastener"]
                         .iter()
                         .any(|b| base.starts_with(b));
                     continue;
