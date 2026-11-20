@@ -1,6 +1,6 @@
 //! Stave's editor features without a user interface: the navigation layer
-//! the desktop editor uses today and the language server (`stave-lsp`)
-//! will use unchanged (grammar, "Tooling and editors").
+//! the desktop editor and the language server (`stave-lsp`) both use
+//! (grammar, "Tooling and editors").
 //!
 //! - [`Analysis`] indexes a loaded project (its own folders, the folders
 //!   it imports and the standard library) and answers, at a byte offset:

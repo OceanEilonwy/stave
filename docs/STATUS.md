@@ -515,8 +515,12 @@ open in the editor the change stays unsaved there.
   part, not by triangle. A joint's view from above exists only when one
   of its parts turns about the up axis.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
-- **Editors and AI**: the language server (`stave-lsp`, on `stave-ide`),
-  completion, signature help, quick fixes in the text editor and inlay
-  hints. (Patches, rename and smart edits exist for the 3D editor and
+- **Editors and AI**: the language server (`stave-lsp`, on `stave-app`
+  and `stave-ide`) answers diagnostics, definition, references, hover,
+  rename, semantic tokens, completion, signature help and code lenses; its
+  names-and-types diagnostics come with the background check rather than
+  on every keystroke. Quick fixes, inlay hints, document symbols, folding
+  and formatting over the protocol are not built yet, nor is the editor
+  extension. (Patches, rename and smart edits exist for the 3D editor and
   `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).
