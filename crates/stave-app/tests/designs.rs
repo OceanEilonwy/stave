@@ -312,3 +312,68 @@ fn shelf_on_pins_rests_on_them_with_a_row_of_spare_holes() {
         assert_eq!(starts, expected, "{side}");
     }
 }
+
+/// The cuts on a part made by one named cut of a kind.
+fn named_cuts<'a>(
+    design: &'a SolvedDesign,
+    part_name: &str,
+    cut_name: &str,
+) -> Vec<&'a stave_model::solved::Cut> {
+    part(design, part_name)
+        .cuts
+        .iter()
+        .filter(|cut| cut.name.as_ref().is_some_and(|n| n.as_str() == cut_name))
+        .collect()
+}
+
+#[test]
+fn a_top_on_tabletop_fasteners_is_held_by_them_with_no_joint() {
+    use stave_model::solved::HardwareBase;
+    let opened = clean("top_on_fasteners");
+    let design = solved(&opened);
+    // Six fasteners, all of the neutral base: nothing in the core knows
+    // what a tabletop fastener is.
+    assert_eq!(design.hardware().len(), 6);
+    assert!(
+        design
+            .hardware()
+            .iter()
+            .all(|hardware| hardware.base == HardwareBase::Fitting)
+    );
+    // Each one is screwed up into the top and sits in a recess in its
+    // apron's top edge, screwed down into it.
+    assert_eq!(named_cuts(design, "top", "top_pilot_hole").len(), 6);
+    for apron in ["apron_front", "apron_back"] {
+        assert_eq!(named_cuts(design, apron, "recess").len(), 3, "{apron}");
+        assert_eq!(
+            named_cuts(design, apron, "apron_pilot_hole").len(),
+            3,
+            "{apron}"
+        );
+    }
+    // The short aprons have none.
+    assert!(named_cuts(design, "apron_left", "recess").is_empty());
+}
+
+#[test]
+fn a_knock_down_cabinet_is_held_together_by_cam_locks() {
+    let opened = clean("knock_down_cabinet");
+    let design = solved(&opened);
+    for panel in ["bottom", "top"] {
+        // Two cams at each end: a bore in the face and a hole into the
+        // end for each bolt.
+        assert_eq!(named_cuts(design, panel, "cam_bore").len(), 4, "{panel}");
+        let bolt_holes = named_cuts(design, panel, "bolt_hole");
+        assert_eq!(bolt_holes.len(), 4, "{panel}");
+        assert!(
+            bolt_holes
+                .iter()
+                .all(|cut| cut.kind.operation() == CutOperation::Drill)
+        );
+    }
+    // Each side takes the threads of the bolts of both panels: the cam is
+    // set in from whichever end of the panel meets it.
+    for side in ["side_l", "side_r"] {
+        assert_eq!(named_cuts(design, side, "thread_hole").len(), 4, "{side}");
+    }
+}

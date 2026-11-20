@@ -1759,6 +1759,8 @@ pub enum HardwareBase {
     Pull,
     /// A shelf support.
     Support,
+    /// Any other mounted fitting.
+    Fitting,
 }
 
 impl HardwareBase {
@@ -1769,6 +1771,7 @@ impl HardwareBase {
             BaseKind::Hinge => Some(HardwareBase::Hinge),
             BaseKind::Pull => Some(HardwareBase::Pull),
             BaseKind::Support => Some(HardwareBase::Support),
+            BaseKind::Fitting => Some(HardwareBase::Fitting),
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }

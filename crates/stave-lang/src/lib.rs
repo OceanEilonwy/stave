@@ -230,6 +230,7 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "hinge",
     "pull",
     "support",
+    "fitting",
     "fastener",
     "tool",
     "roles",

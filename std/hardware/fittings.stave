@@ -1,0 +1,126 @@
+stave 1
+
+/// A tabletop fastener (a figure-8 fastener): a flat steel plate shaped like
+/// an 8. One end sits flush in a shallow round recess in the top edge of an
+/// apron and is screwed down into it; the other end reaches past the
+/// apron's inside face and is screwed up into the underside of the top.
+/// The plate can swivel a little on its lower screw, so a solid top can
+/// swell and shrink across its grain without splitting.
+kind tabletop_fastener : fitting {
+  roles {
+    piece:    Part                   // the apron it is screwed down into
+    tabletop: Part                   // the top it is screwed up into
+  }
+  /// Diameter of each round end of the plate, and of the recess it sits in.
+  param end_diameter = 16mm
+  /// From the middle of one end of the plate to the middle of the other.
+  param centres = 18mm
+  /// How thick the plate is, and how deep its recess.
+  param plate_thickness = 3mm
+  /// Diameter of the two screws, and of their pilot holes.
+  param screw_diameter = 3.5mm
+  /// How far each screw goes into the wood, past the plate.
+  param screw_length = 13mm
+
+  // The recess must stay inside the apron's top edge, a millimetre in from
+  // its inside face, and the other end must clear that face.
+  require recess_fits : piece.thickness >= end_diameter + 2mm "the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron"
+  require end_clears  : centres >= end_diameter + 1mm "the end screwed into the top must reach past the apron's inside face; space the plate's ends further apart"
+
+  // On the apron's top edge, the recess a millimetre in from the inside
+  // face; the design says where along the apron.
+  mount {
+    face:   top
+    across: from(edge(piece, nearer: tabletop), inset: end_diameter / 2 + 1mm)
+    along:  open
+  }
+
+  /// The lower end of the plate, flush in its recess in the apron.
+  member lower_end {
+    with:  piece
+    shape: cylinder(diameter: end_diameter, depth: 0mm..plate_thickness)
+  }
+  /// The screw that holds the lower end down into the apron.
+  member lower_screw {
+    with:  piece
+    shape: cylinder(diameter: screw_diameter, depth: 0mm..plate_thickness + screw_length)
+  }
+  /// The upper end of the plate: it reaches inside the apron and lies
+  /// against the underside of the top.
+  member upper_end {
+    with:  tabletop
+    shape: cylinder(diameter: end_diameter, depth: 0mm..plate_thickness, at: point(across: -centres))
+  }
+  /// The screw that holds the upper end up into the top.
+  member upper_screw {
+    with:  tabletop
+    shape: cylinder(diameter: screw_diameter, depth: -screw_length..0mm, at: point(across: -centres))
+  }
+
+  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness) }
+  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length) }
+  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length) }
+}
+
+/// A cam lock (a cam and dowel, or minifix): a knock-down fitting that pulls
+/// a panel's end tight against another panel's face, and lets go again with
+/// a turn of a screwdriver. A steel bolt is screwed into the face of the
+/// other panel; its head passes through a hole drilled into the panel's end
+/// and into a round cam set in a bore in the panel's face. Turning the cam
+/// draws the bolt in.
+kind cam_lock : fitting {
+  roles {
+    piece: Part                      // the panel whose end is pulled tight: the cam goes in it
+    into:  Part                      // the panel the bolt is screwed into
+  }
+  /// Diameter of the cam, and of the bore it sits in.
+  param cam_diameter = 15mm within [12mm, 15mm, 20mm]
+  /// How deep the cam's bore is.
+  param bore_depth = 13.5mm
+  /// From the end of the panel to the middle of the cam.
+  param setback = 34mm within [24mm, 34mm]
+  /// Diameter of the bolt where it passes through the panel's end.
+  param bolt_diameter = 7mm
+  /// Diameter of the hole drilled for the bolt, a little larger than it.
+  param bolt_hole_diameter = 8mm
+  /// Diameter of the bolt's thread, and of the hole it is screwed into.
+  param thread_diameter = 5mm
+  /// How far the bolt's thread goes into the other panel.
+  param thread_length = 11mm
+
+  // The bolt runs along the middle of the panel's thickness; its head
+  // must sit inside the cam, and the cam's bore must not come out the
+  // other face.
+  require bolt_reaches_cam : bore_depth >= piece.thickness / 2 + bolt_diameter / 2 "the bolt's head would sit below the cam's bore; bore the cam deeper"
+  require bore_stays_in    : bore_depth <= piece.thickness - 3mm "the bore for the cam would come too near the other face of the panel; bore it shallower or use a thicker panel"
+
+  // In the top face of the panel, the cam's middle setback in from the end
+  // that meets the other panel; the design says where across the panel,
+  // and a call's face: can put it in the bottom face instead.
+  mount {
+    face:   top
+    across: open
+    along:  from(end(piece, nearer: into), inset: setback)
+  }
+
+  /// The cam: the round fitting in its bore. Turning it pulls the bolt in.
+  member cam {
+    with:  piece
+    shape: cylinder(diameter: cam_diameter, depth: 0mm..bore_depth)
+  }
+  /// The bolt's shank: it reaches from the other panel through a hole in
+  /// this panel's end, its head inside the cam.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, axis: along, along: -setback..0mm, at: point(depth: piece.thickness / 2))
+  }
+  /// The bolt's thread, screwed into the other panel's face.
+  member thread {
+    with:  into
+    shape: cylinder(diameter: thread_diameter, axis: along, along: -setback - thread_length..-setback, at: point(depth: piece.thickness / 2))
+  }
+
+  cut cam_bore: crossing(piece, cam) { drill(diameter: cam_diameter, depth: bore_depth) }
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_hole_diameter, depth: setback) }
+  cut thread_hole: crossing(into, thread) { drill(diameter: thread_diameter, depth: thread_length) }
+}

@@ -418,7 +418,7 @@ impl<'a> Resolver<'a> {
                     name.span(),
                     name.as_str(),
                     ast::TypeName::ALL.map(ast::TypeName::word),
-                    "a param's type is one of Length, Angle, Ratio, Count, Bool, Text, Part, Parts, Stock, Region, Profile, Anchor, Axis, Direction, Mount, Shape, Envelope, Model, Spacing, JointKind, HardwareKind, SlideKind, HingeKind, PullKind, SupportKind, FastenerKind, Tool, Recipe",
+                    "a param's type is one of Length, Angle, Ratio, Count, Bool, Text, Part, Parts, Stock, Region, Profile, Anchor, Axis, Direction, Mount, Shape, Envelope, Model, Spacing, JointKind, HardwareKind, SlideKind, HingeKind, PullKind, SupportKind, FittingKind, FastenerKind, Tool, Recipe",
                 );
                 Ty::Unknown
             }

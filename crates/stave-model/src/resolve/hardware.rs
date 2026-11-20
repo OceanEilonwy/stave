@@ -466,13 +466,31 @@ impl Resolver<'_> {
                 }
             }
             "end" => {
-                let parsed = self.split_args(cx, "end", args, &["toward"], 1);
-                let (Some(part), Some(toward)) = (parsed.positional.first(), parsed.get("toward"))
-                else {
-                    self.missing_argument(cx, "end", "a role and toward:", expr.span);
+                let parsed = self.split_args(cx, "end", args, &["toward", "nearer"], 1);
+                let Some(part) = parsed.positional.first() else {
+                    self.missing_argument(cx, "end", "a role", expr.span);
                     return None;
                 };
                 let part = self.role_of(cx, roles, part, "end")?;
+                let toward = match (parsed.get("toward"), parsed.get("nearer")) {
+                    (Some(toward), None) => toward,
+                    (None, Some(other)) => {
+                        return Some(MountSelector::EndNearer {
+                            part,
+                            other: self.role_of(cx, roles, other, "nearer")?,
+                        });
+                    }
+                    (Some(_), Some(_)) | (None, None) => {
+                        self.error_help(
+                            Code::TypeMismatch,
+                            "'end' needs one of toward: or nearer:",
+                            cx.file,
+                            expr.span,
+                            "write end(piece, toward: front) or end(piece, nearer: on)",
+                        );
+                        return None;
+                    }
+                };
                 #[expect(
                     clippy::wildcard_enum_match_arm,
                     reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"

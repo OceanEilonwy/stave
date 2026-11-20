@@ -1286,6 +1286,32 @@ impl Solver<'_> {
                 let part_box = self.drawn_box(part_id)?;
                 Ok(side(&part_box, toward.is_positive()))
             }
+            MountSelector::EndNearer { part, other } => {
+                let part_id = self.role_part(binding, part)?;
+                let length = self
+                    .part_orientation(part_id)?
+                    .direction(PartAxis::Length)
+                    .axis();
+                if length != axis {
+                    let name = self.part_name(part_id);
+                    return Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            format!(
+                                "an end of {name} measures along its length, which runs '{}', not '{}'",
+                                length.word(),
+                                axis.word()
+                            ),
+                            file,
+                            span,
+                            "measure along from an end, and across from an edge",
+                        )
+                        .into());
+                }
+                let part_box = self.drawn_box(part_id)?;
+                let target = middle(&self.role_box(binding, other)?)?;
+                Ok(side(&part_box, nearer_high(&part_box, target)?))
+            }
             MountSelector::FaceToward { part, other } => {
                 let part_box = self.role_box(binding, part)?;
                 let target = middle(&self.role_box(binding, other)?)?;
