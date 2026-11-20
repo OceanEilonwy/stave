@@ -52,7 +52,6 @@
 //! nothing to block. [`TreeSidebar`] keeps the older callback API in front
 //! of it until the window moves to relm4 too.
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -113,26 +112,22 @@ button.stave-partner:hover { background: alpha(#3584e4, 0.24); }
 .stave-partner-text { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; color: alpha(currentColor, 0.75); padding: 0 2px; }
 "#;
 
-thread_local! {
-    /// Whether [`CSS`] is installed on the default display.
-    static STYLED: Cell<bool> = const { Cell::new(false) };
-}
-
+/// Puts [`CSS`] on the default display, once for the process (Stave uses
+/// only the default display).
 fn install_css() {
-    if STYLED.with(Cell::get) {
-        return;
-    }
+    static STYLED: std::sync::Once = std::sync::Once::new();
     let Some(display) = gtk::gdk::Display::default() else {
         return;
     };
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(CSS);
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    STYLED.with(|styled| styled.set(true));
+    STYLED.call_once(|| {
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(CSS);
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    });
 }
 
 /// A stroked 16-unit icon.
@@ -1648,7 +1643,7 @@ fn holds(node: &AssemblyNode, selection: &Selection) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::path::Path;
 
     use super::*;

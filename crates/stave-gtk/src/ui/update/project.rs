@@ -23,6 +23,8 @@ pub(in crate::ui) enum ProjectInput {
     NewProject,
     /// The New Project dialog wrote a project into this folder.
     NewProjectWritten(PathBuf),
+    /// The New Project dialog has closed: the window lets it go.
+    NewProjectClosed,
     /// Opens the project just written in this folder, and welcomes it.
     OpenNewProject(PathBuf),
     /// A project just made: its envelope lit as the first space to click.
@@ -314,6 +316,7 @@ impl Window {
                 self.handle(events);
             }
             ProjectInput::NewProject => self.ask_new_project(),
+            ProjectInput::NewProjectClosed => self.state.new_project = None,
             ProjectInput::NewProjectWritten(folder) => {
                 self.ask_about_unsaved(ProjectInput::OpenNewProject(folder));
             }

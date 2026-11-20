@@ -92,6 +92,10 @@ impl<C: Component> Bridge<C> {
     /// not be called from a handler of the component's own widgets (a
     /// signal GTK emits synchronously during `update`). From an output
     /// callback, a timeout or another component's handler it is safe.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "only tests read a bridged component's model now")
+    )]
     pub(crate) fn model(&self) -> Ref<'_, C> {
         self.controller.model()
     }

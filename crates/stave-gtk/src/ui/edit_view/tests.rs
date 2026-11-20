@@ -446,7 +446,8 @@ fn menu_and_card_on_the_session() {
     );
 
     // The New Project dialog reads its fields as a project that writes.
-    let dialog = NewProjectDialog::new();
+    let (nobody, _) = relm4::channel::<crate::ui::new_project::NewProjectOutput>();
+    let dialog = NewProjectDialog::new(&nobody, |output| output);
     let project = dialog.answers().project().unwrap();
     assert_eq!(project.title, "Hall table");
     assert_eq!(project.imports, ["std:casework", "std:frames"]);

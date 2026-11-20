@@ -1182,14 +1182,14 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
 
     /// Moves the cursor of the text showing without its cursor handler
     /// hearing (people didn't move it).
-    fn quietly(&self, change: impl FnOnce(&Editor)) {
+    fn quietly(&mut self, change: impl FnOnce(&mut Editor)) {
         match self.active.and_then(|index| self.tabs.get(index)) {
             Some(tab) => {
                 tab.buffer.block_signal(&tab.cursor_handler);
-                change(&self.editor);
+                change(&mut self.editor);
                 tab.buffer.unblock_signal(&tab.cursor_handler);
             }
-            None => change(&self.editor),
+            None => change(&mut self.editor),
         }
     }
 

@@ -534,6 +534,8 @@ struct State {
     /// The question about unsaved changes is showing, and this waits on
     /// people's answer.
     unsaved_then: Option<Box<WindowInput>>,
+    /// The New Project dialog, while it shows.
+    new_project: Option<new_project::NewProjectDialog>,
 }
 
 /// The clock of something that plays frame by frame: the frame time it
@@ -816,6 +818,7 @@ impl Component for Window {
                 edit_script: options.edit_script,
                 text_blocked: false,
                 unsaved_then: None,
+                new_project: None,
             },
             pins: Pins::default(),
             watcher: None,
