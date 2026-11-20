@@ -250,6 +250,8 @@ codes! {
     UnclosedBracket = "unclosed-bracket", layer 1;
     /// `<the body of part 'side_l'> is missing its closing "}"`
     MissingBrace = "missing-brace", layer 1;
+    /// `'<your saved work>' and '<Claude Desktop>' change the same lines`
+    Conflict = "conflict", layer 1;
     /// `unknown name '<name>'`
     UnknownName = "unknown-name", layer 2;
     /// `'<name>' is declared twice`
