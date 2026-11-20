@@ -54,8 +54,8 @@ use stave_app::problems::Marks;
 use stave_app::save_failure::SaveFailure;
 use stave_app::session::{LineNumber, SourceLocation};
 use stave_ide::{
-    Analysis, Buffers, Document, FilePosition, Location, Overlay, SymbolId, TokenClass,
-    TokenModifiers,
+    Analysis, AnalysisHost, Buffers, Document, FilePosition, Location, Overlay, SymbolId,
+    TokenClass, TokenModifiers,
 };
 use stave_lang::Severity;
 use stave_lang::ast::Span;
@@ -196,6 +196,8 @@ pub enum FilesInput<Then> {
         generation: u64,
         /// The analysis, when the project could be read.
         analysis: Option<Box<Analysis>>,
+        /// What it worked out, handed back for the next analysis to reuse.
+        host: Box<AnalysisHost>,
     },
     /// The pause before checking again is over.
     CheckDue(u64),
@@ -468,6 +470,9 @@ pub struct FilesComponent<Then: fmt::Debug + 'static> {
     fresh_memo: Option<FreshMemo>,
     analysing: bool,
     analyse_again: bool,
+    /// What the analyses so far worked out, for the next to reuse; away on
+    /// the worker thread while one is worked out.
+    host: Option<Box<AnalysisHost>>,
     tabs: Vec<Tab>,
     active: Option<usize>,
     /// The last check, kept by the session too: shared, not copied.
@@ -655,6 +660,7 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             fresh_memo: None,
             analysing: false,
             analyse_again: false,
+            host: Some(Box::default()),
             tabs: Vec::new(),
             active: None,
             checked: None,
@@ -747,7 +753,11 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
                 folder,
                 generation,
                 analysis,
-            } => self.analysed(folder, generation, analysis),
+                host,
+            } => {
+                self.host = Some(host);
+                self.analysed(folder, generation, analysis);
+            }
             FilesInput::CheckDue(ticket) => {
                 if ticket == self.check_ticket {
                     self.tell(FilesOutput::Check);
@@ -1428,18 +1438,21 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         let overlay = self.buffers.overlay();
         let generation = self.generation;
         let input = self.sender.input_sender().clone();
+        // Only one analysis is worked out at a time, so the host is here.
+        let mut host = self.host.take().unwrap_or_default();
         glib::spawn_future_local(async move {
             let loaded = gio::spawn_blocking(move || {
-                let analysis = Analysis::load(&folder, &overlay).ok().map(Box::new);
-                (folder, analysis)
+                let analysis = host.analyse(&folder, &overlay).ok().map(Box::new);
+                (folder, analysis, host)
             })
             .await;
-            let (folder, analysis) = loaded.unwrap_or_default();
+            let (folder, analysis, host) = loaded.unwrap_or_default();
             // The page may have gone; then nobody needs the names.
             let _ = input.send(FilesInput::Analysed {
                 folder,
                 generation,
                 analysis,
+                host,
             });
         });
     }

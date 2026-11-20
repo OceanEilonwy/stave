@@ -102,11 +102,13 @@
 //!
 //! - Names, types and placement (layers 2 and 3) come with the background
 //!   check rather than on every keystroke: today only the full pipeline
-//!   reports them. Making them fast is the incremental work of the plan's
-//!   step 4.
-//! - Every change loads the project again from scratch (a few
-//!   milliseconds for the examples); requests are answered one at a time
-//!   on the main loop, so `$/cancelRequest` has nothing to cancel.
+//!   reports them. The editor's own queries are incremental (step 4 of
+//!   the plan); the checker's layers are not yet.
+//! - Every change loads the project again through the project's
+//!   [`stave_ide::AnalysisHost`], which parses and resolves again only
+//!   what the change touched (well under a millisecond for an edit on
+//!   the examples); requests are answered one at a time on the main loop,
+//!   so `$/cancelRequest` has nothing to cancel.
 //! - Files changed on disk by another program are read when the next
 //!   change to an open file of the project loads it again.
 
