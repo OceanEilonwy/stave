@@ -619,17 +619,17 @@ impl Solver<'_> {
         // Every piece within the stock's length.
         let stock = self.part_stock(part)?;
         if let Some(max_length) = self.stock_length(stock, StockField::MaxLength)? {
+            let rough = self.rough_length_of(stock)?;
             for piece in &pieces {
                 let length = piece.high.checked_sub(piece.low).ok_or(Fault::Overflow)?;
-                if length > max_length {
+                if let Some((which, said)) = Self::rough_over(length, rough, max_length)? {
                     let piece_name = self.part_name(piece.stand_in);
                     let stock_name = self.stock_name(stock);
                     return Err(self.fail(
                         place,
                         Code::TypeMismatch,
                         format!(
-                            "{piece_name}: its cut length works out as {}, which is more than its stock's max_length of {}",
-                            stave_model::value::format_length(length),
+                            "{piece_name}: its {which} length works out as {said}, which is more than its stock's max_length of {}",
                             stave_model::value::format_length(max_length)
                         ),
                         format!(

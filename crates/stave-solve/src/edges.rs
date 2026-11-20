@@ -15,7 +15,7 @@ use crate::joints::{GeomTable, round_length};
 use crate::{Fault, Solved, Solver};
 
 /// The face of the part's own frame a world face is, once placed.
-fn local_face(orientation: &Orientation, face: Face) -> LocalFace {
+pub(crate) fn local_face(orientation: &Orientation, face: Face) -> LocalFace {
     let axis = orientation.part_axis(face.axis());
     LocalFace {
         axis,

@@ -1,0 +1,86 @@
+stave 1
+
+// A low shelf unit: two solid oak sides and three plywood shelves in dados,
+// the shelves' front edges covered with edge banding. It shows the cut
+// list's allowances (grammar, "Cut list"):
+//
+//   stave cut-list examples/shelf_unit
+//
+// prints each part at the size to cut it, the rough size to cut it from the
+// board at before milling, how many oak boards to buy and how much banding.
+
+project "Shelf unit" {
+  goal:         "An oak and plywood shelf unit for a hallway"
+  units:        mm
+  resolution:   0.5mm
+  kerf:         3mm     // a full-kerf table saw blade
+  rough_length: 25mm    // cut the oak 25mm long, then trim the ends square
+  rough_width:  5mm     // and 5mm wide, then joint and plane it to width
+}
+
+// ---- parameters ----
+param unit_height = 760mm within 600mm..900mm
+param unit_width  = 900mm within 600mm..1000mm
+param unit_depth  = 280mm within 240mm..320mm
+let dado_depth = 6mm
+
+// ---- stock ----
+// The oak is bought as 4/4 lumber (1in thick) and planed to 19mm.
+stock oak_19 {
+  species:    white_oak
+  form:       solid
+  thickness:  19mm
+  sold:       1in
+  max_width:  300mm
+  max_length: 1800mm
+}
+// Plywood is cut straight to size; its saw takes a little more.
+stock ply_18 {
+  species:    birch
+  form:       plywood
+  thickness:  18mm
+  kerf:       4mm
+  max_width:  1220mm
+  max_length: 2440mm
+}
+
+// ---- the case ----
+
+/// The left side stands on the floor; everything else is placed from it.
+part side_l : oak_19 {
+  length: unit_height
+  width:  unit_depth
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+/// The right side, the inside width away from the left one.
+part side_r : oak_19 {
+  length: unit_height
+  width:  unit_depth
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: unit_width - 2 * oak_19.thickness)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+/// Three shelves, the bottom one 60mm off the floor and the top one 60mm
+/// below the tops of the sides. Each is drawn at its finished depth, banding
+/// included: the cut list takes the 1mm band off the front.
+part shelf[3] : ply_18 {
+  length:  fit
+  width:   unit_depth
+  banding: edge_band(1mm, on: front)
+  place {
+    spaced(ends(inset: 60mm), from: side_l.bottom, to: side_l.top)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+// ---- joints ----
+joint shelf_dados : dado(shelf[*], into: [side_l, side_r], depth: dado_depth)

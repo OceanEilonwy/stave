@@ -378,7 +378,7 @@ pub enum End {
 }
 
 /// A face of a part in its own frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct LocalFace {
     /// The axis the face is perpendicular to.
     pub axis: PartAxis,
@@ -738,6 +738,12 @@ pub struct ProjectInfo {
     pub tools: Option<Vec<Tool>>,
     /// `methods:`: recipe names, most preferred first.
     pub methods: Vec<String>,
+    /// `kerf:`: what each saw cut takes (grammar, "Cut list").
+    pub kerf: Length,
+    /// `rough_length:`: extra along the grain for solid parts.
+    pub rough_length: Length,
+    /// `rough_width:`: extra across the grain for solid parts.
+    pub rough_width: Length,
 }
 
 /// A tool the project lists.
@@ -769,6 +775,28 @@ pub struct Stock {
     pub max_width: Option<Length>,
     /// The longest board available.
     pub max_length: Option<Length>,
+    /// The allowances the cut list makes for parts cut from it, its own
+    /// or the project's (grammar, "Cut list").
+    pub allowances: Allowances,
+}
+
+/// What the cut list allows for a stock beyond its parts' cut sizes
+/// (grammar, "Cut list"): the stock's own values, or the project's where
+/// it doesn't say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Allowances {
+    /// What each saw cut takes, counted between pieces when boards are
+    /// counted. Never negative.
+    pub kerf: Length,
+    /// Extra along the grain a part is first cut at; zero for a sheet or
+    /// a dowel. Never negative.
+    pub rough_length: Length,
+    /// Extra across the grain a part is first cut at; zero for a sheet or
+    /// a dowel. Never negative.
+    pub rough_width: Length,
+    /// The thickness the boards are bought at, when it is more than the
+    /// finished thickness (`sold:`, solid stock only).
+    pub sold: Option<Length>,
 }
 
 impl Stock {
@@ -926,6 +954,26 @@ pub struct Part {
     /// On the first piece of a part spliced end to end (grammar,
     /// "Splices"): every piece and splice. Derived, never written.
     pub pieces: Option<Pieces>,
+    /// `banding:`: the edge banding on its edges (grammar, "Edge
+    /// banding"). The drawn and cut sizes include it.
+    pub banding: Option<Banding>,
+}
+
+/// Edge banding glued on a sheet part's edges (grammar, "Edge banding").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Banding {
+    /// The band's thickness, more than zero.
+    pub thickness: Length,
+    /// The faces it is glued to, in the part's own frame: never across
+    /// its thickness, each once, sorted.
+    pub faces: Vec<LocalFace>,
+}
+
+impl Banding {
+    /// How many of the banded faces are at an end of `axis`: 0, 1 or 2.
+    pub fn ends_on(&self, axis: PartAxis) -> usize {
+        self.faces.iter().filter(|face| face.axis == axis).count()
+    }
 }
 
 /// The number of a piece of a spliced part: 1 is the piece at the end its
@@ -1076,6 +1124,7 @@ impl Part {
             boards: None,
             loose: self.loose,
             pieces: self.pieces.clone(),
+            banding: self.banding.clone(),
         }
     }
 }

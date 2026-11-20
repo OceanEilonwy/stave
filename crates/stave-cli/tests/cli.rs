@@ -317,3 +317,41 @@ fn view_says_when_the_viewer_is_missing_or_starts_it() {
         "{stderr}"
     );
 }
+
+/// `stave cut-list <folder>` is the same as `snapshots/<name>.cut-list`,
+/// checked by hand when it was added (grammar, "Cut list").
+fn cut_list_matches_its_snapshot(folder: &str, name: &str) {
+    let output = stave(&["cut-list", folder]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let list = String::from_utf8(output.stdout).unwrap();
+    let snapshot = workspace()
+        .join("crates/stave-cli/tests/snapshots")
+        .join(format!("{name}.cut-list"));
+    if std::env::var_os("STAVE_UPDATE_SNAPSHOTS").is_some() {
+        std::fs::write(&snapshot, &list).unwrap();
+    }
+    let expected = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(
+        list == expected,
+        "the cut list changed; diff it against {}",
+        snapshot.display()
+    );
+}
+
+/// The shelf unit uses every allowance: rough sizes and the bought
+/// thickness of its oak, a stock's own kerf, and edge banding.
+#[test]
+fn cut_list_of_the_shelf_unit_matches_its_snapshot() {
+    cut_list_matches_its_snapshot("examples/shelf_unit", "shelf_unit");
+}
+
+/// The bookshelf, with no allowances written: the defaults.
+#[test]
+fn cut_list_of_the_bookshelf_matches_its_snapshot() {
+    cut_list_matches_its_snapshot("examples/bookshelf", "bookshelf");
+}
