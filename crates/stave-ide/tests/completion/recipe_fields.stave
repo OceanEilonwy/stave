@@ -1,0 +1,7 @@
+stave 1
+
+recipe notch_by_hand : notch {
+  tools: [marking_knife]
+  $0
+}
+// expect: rank, needs, check

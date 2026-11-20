@@ -1,0 +1,12 @@
+stave 1
+
+kind pinned : joint {
+  makes part pin : dowel_stock {
+    length: 30mm
+    place {
+      orient(length: up)
+      $0
+    }
+  }
+}
+// expect: orient, center, against, flush

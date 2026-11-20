@@ -1,0 +1,9 @@
+stave 1
+
+kind housing : joint {
+  cut housing: crossing(into, piece) {
+    slot(width: 6mm, $0)
+  }
+}
+// label: slot(width:, depth:, angle = 0deg, from_centre = false)
+// active: -

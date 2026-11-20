@@ -1,0 +1,12 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part base : oak {
+  length: 600mm
+  width: 300mm
+  place {
+    $0
+  }
+}
+// expect: ground, against, flush, center, spaced, corners, orient

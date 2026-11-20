@@ -1,0 +1,7 @@
+stave 1
+
+kind housing : joint {
+  param depth = into.thickness / 3
+  cut $0
+}
+// expect: end, side, crossing

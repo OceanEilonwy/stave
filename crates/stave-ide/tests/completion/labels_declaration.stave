@@ -1,0 +1,4 @@
+stave 1
+
+part shelf[$0
+// expect: -

@@ -54,6 +54,7 @@
 
 mod analysis;
 mod buffers;
+mod completion;
 mod document;
 mod index;
 mod rename;
@@ -64,6 +65,9 @@ use std::path::{Path, PathBuf};
 
 pub use analysis::{Analysis, Crumb, FilePosition, Found, Hover, Lens, Location, Use, Uses};
 pub use buffers::{Buffers, OpenError, Overlay, Reload, SaveError};
+pub use completion::{
+    Completion, CompletionKind, ParameterKind, SignatureHelp, SignatureParameter,
+};
 pub use document::{Document, STD_SCHEME};
 pub use index::{Symbol, SymbolId, SymbolKind, UseKind};
 pub use rename::{RenameEdit, RenameError};

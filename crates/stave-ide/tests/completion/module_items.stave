@@ -1,0 +1,21 @@
+stave 1
+
+import "./shop"
+
+hardware knob : shop.$0
+//- shop/library.stave
+stave 1
+
+library "Shop" { }
+
+/// A small round brass knob.
+kind brass_knob : pull {
+  model: "knob.glb"
+}
+
+kind cup_hinge : hinge { }
+
+private param secret = 3mm
+
+stock oak_19 { species: oak, form: solid, thickness: 19mm }
+// expect: brass_knob, cup_hinge, oak_19

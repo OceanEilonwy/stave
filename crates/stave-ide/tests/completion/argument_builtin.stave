@@ -1,0 +1,4 @@
+stave 1
+
+let middle = mid(base, a$0)
+// expect: across

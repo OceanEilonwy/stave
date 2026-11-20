@@ -302,7 +302,7 @@ pub(crate) struct Index {
     /// The symbol an item node declares, by file and node start.
     item_at: BTreeMap<(FileId, u32), SymbolId>,
     /// The component each assembly is an instance of.
-    instance_of: BTreeMap<SymbolId, SymbolId>,
+    pub(crate) instance_of: BTreeMap<SymbolId, SymbolId>,
     /// Every reference, sorted by file and position.
     pub(crate) references: Vec<Reference>,
     /// Indices into `references`, by symbol.
@@ -681,7 +681,7 @@ impl Index {
     }
 
     /// What a bare name means at a node.
-    fn lookup(&self, file: FileId, node: &SyntaxNode, name: &str) -> Option<SymbolId> {
+    pub(crate) fn lookup(&self, file: FileId, node: &SyntaxNode, name: &str) -> Option<SymbolId> {
         let module = self.files.get(&file).and_then(|f| f.module);
         // The enclosing body first, then further out.
         if let Some(container) = self.container_at(file, node)
@@ -705,7 +705,7 @@ impl Index {
     }
 
     /// What `name` after a `.` means when the left side is `base`.
-    fn member(&self, file: FileId, base: SymbolId, name: &str) -> Option<SymbolId> {
+    pub(crate) fn member(&self, file: FileId, base: SymbolId, name: &str) -> Option<SymbolId> {
         let symbol = self.symbol(base)?;
         match symbol.kind {
             SymbolKind::Module => {

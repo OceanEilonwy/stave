@@ -1,0 +1,7 @@
+stave 1
+
+stock oak {
+  species: oak
+  th$0
+}
+// expect: thickness

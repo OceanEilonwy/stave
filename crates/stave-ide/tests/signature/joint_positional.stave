@@ -1,0 +1,17 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+/// A housing for a shelf.
+kind housing : joint {
+  roles {
+    piece: Part
+    into: Parts
+  }
+  /// How deep the housing is.
+  param depth : Length = into.thickness / 3
+}
+
+joint shelf_housing : housing(shelf, $0
+// label: housing(piece, into, depth = into.thickness / 3, glue:, methods:)
+// active: into

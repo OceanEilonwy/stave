@@ -1,0 +1,12 @@
+stave 1
+
+stock oak { species: oak, form: solid, thickness: 19mm }
+
+part shelf : oak {
+  length: between(side_l,
+  width: 300mm
+  place {
+    $0
+  }
+}
+// expect: ground, against, flush, center, spaced, corners, orient

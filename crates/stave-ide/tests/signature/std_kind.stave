@@ -1,0 +1,5 @@
+stave 1
+
+joint shelf_dado : dado(shelf, into: side, $0)
+// label: dado(piece, into, depth = into.thickness / 3, glue:, methods:)
+// active: -

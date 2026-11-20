@@ -1,0 +1,6 @@
+stave 1
+
+kind lap : joint {
+  cut lap: crossing(piece, into, normal: $0
+}
+// expect: length, width, thickness

@@ -1,0 +1,5 @@
+stave 1
+
+/// A new joint.
+kind housing : $0
+// expect: joint, slide, hinge, pull, support, fastener, tool

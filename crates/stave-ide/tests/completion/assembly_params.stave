@@ -1,0 +1,10 @@
+stave 1
+
+import "std:casework"
+
+assembly drawer : casework.Drawer {
+  opening: bay
+  mount: inset(reveal: 2mm)
+  $0
+}
+// expect: front_stock, box_stock, bottom_stock, slide, pull_kind, bottom_gap, top_gap, box_height, front_screw_inset
