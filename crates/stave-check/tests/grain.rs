@@ -278,12 +278,6 @@ fn screws_in_round_holes_across_the_grain_hold_the_top_fast() {
     );
 }
 
-#[test]
-fn screws_through_slots_let_the_top_move() {
-    let checked = check(&screwed("slotted_screw"));
-    assert_eq!(messages(&checked), Vec::<String>::new());
-}
-
 /// Two cleats under the top, at its front and back edges, running left to
 /// right, screwed up into it through round holes; `join` joins them to
 /// each other or not.
@@ -717,5 +711,68 @@ fn a_solid_panel_floating_in_grooves_at_its_ends_is_sound() {
 #[test]
 fn plywood_glued_into_its_grooves_is_sound() {
     let checked = check(&panel_between_stiles("ply_12", ""));
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+// ---- Which way a slot runs ----
+
+#[test]
+fn slots_that_run_along_the_grain_give_no_room() {
+    // The batten runs front to back, across the top's grain, and its
+    // slots are long across the batten: left to right, along the top's
+    // grain. The top moves front to back, so the slots don't help.
+    let checked = check(&screwed("slotted_screw"));
+    let found: Vec<_> = checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == Code::Grain)
+        .collect();
+    let [only] = found.as_slice() else {
+        panic!("{:#?}", checked.messages());
+    };
+    assert_eq!(
+        only.message,
+        "top is held fast at places 201.5mm apart across its grain, so it can't swell and shrink with the seasons"
+    );
+    assert_eq!(only.notes, ["held to batten by screws"]);
+    assert_eq!(
+        only.help.as_deref(),
+        Some(
+            "turn the slots of screws a quarter turn so they run across the grain of top, the way it moves: a slot that runs along the grain gives it no room"
+        )
+    );
+}
+
+#[test]
+fn slots_turned_to_run_across_the_grain_let_the_top_move() {
+    // The same batten with its slots long along it: front to back.
+    let text = design(&format!(
+        "{BATTEN}\njoint screws : slotted_screw(batten, into: top, length: 35mm, count: 3, glue: false, slide: 0mm, slide_along: 3mm)"
+    ));
+    let checked = check(&text);
+    assert_eq!(messages(&checked), Vec::<String>::new());
+}
+
+#[test]
+fn slots_across_the_grain_let_the_top_move_between_joined_cleats() {
+    // Cleats along the top's grain, front and back, joined by a tie: held
+    // fast 370mm apart through round holes, free through slots long
+    // across the cleats (front to back, the way the top moves).
+    let text = two_cleats(
+        r#"
+part tie : oak {
+  length: 400mm
+  width:  60mm
+  place {
+    orient(length: back, width: right)
+    against(cleat_front.bottom)
+    center(top, across)
+    flush(top.front)
+  }
+}
+joint ties : glued_face(tie, into: [cleat_front, cleat_back])"#,
+    )
+    .replace("screw([cleat_front", "slotted_screw([cleat_front");
+    let checked = check(&text);
     assert_eq!(messages(&checked), Vec::<String>::new());
 }

@@ -118,3 +118,41 @@ What changed in the corpus, each a true warning:
   shelves near the front; Stave can't yet say either (glue over part of
   a dado, or a member in a housed joint, which the screw and dowel kinds
   reject as overlapping), so the example says why the dados are dry.
+
+## 3. Which way a slot runs
+
+A slot is room to move only if its long way lies across the grain of
+the board that moves; one along the grain gives none, and the first pass
+let any slot silence the warning.
+
+- **What a slot is.** A `pocket` on a member (`crossing(p, member)`)
+  longer one way than the other, read from the language's own words: the
+  spec already says a pocket on a member lies with its `width` along the
+  part's length and its `thickness` across it, so the world axis it runs
+  along is that of its longer side. No new operation or field.
+- **The rule.** For each member in two parts, a solid board is held to
+  the other part where the member is unless a slot, in either part, runs
+  along the board's movement axis (a slot in the cleat, the screw fast
+  in the top, lets the top slide just as well as a slot in the top). A
+  slot that runs another way fixes the board like a round hole. A square
+  pocket is not a slot: it is taken as a round hole, which is the
+  cautious reading.
+- **The help.** When a member that holds the board at one of the two
+  places reported goes through a slot that runs the wrong way, the help
+  is `turn the slots of screws a quarter turn so they run across the
+  grain of top, the way it moves: a slot that runs along the grain gives
+  it no room`, in place of the general advice, since slots are already
+  there and only their direction is wrong.
+- **std can turn them.** std's `slotted_screw` cut its slots only across
+  the piece, so a batten across a top's grain (the common case for a
+  batten) could not be slotted the right way and the new help would have
+  had no answer. It gains `slide_along` (default 0mm), which lengthens
+  the slot along the piece; `slide: 0mm, slide_along: 3mm` turns it. A
+  kind can't choose a cut by a param, but a cut's sizes are expressions,
+  so two lengths say it. Its `seat_long` rule counts the longer slots.
+- The first pass's test `screws_through_slots_let_the_top_move` asserted
+  that exactly this wrong-way case (slots across a batten that runs
+  across the top's grain) was sound. It is replaced by
+  `slots_that_run_along_the_grain_give_no_room`, with the turned and the
+  cleat cases beside it. The examples' side tables already slot their
+  cleats the right way and check clean.

@@ -4042,9 +4042,15 @@ Parts that only touch, overlapping nowhere, have no glue in a cut.
    - at its edge, by a glued pair whose kind extends it (`adds:`) across
      its grain into the other part, a panel glued into its groove;
    - where a member is, by a joint's or a piece of hardware's member that
-     has a round hole (`drill`) in this part and in the other. A hole of
-     any other shape (a `pocket` cut long as a slot) is taken as room to
-     move, which way it is long is not checked, so a member drilled in
+     has a hole (a `drill` or a `pocket`) in this part and in the other,
+     unless a **slot** in either part runs the way this board moves. A
+     slot is a `pocket` on the member (`crossing(p, member)`) longer one
+     way than the other; it runs along its longer side, its `width` lying
+     along the part's length and its `thickness` across it (on an end, the
+     part's width and thickness). A slot that runs across this board's
+     grain lets the member slide as the board moves, and fixes nothing; a
+     slot that runs any other way (along the grain, or up through the
+     board) gives no room, and fixes it as a round hole would. A member in
      one part only (a tabletop fastener's screws, each in its own part)
      fixes nothing.
 
@@ -4066,14 +4072,20 @@ Parts that only touch, overlapping nowhere, have no glue in a cut.
    help `hold <top> fast along one line only and let it slide everywhere
    else: fasten it through slots, use fittings made to let it move, or
    keep its fixings within <80mm> of each other across its grain (the
-   max_held_width of <oak>)`. A part already warned
+   max_held_width of <oak>)`. When a member that holds it at one of the
+   two places goes through a slot that runs the wrong way, the help says
+   so in place of that advice: `turn the slots of <screws> a quarter turn
+   so they run across the grain of <top>, the way it moves: a slot that
+   runs along the grain gives it no room`. A part already warned
    for glue across the grain or end grain is not warned again here.
 
 std's `slotted_screw` drives its screws through slots in the piece (a
-`pocket` on `crossing(piece, screw)`, long across the piece) into pilot
-holes in the other part, so a top screwed down through cleats or
-aprons that run along its grain can move; std's `tabletop_fastener` is
-the fitting for the same job. The examples' side tables screw their tops
+`pocket` on `crossing(piece, screw)`) into pilot holes in the other
+part. Its slots are long across the piece (`slide:`), so a top screwed
+down through cleats or aprons that run along its grain can move; for a
+batten that runs across the top's grain, `slide: 0mm, slide_along: 3mm`
+turns them to run along the batten. std's `tabletop_fastener` is the
+fitting for the same job. The examples' side tables screw their tops
 down this way.
 
 ```
@@ -4084,8 +4096,7 @@ warning[grain]: top is held fast at places 372mm apart across its grain, so it c
    = help: hold top fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within 80mm of each other across its grain (the max_held_width of oak)
 ```
 
-**Not measured yet.** A slot that is long the wrong way, whether a solid
-panel has room to swell at the bottom of its groove (std's `groove` has a
+**Not measured yet.** Whether a solid panel has room to swell at the bottom of its groove (std's `groove` has a
 `clearance`), and movement in a part's thickness.
 
 ### Diagnostics

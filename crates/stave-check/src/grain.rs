@@ -36,6 +36,8 @@ use stave_model::solved::{
 use stave_schema::fields::DEFAULT_MAX_HELD_WIDTH_NM;
 use stave_schema::words::{Grain, StockForm};
 
+use stave_geom::solid::across;
+
 use crate::names::length_text;
 use crate::walls::cut_noun;
 use crate::{Checker, Contact, Item};
@@ -170,6 +172,56 @@ struct Fixing {
     high: Length,
     /// The joint or hardware that holds it.
     by: String,
+    /// `true` when a member holds it through a slot that runs the wrong
+    /// way: along its grain, so the slot gives it no room to move.
+    turned: bool,
+}
+
+/// A member's hole in one part: where the member is, and which world
+/// axes the slots cut for it there run along (a `pocket` longer one way
+/// than the other).
+#[derive(Debug, Clone)]
+struct Hole {
+    /// The part.
+    part: PartId,
+    /// The member's shape, in the world.
+    world: WorldBox,
+    /// The world axis each slot for it runs along.
+    slots: Vec<Axis>,
+}
+
+/// The world axis a `pocket` on a member runs along, when it is longer one
+/// way than the other: its width lies along the part's length (or the
+/// face's first axis), its thickness across it (grammar, "Cut
+/// operations").
+fn slot_axis(part: &Part, cut: &Cut) -> Option<Axis> {
+    let CutKind::Pocket {
+        width, thickness, ..
+    } = &cut.kind
+    else {
+        return None;
+    };
+    let [first, second] = across(cut.face.axis);
+    let world = |axis: PartAxis| part.pose.orientation.direction(axis).axis();
+    if width > thickness {
+        Some(world(first))
+    } else if thickness > width {
+        Some(world(second))
+    } else {
+        None
+    }
+}
+
+/// How far apart across its grain a board is held fast, as the held-fast
+/// warning reports it.
+struct HeldSpan {
+    /// The distance.
+    width: Length,
+    /// What holds it at the two places furthest apart.
+    notes: Vec<String>,
+    /// The members that hold it there through slots that run the wrong
+    /// way, by name.
+    turned: Vec<String>,
 }
 
 /// A glued joint pair whose glue is in its cuts, as [`Checker::glue_in_cuts`]
@@ -411,6 +463,7 @@ impl Checker<'_> {
                         low: at,
                         high: at,
                         by: joint.name.clone(),
+                        turned: false,
                     });
                 }
                 // Glue spread on the patch where the parts touch, or, for
@@ -479,6 +532,7 @@ impl Checker<'_> {
                         low: patch.min().get(axis),
                         high: patch.max().get(axis),
                         by: joint.name.clone(),
+                        turned: false,
                     });
                     let across = patch.size(axis);
                     if holds_still(other, axis)
@@ -526,9 +580,27 @@ impl Checker<'_> {
             let Some(part) = design.part(part_id) else {
                 continue;
             };
-            if let Some((span, notes)) = self.part_span(part, &held, &links)
+            if let Some(HeldSpan {
+                width: span,
+                notes,
+                turned,
+            }) = self.part_span(part, &held, &links)
                 && span > limit(part)
             {
+                let help = if turned.is_empty() {
+                    format!(
+                        "hold {} fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within {} of each other across its grain ({})",
+                        self.part_name(part_id),
+                        length_text(limit(part)),
+                        limit_source(part)
+                    )
+                } else {
+                    format!(
+                        "turn the slots of {} a quarter turn so they run across the grain of {}, the way it moves: a slot that runs along the grain gives it no room",
+                        crate::names::list(&turned),
+                        self.part_name(part_id)
+                    )
+                };
                 self.next_contact = Some(Contact::of(design, &[Item::Part(part_id)], &[]));
                 self.report(
                     Severity::Warning,
@@ -540,12 +612,7 @@ impl Checker<'_> {
                     ),
                     self.part_place(part_id),
                     notes,
-                    Some(format!(
-                        "hold {} fast along one line only and let it slide everywhere else: fasten it through slots, use fittings made to let it move, or keep its fixings within {} of each other across its grain ({})",
-                        self.part_name(part_id),
-                        length_text(limit(part)),
-                        limit_source(part)
-                    )),
+                    Some(help),
                 );
             }
         }
@@ -594,13 +661,15 @@ impl Checker<'_> {
         }
     }
 
-    /// Every member with a round hole in two parts: each part is held to
-    /// the other where it is.
+    /// Every member with a hole in two parts: each solid board is held to
+    /// the other part where it is, unless a slot in either part runs the
+    /// way the board moves (across its grain). A slot that runs another
+    /// way still holds it, and is marked so the help can say to turn it.
     fn member_fixings(&self, fixings: &mut BTreeMap<PartId, Vec<Fixing>>) {
         let design = self.design;
         // A member's copy is known by its shape's whole box, which is the
-        // same in every part it is drilled into.
-        let mut holes: BTreeMap<HoleKey, Vec<(PartId, WorldBox)>> = BTreeMap::new();
+        // same in every part it is cut into.
+        let mut holes: BTreeMap<HoleKey, Vec<Hole>> = BTreeMap::new();
         for part in design.parts() {
             for cut in &part.cuts {
                 let CutPlace::Member {
@@ -609,8 +678,20 @@ impl Checker<'_> {
                 else {
                     continue;
                 };
-                let CutKind::Drill { .. } = cut.kind else {
-                    continue;
+                let slot = match cut.kind {
+                    CutKind::Drill { .. } => None,
+                    CutKind::Pocket { .. } => slot_axis(part, cut),
+                    CutKind::Notch { .. }
+                    | CutKind::Slot { .. }
+                    | CutKind::Tenon { .. }
+                    | CutKind::Spigot { .. }
+                    | CutKind::Round { .. }
+                    | CutKind::DovetailSocket { .. }
+                    | CutKind::DovetailTail { .. }
+                    | CutKind::Outline { .. }
+                    | CutKind::Diagonal
+                    | CutKind::Chamfer { .. }
+                    | CutKind::Roundover { .. } => continue,
                 };
                 let size = Size3 {
                     length: difference(shape.max.length, shape.min.length),
@@ -636,8 +717,19 @@ impl Checker<'_> {
                     body: *body,
                 };
                 let entry = holes.entry((id, key)).or_default();
-                if !entry.iter().any(|(seen, _)| *seen == part.id) {
-                    entry.push((part.id, world));
+                let index = match entry.iter().position(|hole| hole.part == part.id) {
+                    Some(index) => index,
+                    None => {
+                        entry.push(Hole {
+                            part: part.id,
+                            world,
+                            slots: Vec::new(),
+                        });
+                        entry.len().saturating_sub(1)
+                    }
+                };
+                if let (Some(axis), Some(hole)) = (slot, entry.get_mut(index)) {
+                    hole.slots.push(axis);
                 }
             }
         }
@@ -649,26 +741,33 @@ impl Checker<'_> {
                 BodyOwner::Joint { joint, .. } => self.joint_name(joint),
                 BodyOwner::Hardware { hardware } => self.hardware_name(hardware),
             };
-            for (part_id, world) in &parts {
-                let Some(part) = design.part(*part_id) else {
+            for hole in &parts {
+                let Some(part) = design.part(hole.part) else {
                     continue;
                 };
                 if !moves(part) {
                     continue;
                 }
                 let axis = movement_axis(part);
-                let middle = world
+                let middle = hole
+                    .world
                     .min()
                     .get(axis)
                     .nm()
-                    .saturating_add(world.max().get(axis).nm())
+                    .saturating_add(hole.world.max().get(axis).nm())
                     / 2;
-                for (other, _) in parts.iter().filter(|(other, _)| other != part_id) {
-                    fixings.entry(*part_id).or_default().push(Fixing {
-                        other: *other,
+                for other in parts.iter().filter(|other| other.part != hole.part) {
+                    let room = hole.slots.contains(&axis) || other.slots.contains(&axis);
+                    if room {
+                        continue;
+                    }
+                    let turned = !hole.slots.is_empty() || !other.slots.is_empty();
+                    fixings.entry(hole.part).or_default().push(Fixing {
+                        other: other.part,
                         low: Length::from_nm(middle),
                         high: Length::from_nm(middle),
                         by: by.clone(),
+                        turned,
                     });
                 }
             }
@@ -714,12 +813,7 @@ impl Checker<'_> {
     /// How far apart across its grain a part is held fast. A part made of
     /// boards whose seams are not glued moves board by board, so each
     /// board is measured on its own.
-    fn part_span(
-        &self,
-        part: &Part,
-        held: &[Fixing],
-        links: &[Vec<PartId>],
-    ) -> Option<(Length, Vec<String>)> {
+    fn part_span(&self, part: &Part, held: &[Fixing], links: &[Vec<PartId>]) -> Option<HeldSpan> {
         let joined = joined_without(part.id, links, self.design.parts().len());
         let loose_boards = part
             .boards
@@ -730,7 +824,7 @@ impl Checker<'_> {
         };
         let axis = part.pose.orientation.direction(boards.axis);
         let origin = part.pose.origin.get(axis.axis()).nm();
-        let mut best: Option<(Length, Vec<String>)> = None;
+        let mut best: Option<HeldSpan> = None;
         for board in boards.boards.iter() {
             let near = board.offset.nm();
             let far = near.saturating_add(board.width.nm());
@@ -748,7 +842,7 @@ impl Checker<'_> {
                 .cloned()
                 .collect();
             if let Some(found) = self.held_span(part, &on_board, &joined)
-                && best.as_ref().is_none_or(|(span, _)| found.0 > *span)
+                && best.as_ref().is_none_or(|span| found.width > span.width)
             {
                 best = Some(found);
             }
@@ -761,12 +855,7 @@ impl Checker<'_> {
     /// one other part count with their spread only when that part holds
     /// still along the way this one moves; fixings in different parts
     /// with the distance between where each part holds it.
-    fn held_span(
-        &self,
-        part: &Part,
-        held: &[Fixing],
-        joined: &[usize],
-    ) -> Option<(Length, Vec<String>)> {
+    fn held_span(&self, part: &Part, held: &[Fixing], joined: &[usize]) -> Option<HeldSpan> {
         let axis = movement_axis(part);
         // Each other part: where it holds this one, from and to.
         let mut groups: BTreeMap<PartId, (i64, i64, Vec<String>)> = BTreeMap::new();
@@ -789,15 +878,15 @@ impl Checker<'_> {
                 crate::names::list(by)
             )
         };
-        let mut best: Option<(i64, Vec<String>)> = None;
+        let mut best: Option<(i64, Vec<String>, Vec<PartId>)> = None;
         for (other, (low, high, by)) in &groups {
             let still = self
                 .design
                 .part(*other)
                 .is_some_and(|other| holds_still(other, axis));
             let spread = high.saturating_sub(*low);
-            if still && best.as_ref().is_none_or(|(span, _)| spread > *span) {
-                best = Some((spread, vec![held_to(*other, by)]));
+            if still && best.as_ref().is_none_or(|(span, _, _)| spread > *span) {
+                best = Some((spread, vec![held_to(*other, by)], vec![*other]));
             }
         }
         // Between parts joined to each other other than through this one:
@@ -814,16 +903,35 @@ impl Checker<'_> {
                 }
                 let spread = first.0.abs_diff(second.0) / 2;
                 let spread = i64::try_from(spread).unwrap_or(i64::MAX);
-                if best.as_ref().is_none_or(|(span, _)| spread > *span) {
+                if best.as_ref().is_none_or(|(span, _, _)| spread > *span) {
                     let (low, high) = if first.0 <= second.0 {
                         (first, second)
                     } else {
                         (second, first)
                     };
-                    best = Some((spread, vec![held_to(low.1, low.2), held_to(high.1, high.2)]));
+                    best = Some((
+                        spread,
+                        vec![held_to(low.1, low.2), held_to(high.1, high.2)],
+                        vec![low.1, high.1],
+                    ));
                 }
             }
         }
-        best.map(|(span, notes)| (Length::from_nm(span), notes))
+        best.map(|(span, notes, others)| {
+            // The members that hold it there through slots turned the
+            // wrong way.
+            let mut turned: Vec<String> = held
+                .iter()
+                .filter(|fixing| fixing.turned && others.contains(&fixing.other))
+                .map(|fixing| fixing.by.clone())
+                .collect();
+            turned.sort();
+            turned.dedup();
+            HeldSpan {
+                width: Length::from_nm(span),
+                notes,
+                turned,
+            }
+        })
     }
 }
