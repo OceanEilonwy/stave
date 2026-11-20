@@ -286,9 +286,9 @@
       "match": "(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*"
     },
     "invalid-characters": {
-      "comment": "A character that starts no token: the lexer's ERROR_TOKEN.",
+      "comment": "A character that starts no token: the lexer's ERROR_TOKEN. A byte-order mark is whitespace to the lexer.",
       "name": "invalid.illegal.character.stave",
-      "match": "[^\\s]"
+      "match": "[^\\s\\x{FEFF}]"
     }
   }
 }

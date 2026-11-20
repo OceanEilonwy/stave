@@ -410,6 +410,12 @@ for (const file of corpus) {
   });
 }
 
+// A byte-order mark is whitespace to the lexer, so it must not be invalid.
+{
+  const scopes = scopesOf("﻿part side_l : oak");
+  if (/\binvalid\./.test(scopes[0])) fail(`a byte-order mark has scopes '${scopes[0]}'`);
+}
+
 if (counts.files < 50) {
   fail(`expected the whole corpus, found only ${counts.files} files`);
 }

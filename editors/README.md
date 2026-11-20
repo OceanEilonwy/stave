@@ -81,8 +81,10 @@ editor's own colouring (TextMate brackets and operators) stays.
 | 3 (8) | `unresolved` | yes | `Unresolved`: a word where a name goes that names nothing |
 | 4 (16) | `solvedParam` | yes | `SolvedParam`: a `solved param`, declared or named |
 
-The bits are the same as `TokenModifier`'s own (`1 << n` in this order), so
-the server can send a `TokenModifiers` set unchanged.
+The order is `TokenModifier::ALL`'s, so bit `n` of the protocol's
+modifier set is `TokenModifier::ALL[n]`: the server builds the number by
+folding `TokenModifiers::iter()` over that order (the set's own bits are
+private to `stave-ide`).
 
 Positions are UTF-16 code units, as the protocol requires; the server
 converts from byte offsets at the edge (`docs/grammar.md`, "Positions").
@@ -100,12 +102,16 @@ result: string | null      (null: no such file)
 ```
 
 The VS Code extension registers a read-only document provider for the
-`stave-std` scheme that sends it.
+`stave-std` scheme that sends it. Once such a document is open the client
+sends the usual `textDocument/didOpen` for it, with its `stave-std:///`
+URI, and asks for its semantic tokens, hover and definitions like any
+other document; the server answers them and never accepts edits to it.
 
 ### How colours look
 
 The VS Code extension sets these defaults for `.stave` files; the Neovim
-file sets the same with highlight links. They match the GTK editor:
+file sets the same with highlight groups (set again after each colour
+scheme change). They match the GTK editor:
 
 - `unit`: italic;
 - `*.reference`: underlined;

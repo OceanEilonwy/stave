@@ -3,7 +3,7 @@
 # rename and the rest.
 name = "Stave"
 path_suffixes = ["stave"]
-line_comments = ["/// ", "// "]
+line_comments = ["// ", "/// "]
 block_comment = ["/* ", " */"]
 tab_size = 2
 hard_tabs = false

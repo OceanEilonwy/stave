@@ -67,6 +67,9 @@ async function startClient(): Promise<void> {
     await created.start();
   } catch (error) {
     client = undefined;
+    // A client whose start failed still holds its output channel and
+    // watchers; release them so a restart starts clean.
+    await created.dispose().catch(() => undefined);
     const message = error instanceof Error ? error.message : String(error);
     const openSettings = "Open Settings";
     const choice = await vscode.window.showErrorMessage(
@@ -83,8 +86,14 @@ async function startClient(): Promise<void> {
 async function stopClient(): Promise<void> {
   const running = client;
   client = undefined;
-  if (running !== undefined) {
+  if (running === undefined) {
+    return;
+  }
+  try {
     await running.stop();
+  } catch {
+    // The server already exited or never finished starting: there is
+    // nothing left to stop, and a restart must still go ahead.
   }
 }
 
