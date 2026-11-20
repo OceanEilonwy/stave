@@ -185,6 +185,7 @@ impl EditView {
             changes.card.root.upcast_ref(),
             hold.card.widget().upcast_ref(),
         ]);
+        let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
             card,
@@ -198,12 +199,12 @@ impl EditView {
                 .forward(input, search_heard),
             search_open: None,
             face_button,
-            grips: grips::GripView::new(),
+            grips: grips::GripView::new(input),
             state: EditState::default(),
             changes,
             tools: item_tools::ItemTools::new(input),
             hold,
-            repeats: repeat_handles::Repeats::new(),
+            repeats,
             pending: editor_link::PendingPanel::new(),
             pending_marked: None,
             verbs: Vec::new(),
@@ -528,7 +529,6 @@ impl Window {
         self.connect_item_tools();
         self.connect_hold();
         self.connect_repeats();
-        self.connect_editor_link();
 
         // The menu's and the card's outputs were forwarded to the window
         // when they were launched (`EditView::new`).
@@ -914,7 +914,7 @@ impl Window {
         match event {
             EditEvent::Started => {
                 self.stop_options_check();
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 let generation = {
                     let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
@@ -931,7 +931,7 @@ impl Window {
             EditEvent::MenuChanged => self.refresh_edit(),
             EditEvent::Chosen => {
                 // Another candidate: "Repeat…" is asked for again.
-                self.editing.repeats.row.forget();
+                self.forget_card_repeat();
                 self.update_ghost();
                 self.refresh_edit();
                 self.start_options_check();

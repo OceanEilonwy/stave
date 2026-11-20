@@ -13,9 +13,8 @@
 //! controls' controllers ([`ItemTools`]), launched with their outputs
 //! forwarded to its input, and keeps its own copy of what the repeat
 //! controls show ([`RepeatFoldShown`]), which scripts read and press in
-//! one step. [`RepeatRow`] and [`RepeatFoldRow`] keep the older callback
-//! API for the candidate card's repeat controls (`repeat_handles.rs`)
-//! until they move to [`RepeatFoldComponent`].
+//! one step. The candidate card's repeat controls (`repeat_handles.rs`)
+//! are a [`RepeatFoldComponent`] the window holds the same way.
 //!
 //! ```text
 //! ▾ Change                          drawer   (a section of the Inspector)
@@ -26,8 +25,6 @@
 //! ```
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
-use std::cell::Cell;
-use std::rc::Rc;
 
 use crate::ui::update::editing::EditingInput;
 use adw::prelude::*;
@@ -42,7 +39,6 @@ use stave_app::session::Selection;
 use stave_lang::placement::Axis;
 use stave_model::solved::SolvedDesign;
 
-use super::super::relm4_shim::Bridge;
 use super::super::sections;
 use super::super::{Window, WindowInput};
 
@@ -304,231 +300,6 @@ impl Component for RepeatRowComponent {
     }
 }
 
-/// What a [`RepeatRow`] says it shows, at once: the count and axis `show`
-/// last set or people last chose, while the stepper itself follows when the
-/// main loop next runs. Edit scripts read it between steps of one turn of
-/// the loop, as the old row's stepper was read.
-#[derive(Debug)]
-struct RepeatShown {
-    /// The count (within the stepper's range) and the axis.
-    value: Cell<(usize, Axis)>,
-    /// How many `show` calls were sent to the component.
-    shows: Cell<u64>,
-}
-
-impl RepeatShown {
-    /// Takes a change people made, unless a `show` sent after it has
-    /// replaced it (the component handled fewer shows than were sent).
-    fn take_change(&self, count: usize, axis: Axis, shows: u64) {
-        if shows == self.shows.get() {
-            self.value.set((count, axis));
-        }
-    }
-}
-
-/// A count stepper, behind the callback API the window still uses: it owns
-/// the component and passes its setters on as [`RepeatRowInput`] messages.
-pub(in crate::ui) struct RepeatRow {
-    /// The row; its owner shows and hides it.
-    pub(in crate::ui) root: gtk::Box,
-    bridge: Bridge<RepeatRowComponent>,
-    /// The smallest count it offers.
-    least: usize,
-    /// What it shows, readable at once (plain values: no cycle).
-    shown: Rc<RepeatShown>,
-}
-
-impl RepeatRow {
-    /// A row starting at one piece, stacked up; the smallest count it
-    /// offers is `least`.
-    pub(in crate::ui) fn new(least: usize) -> RepeatRow {
-        let bridge = Bridge::<RepeatRowComponent>::launch(least);
-        let shown = Rc::new(RepeatShown {
-            value: Cell::new((clamp_count(1, least), Axis::Up)),
-            shows: Cell::new(0),
-        });
-        let row = RepeatRow {
-            root: bridge.widget().clone(),
-            bridge,
-            least,
-            shown,
-        };
-        // Until a callback is connected, people's changes are still taken.
-        row.connect_changed(|_, _| {});
-        row
-    }
-
-    /// Says "×" in place of "How many" (in full in the stepper's tooltip
-    /// and accessible label), so the row fits the Edit panel's width in
-    /// the default layout, where the docked area would otherwise widen to
-    /// hold it.
-    pub(in crate::ui) fn shorten(&self) {
-        self.bridge.send(RepeatRowInput::Shorten);
-    }
-
-    /// Shows a count and an axis without reporting them; the axis list
-    /// shows only while the count can still choose it.
-    pub(in crate::ui) fn show(&self, count: usize, axis: Axis, axis_shown: bool) {
-        self.shown.value.set((clamp_count(count, self.least), axis));
-        self.shown.shows.set(self.shown.shows.get().wrapping_add(1));
-        self.bridge.send(RepeatRowInput::Show {
-            count,
-            axis,
-            axis_shown,
-        });
-    }
-
-    /// The count shown: what [`RepeatRow::show`] last set (clamped as the
-    /// stepper clamps it) or people last chose, at once, though the stepper
-    /// itself follows when the main loop next runs.
-    pub(in crate::ui) fn count(&self) -> usize {
-        self.shown.value.get().0
-    }
-
-    /// The axis chosen: what [`RepeatRow::show`] last set or people last
-    /// chose, at once.
-    pub(in crate::ui) fn axis(&self) -> Axis {
-        self.shown.value.get().1
-    }
-
-    /// Calls `callback` with the count and axis when the user changes
-    /// either; [`RepeatRow::count`] and [`RepeatRow::axis`] already say
-    /// them when it runs.
-    pub(in crate::ui) fn connect_changed(&self, callback: impl Fn(usize, Axis) + 'static) {
-        let shown = Rc::clone(&self.shown);
-        self.bridge.connect(move |output| match output {
-            RepeatRowOutput::Changed { count, axis, shows } => {
-                shown.take_change(count, axis, shows);
-                callback(count, axis);
-            }
-        });
-    }
-
-    /// The stepper and the axis list, to use them as people do, for a test.
-    #[cfg(test)]
-    fn controls(&self) -> Option<(gtk::SpinButton, gtk::DropDown)> {
-        let mut spin = None;
-        let mut list = None;
-        let mut child = self.root.first_child();
-        while let Some(widget) = child {
-            if let Some(found) = widget.downcast_ref::<gtk::SpinButton>() {
-                spin = Some(found.clone());
-            }
-            if let Some(found) = widget.downcast_ref::<gtk::DropDown>() {
-                list = Some(found.clone());
-            }
-            child = widget.next_sibling();
-        }
-        spin.zip(list)
-    }
-}
-
-/// The repeat controls folded behind a small "Repeat…" button
-/// (`stave_app::item_offer::RepeatFold`, one rule for every card): the
-/// button while folded, the count and the direction once open.
-pub(in crate::ui) struct RepeatFoldRow {
-    /// The button and the row.
-    pub(in crate::ui) root: gtk::Box,
-    unfold: gtk::Button,
-    /// The count and the direction.
-    pub(in crate::ui) row: RepeatRow,
-    /// Whether the user pressed "Repeat…" for what is shown now.
-    asked: Rc<Cell<bool>>,
-}
-
-impl RepeatFoldRow {
-    /// Folded, starting at one piece.
-    pub(in crate::ui) fn new(least: usize) -> RepeatFoldRow {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-repeat-fold"])
-            .build();
-        let unfold = gtk::Button::builder()
-            .label(tr("Repeat…"))
-            .halign(gtk::Align::Start)
-            .css_classes(["flat", "stave-repeat-unfold"])
-            .tooltip_text(tr(
-                "Make more than one, each the same size, filling the space",
-            ))
-            .build();
-        unfold.update_property(&[gtk::accessible::Property::Label(&tr("Repeat"))]);
-        let row = RepeatRow::new(least);
-        root.append(&unfold);
-        root.append(&row.root);
-        let asked = Rc::new(Cell::new(false));
-        {
-            let asked = asked.clone();
-            unfold.connect_clicked(move |_| asked.set(true));
-        }
-        RepeatFoldRow {
-            root,
-            unfold,
-            row,
-            asked,
-        }
-    }
-
-    /// Shows what the rule says: hidden, the button, or the count and the
-    /// direction.
-    pub(in crate::ui) fn show(&self, fold: RepeatFold) {
-        let (any, open) = match fold {
-            RepeatFold::Hidden => (false, false),
-            RepeatFold::Folded => (true, false),
-            RepeatFold::Open => (true, true),
-        };
-        self.root.set_visible(any);
-        self.unfold.set_visible(any && !open);
-        self.row.root.set_visible(open);
-    }
-
-    /// `true` once the user pressed "Repeat…".
-    pub(in crate::ui) fn asked(&self) -> bool {
-        self.asked.get()
-    }
-
-    /// Puts "Repeat…" in one place and the count and direction in another
-    /// (the candidate's card: "Repeat…" on the line of its buttons, the
-    /// count above them, so folded it takes no line of its own).
-    pub(in crate::ui) fn place_apart(&self, button_slot: &gtk::Box, row_slot: &gtk::Box) {
-        self.root.remove(&self.unfold);
-        self.root.remove(&self.row.root);
-        button_slot.append(&self.unfold);
-        row_slot.append(&self.row.root);
-        self.row.shorten();
-    }
-
-    /// Forgets that "Repeat…" was pressed (something else is shown).
-    pub(in crate::ui) fn forget(&self) {
-        self.asked.set(false);
-    }
-
-    /// `true` while the count and the direction show.
-    pub(in crate::ui) fn is_open(&self) -> bool {
-        self.root.is_visible() && self.row.root.is_visible()
-    }
-
-    /// Presses "Repeat…", as a click does (scripts); `false` when it
-    /// doesn't show.
-    pub(in crate::ui) fn press(&self) -> bool {
-        if !self.unfold.is_visible() || !self.root.is_visible() {
-            return false;
-        }
-        self.unfold.emit_clicked();
-        true
-    }
-
-    /// Calls `callback` after "Repeat…" is pressed.
-    pub(in crate::ui) fn connect_unfold(&self, callback: impl Fn() + 'static) {
-        self.unfold.connect_clicked(move |_| callback());
-    }
-
-    /// The button (for tests).
-    #[cfg(test)]
-    pub(in crate::ui) fn unfold_button(&self) -> gtk::Button {
-        self.unfold.clone()
-    }
-}
-
 /// The repeat controls folded behind a small "Repeat…" button, as a relm4
 /// component its owner holds through a `Controller`: the button while
 /// folded, the count and the direction (a [`RepeatRowComponent`] it owns)
@@ -536,10 +307,6 @@ impl RepeatFoldRow {
 /// and the count and axis a script reads between steps, are the owner's,
 /// in a [`RepeatFoldShown`] it keeps beside the controller and updates from
 /// this component's outputs.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug)]
 pub(in crate::ui) struct RepeatFoldComponent {
     /// The count and the direction.
@@ -549,10 +316,6 @@ pub(in crate::ui) struct RepeatFoldComponent {
 /// Where a [`RepeatFoldComponent`]'s parts go when they are placed apart
 /// (the candidate's card: "Repeat…" on the line of its buttons, the count
 /// above them, so folded it takes no line of its own).
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug)]
 pub(in crate::ui) struct RepeatFoldSlots {
     /// Where "Repeat…" goes.
@@ -563,10 +326,6 @@ pub(in crate::ui) struct RepeatFoldSlots {
 }
 
 /// What a [`RepeatFoldComponent`] is made with.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug)]
 pub(in crate::ui) struct RepeatFoldInit {
     /// The smallest count the stepper offers.
@@ -576,10 +335,6 @@ pub(in crate::ui) struct RepeatFoldInit {
 }
 
 /// A [`RepeatFoldComponent`]'s widgets.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug)]
 pub(in crate::ui) struct RepeatFoldWidgets {
     unfold: gtk::Button,
@@ -600,10 +355,6 @@ impl RepeatFoldWidgets {
 }
 
 /// What a [`RepeatFoldComponent`] is told.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug)]
 pub(in crate::ui) enum RepeatFoldInput {
     /// Show what the rule says: hidden, the button, or the count and the
@@ -633,10 +384,6 @@ pub(in crate::ui) enum RepeatFoldInput {
 }
 
 /// What a [`RepeatFoldComponent`] tells its owner.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum RepeatFoldOutput {
     /// People pressed "Repeat…".
@@ -765,10 +512,6 @@ impl Component for RepeatFoldComponent {
 /// owner, so scripts and the count handle read them at once while the
 /// component draws them when the main loop next runs. Each setter returns
 /// the message to send to the component.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) struct RepeatFoldShown {
     /// What the rule last said.
@@ -784,10 +527,6 @@ pub(in crate::ui) struct RepeatFoldShown {
     shows: u64,
 }
 
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "ItemTools and Repeats move to it next")
-)]
 impl RepeatFoldShown {
     /// Hidden, at the least count, stacked up: what a new component shows.
     pub(in crate::ui) fn new(least: usize) -> RepeatFoldShown {
@@ -894,7 +633,7 @@ pub(in crate::ui) struct ItemToolsShown {
 /// switch and buttons only send [`ItemToolsInput`] messages. Showing it
 /// fills in the name and turns Mirror off with their handlers blocked, so
 /// only people's renames and switches are reported. The repeat controls on
-/// it ([`RepeatFoldRow`]) are its owner's, placed among its rows at launch.
+/// it ([`RepeatFoldComponent`]) are its owner's, placed among its rows at launch.
 #[derive(Debug)]
 pub(in crate::ui) struct ItemToolsComponent {
     shown: ItemToolsShown,
@@ -1472,6 +1211,7 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
 
@@ -1502,25 +1242,66 @@ mod tests {
         found
     }
 
+    /// What a count stepper reported: (count, axis, shows).
+    type RowHeard = Rc<RefCell<Vec<(usize, Axis, u64)>>>;
+
+    /// A count stepper launched as a fold launches it, what it reports
+    /// recorded.
+    fn launch_row(least: usize) -> (relm4::Controller<RepeatRowComponent>, RowHeard) {
+        let heard: RowHeard = Rc::default();
+        let log = Rc::clone(&heard);
+        let row = RepeatRowComponent::builder()
+            .launch(least)
+            .connect_receiver(move |_, RepeatRowOutput::Changed { count, axis, shows }| {
+                log.borrow_mut().push((count, axis, shows));
+            });
+        (row, heard)
+    }
+
+    /// The stepper and the axis list of a count stepper's row.
+    fn row_controls(row: &gtk::Box) -> (gtk::SpinButton, gtk::DropDown) {
+        let row: gtk::Widget = row.clone().upcast();
+        let spin = descendants::<gtk::SpinButton>(&row).first().cloned();
+        let list = descendants::<gtk::DropDown>(&row).first().cloned();
+        match spin.zip(list) {
+            Some(controls) => controls,
+            None => panic!("the row has a stepper and an axis list"),
+        }
+    }
+
+    fn show_row(
+        row: &relm4::Controller<RepeatRowComponent>,
+        count: usize,
+        axis: Axis,
+        axis_shown: bool,
+    ) {
+        let _ = row.sender().send(RepeatRowInput::Show {
+            count,
+            axis,
+            axis_shown,
+        });
+    }
+
     #[test]
     fn a_dropped_repeat_row_is_freed() {
         on_gtk_thread(repeat_row_is_freed);
     }
 
-    /// Dropping the row drops its controller: the widget, the model and
-    /// the callback are freed once the main loop runs.
+    /// Dropping the controller shuts the row down: the widget, the model
+    /// and the receiver's captures are freed once the main loop runs.
     fn repeat_row_is_freed() {
-        let row = RepeatRow::new(1);
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        row.connect_changed(move |_, _| {
-            let _ = &held;
-        });
+        let row = RepeatRowComponent::builder()
+            .launch(1)
+            .connect_receiver(move |_, _| {
+                let _ = &held;
+            });
         let callback = Rc::downgrade(&token);
         drop(token);
         settle();
-        let root = row.root.downgrade();
-        let input = row.bridge.sender().clone();
+        let root = row.widget().downgrade();
+        let input = row.sender().clone();
         drop(row);
         settle();
         assert!(root.upgrade().is_none(), "the row is freed");
@@ -1528,7 +1309,7 @@ mod tests {
             input.send(RepeatRowInput::Shorten).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the receiver is freed");
     }
 
     #[test]
@@ -1539,48 +1320,46 @@ mod tests {
     /// The old row set a `filling` flag around its own setters; now its
     /// handlers are blocked while the view follows the model.
     fn showing_a_count_reports_nothing_body() {
-        let row = RepeatRow::new(1);
-        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        row.connect_changed(move |count, axis| log.borrow_mut().push((count, axis)));
-        row.show(3, Axis::Deep, false);
-        row.shorten();
+        let (row, heard) = launch_row(1);
+        show_row(&row, 3, Axis::Deep, false);
+        let _ = row.sender().send(RepeatRowInput::Shorten);
         settle();
-        assert_eq!((row.count(), row.axis()), (3, Axis::Deep));
-        let Some((spin, list)) = row.controls() else {
-            panic!("the row has a stepper and an axis list");
-        };
+        let (spin, list) = row_controls(row.widget());
         assert_eq!(spin.value_as_int(), 3);
         assert_eq!(list.selected(), 2);
         assert!(!list.is_visible(), "the axis list follows the model");
+        assert!(row.widget().has_css_class("stave-repeat-short"));
         assert!(heard.borrow().is_empty(), "showing it reports nothing");
     }
 
     #[test]
-    fn a_shown_count_and_axis_read_back_at_once() {
-        on_gtk_thread(shown_reads_back_at_once);
+    fn a_shown_count_is_clamped_as_the_stepper_clamps_it() {
+        on_gtk_thread(shown_count_is_clamped);
     }
 
-    /// Edit scripts run their steps in one turn of the main loop and read
-    /// the row between them (`repeat 2 deep`, then `repeat 3` keeps the
-    /// axis), as the old row's stepper was read: what `show` set reads back
-    /// before the component has handled it, clamped as the stepper clamps.
-    fn shown_reads_back_at_once() {
-        let row = RepeatRow::new(2);
-        assert_eq!((row.count(), row.axis()), (2, Axis::Up), "starts at least");
-        row.show(3, Axis::Deep, true);
-        assert_eq!((row.count(), row.axis()), (3, Axis::Deep), "no settle");
-        row.show(40, Axis::Deep, true);
-        assert_eq!(row.count(), MOST, "clamped to the most");
-        row.show(0, Axis::Across, true);
-        assert_eq!((row.count(), row.axis()), (2, Axis::Across), "clamped up");
+    /// What the owner's copy says at once ([`RepeatFoldShown`], tested
+    /// without the main loop below) is what the stepper holds once it has
+    /// run: clamped to the least and the most.
+    fn shown_count_is_clamped() {
+        let (row, _) = launch_row(2);
+        let mut shown = RepeatFoldShown::new(2);
+        let (spin, list) = row_controls(row.widget());
         settle();
-        let Some((spin, list)) = row.controls() else {
-            panic!("the row has a stepper and an axis list");
-        };
-        assert_eq!(spin.value_as_int(), 2, "the stepper agrees");
-        assert_eq!(list.selected(), 1);
-        assert_eq!((row.count(), row.axis()), (2, Axis::Across));
+        assert_eq!(spin.value_as_int(), 2, "starts at least");
+        for (count, axis) in [(3, Axis::Deep), (40, Axis::Deep), (0, Axis::Across)] {
+            let _ = shown.show_count(count, axis, true);
+            show_row(&row, count, axis, true);
+            settle();
+            assert_eq!(
+                (
+                    usize::try_from(spin.value_as_int()).unwrap_or(0),
+                    axis_at(list.selected())
+                ),
+                (shown.count(), shown.axis()),
+                "the stepper agrees with the copy"
+            );
+        }
+        assert_eq!((shown.count(), shown.axis()), (2, Axis::Across));
     }
 
     #[test]
@@ -1589,27 +1368,27 @@ mod tests {
     }
 
     /// People change the count, and the window shows another before the
-    /// main loop runs: the callback still hears the change (the old row
-    /// called it before the show), but the show is what the row says and
-    /// what the stepper holds.
+    /// main loop runs: the change is still reported (the old row called
+    /// back before the show), with the shows the row had handled, so the
+    /// owner's copy keeps the show; the stepper holds the show too.
     fn show_replaces_an_earlier_change() {
-        let row = RepeatRow::new(1);
-        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        row.connect_changed(move |count, axis| log.borrow_mut().push((count, axis)));
-        let Some((spin, _)) = row.controls() else {
-            panic!("the row has a stepper and an axis list");
-        };
+        let (row, heard) = launch_row(1);
+        let mut shown = RepeatFoldShown::new(1);
+        let (spin, _) = row_controls(row.widget());
         spin.set_value(5.0);
-        row.show(3, Axis::Deep, true);
+        let _ = shown.show_count(3, Axis::Deep, true);
+        show_row(&row, 3, Axis::Deep, true);
         settle();
-        assert_eq!(*heard.borrow(), vec![(5, Axis::Up)]);
-        assert_eq!((row.count(), row.axis()), (3, Axis::Deep));
+        assert_eq!(*heard.borrow(), vec![(5, Axis::Up, 0)]);
+        shown.take_change(5, Axis::Up, 0);
+        assert_eq!((shown.count(), shown.axis()), (3, Axis::Deep));
         assert_eq!(spin.value_as_int(), 3);
         // A change after the show is taken again.
         spin.set_value(6.0);
         settle();
-        assert_eq!((row.count(), row.axis()), (6, Axis::Deep));
+        assert_eq!(heard.borrow().last(), Some(&(6, Axis::Deep, 1)));
+        shown.take_change(6, Axis::Deep, 1);
+        assert_eq!((shown.count(), shown.axis()), (6, Axis::Deep));
     }
 
     #[test]
@@ -1618,30 +1397,28 @@ mod tests {
     }
 
     /// The old row called back from inside the stepper's own signal. Now
-    /// people's change only queues a message; it reaches the callback after
-    /// the row's update has returned, and a change made from inside the
-    /// callback waits its turn.
+    /// people's change only queues a message; it reaches the receiver
+    /// after the row's update has returned, and a change made from inside
+    /// the receiver waits its turn.
     fn counts_are_queued() {
-        let row = Rc::new(RepeatRow::new(1));
-        let Some((spin, list)) = row.controls() else {
-            panic!("the row has a stepper and an axis list");
-        };
         let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&row);
-        row.connect_changed(move |count, axis| {
-            let Some(row) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push((count, axis));
-            // The model is free to read: the update has returned.
-            assert_eq!(row.count(), count);
-            if first {
-                list.set_selected(1);
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
-            }
-        });
+        let list_slot: Rc<RefCell<Option<gtk::DropDown>>> = Rc::default();
+        let inner = Rc::clone(&list_slot);
+        let row = RepeatRowComponent::builder().launch(1).connect_receiver(
+            move |_, RepeatRowOutput::Changed { count, axis, .. }| {
+                let first = log.borrow().is_empty();
+                log.borrow_mut().push((count, axis));
+                if first {
+                    if let Some(list) = inner.borrow().as_ref() {
+                        list.set_selected(1);
+                    }
+                    assert_eq!(log.borrow().len(), 1, "nothing ran under the receiver");
+                }
+            },
+        );
+        let (spin, list) = row_controls(row.widget());
+        *list_slot.borrow_mut() = Some(list);
         spin.set_value(4.0);
         assert!(heard.borrow().is_empty(), "the change is only queued");
         settle();
@@ -1667,13 +1444,7 @@ mod tests {
     fn fold_controls(
         fold: &relm4::Controller<RepeatFoldComponent>,
     ) -> (gtk::SpinButton, gtk::DropDown) {
-        let row: gtk::Widget = fold.widgets().row().clone().upcast();
-        let spin = descendants::<gtk::SpinButton>(&row).first().cloned();
-        let list = descendants::<gtk::DropDown>(&row).first().cloned();
-        match spin.zip(list) {
-            Some(controls) => controls,
-            None => panic!("the row has a stepper and an axis list"),
-        }
+        row_controls(fold.widgets().row())
     }
 
     #[test]

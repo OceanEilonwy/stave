@@ -166,6 +166,7 @@ pub(in crate::ui) fn wire(window: &mut Window) {
             InspectorOutput::Focus(target) => SelectionInput::Focus(target).into(),
             InspectorOutput::Source(location) => SelectionInput::GoToSource(location).into(),
             InspectorOutput::Link(target) => EditingInput::LinkClicked(target).into(),
+            InspectorOutput::Hover(target) => EditingInput::LinkHovered(target).into(),
         });
     });
 

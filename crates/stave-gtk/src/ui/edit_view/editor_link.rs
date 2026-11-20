@@ -396,10 +396,6 @@ const BLOCK_LINE_ABOVE_DOCK: i32 = 84;
 const PENDING_TAG: &str = "stave-pending-old";
 
 impl Window {
-    /// The pending lines live in the card in progress (see
-    /// [`Window::update_pending`]); nothing goes into the Code panel.
-    pub(in crate::ui) fn connect_editor_link(&self) {}
-
     /// The text of a file of the project as the editor has it (unsaved
     /// changes included), else as on disk.
     fn text_now(&self, path: &Path) -> Option<String> {

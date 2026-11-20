@@ -82,12 +82,15 @@ pub(in crate::ui) enum EditingInput {
     ItemRepeat(RepeatFoldOutput),
     /// The card's repeat row was unfolded.
     CardRepeatUnfolded,
-    /// A repeat count or direction changed.
-    RepeatChanged {
+    /// People changed the count or direction on the candidate's card.
+    CardRepeatChanged {
         /// How many.
         count: usize,
         /// Along which axis.
         axis: Axis,
+        /// How many counts the window had shown the stepper when people
+        /// changed it (a later one replaces the change).
+        shows: u64,
     },
     /// The repeat count's handle was pressed here.
     CountDragBegun {
@@ -200,11 +203,11 @@ impl From<EditingInput> for WindowInput {
     }
 }
 
-/// Puts the editing widgets over the 3D view and wires them (and the
-/// Details panel's links) to [`EditingInput`]s.
+/// Puts the editing widgets over the 3D view and wires them to
+/// [`EditingInput`]s. The Details panel's links come as the inspector's
+/// outputs (`update/selection.rs`).
 pub(in crate::ui) fn wire(window: &mut Window) {
     window.connect_editing();
-    window.connect_links(&window.widgets.inspector.links);
 }
 
 impl Window {
@@ -241,12 +244,9 @@ impl Window {
             EditingInput::HoldCard(output) => self.hold_card_asked(output),
             EditingInput::ItemTools(output) => self.item_tools_asked(output),
             EditingInput::ItemRepeat(output) => self.item_repeat_heard(output),
-            EditingInput::CardRepeatUnfolded => {
-                self.update_repeat_row();
-                self.request_render();
-            }
-            EditingInput::RepeatChanged { count, axis } => {
-                self.repeat_selected(count, Some(axis));
+            EditingInput::CardRepeatUnfolded => self.card_repeat_unfolded(),
+            EditingInput::CardRepeatChanged { count, axis, shows } => {
+                self.card_repeat_changed(count, axis, shows);
             }
             EditingInput::CountDragBegun { x, y } => self.count_drag_begin(x, y),
             EditingInput::CountDragged { x, y } => self.count_drag_update(x, y),
