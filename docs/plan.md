@@ -198,6 +198,109 @@ screenshots of focus mode (X-ray on, a step mid-way), the cabinet's top hinge
 is shown from above at 0°, 45° and 110° with its edge path and minimum gap,
 every new behaviour has tests, and the gate is green.
 
+# Next: language server, completion and richer colouring
+
+Goal: editing a `.stave` file feels like editing Rust in a good IDE, in the
+GTK app and in any LSP editor. Completion offers the right words for the
+cursor's position, units and name references stand out from the code
+around them, and every result comes back within a keystroke. The feature
+list is the grammar's "What an editor gets" table; this push builds it in
+order.
+
+What exists: `stave-ide` already answers definition, uses, hover, rename,
+breadcrumbs, lenses, search, fast diagnostics and a token class for every
+word. What is missing is listed step by step below.
+
+## Steps (each delegated, then checked before the next starts)
+
+1. **Token modifiers, units and references drawn** (`stave-lang`,
+   `stave-ide`, `stave-gtk`).
+   - The lexer emits `18mm` and `3/4in` as one `QUANTITY` token. Give
+     `Analysis::tokens` a separate span for the number and for the unit, and
+     add `TokenClass::Unit`, so units can be coloured and set in italics.
+   - `SemanticToken` gains a set of modifiers next to its class:
+     declaration, reference, from the standard library, unresolved and
+     solved param. This is the shape LSP semantic tokens need, and it lets
+     the editor underline references.
+   - `stave-gtk/src/ui/editor.rs` maps every `TokenClass::Item` except
+     components and kinds to no style, and leaves `Field` plain. Give parts,
+     joints, params, regions, hardware and the rest their own styles, and
+     underline references.
+   - Merge the three separate palettes (`ui/editor.rs`, `ui/inspector.rs`,
+     `ui/files.rs`) into one theme table before adding classes.
+2. **Completion engine** (`stave-schema`, `stave-ide`).
+   - `stave-schema` answers, by position, "which fields does this block
+     take" and "what type does this argument expect". Today that knowledge
+     lives in the checkers.
+   - `Analysis::completions(position)` works on half-typed, broken text and
+     offers the vocabulary the grammar lists: placement terms at the start
+     of a line in `place { }`, cut operations after `cut`, base kinds after
+     `kind name :`, the declaration's fields in a field position, the
+     expected type's words in an argument (`WordSet::words`), a module's
+     public items after `module.`, labels inside `[ ]`, and units after a
+     number.
+   - The same position logic gives signature help: the roles and params of
+     the kind or component being called, with defaults.
+   - Tested with corpus fixtures: snippets with a cursor marker and the
+     exact list expected.
+3. **`stave-lsp`** (new crate and binary).
+   - A stdio server that maps open, change and close events onto `Buffers`
+     and an `Overlay`, and answers from `Analysis`.
+   - A line index that converts byte offsets to and from the UTF-16 offsets
+     the protocol uses, computed at the edge (grammar, "Positions").
+   - Standard library documents served read-only through the existing
+     `stave-std:///` URIs.
+   - Slow-tier diagnostics run in the background after typing pauses and
+     are cancelled by the next change.
+   - Resolve the layering first: `CLAUDE.md` says the server builds on
+     `stave-ide`, `docs/grammar.md` says on `stave-app`. Slow diagnostics
+     and inlay values need `stave-app`, so the grammar is likely right; fix
+     whichever is wrong in the same change.
+4. **Salsa-style incremental work** (`stave-lang`, `stave-modules`,
+   `stave-ide`, then `stave-check`).
+   - Today an `Analysis` is rebuilt from scratch on every change: every
+     file is parsed again and the index rebuilt. The grammar asks for
+     query-based results, as in rust-analyzer's `salsa`: a change to one
+     file re-runs only what depends on it.
+   - Inputs are file texts; derived queries are a file's parse, its items,
+     a module's names, resolution, the index, tokens, completions and the
+     fast diagnostics, each cached and invalidated by its dependencies.
+     Determinism makes every result cacheable.
+   - Decide between the `salsa` crate and a small hand-written query
+     layer; either way `Analysis`'s public interface stays as it is.
+   - Done when an edit inside one item of a large project re-parses one
+     file and re-resolves only what names that file's items, and a
+     benchmark shows completion and tokens well within a keystroke on the
+     largest example plus its imports.
+5. **Hover values, inlay hints, symbols, folding, formatting and fixes**
+   (`stave-ide`, `stave-app`, `stave-lsp`).
+   - Hover and inlay hints show worked-out values in the project's units:
+     `length: fit` shows `= 844mm`, every size its cut length.
+   - Document symbols and folding from items and their blocks.
+   - Formatting through `stave fmt` on the lossless tree.
+   - Quick fixes from each diagnostic's patches, as workspace edits.
+   - Code lens "show in 3D" and "show work card".
+6. **Other editors** (`editors/`).
+   - A TextMate grammar, so files are coloured before the server starts
+     and on GitHub.
+   - A VS Code extension that starts `stave-lsp` and maps the custom token
+     types and modifiers (`unit`, part, joint, param, ...) to scopes and
+     styles.
+   - Configuration snippets for Helix, Neovim and Zed.
+
+## Definition of done
+
+- Completion fixtures for every position in the grammar's completion row,
+  each with an exact expected list.
+- Semantic token snapshot tests over the examples, including unit spans and
+  modifiers.
+- `stave-lsp` passes an integration test that opens an example, edits it,
+  and receives diagnostics, completions, tokens and a rename.
+- Screenshots of the GTK editor showing coloured units and underlined
+  references on the cabinet and at least two other examples, looked at.
+- The gate is green: `cargo fmt`, `cargo clippy --all-targets -- -D
+  warnings`, tests.
+
 # Done: generalise kinds (2026-11-17)
 
 The work pack `docs/workpacks/2026-11-17-generalise-kinds.md` is done
