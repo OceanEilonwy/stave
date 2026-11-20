@@ -96,6 +96,9 @@ pub enum Editor {
 pub struct LineNumber(NonZeroU32);
 
 impl LineNumber {
+    /// The first line.
+    pub const FIRST: LineNumber = LineNumber(NonZeroU32::MIN);
+
     /// The line numbered `number`; `None` for 0.
     pub fn new(number: u32) -> Option<LineNumber> {
         NonZeroU32::new(number).map(LineNumber)

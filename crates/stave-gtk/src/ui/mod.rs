@@ -45,6 +45,7 @@ mod new_project;
 mod option_search;
 mod output;
 mod panels;
+#[cfg(test)]
 mod relm4_shim;
 mod remember;
 mod sections;
@@ -59,7 +60,6 @@ mod view_tools;
 mod viewport;
 mod workbench;
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -107,6 +107,10 @@ use viewport::Viewport;
 /// Moving the mouse less than this many pixels between press and release
 /// is a click, not a drag.
 const CLICK_SLOP: f64 = 4.0;
+
+/// The window's action that removes the selection (Delete): enabled only
+/// while Delete has something to do ([`Window::offer_removal`]).
+pub(in crate::ui) const REMOVE_SELECTED: &str = "remove-selected";
 
 /// A mouse's Back button (the thumb button nearer the wrist), as GDK
 /// numbers it.
@@ -525,11 +529,15 @@ struct State {
     marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
-    /// Whether Delete has something to remove ([`Window::has_removable`]),
-    /// set after each message. The window's key handler reads this copy
-    /// to take Delete or pass it on, without asking the model from inside
-    /// GTK's signal.
-    removable: Rc<Cell<bool>>,
+    /// Whether a file of the project doesn't read (a syntax error), so
+    /// editing in 3D is off: worked out when the editor's analysis
+    /// arrives ([`ProjectInput::Analysed`](update::project::ProjectInput::Analysed)).
+    text_blocked: bool,
+    /// The question about unsaved changes is showing, and this waits on
+    /// people's answer.
+    unsaved_then: Option<Box<WindowInput>>,
+    /// The New Project dialog, while it shows.
+    new_project: Option<new_project::NewProjectDialog>,
 }
 
 /// The clock of something that plays frame by frame: the frame time it
@@ -574,9 +582,9 @@ pub(in crate::ui) struct Widgets {
     /// The dock and its panels round the 3D view.
     workbench: workbench::Workbench,
     /// The Problems panel.
-    problems: Rc<panels::ProblemsPanel>,
+    problems: panels::ProblemsPanel,
     /// The Files panel.
-    file_list: Rc<panels::FilesList>,
+    file_list: panels::FilesList,
     /// A short line at the top of the view: focus mode, posed problems.
     hint: gtk::Label,
     hint_box: gtk::Box,
@@ -810,7 +818,9 @@ impl Component for Window {
                 hovered: Vec::new(),
                 marks: Rc::default(),
                 edit_script: options.edit_script,
-                removable: Rc::default(),
+                text_blocked: false,
+                unsaved_then: None,
+                new_project: None,
             },
             pins: Pins::default(),
             watcher: None,
@@ -819,6 +829,9 @@ impl Component for Window {
             sender,
             style_handler: None,
         };
+        update::add_action(&root, REMOVE_SELECTED, &window.input(), || {
+            update::editing::EditingInput::RemoveSelected
+        });
         update::project::wire(&window);
         update::selection::wire(&mut window);
         update::rendering::wire(&mut window);
@@ -853,7 +866,7 @@ impl Component for Window {
         root.present();
         window.show_folder();
         window.dispatch(Command::Check);
-        window.state.removable.set(window.has_removable());
+        window.offer_removal();
         ComponentParts {
             model: window,
             widgets: (),
@@ -872,8 +885,9 @@ impl Component for Window {
             WindowInput::Editing(message) => self.update_editing(message),
             WindowInput::Rendering(message) => self.update_rendering(message),
         }
-        // The selection and the change in progress change only here.
-        self.state.removable.set(self.has_removable());
+        // The selection, the change in progress and whether the text
+        // reads change only here.
+        self.offer_removal();
     }
 
     fn shutdown(&mut self, _widgets: &mut (), _output: relm4::Sender<WindowOutput>) {
@@ -884,6 +898,22 @@ impl Component for Window {
 }
 
 impl Window {
+    /// Enables the window's `remove-selected` action (Delete) while there
+    /// is something to remove, or while the text doesn't read (then Delete
+    /// says why editing in 3D is off); disables it otherwise, so the Delete
+    /// key's handler passes the key on to other widgets. Called at the end
+    /// of every message: the key's handler reads the action's state, never
+    /// the model.
+    fn offer_removal(&self) {
+        let offered = self.state.text_blocked || self.has_removable();
+        if let Some(action) = self.widgets.window.lookup_action(REMOVE_SELECTED)
+            && let Ok(action) = action.downcast::<gio::SimpleAction>()
+            && action.is_enabled() != offered
+        {
+            action.set_enabled(offered);
+        }
+    }
+
     /// A clone of the window's input sender, for a handler, a timer or
     /// background work to send messages with. Sending fails quietly once
     /// the window has gone.
@@ -1194,8 +1224,8 @@ pub(in crate::ui) fn build_widgets(
     let camera = CameraToolbar::new(&view_toolbar, &to_window, update::rendering::camera_said);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new(&to_window, update::selection::plan_switch_said);
-    let step_card = StepCard::new();
-    let problem_card = ProblemCard::new();
+    let step_card = StepCard::new(&to_window, update::selection::step_card_said);
+    let problem_card = ProblemCard::new(&to_window, update::selection::problem_card_said);
     let dock = Dock::new(
         &header.scene,
         &motion,
@@ -1233,8 +1263,8 @@ pub(in crate::ui) fn build_widgets(
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
-    let pictures = Pictures::new();
-    let swing_card = SwingCard::new();
+    let pictures = Pictures::new(&to_window, update::selection::pictures_said);
+    let swing_card = SwingCard::new(&to_window, update::selection::swing_card_said);
     let stage = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["stave-stage"])
@@ -1251,8 +1281,12 @@ pub(in crate::ui) fn build_widgets(
 
     // The panels round the view: the parts tree, the files, the
     // selection's account, the open files and the problems.
-    let tree = TreeSidebar::new();
-    let inspector = Inspector::new();
+    let tree = TreeSidebar::new(&to_window, update::selection::tree_said);
+    let inspector = Inspector::new(
+        &to_window,
+        update::selection::inspector_said,
+        update::selection::focus_panel_said,
+    );
     let details_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     details_box.append(&inspector.root);
     let details = gtk::ScrolledWindow::builder()
@@ -1267,9 +1301,9 @@ pub(in crate::ui) fn build_widgets(
         .hexpand(true)
         .vexpand(true)
         .build();
-    let files = Files::new();
-    let file_list = panels::FilesList::new();
-    let problems = panels::ProblemsPanel::new();
+    let files = Files::new(&to_window, update::project::files_said);
+    let file_list = panels::FilesList::new(&to_window, update::selection::file_list_said);
+    let problems = panels::ProblemsPanel::new(&to_window, update::selection::problems_said);
     let output = output::OutputPanel::new();
 
     // The 3D View panel: the view, with the problems pinned on the model
@@ -1406,7 +1440,7 @@ pub(in crate::ui) fn build_widgets(
         window.add_breakpoint(narrow);
     }
 
-    let finder = Finder::new();
+    let finder = Finder::new(&to_window, update::selection::finder_said);
 
     Ok(Widgets {
         window: window.clone(),
@@ -1480,6 +1514,8 @@ fn narrow(value: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 

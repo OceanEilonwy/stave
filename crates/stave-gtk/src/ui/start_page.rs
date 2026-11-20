@@ -17,26 +17,45 @@
 //! its window and closes this one.
 //!
 //! The page's window is a relm4 component, [`StartPageComponent`]: its
-//! actions, rows and drop target only send [`StartPageInput`] messages,
-//! and it tells its owner what people asked for as [`StartPageOutput`]s.
-//! [`StartPage`] keeps the older API the application uses and passes what
-//! they ask on to the application as [`ShellInput`]s.
+//! actions, rows and drop target only send [`StartPageInput`] messages.
+//! It asks for a folder and shows the New Project dialog itself (its model
+//! owns the dialog while it shows), and tells its owner which folder to
+//! open as [`StartPageOutput`]s. [`StartPage`] is the application's
+//! handle: the one owner of the component's controller, its outputs
+//! forwarded at launch as [`ShellInput`]s.
 
 use stave_app::i18n::tr;
 use std::path::PathBuf;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use super::app::{self, APP_ID, ShellInput};
-use super::relm4_shim::Bridge;
-use super::{new_project, shown_path};
+use super::new_project::{NewProjectDialog, NewProjectOutput};
+use super::shown_path;
 
-/// The start page has no state of its own: what it lists is fixed when
-/// it opens, and what people ask for goes to its owner.
-#[derive(Debug)]
-pub(super) struct StartPageComponent;
+/// Asks for a project folder over the page's window; the folder chosen
+/// comes back to the page as [`StartPageInput::FolderChosen`].
+pub(super) type FolderChooser = fn(&adw::ApplicationWindow, relm4::Sender<StartPageInput>);
+
+/// The start page's state: what it lists is fixed when it opens; it keeps
+/// the New Project dialog while it shows, and how it asks for a folder.
+pub(super) struct StartPageComponent {
+    /// The New Project dialog, while it shows.
+    new_project: Option<NewProjectDialog>,
+    /// How it asks for a folder ([`choose_folder`], or a test's).
+    choose_folder: FolderChooser,
+}
+
+impl std::fmt::Debug for StartPageComponent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StartPageComponent")
+            .field("new_project", &self.new_project.is_some())
+            .finish_non_exhaustive()
+    }
+}
 
 /// What a start page is made with.
 #[derive(Debug)]
@@ -47,6 +66,8 @@ pub(super) struct StartPageInit {
     pub(super) recent: Vec<PathBuf>,
     /// Where its short lines show; the application adds them.
     pub(super) toasts: adw::ToastOverlay,
+    /// How it asks for a folder: [`choose_folder`].
+    pub(super) choose_folder: FolderChooser,
 }
 
 /// What the start page is told.
@@ -64,19 +85,22 @@ pub(super) enum StartPageInput {
     CloseRequested,
     /// Ask for a new project, as if people had.
     AskNewProject,
+    /// People chose a folder to open.
+    FolderChosen(PathBuf),
+    /// The New Project dialog wrote a project into this folder.
+    NewProjectWritten(PathBuf),
+    /// The New Project dialog has closed.
+    NewProjectClosed,
 }
 
 /// What the start page tells its owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StartPageOutput {
-    /// Ask for a project folder and open it.
-    Open,
-    /// Ask for a new project and open it.
-    Create,
-    /// Open this recent project.
-    OpenRecent(PathBuf),
-    /// Open this folder, dropped on the page.
-    Dropped(PathBuf),
+    /// Open this folder: chosen, recent or dropped on the page.
+    OpenFolder(PathBuf),
+    /// Open this project, just written by the New Project dialog, and
+    /// welcome it.
+    OpenNewProject(PathBuf),
     /// The page's window is closing.
     CloseRequest,
 }
@@ -229,6 +253,7 @@ impl Component for StartPageComponent {
             application,
             recent,
             toasts,
+            choose_folder,
         } = init;
         let toasts = &toasts;
         let has_icon = gtk::gdk::Display::default()
@@ -239,7 +264,10 @@ impl Component for StartPageComponent {
             "folder-open-symbolic"
         };
         let dropped = sender.input_sender().clone();
-        let model = StartPageComponent;
+        let model = StartPageComponent {
+            new_project: None,
+            choose_folder,
+        };
         let widgets = view_output!();
         if !recent.is_empty() {
             widgets.content.append(&recent_list(&recent, &sender));
@@ -251,30 +279,58 @@ impl Component for StartPageComponent {
         &mut self,
         message: StartPageInput,
         sender: ComponentSender<Self>,
-        _root: &Self::Root,
+        root: &Self::Root,
     ) {
         let output = match message {
-            StartPageInput::Open => StartPageOutput::Open,
-            StartPageInput::Create | StartPageInput::AskNewProject => StartPageOutput::Create,
-            StartPageInput::OpenRecent(folder) => StartPageOutput::OpenRecent(folder),
-            StartPageInput::Dropped(folder) => StartPageOutput::Dropped(folder),
-            StartPageInput::CloseRequested => StartPageOutput::CloseRequest,
+            StartPageInput::Open => {
+                (self.choose_folder)(root, sender.input_sender().clone());
+                None
+            }
+            StartPageInput::Create | StartPageInput::AskNewProject => {
+                // One at a time: the dialog showing is the one people
+                // answer.
+                if self.new_project.is_none() {
+                    let dialog =
+                        NewProjectDialog::new(sender.input_sender(), |output| match output {
+                            NewProjectOutput::Created(folder) => {
+                                StartPageInput::NewProjectWritten(folder)
+                            }
+                            NewProjectOutput::Closed => StartPageInput::NewProjectClosed,
+                        });
+                    dialog.present(root);
+                    self.new_project = Some(dialog);
+                }
+                None
+            }
+            StartPageInput::NewProjectClosed => {
+                self.new_project = None;
+                None
+            }
+            StartPageInput::NewProjectWritten(folder) => {
+                Some(StartPageOutput::OpenNewProject(folder))
+            }
+            StartPageInput::OpenRecent(folder)
+            | StartPageInput::Dropped(folder)
+            | StartPageInput::FolderChosen(folder) => Some(StartPageOutput::OpenFolder(folder)),
+            StartPageInput::CloseRequested => Some(StartPageOutput::CloseRequest),
         };
-        // Nobody listening is not a mistake: the owner may not want to
-        // hear.
-        let _ = sender.output(output);
+        if let Some(output) = output {
+            // Nobody listening is not a mistake: the owner may not want
+            // to hear.
+            let _ = sender.output(output);
+        }
     }
 }
 
-/// The start page's window, behind the API the application still uses:
-/// it owns the component (dropping it shuts the component down) and does
-/// what people ask for with the application.
+/// The start page's window as the application holds it: the one owner
+/// of the component's controller (dropping it shuts the component down),
+/// its outputs forwarded at launch as [`ShellInput`]s.
 pub(super) struct StartPage {
     /// Its window.
     pub(super) window: adw::ApplicationWindow,
     /// Where its short lines show.
     pub(super) toasts: adw::ToastOverlay,
-    bridge: Bridge<StartPageComponent>,
+    controller: Controller<StartPageComponent>,
 }
 
 impl StartPage {
@@ -286,44 +342,34 @@ impl StartPage {
         shell: relm4::Sender<ShellInput>,
     ) -> StartPage {
         let toasts = adw::ToastOverlay::new();
-        let bridge = Bridge::<StartPageComponent>::launch(StartPageInit {
-            application: application.clone(),
-            recent,
-            toasts: toasts.clone(),
-        });
-        let window = bridge.widget().clone();
-        let parent = window.downgrade();
-        bridge.connect(move |output| match output {
-            StartPageOutput::Open => {
-                if let Some(window) = parent.upgrade() {
-                    choose_folder(&window, shell.clone());
-                }
-            }
-            StartPageOutput::Create => {
-                if let Some(window) = parent.upgrade() {
-                    ask_new_project(&window, shell.clone());
-                }
-            }
-            StartPageOutput::OpenRecent(folder) | StartPageOutput::Dropped(folder) => {
-                shell.emit(ShellInput::OpenFolder(folder));
-            }
-            StartPageOutput::CloseRequest => shell.emit(ShellInput::StartClosed),
-        });
+        let controller = StartPageComponent::builder()
+            .launch(StartPageInit {
+                application: application.clone(),
+                recent,
+                toasts: toasts.clone(),
+                choose_folder,
+            })
+            .forward(&shell, |output| match output {
+                StartPageOutput::OpenFolder(folder) => ShellInput::OpenFolder(folder),
+                StartPageOutput::OpenNewProject(folder) => ShellInput::OpenNewProject(folder),
+                StartPageOutput::CloseRequest => ShellInput::StartClosed,
+            });
         StartPage {
-            window,
+            window: controller.widget().clone(),
             toasts,
-            bridge,
+            controller,
         }
     }
 
     /// The New Project dialog; the project it makes opens in its window.
     pub(super) fn ask_new_project(&self) {
-        self.bridge.send(StartPageInput::AskNewProject);
+        let _ = self.controller.sender().send(StartPageInput::AskNewProject);
     }
 }
 
-/// Asks for a project folder over `window` and opens it.
-fn choose_folder(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInput>) {
+/// Asks for a project folder over `window`; the folder chosen goes to the
+/// page as [`StartPageInput::FolderChosen`].
+fn choose_folder(window: &adw::ApplicationWindow, page: relm4::Sender<StartPageInput>) {
     let dialog = gtk::FileDialog::builder()
         .title(tr("Open a project folder"))
         .modal(true)
@@ -332,16 +378,9 @@ fn choose_folder(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInpu
         if let Ok(folder) = result
             && let Some(path) = folder.path()
         {
-            shell.emit(ShellInput::OpenFolder(path));
+            // The page may have gone; then nobody needs to know.
+            let _ = page.send(StartPageInput::FolderChosen(path));
         }
-    });
-}
-
-/// The New Project dialog over `window`; the project it makes opens in
-/// its window.
-fn ask_new_project(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInput>) {
-    new_project::ask(window.upcast_ref(), move |folder: PathBuf| {
-        shell.emit(ShellInput::OpenNewProject(folder));
     });
 }
 
@@ -351,11 +390,26 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, settle};
+
+    /// The folder a test's page is told was chosen, as the file chooser
+    /// would tell it.
+    const CHOSEN: &str = "/projects/chosen";
+
+    /// A folder chooser that answers at once with [`CHOSEN`], so no real
+    /// chooser opens in a test.
+    fn choose_at_once(_: &adw::ApplicationWindow, page: relm4::Sender<StartPageInput>) {
+        let _ = page.send(StartPageInput::FolderChosen(PathBuf::from(CHOSEN)));
+    }
 
     /// A start page listing `recent`, for an application of its own
-    /// (named `name`: each test's has a name of its own on the bus).
-    fn page(name: &str, recent: Vec<PathBuf>) -> Bridge<StartPageComponent> {
+    /// (named `name`: each test's has a name of its own on the bus), its
+    /// outputs going to `to`.
+    fn page(
+        name: &str,
+        recent: Vec<PathBuf>,
+        to: &relm4::Sender<StartPageOutput>,
+    ) -> Controller<StartPageComponent> {
         let application = adw::Application::new(
             Some(&format!("org.stave.StartPageTest.{name}")),
             gio::ApplicationFlags::NON_UNIQUE,
@@ -364,11 +418,14 @@ mod tests {
         if let Err(error) = application.register(gio::Cancellable::NONE) {
             panic!("the test's application registers: {error}");
         }
-        Bridge::<StartPageComponent>::launch(StartPageInit {
-            application,
-            recent,
-            toasts: adw::ToastOverlay::new(),
-        })
+        StartPageComponent::builder()
+            .launch(StartPageInit {
+                application,
+                recent,
+                toasts: adw::ToastOverlay::new(),
+                choose_folder: choose_at_once,
+            })
+            .forward(to, |output| output)
     }
 
     /// The rows people can activate, depth first.
@@ -394,12 +451,13 @@ mod tests {
     /// when it hears the page close) shuts the component down: the
     /// window, the runtime and the callback are freed.
     fn start_page_is_freed() {
-        let page = page("Freed", Vec::new());
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        page.connect(move |_| {
+        let to = listener(move |_: StartPageOutput| {
             let _ = &held;
         });
+        let page = page("Freed", Vec::new(), &to);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         let window = page.widget().downgrade();
@@ -427,40 +485,60 @@ mod tests {
     /// The old page called the application from inside GTK's signals.
     /// Now each action, row and close only queues a message, and the
     /// owner hears of them in order after each update; an action fired
-    /// from inside the owner's callback is queued too.
+    /// from inside the owner's handler is queued too. Open asks for a
+    /// folder (here answered at once) and the folder chosen is told;
+    /// New Project shows the dialog, which the page keeps while it shows
+    /// and lets go once it has closed.
     fn asks_are_queued() {
         let shelf = PathBuf::from("/projects/wall_shelf");
-        let page = Rc::new(page("Queued", vec![shelf.clone()]));
+        let dropped = PathBuf::from("/projects/hall_table");
+        let window_slot: Rc<RefCell<Option<adw::ApplicationWindow>>> = Rc::default();
         let heard: Rc<RefCell<Vec<StartPageOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let window = page.widget().clone();
-        page.connect(move |output| {
+        let (log, window_of) = (Rc::clone(&heard), Rc::clone(&window_slot));
+        let to = listener(move |output| {
             let first = log.borrow().is_empty();
-            if first {
+            if first && let Some(window) = window_of.borrow().as_ref() {
                 // Activating an action from in here only queues it.
-                let _ = WidgetExt::activate_action(&window, "win.new-project", None);
+                let _ = WidgetExt::activate_action(window, "win.open", None);
             }
             log.borrow_mut().push(output);
         });
+        let page = page("Queued", vec![shelf.clone()], &to);
+        window_slot.replace(Some(page.widget().clone()));
         let Some(row) = rows(page.widget().upcast_ref()).into_iter().next() else {
             panic!("the recent project has a row");
         };
-        let _ = WidgetExt::activate_action(page.widget(), "win.open", None);
         ActionRowExt::activate(&row);
-        page.send(StartPageInput::AskNewProject);
+        let _ = page.sender().send(StartPageInput::Dropped(dropped.clone()));
         assert!(heard.borrow().is_empty(), "nothing has run yet");
         settle();
         assert_eq!(
             *heard.borrow(),
             vec![
-                StartPageOutput::Open,
-                StartPageOutput::OpenRecent(shelf),
-                StartPageOutput::Create,
-                StartPageOutput::Create,
+                StartPageOutput::OpenFolder(shelf),
+                StartPageOutput::OpenFolder(dropped),
+                StartPageOutput::OpenFolder(PathBuf::from(CHOSEN)),
             ],
-            "in order, the action fired from the callback last"
+            "in order, the folder chosen from the handler's action last"
         );
+
         page.widget().present();
+        let _ = WidgetExt::activate_action(page.widget(), "win.new-project", None);
+        let _ = page.sender().send(StartPageInput::AskNewProject);
+        settle();
+        let Some(dialog) = page.widget().visible_dialog() else {
+            panic!("New Project shows its dialog over the page");
+        };
+        assert!(page.model().new_project.is_some(), "the page keeps it");
+        let shown = dialog.downgrade();
+        drop(dialog);
+        if let Some(dialog) = shown.upgrade() {
+            dialog.force_close();
+        }
+        settle();
+        assert!(page.model().new_project.is_none(), "let go once closed");
+        assert!(shown.upgrade().is_none(), "and freed");
+
         page.widget().close();
         settle();
         assert_eq!(heard.borrow().last(), Some(&StartPageOutput::CloseRequest));

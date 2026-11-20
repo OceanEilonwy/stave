@@ -10,22 +10,22 @@
 //! what the list shows is its model, only its update changes that, and the
 //! rows and links only send input messages. The rows are plain widgets the
 //! update builds, not components of their own. [`ProblemsPanel`] and
-//! [`FilesList`] keep the older API in front of them until the window
-//! moves to relm4 too.
+//! [`FilesList`] are their owner's handles: the one owner of the
+//! component's controller, its outputs forwarded at launch to where the
+//! owner said, its setters sent as input messages.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
 use stave_app::inspect::Token;
 use stave_app::problems::{Report, ReportPlace, Role};
 use stave_app::session::SourceLocation;
 use stave_lang::Severity;
 
-use super::relm4_shim::Bridge;
 use super::style::CODE;
 
 /// The Problems panel's state: the problems it lists, whether the 3D
@@ -197,34 +197,39 @@ impl Component for ProblemsComponent {
     }
 }
 
-/// The Problems panel: it owns the [`ProblemsComponent`] (dropping it
-/// shuts the component down), passes its setters on as [`ProblemsInput`]
-/// messages and its [`ProblemsOutput`]s to the callback connected with
-/// [`ProblemsPanel::connect_outputs`].
+/// The Problems panel: it owns the [`ProblemsComponent`]'s controller
+/// (dropping it shuts the component down) and passes its setters on as
+/// [`ProblemsInput`] messages; its [`ProblemsOutput`]s go where the owner
+/// said when it made it.
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
 pub struct ProblemsPanel {
     /// The panel's content.
     pub root: gtk::Stack,
-    bridge: Bridge<ProblemsComponent>,
+    controller: Controller<ProblemsComponent>,
 }
 
 impl ProblemsPanel {
-    /// An empty list.
-    pub fn new() -> Rc<ProblemsPanel> {
-        let bridge = Bridge::<ProblemsComponent>::launch(());
-        Rc::new(ProblemsPanel {
-            root: bridge.widget().clone(),
-            bridge,
-        })
+    /// An empty list, its outputs (a problem chosen, by its index in the
+    /// latest check's problems, or one of a problem's places clicked, to
+    /// open in the Code panel) made into the owner's messages by `map` and
+    /// sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(ProblemsOutput) -> X + 'static,
+    ) -> ProblemsPanel {
+        let controller = ProblemsComponent::builder().launch(()).forward(to, map);
+        ProblemsPanel {
+            root: controller.widget().clone(),
+            controller,
+        }
     }
 
-    /// Calls `callback` from now on, instead of the one connected before,
-    /// when a problem is chosen (its index in the latest check's problems)
-    /// or one of a problem's places is clicked, to open in the Code panel.
-    pub fn connect_outputs(&self, callback: impl Fn(ProblemsOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues `input`; once the component has gone there is nobody to
+    /// tell.
+    fn send(&self, input: ProblemsInput) {
+        let _ = self.controller.sender().send(input);
     }
 
     /// Lists these problems in full, the `selected` one marked. `stale`
@@ -234,7 +239,7 @@ impl ProblemsPanel {
     /// position and the keyboard's row survive a check that changed
     /// nothing, or little.
     pub fn show(&self, reports: &[Report], selected: Option<usize>, stale: bool) {
-        self.bridge.send(ProblemsInput::Show {
+        self.send(ProblemsInput::Show {
             reports: reports.to_vec(),
             selected,
             stale,
@@ -243,7 +248,7 @@ impl ProblemsPanel {
 
     /// Marks the selected problem, or none.
     pub fn show_selected(&self, selected: Option<usize>) {
-        self.bridge.send(ProblemsInput::ShowSelected(selected));
+        self.send(ProblemsInput::ShowSelected(selected));
     }
 }
 
@@ -675,39 +680,39 @@ impl Component for FilesListComponent {
     }
 }
 
-/// The Files panel: it owns the [`FilesListComponent`] (dropping it shuts
-/// the component down), passes its setter on as a [`FilesListInput`]
-/// message and its [`FilesListOutput`] to the callback connected with
-/// [`FilesList::connect_outputs`].
+/// The Files panel: it owns the [`FilesListComponent`]'s controller
+/// (dropping it shuts the component down) and passes its setter on as a
+/// [`FilesListInput`] message; its [`FilesListOutput`]s go where the owner
+/// said when it made it.
 ///
 /// The setter is queued: it takes effect when the main loop next runs,
 /// after whatever called it has returned.
 pub struct FilesList {
     /// The panel's content.
     pub root: gtk::Stack,
-    bridge: Bridge<FilesListComponent>,
+    controller: Controller<FilesListComponent>,
 }
 
 impl FilesList {
-    /// An empty list.
-    pub fn new() -> Rc<FilesList> {
-        let bridge = Bridge::<FilesListComponent>::launch(());
-        Rc::new(FilesList {
-            root: bridge.widget().clone(),
-            bridge,
-        })
-    }
-
-    /// Calls `callback` with each file people choose from now on, instead
-    /// of the one connected before.
-    pub fn connect_outputs(&self, callback: impl Fn(FilesListOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// An empty list, each file people choose made into the owner's
+    /// message by `map` and sent to `to`.
+    pub fn new<X: 'static>(
+        to: &relm4::Sender<X>,
+        map: impl Fn(FilesListOutput) -> X + 'static,
+    ) -> FilesList {
+        let controller = FilesListComponent::builder().launch(()).forward(to, map);
+        FilesList {
+            root: controller.widget().clone(),
+            controller,
+        }
     }
 
     /// Lists the `.stave` files in a project folder and the folders in it
     /// (not hidden ones, nor `target`), sorted by path.
     pub fn set_folder(&self, folder: &Path) {
-        self.bridge
+        let _ = self
+            .controller
+            .sender()
             .send(FilesListInput::SetFolder(folder.to_path_buf()));
     }
 }
@@ -747,7 +752,7 @@ mod tests {
     use stave_app::session::LineNumber;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle};
 
     #[test]
     fn the_cabinet_lists_its_own_files() {
@@ -834,7 +839,8 @@ mod tests {
     }
 
     fn problems_update_in_place() {
-        let panel = ProblemsPanel::new();
+        let (to, _heard) = recorder();
+        let panel = ProblemsPanel::new(&to, |output| output);
         let list = list_of(&panel.root);
         let first = vec![problem("a"), problem("b"), problem("c")];
         panel.show(&first, None, false);
@@ -870,18 +876,19 @@ mod tests {
     /// Dropping the panel shuts its component down when the main loop
     /// next runs: the list, the model and the callbacks are all freed.
     fn problems_panel_is_freed() {
-        let panel = ProblemsPanel::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        panel.connect_outputs(move |_| {
+        let to = listener(move |_: ProblemsOutput| {
             let _ = &held;
         });
+        let panel = ProblemsPanel::new(&to, |output| output);
+        drop(to);
         let callbacks = Rc::downgrade(&token);
         drop(token);
         panel.show(&[report(3)], None, false);
         settle();
         let root = panel.root.downgrade();
-        let input = panel.bridge.sender().clone();
+        let input = panel.controller.sender().clone();
         drop(panel);
         settle();
         assert!(root.upgrade().is_none(), "the panel is freed");
@@ -898,10 +905,8 @@ mod tests {
     }
 
     fn problem_setters_do_not_call_back() {
-        let panel = ProblemsPanel::new();
-        let calls = Rc::new(RefCell::new(0));
-        let counted = Rc::clone(&calls);
-        panel.connect_outputs(move |_| *counted.borrow_mut() += 1);
+        let (to, heard) = recorder();
+        let panel = ProblemsPanel::new(&to, |output| output);
         assert_eq!(panel.root.visible_child_name().as_deref(), Some("empty"));
         panel.show(&[report(3), report(9)], Some(1), true);
         settle();
@@ -914,7 +919,7 @@ mod tests {
         panel.show_selected(None);
         settle();
         assert!(list.selected_row().is_none());
-        assert_eq!(*calls.borrow(), 0, "setters never call back");
+        assert!(heard.borrow().is_empty(), "setters never call back");
     }
 
     #[test]
@@ -929,13 +934,13 @@ mod tests {
     /// selection the window makes from inside it is queued and never calls
     /// back, and a place's link clicked from inside it is queued too.
     fn problem_choices_are_queued() {
-        let panel = ProblemsPanel::new();
-        panel.show(&[report(3), report(9)], None, false);
-        settle();
-        let list = list_of(&panel.root);
+        // The owner's handler: it selects again (by message, as the window
+        // does) and a place's link is clicked from inside it.
+        type Handles = (relm4::Sender<ProblemsInput>, gtk::Stack);
+        let handles: Rc<RefCell<Option<Handles>>> = Rc::default();
         let heard: Rc<RefCell<Vec<String>>> = Rc::default();
-        let (log, weak) = (Rc::clone(&heard), Rc::downgrade(&panel));
-        panel.connect_outputs(move |output| {
+        let (log, inner) = (Rc::clone(&heard), Rc::clone(&handles));
+        let to = listener(move |output| {
             let index = match output {
                 ProblemsOutput::Choose(index) => index,
                 ProblemsOutput::Source(location) => {
@@ -943,11 +948,11 @@ mod tests {
                     return;
                 }
             };
-            let Some(panel) = weak.upgrade() else {
+            let Some((input, root)) = inner.borrow().clone() else {
                 return;
             };
-            panel.show_selected(Some(0));
-            let link = list_in(panel.root.upcast_ref())
+            let _ = input.send(ProblemsInput::ShowSelected(Some(0)));
+            let link = list_in(root.upcast_ref())
                 .and_then(|list| list.row_at_index(0))
                 .and_then(|row| find_button(row.upcast_ref()));
             if let Some(link) = link {
@@ -955,6 +960,14 @@ mod tests {
             }
             log.borrow_mut().push(format!("choose {index}"));
         });
+        let panel = ProblemsPanel::new(&to, |output| output);
+        handles.replace(Some((
+            panel.controller.sender().clone(),
+            panel.root.clone(),
+        )));
+        panel.show(&[report(3), report(9)], None, false);
+        settle();
+        let list = list_of(&panel.root);
         // People choose the second problem.
         list.select_row(list.row_at_index(1).as_ref());
         assert!(heard.borrow().is_empty(), "the choice is only queued");
@@ -975,14 +988,14 @@ mod tests {
     /// People clear the selection (Ctrl and a click): the panel tells
     /// nobody, and nothing it handles afterwards selects the row again.
     fn cleared_selection_stays_cleared() {
-        let panel = ProblemsPanel::new();
         let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
         let log = Rc::clone(&chosen);
-        panel.connect_outputs(move |output| {
+        let to = listener(move |output| {
             if let ProblemsOutput::Choose(index) = output {
                 log.borrow_mut().push(index);
             }
         });
+        let panel = ProblemsPanel::new(&to, |output| output);
         panel.show(&[report(3), report(9)], None, false);
         settle();
         let list = list_of(&panel.root);
@@ -1013,14 +1026,14 @@ mod tests {
     /// problems: its number would mean a different problem in the new
     /// ones, so the choice is let go.
     fn older_rows_choose_nothing() {
-        let panel = ProblemsPanel::new();
         let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
         let log = Rc::clone(&chosen);
-        panel.connect_outputs(move |output| {
+        let to = listener(move |output| {
             if let ProblemsOutput::Choose(index) = output {
                 log.borrow_mut().push(index);
             }
         });
+        let panel = ProblemsPanel::new(&to, |output| output);
         panel.show(&[report(3), report(9)], None, false);
         settle();
         let list = list_of(&panel.root);
@@ -1051,18 +1064,19 @@ mod tests {
     /// Dropping the list shuts its component down when the main loop next
     /// runs: the list, the model and the callback are all freed.
     fn files_list_is_freed() {
-        let files = FilesList::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        files.connect_outputs(move |_| {
+        let to = listener(move |_: FilesListOutput| {
             let _ = &held;
         });
+        let files = FilesList::new(&to, |output| output);
+        drop(to);
         let callback = Rc::downgrade(&token);
         drop(token);
         files.set_folder(&cabinet());
         settle();
         let root = files.root.downgrade();
-        let input = files.bridge.sender().clone();
+        let input = files.controller.sender().clone();
         drop(files);
         settle();
         assert!(root.upgrade().is_none(), "the list is freed");
@@ -1094,28 +1108,23 @@ mod tests {
     /// row activated before the new folder's listing is handled still
     /// opens the cabinet file it showed, never one of the new folder's.
     fn files_are_queued() {
-        let files = FilesList::new();
-        files.set_folder(&cabinet());
-        let list = list_of(&files.root);
-        assert!(list.row_at_index(0).is_none(), "the listing is only queued");
-        settle();
-        let Some(first) = list.row_at_index(0) else {
-            panic!("the cabinet has files");
-        };
         let other = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/box");
+        // The owner's handler, with the list's input and its root.
+        type Handles = (relm4::Sender<FilesListInput>, gtk::Stack);
+        let handles: Rc<RefCell<Option<Handles>>> = Rc::default();
         let heard: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
-        let (log, weak) = (Rc::clone(&heard), Rc::downgrade(&files));
+        let (log, inner_handles) = (Rc::clone(&heard), Rc::clone(&handles));
         let inner = other.clone();
-        files.connect_outputs(move |FilesListOutput::Open(path)| {
-            let Some(files) = weak.upgrade() else {
+        let to = listener(move |FilesListOutput::Open(path)| {
+            let Some((input, root)) = inner_handles.borrow().clone() else {
                 return;
             };
             let first_call = log.borrow().is_empty();
             if first_call {
                 // A folder with files of its own: queued, so the row below
                 // is still the cabinet's when it is activated.
-                files.set_folder(&inner);
-                if let Some(list) = list_in(files.root.upcast_ref())
+                let _ = input.send(FilesListInput::SetFolder(inner.clone()));
+                if let Some(list) = list_in(root.upcast_ref())
                     && let Some(row) = list.row_at_index(0)
                 {
                     activate(&list, &row);
@@ -1123,6 +1132,18 @@ mod tests {
             }
             log.borrow_mut().push(path);
         });
+        let files = FilesList::new(&to, |output| output);
+        handles.replace(Some((
+            files.controller.sender().clone(),
+            files.root.clone(),
+        )));
+        files.set_folder(&cabinet());
+        let list = list_of(&files.root);
+        assert!(list.row_at_index(0).is_none(), "the listing is only queued");
+        settle();
+        let Some(first) = list.row_at_index(0) else {
+            panic!("the cabinet has files");
+        };
         activate(&list, &first);
         assert!(heard.borrow().is_empty(), "the choice is only queued");
         settle();

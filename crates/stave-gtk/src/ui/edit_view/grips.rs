@@ -56,7 +56,6 @@ use super::grip_text::{
     grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
     suggested_range, typed_check, typed_refusal,
 };
-use crate::ui::update::Unprinted;
 use crate::ui::update::editing::EditingInput;
 use crate::ui::{EDGE, Window, WindowInput};
 
@@ -937,7 +936,7 @@ impl Window {
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
                 if input
-                    .send(EditingInput::GripStopsFound(Unprinted(Box::new(found))).into())
+                    .send(EditingInput::GripStopsFound(Box::new(found)).into())
                     .is_err()
                 {
                     return;
