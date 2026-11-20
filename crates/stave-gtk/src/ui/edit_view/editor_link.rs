@@ -532,6 +532,73 @@ impl Window {
     pub(in crate::ui) fn gestures_allowed(&self) -> bool {
         self.parse_block_line().is_none()
     }
+
+    /// The one gate on editing in 3D while the text doesn't read: says why
+    /// (a notice, beside the line low in the view) and returns `true`, so
+    /// the caller does nothing; `false` while the text reads.
+    ///
+    /// [`Window::dispatch`] asks it before every edit command the session
+    /// would act on ([`needs_readable_text`]), so a click, a script, a
+    /// card, a grip, the item's tools, a hold, the finder's verbs and
+    /// Delete are all refused the same way. Only what the window does
+    /// before it sends any command asks it too: starting an edit (which
+    /// would first drop the selection), starting a hold (which first asks
+    /// for the second thing in the hint), the finder's verbs (one notice,
+    /// not one per step) and Delete with nothing selected.
+    pub(in crate::ui) fn refuse_while_unreadable(&self) -> bool {
+        let Some(line) = self.parse_block_line() else {
+            return false;
+        };
+        self.edit_toast(&line);
+        self.show_parse_block_line();
+        true
+    }
+
+    /// Whether the text reads changed, or may have (a new analysis): the
+    /// line low in the view, the face button, the item's tools and the
+    /// Sizes card follow it.
+    pub(in crate::ui) fn readability_changed(&mut self) {
+        self.update_face_button();
+        self.relist_grips_soon();
+    }
+}
+
+/// Whether the session acting on `command` needs the text to read: every
+/// command that starts, changes or writes an edit or a change does. Only
+/// dropping what is in progress, listing a selection's grips and
+/// checking the open menu's entries don't.
+pub(in crate::ui) fn needs_readable_text(command: &stave_app::editing::EditCommand) -> bool {
+    use stave_app::editing::EditCommand;
+    match command {
+        EditCommand::Cancel | EditCommand::ListGrips(_) | EditCommand::CheckMenu => false,
+        EditCommand::Start(_)
+        | EditCommand::Choose(_)
+        | EditCommand::Bind(_)
+        | EditCommand::Set { .. }
+        | EditCommand::PutBack
+        | EditCommand::UseDefault(_)
+        | EditCommand::Rename(_)
+        | EditCommand::ApplyFix { .. }
+        | EditCommand::Repeat(_)
+        | EditCommand::RepeatItem { .. }
+        | EditCommand::MoveShares { .. }
+        | EditCommand::Mirror(_)
+        | EditCommand::MirrorSplit { .. }
+        | EditCommand::SetParam { .. }
+        | EditCommand::Hold(_)
+        | EditCommand::Remove(_)
+        | EditCommand::IncludeDependants
+        | EditCommand::RenameItem { .. }
+        | EditCommand::RepeatPart { .. }
+        | EditCommand::BeginDrag(_)
+        | EditCommand::DragTo(_)
+        | EditCommand::PickParam(_)
+        | EditCommand::TypeGripValue { .. }
+        | EditCommand::MakeSolved { .. }
+        | EditCommand::MakePlain(_)
+        | EditCommand::ShowPatch(_)
+        | EditCommand::Add => true,
+    }
 }
 
 /// Why editing in the 3D view is off for this analysis of the project, in

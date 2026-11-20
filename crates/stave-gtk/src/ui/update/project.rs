@@ -29,6 +29,9 @@ pub(in crate::ui) enum ProjectInput {
     OpenNewProject(PathBuf),
     /// A project just made: its envelope lit as the first space to click.
     Welcome,
+    /// The application's recent projects changed (or the window just
+    /// opened): Open Recent lists these folders, newest first.
+    ShowRecent(Vec<PathBuf>),
     /// The Open action: ask for a project folder.
     ChooseFolder,
     /// A folder chosen, dropped on the window or picked from Open Recent.
@@ -340,6 +343,7 @@ impl Window {
                 self.welcome_new_project();
             }
             ProjectInput::Welcome => self.welcome_new_project(),
+            ProjectInput::ShowRecent(folders) => self.widgets.header.show_recent(folders),
             ProjectInput::ChooseFolder => self.choose_folder(),
             ProjectInput::GoToFolder(path) => self.go_to_folder(path),
             ProjectInput::OpenHere(folder) => {
@@ -434,11 +438,17 @@ impl Window {
                 }
             }
             ProjectInput::Analysed(analysis) => {
-                self.state.text_blocked = edit_view::block_line(&analysis).is_some();
+                let blocked = edit_view::block_line(&analysis).is_some();
+                let was = std::mem::replace(&mut self.state.text_blocked, blocked);
                 self.widgets.files.set_analysis(analysis);
-                // The line saying why editing in 3D is off comes and goes
-                // with the text reading.
+                // The line saying why editing in 3D is off follows each
+                // analysis (its words name the problem); the face button,
+                // the item's tools and the Sizes card follow the text
+                // starting or ceasing to read.
                 self.show_parse_block_line();
+                if was != blocked {
+                    self.readability_changed();
+                }
             }
             ProjectInput::FilesSaved { ok, then } => {
                 if ok {
@@ -1180,8 +1190,7 @@ mod tests {
             };
             let builder = Window::builder();
             let root = builder.widget().clone();
-            let widgets =
-                build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+            let widgets = build_widgets(&root, &application, &folder, &options).unwrap();
             let removed = Rc::new(Cell::new(false));
             let heard = Rc::clone(&removed);
             let removed_handler = application.connect_window_removed(move |_, _| heard.set(true));

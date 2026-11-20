@@ -1374,8 +1374,11 @@ name changed as a word. They go when the edit is cancelled or applied.
 **While the text doesn't read** (an error of layer 1, a syntax error, in
 one of the project's files, as the editor's analysis has it), editing in
 the 3D view is off: a click in a space or a gap, the item's changes,
-Delete and the finder's verbs start nothing, and a line low in the view,
-just above the dock and wrapped, says why ("Editing in 3D is off while
+Hold, a size's change, Delete, the finder's verbs and an edit script's
+steps start nothing but a notice saying why; the "Add something onto
+its face" button, the item's tools and the Sizes card are not offered;
+and a line low in the view, just above the dock, wrapped and centred,
+says why ("Editing in 3D is off while
 small_chest.stave doesn't read: expected end of line, found 'space'. Fix
 the text first."); it stands there, not at the top, so it covers neither
 the parts list nor a card.

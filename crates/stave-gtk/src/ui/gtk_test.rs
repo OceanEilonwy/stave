@@ -36,6 +36,15 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_im_module(Some("gtk-im-context-simple"));
             }
+            // One font at 96 dpi, whatever the display's settings: the one
+            // `--window-screenshot` uses (`settle_for_screenshot`), so tests
+            // that lay widgets out at a width in sp, or measure text, read
+            // the same on any desktop and on the private Broadway display
+            // the tests run on.
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+                settings.set_gtk_xft_dpi(96 * 1024);
+            }
             // What the application puts on the display at startup that
             // the windows tests build rely on: the grips' sizes.
             if let Some(display) = gtk::gdk::Display::default() {
@@ -86,7 +95,7 @@ pub(crate) fn settle() {
 /// an animation (libadwaita's dialogs fade out even when force-closed,
 /// holding the dialog until the last frame) runs on the frame clock's
 /// time, so it may still be running then, more so on a busy machine.
-pub(crate) fn settle_until(limit: std::time::Duration, done: impl Fn() -> bool) -> bool {
+pub(crate) fn settle_until(limit: std::time::Duration, mut done: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + limit;
     loop {
         settle();

@@ -177,7 +177,10 @@ pub(super) fn heard(output: &ShowcaseOutput) {
             EditMenuOutput::Drawn | EditMenuOutput::Placed(_) | EditMenuOutput::HoldFromSpace,
         )
         | ShowcaseOutput::Card(
-            EditCardOutput::OptionsOpen(_) | EditCardOutput::Link(_) | EditCardOutput::Hover(_),
+            EditCardOutput::OptionsOpen(_)
+            | EditCardOutput::Link(_)
+            | EditCardOutput::Hover(_)
+            | EditCardOutput::WantsLayout,
         ) => {}
     }
 }

@@ -1195,8 +1195,7 @@ mod tests {
         };
         let builder = Window::builder();
         let root = builder.widget().clone();
-        let widgets =
-            build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+        let widgets = build_widgets(&root, &application, &folder, &options).unwrap();
         let controller = builder
             .launch(WindowInit {
                 widgets,

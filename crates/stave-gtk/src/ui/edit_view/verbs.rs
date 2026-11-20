@@ -277,8 +277,7 @@ impl Window {
 
     /// Runs a verb: the same methods the menu, the cards and the keys call.
     pub(in crate::ui) fn run_verb(&mut self, run: Run) {
-        if !self.gestures_allowed() {
-            self.edit_toast(&self.parse_block_line().unwrap_or_default());
+        if self.refuse_while_unreadable() {
             return;
         }
         match run {

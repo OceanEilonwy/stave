@@ -235,6 +235,7 @@ fn card_heard(output: EditCardOutput) -> WindowInput {
         EditCardOutput::OptionsOpen(setting) => EditingInput::CardOptionsOpen(setting),
         EditCardOutput::Link(target) => EditingInput::LinkClicked(target),
         EditCardOutput::Hover(target) => EditingInput::LinkHovered(target),
+        EditCardOutput::WantsLayout => EditingInput::CardWantsLayout,
     }
     .into()
 }
@@ -710,10 +711,6 @@ impl Window {
             None => facing.as_ref().and_then(picked_from_facing),
         };
         match (target, picked) {
-            (Some(Target::Region(_)), Some(_)) | (None, Some(_)) if !self.gestures_allowed() => {
-                self.edit_toast(&self.parse_block_line().unwrap_or_default());
-                true
-            }
             (Some(Target::Region(_)), Some(picked)) | (None, Some(picked)) => {
                 self.start_edit(picked, (x, y));
                 true
@@ -735,6 +732,10 @@ impl Window {
 
     /// Starts an edit from a selection: the menu opens near `point`.
     pub(super) fn start_edit(&mut self, picked: Picked, point: (f64, f64)) {
+        // Before the selection is dropped for it.
+        if self.refuse_while_unreadable() {
+            return;
+        }
         let keeps_selection = matches!(picked, Picked::Face(_));
         {
             let session = &mut self.session;
@@ -759,15 +760,19 @@ impl Window {
     }
 
     /// Shows the part's "Add onto" button when the selected part is the
-    /// one whose face was clicked and nothing is being edited.
+    /// one whose face was clicked, nothing is being edited and the text
+    /// reads.
     pub(super) fn update_face_button(&mut self) {
+        let readable = self.gestures_allowed();
         let face = self.editing.state.face;
         let selected = match self.session.selection() {
             Some(Selection::Part(part)) => Some(*part),
             _ => None,
         };
         let shown = match (face, selected) {
-            (Some(face), Some(part)) if face.part == part && !self.edit_open() => Some(face),
+            (Some(face), Some(part)) if readable && face.part == part && !self.edit_open() => {
+                Some(face)
+            }
             _ => None,
         };
         let button = &self.editing.face_button;
@@ -785,7 +790,7 @@ impl Window {
                 .session
                 .drawable()
                 .is_some_and(|(_, graph)| pointing::only_spaces(graph));
-        if waiting && !self.edit_open() && self.session.selection().is_none() {
+        if readable && waiting && !self.edit_open() && self.session.selection().is_none() {
             self.show_hint(&tr("Click inside the box to add the first piece"));
         }
         self.update_item_tools();
@@ -1090,6 +1095,23 @@ impl Window {
     /// The card says which setting's short list is open now.
     pub(in crate::ui) fn card_options_open(&mut self, setting: Option<String>) {
         self.editing.card_open_options = setting;
+    }
+
+    /// The card asked for a layout to bring its open short list into
+    /// sight (an edit script's `choices`, whose picture is taken from the
+    /// last layout): the window lays out its own tree at the size it has,
+    /// then tells the card, which scrolls its own scrolled window. The
+    /// picture's own layout, just before it is saved
+    /// (`ProjectInput::CaptureTick`), shows it scrolled.
+    pub(in crate::ui) fn lay_out_for_card(&self) {
+        let window = &self.widgets.window;
+        let (width, height) = (window.width(), window.height());
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        window.allocate(width, height, -1, None);
+        // Only fails once the card has shut down, with the window.
+        let _ = self.editing.card.sender().send(EditCardInput::LaidOut);
     }
 
     /// The menu near where it was asked for, inside the view (the cards
@@ -1565,7 +1587,9 @@ pub(in crate::ui) mod changes;
 #[cfg(test)]
 mod changes_tests;
 mod editor_link;
-pub(in crate::ui) use editor_link::block_line;
+#[cfg(test)]
+mod gate_tests;
+pub(in crate::ui) use editor_link::{block_line, needs_readable_text};
 pub(in crate::ui) mod grip_panel;
 mod grip_script;
 mod grip_text;
