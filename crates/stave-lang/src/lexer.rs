@@ -196,6 +196,15 @@ impl RawLexer<'_> {
         }
         while self.position < self.bytes.len() {
             let start = self.position;
+            // Skip any conflict already passed: one whose marker lines sit
+            // inside a block comment or a string is never reached.
+            while self
+                .conflicts
+                .get(self.next_conflict)
+                .is_some_and(|conflict| conflict.range.start < start)
+            {
+                self.next_conflict += 1;
+            }
             if let Some(conflict) = self.conflicts.get(self.next_conflict)
                 && conflict.range.start == start
             {
@@ -267,13 +276,11 @@ impl RawLexer<'_> {
 
     /// Lexes a conflict: its marker lines, and each side on its own.
     fn conflict(&mut self, conflict: &Conflict) {
-        let mut sides: Vec<&std::ops::Range<usize>> = conflict
-            .sides
-            .iter()
-            .chain(&conflict.base)
+        let sides: Vec<&std::ops::Range<usize>> = conflict
+            .sections()
+            .into_iter()
             .map(|side| &side.range)
             .collect();
-        sides.sort_by_key(|range| range.start);
         let mut position = conflict.range.start;
         for side in sides {
             self.marker_lines(position, side.start);

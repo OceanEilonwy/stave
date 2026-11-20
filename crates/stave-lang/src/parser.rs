@@ -299,6 +299,14 @@ impl<'t> Parser<'t> {
         while self.emitted < until {
             if let Some(&token) = self.tokens.get(self.emitted) {
                 let conflicts: &'t [Conflict] = self.conflicts;
+                // Skip any conflict already passed: one inside a block
+                // comment is never reached.
+                while conflicts
+                    .get(self.next_conflict)
+                    .is_some_and(|conflict| conflict.range.start < span_start(token.span))
+                {
+                    self.next_conflict += 1;
+                }
                 match conflicts.get(self.next_conflict) {
                     Some(conflict) if conflict.range.start == span_start(token.span) => {
                         self.next_conflict += 1;
@@ -317,13 +325,11 @@ impl<'t> Parser<'t> {
     /// base, in the order they are written; an empty side gets an empty
     /// node.
     fn conflict(&mut self, conflict: &Conflict) {
-        let mut sides: Vec<&std::ops::Range<usize>> = conflict
-            .sides
-            .iter()
-            .chain(&conflict.base)
+        let sides: Vec<&std::ops::Range<usize>> = conflict
+            .sections()
+            .into_iter()
             .map(|side| &side.range)
             .collect();
-        sides.sort_by_key(|range| range.start);
         let mut sides = sides.into_iter().peekable();
         let mut open: Option<usize> = None;
         self.builder.start_node(CONFLICT.into());

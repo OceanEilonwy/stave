@@ -57,9 +57,8 @@ fn conflicted_file_round_trips() {
             .filter(|child| child.kind() == SyntaxKind::CONFLICT_SIDE)
             .map(|child| child.to_string())
             .collect();
-        let mut expected: Vec<_> = found.sides.iter().chain(&found.base).collect();
-        expected.sort_by_key(|side| side.range.start);
-        let expected: Vec<&str> = expected
+        let expected: Vec<&str> = found
+            .sections()
             .iter()
             .map(|side| &text[side.range.clone()])
             .collect();
@@ -83,6 +82,101 @@ fn an_empty_side_gets_an_empty_node() {
         .map(|node| node.to_string())
         .collect();
     assert_eq!(sides, ["let x = 1\n", ""]);
+}
+
+fn item_names(parsed: &Parse<ast::File>) -> Vec<String> {
+    parsed
+        .ast
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .filter_map(|item| item.kind.name())
+        .map(|name| name.as_str().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_conflict_inside_a_block_comment_does_not_hide_the_next_one() {
+    let text = "stave 1\n/* note\n<<<<<<< a\n+++++++ one\nx\n+++++++ two\ny\n>>>>>>> end\n*/\n\
+                let a = 1\n<<<<<<< b\n+++++++ one\nlet b = (1\n/* open\n+++++++ two\nlet b = 2\n\
+                >>>>>>> end\nlet c = 3\n";
+    assert_eq!(find_conflicts(text).len(), 2);
+    let parsed = parse("a", text);
+    let root = parsed.syntax();
+    assert_eq!(root.to_string(), text);
+    let nodes: Vec<String> = root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::CONFLICT)
+        .map(|node| node.to_string())
+        .collect();
+    assert_eq!(nodes, [&text[find_conflicts(text)[1].range.clone()]]);
+    let codes: Vec<Code> = parsed.diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(
+        codes,
+        [Code::Conflict, Code::Conflict],
+        "{:?}",
+        parsed.diagnostics
+    );
+    assert_eq!(item_names(&parsed), ["a", "c"]);
+}
+
+#[test]
+fn every_base_of_a_three_sided_conflict_is_its_own_section() {
+    let text = "stave 1\n<<<<<<< conflict 1 of 1\n+++++++ one\nlet x = 1\n------- base\n\
+                let x = 0\n+++++++ two\nlet x = 2\n------- base\nlet x = 9\n/* note\n\
+                still a note */\n+++++++ three\nlet x = 3\n>>>>>>> conflict 1 of 1 ends\nlet y = 4\n";
+    let conflicts = find_conflicts(text);
+    let [conflict] = conflicts.as_slice() else {
+        panic!("one conflict: {conflicts:?}");
+    };
+    assert_eq!(conflict.sides.len(), 3);
+    let base = conflict.base.as_ref().expect("a base");
+    assert_eq!(&text[base.range.clone()], "let x = 0\n");
+    let later: Vec<&str> = conflict
+        .later_bases
+        .iter()
+        .map(|base| &text[base.range.clone()])
+        .collect();
+    assert_eq!(later, ["let x = 9\n/* note\nstill a note */\n"]);
+
+    let parsed = parse("a", text);
+    let root = parsed.syntax();
+    assert_eq!(root.to_string(), text);
+    let node = root
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::CONFLICT)
+        .expect("a CONFLICT node");
+    let sections: Vec<String> = node
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::CONFLICT_SIDE)
+        .map(|child| child.to_string())
+        .collect();
+    assert_eq!(
+        sections,
+        [
+            "let x = 1\n",
+            "let x = 0\n",
+            "let x = 2\n",
+            "let x = 9\n/* note\nstill a note */\n",
+            "let x = 3\n",
+        ]
+    );
+    let stray: Vec<_> = node
+        .children_with_tokens()
+        .filter(|element| element.as_token().is_some())
+        .map(|element| element.kind())
+        .filter(|&kind| kind != SyntaxKind::CONFLICT_MARKER && kind != SyntaxKind::NEWLINE)
+        .collect();
+    assert!(stray.is_empty(), "tokens outside a section: {stray:?}");
+    assert!(
+        !root
+            .descendants_with_tokens()
+            .any(|element| element.kind() == SyntaxKind::ERROR_TOKEN)
+    );
+    let codes: Vec<Code> = parsed.diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, [Code::Conflict], "{:?}", parsed.diagnostics);
+    assert_eq!(item_names(&parsed), ["y"]);
 }
 
 #[test]

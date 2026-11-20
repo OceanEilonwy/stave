@@ -303,7 +303,8 @@ marker_char     = "<" | "|" | "=" | "%" | "+" | "-" | "\" | ">" ;
   `+++++++` line and the base (what both changed) with a `-------` line,
   every one written in full; `>>>>>>>` closes. The first marker line comes
   right after the opening line, and a conflict has at least two sides.
-  When several bases are written, the first one is the conflict's base.
+  jj writes a base between each pair of sides, so a conflict with three
+  or more sides has several; the first one is the conflict's base.
 
   ```
   <<<<<<< conflict 1 of 1
@@ -328,7 +329,9 @@ marker_char     = "<" | "|" | "=" | "%" | "+" | "-" | "\" | ">" ;
   `error[conflict]` and the lines between them are read as ordinary text.
 - **In the syntax tree** a conflict is one `CONFLICT` node, wherever it
   stands, holding its marker tokens and a `CONFLICT_SIDE` node for each
-  side and for the base, in the order they are written. A side's text is
+  side and for each base, in the order they are written. A conflict whose
+  marker lines sit inside a block comment is part of the comment: it
+  gets no node, though its marker lines are still `error[conflict]`. A side's text is
   kept as tokens but not parsed with the rest of the file; the rest of the
   file is parsed as if the conflict were not there.
 - **Checking.** The file is read once per side, that side chosen in every

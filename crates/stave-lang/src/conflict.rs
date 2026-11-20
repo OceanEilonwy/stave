@@ -43,6 +43,24 @@ pub struct Conflict {
     /// What the sides were changed from, when the conflict says (the first
     /// one written, when it says several).
     pub base: Option<ConflictSide>,
+    /// The bases written after the first, in order: jj writes one between
+    /// each pair of sides, so a conflict with three or more sides has
+    /// several. Empty in git style.
+    pub later_bases: Vec<ConflictSide>,
+}
+
+impl Conflict {
+    /// Every section, sides and bases alike, in the order they are written.
+    pub fn sections(&self) -> Vec<&ConflictSide> {
+        let mut sections: Vec<&ConflictSide> = self
+            .sides
+            .iter()
+            .chain(&self.base)
+            .chain(&self.later_bases)
+            .collect();
+        sections.sort_by_key(|section| section.range.start);
+        sections
+    }
 }
 
 /// One side of a conflict, or its base.
@@ -266,19 +284,21 @@ fn read_conflict(
         && characters
             .iter()
             .all(|&character| matches!(character, MarkerCharacter::Side | MarkerCharacter::Base));
-    let (sides, base) = if snapshot {
+    let (sides, base, later_bases) = if snapshot {
         let mut sides = Vec::new();
-        let mut base = None;
+        let mut bases = Vec::new();
         for (position, &(index, found)) in inner.iter().enumerate() {
             let next = inner.get(position + 1).map_or(close, |&(next, _)| next);
             let section = side(found.label, between(index, next)?);
             if found.character == MarkerCharacter::Side {
                 sides.push(section);
-            } else if base.is_none() {
-                base = Some(section);
+            } else {
+                bases.push(section);
             }
         }
-        (sides, base)
+        let mut bases = bases.into_iter();
+        let base = bases.next();
+        (sides, base, bases.collect())
     } else {
         match inner.as_slice() {
             [(separator, found)] if found.character == MarkerCharacter::GitSeparator => (
@@ -287,6 +307,7 @@ fn read_conflict(
                     side(closing.label, between(*separator, close)?),
                 ],
                 None,
+                Vec::new(),
             ),
             [(base, base_marker), (separator, found)]
                 if base_marker.character == MarkerCharacter::GitBase
@@ -298,6 +319,7 @@ fn read_conflict(
                         side(closing.label, between(*separator, close)?),
                     ],
                     Some(side(base_marker.label, between(*base, *separator)?)),
+                    Vec::new(),
                 )
             }
             _ => return None,
@@ -307,7 +329,15 @@ fn read_conflict(
         return None;
     }
     let range = lines.get(open)?.start..lines.get(close)?.end;
-    Some((Conflict { range, sides, base }, close + 1))
+    Some((
+        Conflict {
+            range,
+            sides,
+            base,
+            later_bases,
+        },
+        close + 1,
+    ))
 }
 
 /// `text` with side `side` chosen in every conflict: the text that side is
