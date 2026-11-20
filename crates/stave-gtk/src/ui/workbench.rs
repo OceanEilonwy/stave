@@ -51,7 +51,7 @@ use gtk::{gio, glib};
 use panel::prelude::*;
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
-use super::tab_strip::{OwnTabs, PageTab, TabStrip, TabStripOutput};
+use super::tab_strip::{OwnTabs, PageTab, TabStrip, TabStripOutput, panel_of};
 use super::view_layout::{Group, Spot, Spots};
 
 /// One of the window's panels.
@@ -646,6 +646,16 @@ impl Dockyard {
         }
     }
 
+    /// Shows a panel in its frame, if it is open: its strip restyles when
+    /// the frame says so.
+    fn show_in_frame(&self, id: PanelId) {
+        if let Some(widget) = self.panels.get(&id)
+            && let Some(frame) = frame_of(widget)
+        {
+            frame.set_visible_child(widget);
+        }
+    }
+
     /// The side a panel is docked at, if it is open.
     fn side_of(&self, id: PanelId) -> Option<Side> {
         self.panels
@@ -861,16 +871,90 @@ fn new_frame() -> panel::Frame {
 }
 
 /// Puts a frame's tabs along its top as a slim strip of flush tabs, as in
-/// an IDE, showing the panels' own tabs as `own` has them; a chosen own
-/// tab comes back to `owner`.
+/// an IDE, showing the panels' own tabs as `own` has them, and gives the
+/// frame Ctrl+Page Up / Down; what the strip's clicks and the keys ask
+/// comes back to `owner`, which carries it out on its own panels.
 fn give_tabs(frame: &panel::Frame, own: &OwnTabs, owner: &relm4::Sender<WorkbenchInput>) {
     frame.set_orientation(gtk::Orientation::Vertical);
-    let strip = TabStrip::new(
-        own.clone(),
-        owner,
-        |TabStripOutput::Show { panel, index }| WorkbenchInput::OwnTabChosen { panel, index },
-    );
+    let strip = TabStrip::new(own.clone(), owner, |output| match output {
+        TabStripOutput::ShowPanel(panel) => WorkbenchInput::ShowTab(panel),
+        TabStripOutput::Show { panel, index } => WorkbenchInput::OwnTabChosen { panel, index },
+        TabStripOutput::Close(panel) => WorkbenchInput::Close(panel),
+    });
     frame.set_header(Some(&strip));
+    frame.add_controller(step_keys(owner));
+}
+
+/// Which way Ctrl+Page Up and Ctrl+Page Down step through a frame's
+/// pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The page before the shown one (the last after the first).
+    Previous,
+    /// The page after the shown one (the first after the last).
+    Next,
+}
+
+/// Ctrl+Page Up and Ctrl+Page Down: the previous and the next tab of the
+/// frame the keyboard is in. After the focused widget had its turn (the
+/// text editor keeps its own Ctrl+Page keys), and passed on when the
+/// frame has fewer than two pages.
+fn step_keys(owner: &relm4::Sender<WorkbenchInput>) -> gtk::ShortcutController {
+    let keys = gtk::ShortcutController::new();
+    for (trigger, step) in [
+        ("<Control>Page_Up", Step::Previous),
+        ("<Control>Page_Down", Step::Next),
+    ] {
+        let input = owner.clone();
+        // Reads only the frame the key came to (which page it shows), and
+        // sends.
+        let action = gtk::CallbackAction::new(move |widget, _| {
+            let shown = widget
+                .downcast_ref::<panel::Frame>()
+                .filter(|frame| frame.n_pages() >= 2)
+                .and_then(|frame| frame.visible_child())
+                .as_ref()
+                .and_then(panel_of);
+            match shown {
+                Some(from) => {
+                    input.emit(WorkbenchInput::Step { from, step });
+                    glib::Propagation::Stop
+                }
+                None => glib::Propagation::Proceed,
+            }
+        });
+        keys.add_shortcut(gtk::Shortcut::new(
+            gtk::ShortcutTrigger::parse_string(trigger),
+            Some(action),
+        ));
+    }
+    keys
+}
+
+/// Shows the page a `step` from the shown one, going round. `false` when
+/// there is only one page or none.
+fn show_step(frame: &panel::Frame, step: Step) -> bool {
+    let count = frame.n_pages();
+    if count < 2 {
+        return false;
+    }
+    let shown = frame.visible_child();
+    let current = (0..count)
+        .find(|index| {
+            frame
+                .page(*index)
+                .is_some_and(|page| shown.as_ref() == Some(&page))
+        })
+        .unwrap_or(0);
+    let next = match step {
+        Step::Previous => current.checked_sub(1).unwrap_or(count.saturating_sub(1)),
+        Step::Next => current.saturating_add(1) % count,
+    };
+    let Some(page) = frame.page(next) else {
+        return false;
+    };
+    frame.set_visible_child(&page);
+    true
 }
 
 /// The frame holding a panel, if it is open.
@@ -1017,8 +1101,20 @@ pub enum WorkbenchInput {
         /// Its tabs; none shows its one tab again.
         tabs: Vec<PageTab>,
     },
-    /// People chose one of a panel's own tabs in a strip (its frame shows
-    /// the panel now).
+    /// People clicked a panel's tab in a strip: its frame shows it.
+    ShowTab(PanelId),
+    /// People clicked a panel's × in a strip: it closes.
+    Close(PanelId),
+    /// People pressed Ctrl+Page Up or Down in the frame showing `from`:
+    /// the frame shows the page before or after it, going round.
+    Step {
+        /// The panel the frame showed.
+        from: PanelId,
+        /// Which way.
+        step: Step,
+    },
+    /// People chose one of a panel's own tabs in a strip: its frame shows
+    /// the panel, and the owner is told which tab.
     OwnTabChosen {
         /// The panel.
         panel: PanelId,
@@ -1338,7 +1434,19 @@ impl Component for WorkbenchComponent {
                     yard.show_own_tabs(&self.own_tabs);
                 }
             }
+            WorkbenchInput::ShowTab(panel) => yard.show_in_frame(panel),
+            WorkbenchInput::Close(panel) => {
+                if let Some(widget) = yard.panels.get(&panel) {
+                    widget.close();
+                }
+            }
+            WorkbenchInput::Step { from, step } => {
+                if let Some(frame) = yard.panels.get(&from).and_then(frame_of) {
+                    show_step(&frame, step);
+                }
+            }
             WorkbenchInput::OwnTabChosen { panel, index } => {
+                yard.show_in_frame(panel);
                 // Nobody listening is not a mistake.
                 let _ = sender.output(WorkbenchOutput::ShowOwnTab { panel, index });
             }
@@ -2254,6 +2362,78 @@ show bottom true
             file_tabs(&workbench).is_empty(),
             "the panel's one tab again"
         );
+    }
+
+    #[test]
+    fn a_strips_clicks_and_keys_are_carried_out_on_the_dock() {
+        on_gtk_thread(strip_asks_are_carried_out);
+    }
+
+    /// The strips never change their frames: a tab clicked, a × and
+    /// Ctrl+Page Up / Down come to the workbench, which shows, steps
+    /// through (round) and closes its own panels. The keys are on the
+    /// frame, given with its strip, and pass on with fewer than two pages.
+    fn strip_asks_are_carried_out() {
+        let Ok(workbench) = unheard(labels()) else {
+            panic!("the dock is built");
+        };
+        workbench.apply(Layout::board());
+        settle();
+        let (Some(view), Some(code)) = (
+            workbench.panel(PanelId::View).cloned(),
+            workbench.panel(PanelId::Code).cloned(),
+        ) else {
+            panic!("the dock has the Model and the Code panel");
+        };
+        assert!(workbench.share_a_frame(PanelId::View, PanelId::Code));
+        let Some(frame) = frame_of(&view) else {
+            panic!("the Model is docked");
+        };
+        assert_eq!(frame.n_pages(), 2);
+        workbench.send(WorkbenchInput::ShowTab(PanelId::Code));
+        assert_eq!(frame.visible_child().as_ref(), Some(&view), "only queued");
+        settle();
+        assert_eq!(frame.visible_child().as_ref(), Some(&code));
+        // Ctrl+Page Down from the frame's own keys, then round.
+        let key = |trigger: &str| -> bool {
+            let controllers = frame.observe_controllers();
+            let found = controllers.iter::<glib::Object>().find_map(|controller| {
+                let keys = controller
+                    .ok()?
+                    .downcast::<gtk::ShortcutController>()
+                    .ok()?;
+                keys.iter::<glib::Object>().find_map(|shortcut| {
+                    let shortcut = shortcut.ok()?.downcast::<gtk::Shortcut>().ok()?;
+                    let wanted = gtk::ShortcutTrigger::parse_string(trigger)?;
+                    shortcut
+                        .trigger()?
+                        .equal(&wanted)
+                        .then_some(shortcut.action()?)
+                })
+            });
+            found.is_some_and(|action| {
+                action.activate(gtk::ShortcutActionFlags::empty(), &frame, None)
+            })
+        };
+        assert!(key("<Control>Page_Down"), "two pages: the key is taken");
+        settle();
+        assert_eq!(frame.visible_child().as_ref(), Some(&view), "round");
+        assert!(key("<Control>Page_Up"));
+        settle();
+        assert_eq!(frame.visible_child().as_ref(), Some(&code));
+        workbench.send(WorkbenchInput::Step {
+            from: PanelId::Code,
+            step: Step::Next,
+        });
+        settle();
+        assert_eq!(frame.visible_child().as_ref(), Some(&view));
+        workbench.send(WorkbenchInput::Close(PanelId::Code));
+        settle();
+        assert!(!workbench.is_open(PanelId::Code), "closed");
+        assert_eq!(frame.n_pages(), 1);
+        assert!(!key("<Control>Page_Down"), "one page: passed on");
+        assert!(!show_step(&frame, Step::Previous));
+        assert_eq!(frame.visible_child().as_ref(), Some(&view));
     }
 
     #[test]

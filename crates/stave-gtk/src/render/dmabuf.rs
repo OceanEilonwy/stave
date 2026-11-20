@@ -30,7 +30,6 @@
 
 use std::collections::VecDeque;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -105,8 +104,9 @@ pub(super) struct Exporter {
     /// The layouts GTK accepts that the GPU can export and copy into.
     modifiers: Vec<u64>,
     pool: Pool,
-    /// Set when GTK refused a frame: frames go back to the readback path.
-    refused: Arc<AtomicBool>,
+    /// Set when GTK refused a frame ([`Exporter::refuse`]): frames go back
+    /// to the readback path.
+    refused: bool,
     /// How many images were made, for tests of reuse.
     made: u64,
 }
@@ -133,14 +133,20 @@ impl Exporter {
         Ok(Exporter {
             modifiers,
             pool: Pool::default(),
-            refused: Arc::default(),
+            refused: false,
             made: 0,
         })
     }
 
     /// Whether GTK still takes the frames.
     pub fn usable(&self) -> bool {
-        !self.refused.load(Ordering::Relaxed)
+        !self.refused
+    }
+
+    /// GTK refused a frame ([`Frame::into_texture`] failed): frames go
+    /// back to the readback path.
+    pub fn refuse(&mut self) {
+        self.refused = true;
     }
 
     /// An image for a `width` by `height` frame: the oldest released one
@@ -163,7 +169,6 @@ impl Exporter {
             height: image.height,
             image: Some(image),
             pool: Arc::clone(&self.pool),
-            refused: Arc::clone(&self.refused),
         })
     }
 
@@ -184,7 +189,6 @@ pub struct Frame {
     /// `None` only while dropping.
     image: Option<Image>,
     pool: Pool,
-    refused: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Frame {
@@ -209,8 +213,9 @@ impl Frame {
     }
 
     /// Wraps the frame as a GDK texture, which holds it until GTK lets it
-    /// go. An error means GTK refused it; frames after it are copied back
-    /// as before.
+    /// go. An error means GTK refused it: whoever shows the frames tells
+    /// the renderer ([`super::Renderer::refuse_dmabufs`]), so frames after
+    /// it are copied back as before.
     pub fn into_texture(mut self) -> Result<gdk::Texture> {
         let image = self.image.take().context("the frame was already used")?;
         let builder = gdk::DmabufTextureBuilder::new()
@@ -243,10 +248,7 @@ impl Frame {
         // and the image (one, once: frames stop coming here) is leaked
         // rather than freed while GTK might hold it.
         let built = unsafe { builder.build_with_release_func(release) };
-        built.map_err(|error| {
-            self.refused.store(true, Ordering::Relaxed);
-            anyhow!("GTK refused the frame as a dmabuf: {error}")
-        })
+        built.map_err(|error| anyhow!("GTK refused the frame as a dmabuf: {error}"))
     }
 }
 
