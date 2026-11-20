@@ -1183,12 +1183,27 @@ pub enum SearchEvent {
 }
 
 /// Which link of a lens was clicked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LensClick {
     /// "2 uses": list the declaration's uses.
     Uses(SymbolId),
     /// "show in 3D": select it in the 3D view.
     Show(SymbolId),
+    /// A link above a conflict ("Keep yours", ...): settle it in the
+    /// buffer showing ([`Editor::settle_conflict`]).
+    Settle(ConflictSettle),
+}
+
+/// What a conflict's link asks: settle conflict number `index` (from 0)
+/// by `resolution`, if it still reads `original`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictSettle {
+    /// Which conflict of the text, from 0.
+    pub index: usize,
+    /// How to settle it.
+    pub resolution: stave_lang::conflict::Resolution,
+    /// The conflict's text when the link was made.
+    pub original: String,
 }
 
 /// Which click a lens's link makes, given its declaration.
@@ -1216,14 +1231,12 @@ impl EscapeProbe {
     }
 }
 
-/// A link above a conflict that settles conflict number `index` (from 0)
-/// of `buffer` by `resolution`, if the conflict still reads `original`.
+/// A link above a conflict that asks, on the lens channel, to settle it
+/// ([`LensClick::Settle`]): its handlers only send.
 fn conflict_link(
-    buffer: &gtk::TextBuffer,
-    index: usize,
+    lens: &relm4::Sender<LensClick>,
     label: &str,
-    resolution: &stave_lang::conflict::Resolution,
-    original: &str,
+    settle: ConflictSettle,
 ) -> gtk::Button {
     let button = super::style::as_link(
         gtk::Button::builder()
@@ -1241,20 +1254,14 @@ fn conflict_link(
     mouse.connect_pressed(|gesture, _, _, _| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
-    let settle = {
-        let buffer = buffer.downgrade();
-        let resolution = resolution.clone();
-        let original = original.to_owned();
-        move || {
-            if let Some(buffer) = buffer.upgrade() {
-                settle_conflict(&buffer, index, &resolution, &original);
-            }
-        }
+    let send = {
+        let lens = lens.clone();
+        move || lens.emit(LensClick::Settle(settle.clone()))
     };
-    let from_mouse = settle.clone();
+    let from_mouse = send.clone();
     mouse.connect_released(move |_, _, _, _| from_mouse());
     button.add_controller(mouse);
-    button.connect_clicked(move |_| settle());
+    button.connect_clicked(move |_| send());
     button
 }
 
@@ -1344,6 +1351,19 @@ struct LensSlot {
 }
 
 impl Editor {
+    /// A conflict's link was clicked ([`LensClick::Settle`]): settles it
+    /// in the buffer showing as one undoable change, if it still reads as
+    /// it did when the link was made. `false` when it doesn't, and
+    /// nothing changes.
+    pub fn settle_conflict(&self, settle: &ConflictSettle) -> bool {
+        settle_conflict(
+            &self.view.buffer(),
+            settle.index,
+            &settle.resolution,
+            &settle.original,
+        )
+    }
+
     /// An empty editor whose buffers share `table`; a lens's links send
     /// their clicks on `lens`, and the search sends what it hears on
     /// `search_events`.
@@ -1618,11 +1638,13 @@ impl Editor {
                     row.root.append(&dot);
                 }
                 row.root.append(&conflict_link(
-                    buffer,
-                    file_conflict.index,
+                    &self.lens,
                     &action.label,
-                    &action.resolution,
-                    &original,
+                    ConflictSettle {
+                        index: file_conflict.index,
+                        resolution: action.resolution.clone(),
+                        original: original.clone(),
+                    },
                 ));
             }
             row.line = i32::try_from(file_conflict.lines.start().saturating_sub(1)).unwrap_or(0);
@@ -2293,15 +2315,26 @@ mod tests {
     }
 
     /// A conflict's sides are tinted, a row of links sits above its
-    /// opening line, and a link replaces the conflict in the buffer as one
-    /// undoable change. A link left from before the conflict changed
-    /// settles nothing.
+    /// opening line, and a link asks (on the lens channel) to replace the
+    /// conflict in the buffer, which the editor does as one undoable
+    /// change when its owner hands the click back. A link left from
+    /// before the conflict changed settles nothing.
     fn conflict_links_settle() {
-        let mut editor = Editor::new(
-            &gtk::TextTagTable::new(),
-            relm4::channel().0,
-            relm4::channel().0,
-        );
+        let (lens, clicks) = recorder::<LensClick>();
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), lens, relm4::channel().0);
+        // What the Files component does with each click it hears.
+        let hand_back = |editor: &Editor| {
+            let mut settled = Vec::new();
+            settle();
+            let heard: Vec<LensClick> = clicks.borrow_mut().drain(..).collect();
+            for click in heard {
+                match click {
+                    LensClick::Settle(settle) => settled.push(editor.settle_conflict(&settle)),
+                    LensClick::Uses(_) | LensClick::Show(_) => {}
+                }
+            }
+            settled
+        };
         let text = "stave 1\n\n<<<<<<< conflict 1 of 1\n+++++++ yours\nlet a = 1\n------- before\n+++++++ theirs\nlet b = 2\n>>>>>>> conflict 1 of 1 ends\n";
         let buffer = editor.new_buffer(text);
         editor.show_buffer(&buffer, true);
@@ -2340,6 +2373,8 @@ mod tests {
         }
         let changed = whole_text(&buffer);
         stale.emit_clicked();
+        assert_eq!(whole_text(&buffer), changed, "the link only asks");
+        assert_eq!(hand_back(&editor), [false]);
         assert_eq!(whole_text(&buffer), changed);
 
         // Painted again, the new row's link settles the conflict, as one
@@ -2347,6 +2382,8 @@ mod tests {
         editor.paint(&buffer, &LineStarts::new(&changed), &[]);
         let row = editor.conflict_rows.first().expect("a row of links");
         link(row, "Keep both").emit_clicked();
+        assert_eq!(whole_text(&buffer), changed, "the link only asks");
+        assert_eq!(hand_back(&editor), [true]);
         assert_eq!(
             whole_text(&buffer),
             "stave 1\n\nlet c = 3\nlet a = 1\nlet b = 2\n"
@@ -2565,6 +2602,11 @@ mod tests {
                 editor.place_overlays();
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
+            // The overlays' last moves are drawn from the next layout:
+            // laid out now, as a frame would (a private Broadway display
+            // with no browser runs few frames), so their bounds are read
+            // where they were put.
+            window.allocate(window.width(), window.height(), -1, None);
         };
         let check = |editor: &Editor, when: &str| {
             let view = &editor.view;

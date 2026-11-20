@@ -92,7 +92,9 @@ impl Launched {
                 .connect_receiver(move |_, output| match output {
                     EditCardOutput::Action(action) => actions.borrow_mut().push(action),
                     EditCardOutput::OptionsOpen(setting) => open.borrow_mut().push(setting),
-                    EditCardOutput::Link(_) | EditCardOutput::Hover(_) => {}
+                    EditCardOutput::Link(_)
+                    | EditCardOutput::Hover(_)
+                    | EditCardOutput::WantsLayout => {}
                 })
         };
         Launched {

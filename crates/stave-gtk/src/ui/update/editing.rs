@@ -38,6 +38,10 @@ pub(in crate::ui) enum EditingInput {
     CardAction(CardAction),
     /// The setting whose short list is open on the card changed.
     CardOptionsOpen(Option<String>),
+    /// The card can bring its open short list into sight only once the
+    /// window is laid out (an edit script's `choices`): the window lays
+    /// itself out and tells the card.
+    CardWantsLayout,
     /// The `--edit-fixture` showcase's menu or card said something: it is
     /// only printed.
     Showcase(crate::ui::edit_demo::ShowcaseOutput),
@@ -187,6 +191,7 @@ impl Window {
             EditingInput::MenuPlaced(place) => self.menu_placed(place),
             EditingInput::CardAction(action) => self.card_action(action),
             EditingInput::CardOptionsOpen(setting) => self.card_options_open(setting),
+            EditingInput::CardWantsLayout => self.lay_out_for_card(),
             EditingInput::Showcase(output) => crate::ui::edit_demo::heard(&output),
             EditingInput::EditFace => self.edit_face(),
             EditingInput::PointerAt(point) => self.edit_hover(point),
@@ -282,8 +287,7 @@ mod tests {
         };
         let builder = Window::builder();
         let root = builder.widget().clone();
-        let widgets =
-            build_widgets(&root, application, &folder, &gio::Menu::new(), &options).unwrap();
+        let widgets = build_widgets(&root, application, &folder, &options).unwrap();
         builder
             .launch(WindowInit {
                 widgets,
