@@ -24,12 +24,13 @@
 //! everything else: the text, the gutter, matched brackets, search matches.
 //!
 //! Lenses and the peek are overlay children placed in the room a tag's
-//! `pixels-above-lines` / `pixels-below-lines` makes for them, and so are
-//! the links above a conflict ("Keep yours · Keep both"), which
-//! [`Editor::paint`] puts there while it tints the conflict's sides. A
-//! conflict link is the one widget here that changes something itself:
-//! it edits the buffer, as typing does, and the page hears the change as
-//! it hears typing.
+//! `pixels-above-lines` / `pixels-below-lines` makes for them; the room is
+//! as tall as they are (a lens row grows with Large Text), and they follow
+//! the text's layout for a while after each change. So are the links above
+//! a conflict ("Keep yours · Keep both"), which [`Editor::paint`] puts
+//! there while it tints the conflict's sides. A conflict link is the one
+//! widget here that changes something itself: it edits the buffer, as
+//! typing does, and the page hears the change as it hears typing.
 //!
 //! The search bar is a relm4 component, [`EditorSearch`]
 //! (docs/relm4-migration.md), whose controller the editor owns: what it
@@ -71,8 +72,13 @@ const DARK_CLASS: &str = "stave-code-dark";
 /// 23 px lines, as the design has it.
 const LINE_SPACING: i32 = 3;
 
-/// The room a lens takes above its line.
+/// The least room a lens takes above its line; more when its row is
+/// taller (larger text): see [`Editor::lens_room`].
 const LENS_HEIGHT: i32 = 20;
+
+/// The room a lens row keeps free below it, above its line's own spacing,
+/// and above it.
+const LENS_GAP: i32 = 2;
 
 /// The width of the gutter's strip for the cursor's bar and problems'
 /// bars, left of the line numbers.
@@ -1162,6 +1168,9 @@ pub struct Editor {
     lenses: Vec<LensSlot>,
     /// How many of the lens rows are in use.
     lenses_used: usize,
+    /// The room above a line with a lens: its row's height and a gap
+    /// either side, at least [`LENS_HEIGHT`] (see [`Editor::lens_room`]).
+    lens_room: i32,
     /// Where the peek goes, and the line it sits under while it shows.
     peek_box: gtk::Box,
     peek_line: Option<i32>,
@@ -1461,6 +1470,7 @@ impl Editor {
             dark: false,
             lenses: Vec::new(),
             lenses_used: 0,
+            lens_room: LENS_HEIGHT,
             peek_box,
             peek_line: None,
             peek_tagged: None,
@@ -2057,7 +2067,7 @@ impl Editor {
             .any(|slot| slot.line == next);
         let mut room = LINE_SPACING.saturating_add(natural).saturating_add(10);
         if lens_below {
-            room = room.saturating_add(LENS_HEIGHT);
+            room = room.saturating_add(self.lens_room);
         }
         if self.peek_tagged == Some((line, room)) {
             return;
@@ -2091,18 +2101,44 @@ impl Editor {
         }
     }
 
+    /// Makes the room above each line with a lens as tall as a lens row
+    /// is now, with a gap either side, and never less than
+    /// [`LENS_HEIGHT`]: the row grows with the text (Large Text, a larger
+    /// font) and must never reach down over the line or up over the line
+    /// before. Changing the room lays the text out again, which settles
+    /// the overlays once more.
+    fn lens_room(&mut self) {
+        let row = self
+            .lenses
+            .iter()
+            .take(self.lenses_used)
+            .map(|slot| slot.root.measure(gtk::Orientation::Vertical, -1).1)
+            .max()
+            .unwrap_or(0);
+        let room = row
+            .saturating_add(LENS_GAP.saturating_mul(2))
+            .max(LENS_HEIGHT);
+        if room != self.lens_room {
+            self.lens_room = room;
+            self.tags
+                .lens
+                .set_pixels_above_lines(LINE_SPACING.saturating_add(room));
+        }
+    }
+
     /// Moves the lenses and the peek to their lines, after the text moved.
     pub fn place_overlays(&mut self) {
+        self.lens_room();
         self.size_peek();
         let buffer = self.view.buffer();
         for slot in self.lenses.iter().take(self.lenses_used) {
             if let Some(iter) = buffer.iter_at_line(slot.line) {
-                // Just above the line's text, whatever room is above it.
+                // Just above the line's text, in the room above it.
                 let text_top = self.view.iter_location(&iter).y();
                 let y = text_top
                     .saturating_sub(LINE_SPACING)
-                    .saturating_sub(LENS_HEIGHT)
-                    .saturating_add(2);
+                    .saturating_sub(self.lens_room)
+                    .saturating_add(LENS_GAP);
                 self.view.move_overlay(&slot.root, 2, y);
             }
         }
@@ -2492,6 +2528,126 @@ mod tests {
             ]
         );
         assert_eq!(editor.lenses.len(), 1, "the row was kept");
+    }
+
+    #[test]
+    fn a_lens_sits_in_the_room_above_its_line_and_never_over_code() {
+        on_gtk_thread(lenses_never_cover_code);
+    }
+
+    /// Each lens row sits wholly in the room above its line, below the
+    /// line before: as laid out, after the text is scrolled, and after its
+    /// font grows (Large Text).
+    fn lenses_never_cover_code() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/wall_shelf")
+            .canonicalize()
+            .unwrap_or_default();
+        let analysis = stave_ide::Analysis::load(&folder, &stave_ide::Overlay::new())
+            .unwrap_or_else(|_| panic!("the wall shelf loads"));
+        let Some(symbol) = analysis
+            .project_files()
+            .into_iter()
+            .flat_map(|(file, _)| analysis.lenses(file))
+            .map(|lens| lens.symbol)
+            .next()
+        else {
+            panic!("the wall shelf declares something");
+        };
+        let (mut editor, _heard) = editor_hearing();
+        let text: String = (0..60)
+            .map(|line| format!("part p{line} : oak_19 {{\n"))
+            .collect();
+        let buffer = editor.new_buffer(&text);
+        editor.show_buffer(&buffer, true);
+        let window = gtk::Window::builder()
+            .default_width(700)
+            .default_height(500)
+            .child(&editor.root)
+            .build();
+        // The window's own style: a lens row's links are as small as Stave
+        // makes them.
+        crate::ui::style::install(&gtk::prelude::WidgetExt::display(&window));
+        window.present();
+        let lines = [1, 13, 24, 26, 40];
+        editor.set_lenses(
+            &lines
+                .iter()
+                .map(|&line| LensLine {
+                    line,
+                    uses: "14 uses".to_owned(),
+                    shows_in_3d: true,
+                    symbol,
+                    name: "p".to_owned(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let laid_out = |editor: &mut Editor| {
+            // A few frames for GTK to lay the text out, the overlays
+            // following as the files page's settling has them.
+            for _ in 0..40 {
+                settle();
+                editor.place_overlays();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        let check = |editor: &Editor, when: &str| {
+            let view = &editor.view;
+            let buffer = view.buffer();
+            for slot in editor.lenses.iter().take(editor.lenses_used) {
+                let Some(iter) = buffer.iter_at_line(slot.line) else {
+                    panic!("line {} is there", slot.line);
+                };
+                let place = view.iter_location(&iter);
+                let (_, text_top) =
+                    view.buffer_to_window_coords(gtk::TextWindowType::Widget, 0, place.y());
+                let Some(bounds) = slot.root.compute_bounds(view) else {
+                    continue;
+                };
+                let top = f64::from(bounds.y());
+                let bottom = top + f64::from(bounds.height());
+                assert!(
+                    bottom <= f64::from(text_top),
+                    "{when}: the lens of line {} ends at {bottom}, below its text at {text_top}",
+                    slot.line
+                );
+                if slot.line > 0 {
+                    let Some(before) = buffer.iter_at_line(slot.line - 1) else {
+                        continue;
+                    };
+                    let place = view.iter_location(&before);
+                    let (_, before_bottom) = view.buffer_to_window_coords(
+                        gtk::TextWindowType::Widget,
+                        0,
+                        place.y() + place.height(),
+                    );
+                    assert!(
+                        top >= f64::from(before_bottom),
+                        "{when}: the lens of line {} starts at {top}, over the line before, which ends at {before_bottom}",
+                        slot.line
+                    );
+                }
+            }
+        };
+        laid_out(&mut editor);
+        check(&editor, "laid out");
+        editor.vadjustment().set_value(200.0);
+        laid_out(&mut editor);
+        check(&editor, "scrolled");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string("textview, .stave-lens { font-size: 20px; }");
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&window),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        laid_out(&mut editor);
+        check(&editor, "with larger text");
+        gtk::style_context_remove_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&window),
+            &provider,
+        );
+        window.destroy();
     }
 
     #[test]

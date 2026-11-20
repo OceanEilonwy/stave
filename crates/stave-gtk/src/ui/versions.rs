@@ -1384,8 +1384,12 @@ mod tests {
     /// saves it with the window's Save.
     fn type_and_save(controller: &relm4::Controller<Window>, folder: &Path, line: &str) {
         let path = folder.join("shelf.stave");
+        // Opening makes the buffer first (`FilesPage::open_document` takes
+        // `&mut`), so this reaches the model through the state watcher.
         controller
-            .model()
+            .state()
+            .get_mut()
+            .model
             .widgets
             .files
             .open_document(&stave_ide::Document::File(path.clone()));

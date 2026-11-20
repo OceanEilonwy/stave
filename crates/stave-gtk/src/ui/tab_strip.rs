@@ -8,10 +8,10 @@
 //!
 //! For the keyboard and screen readers: the strip is a tab list and each
 //! tab a tab, the shown one selected; showing another page restyles the
-//! tabs in place, so the tab with the keyboard keeps it; one Tab stop per
-//! tab (the × is for the pointer; the menu closes a panel); and
-//! Ctrl+Page Up / Ctrl+Page Down show the previous and next tab while the
-//! keyboard is anywhere in the frame.
+//! tabs in place, so the tab with the keyboard keeps it; and one Tab stop
+//! per tab (the × is for the pointer; the menu closes a panel). Ctrl+Page
+//! Up / Ctrl+Page Down, which show the previous and next tab while the
+//! keyboard is anywhere in the frame, are the workbench's, on its frames.
 //!
 //! A panel can show its own tabs in place of its one tab: the Code
 //! panel's open files appear this way, one tab each (name, and a yellow ●
@@ -24,12 +24,19 @@
 //! is kept anywhere else: every window's workbench has its own strips and
 //! its own copy.
 //!
+//! The strip reads its frame (its pages, the one shown) and never changes
+//! it: the frame and its pages are the workbench's dock. A tab clicked or
+//! closed is an output ([`TabStripOutput::ShowPanel`],
+//! [`TabStripOutput::Show`], [`TabStripOutput::Close`]) that the
+//! workbench carries out on its own panel, and the strip restyles when
+//! the frame says another page shows.
+//!
 //! The strip is a GObject subclass, [`TabStrip`], because libpanel takes a
 //! frame's header as a widget implementing `PanelFrameHeader`. Its tabs
 //! are a relm4 component, [`TabStripComponent`] (docs/relm4-migration.md):
 //! the component's model is the only state, the tabs' buttons and keys
-//! only send [`TabStripInput`] messages, and showing one of a panel's own
-//! tabs is a [`TabStripOutput`]. The subclass owns the component's
+//! only send [`TabStripInput`] messages, and what a click asks of the
+//! dock is a [`TabStripOutput`]. The subclass owns the component's
 //! controller. The component gathers its tabs, from the frame's pages and
 //! its copy of the panels' own tabs, in its own update: when the frame's
 //! pages change ([`TabStripInput::Gather`], queued by the pages' handler)
@@ -74,7 +81,7 @@ pub struct PageTab {
 pub type OwnTabs = BTreeMap<PanelId, Vec<PageTab>>;
 
 /// Which panel a page is, read from its id.
-fn panel_of(page: &panel::Widget) -> Option<PanelId> {
+pub(super) fn panel_of(page: &panel::Widget) -> Option<PanelId> {
     // Read as a property: `id()` asserts on a panel that has none.
     let id = page.property::<Option<String>>("id");
     id.as_deref().and_then(PanelId::from_word)
@@ -105,16 +112,6 @@ pub enum Closing {
     Closable,
     /// No ×: the 3D view can't be closed (its tab is still dragged).
     Fixed,
-}
-
-/// Which way Ctrl+Page Up and Ctrl+Page Down step through a frame's
-/// pages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// The page before the shown one (the last after the first).
-    Previous,
-    /// The page after the shown one (the first after the last).
-    Next,
 }
 
 /// What a tab is.
@@ -181,8 +178,6 @@ pub struct TabStripComponent {
     frame: glib::WeakRef<panel::Frame>,
     /// Watching the frame's pages, to gather the tabs again.
     watch: Option<(gtk::SelectionModel, glib::SignalHandlerId)>,
-    /// Ctrl+Page Up / Down on the frame, and the frame it is on.
-    keys: Option<(glib::WeakRef<panel::Frame>, gtk::ShortcutController)>,
     /// The panels' own tabs, the strip's copy.
     own: OwnTabs,
     /// The tabs, as shown.
@@ -211,30 +206,32 @@ pub enum TabStripInput {
     /// The frame shows another page: the tabs already made are restyled
     /// in place, so the tab with the keyboard keeps it.
     PageChanged,
-    /// People pressed Ctrl+Page Up or Ctrl+Page Down in the frame.
-    Step(Step),
     /// People clicked the tab at this place in the strip.
     ShowTab(usize),
     /// People clicked the × of the tab at this place in the strip.
     CloseTab(usize),
 }
 
-/// What the strip's tabs tell their owner.
-#[derive(Debug)]
+/// What the strip's tabs tell their owner, the workbench, whose dock the
+/// frame and its pages are: it carries each out on its own panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabStripOutput {
-    /// People chose one of a panel's own tabs (its frame now shows the
-    /// panel): show it.
+    /// People clicked a panel's tab: show the panel in its frame.
+    ShowPanel(PanelId),
+    /// People chose one of a panel's own tabs: show the panel in its
+    /// frame, on that tab.
     Show {
         /// The panel.
         panel: PanelId,
         /// Where the tab is among the panel's own tabs.
         index: usize,
     },
+    /// People clicked a panel's ×: close the panel.
+    Close(PanelId),
 }
 
 impl TabStripComponent {
-    /// Follows a frame's pages (or none), with Ctrl+Page Up / Down on
-    /// it, and has the tabs gathered.
+    /// Follows a frame's pages (or none), and has the tabs gathered.
     fn follow(&mut self, frame: Option<&panel::Frame>, sender: &ComponentSender<Self>) {
         self.stop_watching();
         self.frame.set(frame);
@@ -246,22 +243,14 @@ impl TabStripComponent {
             let handler =
                 pages.connect_items_changed(move |_, _, _, _| input.emit(TabStripInput::Gather));
             self.watch = Some((pages, handler));
-            let keys = step_keys(sender);
-            frame.add_controller(keys.clone());
-            self.keys = Some((frame.downgrade(), keys));
         }
         sender.input_sender().emit(TabStripInput::Gather);
     }
 
-    /// Stops watching the frame's pages and takes the keys off it.
+    /// Stops watching the frame's pages.
     fn stop_watching(&mut self) {
         if let Some((pages, handler)) = self.watch.take() {
             pages.disconnect(handler);
-        }
-        if let Some((frame, keys)) = self.keys.take()
-            && let Some(frame) = frame.upgrade()
-        {
-            frame.remove_controller(&keys);
         }
     }
 
@@ -397,7 +386,6 @@ impl Component for TabStripComponent {
         let model = TabStripComponent {
             frame: glib::WeakRef::new(),
             watch: None,
-            keys: None,
             own,
             tabs: Vec::new(),
             made: Vec::new(),
@@ -423,35 +411,36 @@ impl Component for TabStripComponent {
             }
             TabStripInput::Gather => self.gather(widgets, &sender),
             TabStripInput::PageChanged => self.mark_shown(widgets),
-            TabStripInput::Step(step) => {
-                // The frame's page-changed only queues `PageChanged`.
-                if let Some(frame) = self.frame.upgrade() {
-                    show_step(&frame, step);
-                }
-            }
             TabStripInput::ShowTab(place) => {
                 let Some(tab) = self.tabs.get(place) else {
                     return;
                 };
-                // The frame's page-changed only queues `PageChanged`:
-                // nothing comes back in here.
-                if let (Some(frame), Some(page)) = (self.frame.upgrade(), tab.page.upgrade()) {
-                    frame.set_visible_child(&page);
-                }
-                match &tab.kind {
-                    TabKind::Panel { .. } => {}
-                    TabKind::Own { panel, tab } => {
-                        // Nobody listening is not a mistake.
-                        let _ = sender.output(TabStripOutput::Show {
-                            panel: *panel,
-                            index: tab.index,
-                        });
-                    }
+                let output = match &tab.kind {
+                    TabKind::Panel { .. } => tab
+                        .page
+                        .upgrade()
+                        .as_ref()
+                        .and_then(panel_of)
+                        .map(TabStripOutput::ShowPanel),
+                    TabKind::Own { panel, tab } => Some(TabStripOutput::Show {
+                        panel: *panel,
+                        index: tab.index,
+                    }),
+                };
+                if let Some(output) = output {
+                    // Nobody listening is not a mistake.
+                    let _ = sender.output(output);
                 }
             }
             TabStripInput::CloseTab(place) => {
-                if let Some(page) = self.tabs.get(place).and_then(|tab| tab.page.upgrade()) {
-                    page.close();
+                if let Some(panel) = self
+                    .tabs
+                    .get(place)
+                    .and_then(|tab| tab.page.upgrade())
+                    .as_ref()
+                    .and_then(panel_of)
+                {
+                    let _ = sender.output(TabStripOutput::Close(panel));
                 }
             }
         }
@@ -662,61 +651,6 @@ impl TabStrip {
     }
 }
 
-/// Ctrl+Page Up and Ctrl+Page Down: the previous and the next tab of the
-/// frame the keyboard is in. After the focused widget had its turn (the
-/// text editor keeps its own Ctrl+Page keys), and passed on when the
-/// frame has fewer than two pages.
-fn step_keys(sender: &ComponentSender<TabStripComponent>) -> gtk::ShortcutController {
-    let keys = gtk::ShortcutController::new();
-    for (trigger, step) in [
-        ("<Control>Page_Up", Step::Previous),
-        ("<Control>Page_Down", Step::Next),
-    ] {
-        let input = sender.input_sender().clone();
-        // Reads only the frame the key came to, and sends.
-        let action = gtk::CallbackAction::new(move |widget, _| {
-            match widget.downcast_ref::<panel::Frame>() {
-                Some(frame) if frame.n_pages() >= 2 => {
-                    input.emit(TabStripInput::Step(step));
-                    glib::Propagation::Stop
-                }
-                _ => glib::Propagation::Proceed,
-            }
-        });
-        keys.add_shortcut(gtk::Shortcut::new(
-            gtk::ShortcutTrigger::parse_string(trigger),
-            Some(action),
-        ));
-    }
-    keys
-}
-
-/// Shows the page a `step` from the shown one, going round. `false` when
-/// there is only one page or none.
-fn show_step(frame: &panel::Frame, step: Step) -> bool {
-    let count = frame.n_pages();
-    if count < 2 {
-        return false;
-    }
-    let shown = frame.visible_child();
-    let current = (0..count)
-        .find(|index| {
-            frame
-                .page(*index)
-                .is_some_and(|page| shown.as_ref() == Some(&page))
-        })
-        .unwrap_or(0);
-    let next = match step {
-        Step::Previous => current.checked_sub(1).unwrap_or(count - 1),
-        Step::Next => current.saturating_add(1) % count,
-    };
-    let Some(page) = frame.page(next) else {
-        return false;
-    };
-    frame.set_visible_child(&page);
-    true
-}
-
 /// One tab: the panel's icon and title, a × to close it (not the 3D
 /// view's, which can't be closed); clicking shows it, dragging docks it
 /// elsewhere.
@@ -907,6 +841,7 @@ mod tests {
         let frame = panel::Frame::new();
         frame.set_header(Some(&strip));
         let model = panel::Widget::builder().title("Model").build();
+        model.set_id(PanelId::View.word());
         let code = panel::Widget::builder().title("Code").build();
         code.set_id(PanelId::Code.word());
         frame.add(&model);
@@ -996,10 +931,11 @@ mod tests {
 
     /// The old strip showed a panel and called its own tab's `show` from
     /// inside the click, and showing the panel remade the strip from
-    /// inside it too. Now a click only queues a message; the frame shows
-    /// the panel when it is handled, the chosen own tab reaches the owner
-    /// after that update has returned, and a click GTK fires while the
-    /// owner handles it is queued in turn.
+    /// inside it too. Now a click only queues a message; the chosen tab
+    /// reaches the owner after that update has returned (the owner, whose
+    /// dock the frame is, shows the panel: the strip never changes the
+    /// frame), and a click GTK fires while the owner handles it is queued
+    /// in turn.
     fn clicks_are_queued() {
         let (owner, outputs) = relm4::channel();
         let (frame, strip, model, code) = frame_with_two_panels_under(TabStrip::new(
@@ -1011,7 +947,10 @@ mod tests {
         let shown: Rc<RefCell<Vec<(PanelId, usize)>>> = Rc::default();
         let weak_strip = strip.downgrade();
         let log = Rc::clone(&shown);
-        handle_each(outputs, move |TabStripOutput::Show { panel, index }| {
+        handle_each(outputs, move |output| {
+            let TabStripOutput::Show { panel, index } = output else {
+                return;
+            };
             let first = log.borrow().is_empty();
             log.borrow_mut().push((panel, index));
             if first && let Some(strip) = weak_strip.upgrade() {
@@ -1036,12 +975,41 @@ mod tests {
         );
 
         settle();
-        assert_eq!(frame.visible_child().as_ref(), Some(&code));
         assert_eq!(
             *shown.borrow(),
             vec![(PanelId::Code, 0), (PanelId::Code, 1)],
             "each after its update, the inner click after the first"
         );
+        assert_eq!(
+            frame.visible_child().as_ref(),
+            Some(&model),
+            "the strip leaves the frame to its owner"
+        );
+        drop(code);
+    }
+
+    #[test]
+    fn a_panel_tab_clicked_asks_its_owner_to_show_it() {
+        on_gtk_thread(panel_tab_asks);
+    }
+
+    /// Clicking a panel's tab asks the owner to show that panel, by its
+    /// id, and changes nothing of the frame itself.
+    fn panel_tab_asks() {
+        let (owner, heard) = recorder::<TabStripOutput>();
+        let (frame, strip, model, _code) = frame_with_two_panels_under(TabStrip::new(
+            OwnTabs::new(),
+            &owner,
+            std::convert::identity,
+        ));
+        settle();
+        show_button(&strip, 1).emit_clicked();
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![TabStripOutput::ShowPanel(PanelId::Code)]
+        );
+        assert_eq!(frame.visible_child().as_ref(), Some(&model));
     }
 
     #[test]
@@ -1189,8 +1157,15 @@ mod tests {
         on_gtk_thread(close_closes);
     }
 
+    /// The × asks the owner to close the panel; the strip doesn't close
+    /// it itself.
     fn close_closes() {
-        let (frame, strip, _model, code) = frame_with_two_panels();
+        let (owner, heard) = recorder::<TabStripOutput>();
+        let (frame, strip, _model, code) = frame_with_two_panels_under(TabStrip::new(
+            OwnTabs::new(),
+            &owner,
+            std::convert::identity,
+        ));
         settle();
         let Some(close) = tab_boxes(&strip)
             .get(1)
@@ -1200,11 +1175,11 @@ mod tests {
             panic!("the Code tab has a ×");
         };
         close.emit_clicked();
-        assert_eq!(frame.n_pages(), 2, "only queued");
+        assert!(heard.borrow().is_empty(), "only queued");
         settle();
-        assert_eq!(frame.n_pages(), 1, "the Code panel is closed");
-        assert!(code.parent().is_none());
-        assert_eq!(tab_boxes(&strip).len(), 1, "its tab is gone");
+        assert_eq!(*heard.borrow(), vec![TabStripOutput::Close(PanelId::Code)]);
+        assert_eq!(frame.n_pages(), 2, "closing is the owner's");
+        assert!(code.parent().is_some());
     }
 
     #[test]
@@ -1247,7 +1222,7 @@ mod tests {
     }
 
     /// Showing another page restyles the tabs in place (the focused tab
-    /// survives), and Ctrl+Page Down / Up step through the pages, round.
+    /// survives).
     fn tabs_stay_put() {
         panel::init();
         let frame = panel::Frame::new();
@@ -1271,9 +1246,6 @@ mod tests {
         settle();
         let before = tab_boxes(&strip);
         assert_eq!(before.len(), 3);
-        let Some(tabs) = strip.imp().tabs.get() else {
-            panic!("the strip has its tabs");
-        };
         assert_eq!(
             tab_list(&strip).map(|list| list.accessible_role()),
             Some(gtk::AccessibleRole::TabList)
@@ -1296,18 +1268,6 @@ mod tests {
             .map(|tab| tab.has_css_class("shown"))
             .collect();
         assert_eq!(shown, [false, true, false]);
-        // Ctrl+Page Down, then round from the last to the first.
-        assert!(show_step(&frame, Step::Next));
-        assert_eq!(frame.visible_child().as_ref(), Some(&pages[2]));
-        assert!(show_step(&frame, Step::Next));
-        assert_eq!(frame.visible_child().as_ref(), Some(&pages[0]));
-        assert!(show_step(&frame, Step::Previous));
-        assert_eq!(frame.visible_child().as_ref(), Some(&pages[2]));
-        // The keys reach the frame by message; nothing happens until it
-        // is handled.
-        let _ = tabs.sender().send(TabStripInput::Step(Step::Next));
-        settle();
-        assert_eq!(frame.visible_child().as_ref(), Some(&pages[0]));
         // The × is not a Tab stop.
         let Some(close) = before[0].last_child() else {
             panic!("the Parts tab has a ×");
@@ -1317,22 +1277,5 @@ mod tests {
         // Every icon button (the ×s, the ▾ menu) has a name.
         assert_eq!(unnamed_buttons(&strip), Vec::<String>::new());
         window.destroy();
-    }
-
-    #[test]
-    fn ctrl_page_keys_pass_on_with_one_page() {
-        on_gtk_thread(one_page_passes_keys_on);
-    }
-
-    /// With fewer than two pages there is nowhere to step: the frame does
-    /// nothing, so the key goes on to whatever else wants it.
-    fn one_page_passes_keys_on() {
-        panel::init();
-        let frame = panel::Frame::new();
-        let only = panel::Widget::builder().title("Parts").build();
-        frame.add(&only);
-        assert!(!show_step(&frame, Step::Next));
-        assert!(!show_step(&frame, Step::Previous));
-        assert_eq!(frame.visible_child().as_ref(), Some(&only));
     }
 }
