@@ -14,6 +14,7 @@ members = [
   "crates/stave-app",
   "crates/stave-cli",
   "crates/stave-gtk",
+  "crates/stave-link",
 ]
 
 [workspace.package]

@@ -16,6 +16,8 @@
 //!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
 //! stave edit examples/clothing_cabinet_assemblies --script steps.txt
 //! stave edit new_chest --script build.txt   # a script can start a new project
+//! stave mcp install                         # set Stave up in the AI apps found
+//! stave mcp uninstall --codex
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -46,6 +48,7 @@ use stave_lang::{FormatError, Parse, Severity, SourceMap, parse_patch_file, rend
 use stave_modules::DiskFiles;
 
 mod dump;
+mod mcp_install;
 mod script;
 
 #[derive(Debug, Parser)]
@@ -152,6 +155,12 @@ enum Command {
         #[arg(long, conflicts_with = "script")]
         commit: bool,
     },
+    /// Use Stave from an AI app (Claude Desktop, Claude Code, Codex):
+    /// set it up there, or take it out.
+    Mcp {
+        #[command(subcommand)]
+        command: mcp_install::McpCommand,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -169,6 +178,7 @@ fn main() -> ExitCode {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::Mcp { command } => mcp_install::run(&command),
         Command::Edit {
             path,
             patch,
