@@ -829,6 +829,9 @@ pub struct StockDef {
     pub rough_length: Option<RExpr>,
     /// `rough_width:`, overriding the project's (solid only).
     pub rough_width: Option<RExpr>,
+    /// `max_held_width:`: the widest a board of it may be held fast across
+    /// its grain (solid only; grammar, "Grain and wood movement").
+    pub max_held_width: Option<RExpr>,
 }
 
 impl StockDef {

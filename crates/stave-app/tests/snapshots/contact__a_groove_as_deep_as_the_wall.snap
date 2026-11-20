@@ -7,9 +7,9 @@ error[require]: 'not_too_deep' fails: a groove deeper than half the board weaken
    |
 58 | joint bottom_groove : groove(bottom, into: [front, back, end_l, end_r], depth: 12mm, glue: false)
    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/groove.stave:15:3
+  ::: std/joinery/groove.stave:18:3
    |
-15 |   require not_too_deep  : depth <= extent(into, thickness, of: contact(piece, into)) / 2 "a groove deeper than half the board weakens it"
+18 |   require not_too_deep  : depth <= extent(into, thickness, of: contact(piece, into)) / 2 "a groove deeper than half the board weakens it"
    |   --------------------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for bottom and front in bottom_groove
    = note: the rule measures 12mm and needs at most 6mm

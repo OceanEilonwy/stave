@@ -775,6 +775,11 @@ pub struct Stock {
     pub max_width: Option<Length>,
     /// The longest board available.
     pub max_length: Option<Length>,
+    /// The widest a board of `solid` stock may be held fast across its
+    /// grain (`max_held_width:`, 80mm unless it says), always more than
+    /// zero; `None` for a sheet or a dowel, which don't move that way
+    /// (grammar, "Grain and wood movement").
+    pub max_held_width: Option<Length>,
     /// The allowances the cut list makes for parts cut from it, its own
     /// or the project's (grammar, "Cut list").
     pub allowances: Allowances,

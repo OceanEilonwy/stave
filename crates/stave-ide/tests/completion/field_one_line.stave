@@ -1,4 +1,4 @@
 stave 1
 
 stock ply { species: birch, $0 }
-// expect: form, thickness, diameter, width, max_width, max_length, sold, kerf, rough_length, rough_width
+// expect: form, thickness, diameter, width, max_width, max_length, sold, kerf, rough_length, rough_width, max_held_width

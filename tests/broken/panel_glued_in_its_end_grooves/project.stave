@@ -1,0 +1,59 @@
+// expect: warning[grain] housed: panel is glued across its grain to stile_left over 300mm in the groove, and wood held that wide splits as it moves with the seasons
+stave 1
+
+// The frame-and-panel trap (audit finding 89): a solid panel glued into
+// grooves in the frame pieces at its ends. The panel's grain runs left to
+// right, so it swells and shrinks front to back; the end pieces' grain
+// runs front to back, so they hold still that way, and the glue in their
+// grooves holds the panel across its whole 300mm. A solid panel floats:
+// glue: false.
+
+project "Panel glued in its end grooves" {
+  units: mm
+}
+
+stock oak    { species: white_oak, form: solid, thickness: 19mm, max_width: 500mm, max_length: 2400mm }
+stock oak_12 { species: white_oak, form: solid, thickness: 12mm, max_width: 500mm, max_length: 2400mm }
+stock ply    { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }
+
+part base : ply {
+  length: 600mm
+  width:  300mm
+  place { ground }
+}
+
+part stile_left : oak {
+  length: 300mm
+  width:  30mm
+  place {
+    orient(length: back, width: right)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part stile_right : oak {
+  length: 300mm
+  width:  30mm
+  place {
+    orient(length: back, width: right)
+    against(base.top)
+    flush(base.right)
+    flush(base.front)
+  }
+}
+
+part panel : oak_12 {
+  length: fit
+  width:  300mm
+  place {
+    against(base.top)
+    flush(base.front)
+    against(stile_left.right)
+  }
+}
+
+joint stiles : screw([stile_left, stile_right], into: base, count: 3, glue: false)
+joint housed : groove(panel, into: [stile_left, stile_right])
+joint rests  : glued_face(panel, into: base, glue: false)

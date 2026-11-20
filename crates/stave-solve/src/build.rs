@@ -487,6 +487,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         let result = solver.stock_allowances(stock);
         let (file, span) = solver.place_of(DefId::Stock(stock));
         let _ = solver.settled(result, file, span);
+        // Its `max_held_width:` (grammar, "Grain and wood movement").
+        let result = solver.max_held_width(stock);
+        let _ = solver.settled(result, file, span);
     }
 
     // 2. Joints, pass A: pairs, requires, extensions.
@@ -1873,6 +1876,7 @@ impl Solver<'_> {
             },
             max_width: length(self, F::MaxWidth)?,
             max_length: length(self, F::MaxLength)?,
+            max_held_width: self.max_held_width(stock)?,
             allowances: self.stock_allowances(stock)?,
         })
     }
