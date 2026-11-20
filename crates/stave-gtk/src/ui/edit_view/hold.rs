@@ -365,8 +365,6 @@ pub(in crate::ui) struct Hold {
     pub(in crate::ui) card: Controller<HoldCardComponent>,
     /// Where it stands.
     pub(in crate::ui) step: HoldStep,
-    /// On a space's menu: hold a distance from that space.
-    pub(in crate::ui) from_space: gtk::Button,
 }
 
 impl Hold {
@@ -377,29 +375,11 @@ impl Hold {
                 .launch(())
                 .forward(input, hold_card_heard),
             step: HoldStep::Idle,
-            from_space: gtk::Button::builder()
-                .label(tr("Hold a distance from this space…"))
-                .css_classes(["flat", "stave-hold-from-space"])
-                .tooltip_text(tr(
-                    "Pick a part or another space and keep the distance to it",
-                ))
-                .build(),
         }
     }
 }
 
 impl Window {
-    /// Puts the space menu's button in the menu and connects it. (The hold
-    /// card's outputs were forwarded to the window when it was launched,
-    /// `Hold::new`.)
-    pub(in crate::ui) fn connect_hold(&self) {
-        let hold = &self.editing.hold;
-        self.editing.menu.widget().append(&hold.from_space);
-        let input = self.input();
-        hold.from_space
-            .connect_clicked(move |_| input.emit(EditingInput::HoldFromSpace.into()));
-    }
-
     /// The hold card asked for something.
     pub(in crate::ui) fn hold_card_asked(&mut self, output: HoldCardOutput) {
         match output {

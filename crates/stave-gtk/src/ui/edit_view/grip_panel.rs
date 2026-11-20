@@ -5,8 +5,9 @@
 //! radio list (one row each: the radio, the name, the value), the range
 //! and the rule a stop names, and holds the grip's options (⋮: let the
 //! solver move it, with its range). The verdict and Apply / Cancel are
-//! the change card's own. It is drawn from a [`PanelModel`] and reports
-//! what is clicked or typed; it decides nothing.
+//! the change card's own. It is drawn from a [`PanelModel`] and the
+//! grip's switches ([`GripOptions`]), and reports what is clicked or
+//! typed; it decides nothing.
 //!
 //! ```text
 //! ▾ Size
@@ -27,16 +28,15 @@
 //! panel's content is its owner's: the owner shows and hides it at once,
 //! while what it says is drawn when the main loop next runs.
 
-use std::cell::RefCell;
-
 use adw::prelude::*;
-use gtk::gdk;
+use gtk::{gdk, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr};
+use stave_lang::ast::Ident;
 use stave_model::ids::ParamId;
 
 use super::super::sections;
-use super::grip_text::PanelModel;
+use super::grip_text::{PanelModel, SolverSwitch, suggested_range};
 
 /// What the panel reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,15 +45,179 @@ pub(in crate::ui) enum PanelAction {
     Pick(ParamId),
     /// A value typed in its field, Enter pressed.
     Type(String),
+    /// The grip's options (⋮) asked for its size to be made plain or
+    /// solved.
+    Switch {
+        /// The grip whose options asked.
+        index: usize,
+        /// What they asked.
+        ask: SwitchAsk,
+    },
 }
 
-/// The panel's content: what it says and the size it moves. Its only
-/// state is the value its field last showed, so a redraw doesn't undo
-/// typing; the rest is drawn from each [`PanelModel`] it is shown.
+/// What a grip's options menu (⋮) asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::ui) enum SwitchAsk {
+    /// Its switch was turned off: write the param plain again.
+    MakePlain(Ident),
+    /// "Make it solved", with the range as typed.
+    MakeSolved {
+        /// The param.
+        param: Ident,
+        /// The range's low end, as typed.
+        low: String,
+        /// The range's high end, as typed.
+        high: String,
+    },
+}
+
+/// Which grip options menu (⋮) asked for a param to be made solved, to
+/// close it once the range is read.
+#[derive(Debug)]
+pub(in crate::ui) enum SwitchMenu {
+    /// The menu beside a grip's number on the model, the window's own.
+    Mark(gtk::MenuButton),
+    /// The menu in the size section: the section closes it when told.
+    Panel,
+}
+
+/// The grip whose options (⋮) the panel holds, and its switches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GripOptions {
+    /// The grip, in the listing.
+    pub(super) index: usize,
+    /// What its menu can switch.
+    pub(super) switches: Vec<SolverSwitch>,
+}
+
+/// The panel's content: what it says and the size it moves. Its state is
+/// the value its field last showed, so a redraw doesn't undo typing, and
+/// the grip its options (⋮) were made for, so they are made again only
+/// for another grip; the rest is drawn from each [`PanelModel`] it is
+/// shown.
 #[derive(Debug, Default)]
 pub(super) struct GripPanelComponent {
     /// The value last shown in the field.
     shown_value: String,
+    /// The grip whose options (⋮) it holds.
+    options_for: Option<usize>,
+}
+
+/// The menu beside a grip's value or number: "Let the solver move this",
+/// with the range a solved param needs, or the switch to make it plain.
+/// What people ask of it goes to `asked`, with the menu.
+pub(super) fn switch_menu(
+    switches: &[SolverSwitch],
+    asked: impl Fn(SwitchAsk, gtk::MenuButton) + Clone + 'static,
+) -> gtk::MenuButton {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["stave-grip-switches"])
+        .build();
+    let menu = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .css_classes(["flat"])
+        .tooltip_text(tr("Let the solver move this"))
+        .build();
+    menu.update_property(&[gtk::accessible::Property::Label(&tr(
+        "Let the solver move this",
+    ))]);
+    let popover = gtk::Popover::builder().child(&content).build();
+    menu.set_popover(Some(&popover));
+    let only = switches.len() == 1;
+    for switch in switches {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let template = if only {
+            tr("Let the solver move this ({param})")
+        } else {
+            tr("Let the solver move {param}")
+        };
+        let words = fill_in(&template, &[("param", &switch.param.as_str())]);
+        row.append(
+            &gtk::Label::builder()
+                .label(&words)
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
+        let toggle = gtk::Switch::builder()
+            .active(switch.solved)
+            .valign(gtk::Align::Center)
+            .build();
+        toggle.update_property(&[gtk::accessible::Property::Label(&words)]);
+        row.append(&toggle);
+        content.append(&row);
+        // The range a solved param needs, typed before it is made one.
+        let (low_text, high_text) = suggested_range(switch.value);
+        let range = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .visible(false)
+            .build();
+        range.append(
+            &gtk::Label::builder()
+                .label(tr("The solver keeps it within:"))
+                .xalign(0.0)
+                .css_classes(["stave-grip-note"])
+                .build(),
+        );
+        let ends = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let low = gtk::Entry::builder().text(&low_text).width_chars(8).build();
+        let high = gtk::Entry::builder()
+            .text(&high_text)
+            .width_chars(8)
+            .build();
+        low.update_property(&[gtk::accessible::Property::Label(&tr("Lowest value"))]);
+        high.update_property(&[gtk::accessible::Property::Label(&tr("Highest value"))]);
+        ends.append(&low);
+        ends.append(&gtk::Label::new(Some(&tr("to"))));
+        ends.append(&high);
+        range.append(&ends);
+        let make = gtk::Button::builder()
+            .label(tr("Make it solved"))
+            .css_classes(["suggested-action"])
+            .halign(gtk::Align::End)
+            .build();
+        range.append(&make);
+        content.append(&range);
+        let solved = switch.solved;
+        let param = switch.param.clone();
+        let plain = asked.clone();
+        let shown = range.clone();
+        // The switch and the button live inside the menu's popover, so
+        // their handlers hold the menu weakly: a strong hold would be a
+        // cycle that keeps every menu alive after it is replaced.
+        let weak_menu = menu.downgrade();
+        toggle.connect_state_set(move |_, on| {
+            shown.set_visible(on && !solved);
+            if !on
+                && solved
+                && let Some(menu) = weak_menu.upgrade()
+            {
+                menu.popdown();
+                plain(SwitchAsk::MakePlain(param.clone()), menu);
+            }
+            glib::Propagation::Proceed
+        });
+        let param = switch.param.clone();
+        let asked = asked.clone();
+        let weak_menu = menu.downgrade();
+        make.connect_clicked(move |_| {
+            let Some(menu) = weak_menu.upgrade() else {
+                return;
+            };
+            asked(
+                SwitchAsk::MakeSolved {
+                    param: param.clone(),
+                    low: low.text().trim().to_owned(),
+                    high: high.text().trim().to_owned(),
+                },
+                menu,
+            );
+        });
+    }
+    menu
 }
 
 /// The panel's widgets: the rows of its content, made by
@@ -66,7 +230,7 @@ pub(super) struct GripPanelWidgets {
     value: gtk::Entry,
     /// "was 900mm", after the field.
     was: gtk::Label,
-    /// Where the window puts the grip's options (⋮).
+    /// Holds the grip's options (⋮).
     options: gtk::Box,
     /// The row under the value: "Follows" or "Note".
     about_row: gtk::Box,
@@ -139,12 +303,23 @@ impl GripPanelWidgets {
 /// What the panel is told.
 #[derive(Debug)]
 pub(super) enum GripPanelInput {
-    /// Draw this (boxed: it is large beside what people do).
-    Show(Box<PanelModel>),
+    /// Draw this (boxed: it is large beside what people do), with the
+    /// options (⋮) of this grip, if it offers any; they are made again
+    /// only for another grip.
+    Show(Box<PanelModel>, Option<GripOptions>),
+    /// Close the options' menu: what it asked was read.
+    CloseOptions,
     /// People pressed Enter in the value's field with this in it.
     Typed(String),
     /// People picked this size from the radios.
     Picked(ParamId),
+    /// People asked something of the options (⋮) of grip `index`.
+    Switched {
+        /// The grip the options were made for.
+        index: usize,
+        /// What they asked.
+        ask: SwitchAsk,
+    },
 }
 
 /// What the panel tells its owner.
@@ -206,12 +381,24 @@ impl Component for GripPanelComponent {
         _root: &gtk::Box,
     ) {
         let action = match message {
-            GripPanelInput::Show(model) => {
+            GripPanelInput::Show(model, options) => {
                 self.draw(widgets, &model, &sender);
+                self.show_options(widgets, options, &sender);
+                None
+            }
+            GripPanelInput::CloseOptions => {
+                if let Some(menu) = widgets
+                    .options
+                    .first_child()
+                    .and_downcast::<gtk::MenuButton>()
+                {
+                    menu.popdown();
+                }
                 None
             }
             GripPanelInput::Typed(text) => Some(PanelAction::Type(text)),
             GripPanelInput::Picked(param) => Some(PanelAction::Pick(param)),
+            GripPanelInput::Switched { index, ask } => Some(PanelAction::Switch { index, ask }),
         };
         if let Some(action) = action {
             // Nobody listening is not a mistake.
@@ -221,6 +408,31 @@ impl Component for GripPanelComponent {
 }
 
 impl GripPanelComponent {
+    /// Holds the options (⋮) of the grip `options` names, made again only
+    /// for another grip.
+    fn show_options(
+        &mut self,
+        widgets: &GripPanelWidgets,
+        options: Option<GripOptions>,
+        sender: &ComponentSender<Self>,
+    ) {
+        let wanted = options.as_ref().map(|options| options.index);
+        if std::mem::replace(&mut self.options_for, wanted) == wanted {
+            return;
+        }
+        clear(&widgets.options);
+        if let Some(GripOptions { index, switches }) = options {
+            let input = sender.input_sender().clone();
+            let menu = switch_menu(&switches, move |ask, _| {
+                input.emit(GripPanelInput::Switched { index, ask });
+            });
+            menu.set_tooltip_text(Some(&tr(
+                "Options: let the solver move this, and its range",
+            )));
+            widgets.options.append(&menu);
+        }
+    }
+
     /// Draws `model` on the widgets.
     fn draw(
         &mut self,
@@ -327,15 +539,12 @@ impl GripPanelComponent {
 }
 
 /// The size section as its owner holds it: the section around the
-/// panel's content (shown and hidden by the owner, at once), the box the
-/// owner puts the grip's options (⋮) in, and the component, whose
-/// outputs were forwarded to the owner when it was launched. Dropping it
-/// shuts the component down.
+/// panel's content (shown and hidden by the owner, at once) and the
+/// component, whose outputs were forwarded to the owner when it was
+/// launched. Dropping it shuts the component down.
 pub(super) struct GripSection {
     /// The section, put into the change card's grip slot.
     pub(super) root: gtk::Box,
-    /// Where the window puts the grip's options (⋮).
-    pub(super) options: gtk::Box,
     /// The panel's content.
     pub(super) panel: Controller<GripPanelComponent>,
 }
@@ -349,26 +558,26 @@ impl GripSection {
     ) -> GripSection {
         let (root, body) = sections::section(&tr("Size"), "", true);
         root.set_visible(false);
-        let widgets = GripPanelWidgets::new();
-        let options = widgets.options.clone();
         let panel = GripPanelComponent::builder()
-            .launch(widgets)
+            .launch(GripPanelWidgets::new())
             .forward(input, forward);
         body.append(panel.widget());
-        GripSection {
-            root,
-            options,
-            panel,
-        }
+        GripSection { root, panel }
     }
 
-    /// Draws `model` when the main loop next runs.
-    pub(super) fn show(&self, model: &PanelModel) {
+    /// Draws `model`, with the options (⋮) of the grip `options` names,
+    /// when the main loop next runs.
+    pub(super) fn show(&self, model: &PanelModel, options: Option<GripOptions>) {
         // After shutdown there is nothing to draw.
         let _ = self
             .panel
             .sender()
-            .send(GripPanelInput::Show(Box::new(model.clone())));
+            .send(GripPanelInput::Show(Box::new(model.clone()), options));
+    }
+
+    /// Closes the options' menu once what it asked has been read.
+    pub(super) fn close_options(&self) {
+        let _ = self.panel.sender().send(GripPanelInput::CloseOptions);
     }
 }
 
@@ -533,25 +742,17 @@ entry.stave-grip-value { font-family: var(--monospace-font-family, monospace); }
 .stave-grip-switches .stave-grip-note { font-size: 0.818rem; opacity: 0.75; }
 "#;
 
-/// Puts the grips' stylesheet on the display, once.
-pub(super) fn install_style(display: &gdk::Display) {
-    thread_local! {
-        static INSTALLED: RefCell<Vec<gdk::Display>> = const { RefCell::new(Vec::new()) };
-    }
-    INSTALLED.with(|installed| {
-        let mut installed = installed.borrow_mut();
-        if installed.contains(display) {
-            return;
-        }
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(STYLE);
-        gtk::style_context_add_provider_for_display(
-            display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-        installed.push(display.clone());
-    });
+/// Puts the grips' stylesheet on the display. The application calls it
+/// once, at startup, beside the window's own style (`style::install`);
+/// tests do it once for the GTK test thread (`gtk_test::on_gtk_thread`).
+pub(in crate::ui) fn install_style(display: &gdk::Display) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(STYLE);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+    );
 }
 
 #[cfg(test)]
@@ -633,7 +834,7 @@ mod tests {
         let forwarding = Rc::downgrade(&token);
         drop(token);
         drop(sender);
-        section.show(&two_choices());
+        section.show(&two_choices(), None);
         settle();
         let content = section.panel.widget().downgrade();
         let root = section.root.downgrade();
@@ -657,8 +858,8 @@ mod tests {
 
     fn showing_reports_nothing() {
         let (section, heard) = heard_section();
-        section.show(&two_choices());
-        section.show(&two_choices());
+        section.show(&two_choices(), None);
+        section.show(&two_choices(), None);
         assert_eq!(
             panel_radios(&section.panel),
             [
@@ -676,7 +877,7 @@ mod tests {
 
     fn typing_is_reported() {
         let (section, heard) = heard_section();
-        section.show(&two_choices());
+        section.show(&two_choices(), None);
         settle();
         let entry = section.panel.widgets().value.clone();
         entry.set_text(" 1200mm ");
@@ -702,7 +903,7 @@ mod tests {
         let section = GripSection::new(&sender, |output| match output {
             GripPanelOutput::Action(action) => action,
         });
-        section.show(&two_choices());
+        section.show(&two_choices(), None);
         settle();
         let input = section.panel.sender().clone();
         let choices = section.panel.widgets().choices.clone();
@@ -712,7 +913,7 @@ mod tests {
                 let first = log.borrow().is_empty();
                 log.borrow_mut().push(action);
                 if first {
-                    let _ = input.send(GripPanelInput::Show(Box::new(two_choices())));
+                    let _ = input.send(GripPanelInput::Show(Box::new(two_choices()), None));
                     // The radios the queued redraw has not replaced yet.
                     if let Some(radio) = radio_buttons(&choices).first() {
                         radio.set_active(true);
@@ -737,6 +938,89 @@ mod tests {
         drop(sender);
         drop(section);
         settle();
+    }
+
+    /// The options' menu the section holds, if any.
+    fn options_menu(section: &GripSection) -> Option<gtk::MenuButton> {
+        section
+            .panel
+            .widgets()
+            .options
+            .first_child()
+            .and_downcast::<gtk::MenuButton>()
+    }
+
+    #[test]
+    fn the_grips_options_are_the_panels_own_and_report_by_message() {
+        on_gtk_thread(options_are_the_panels);
+    }
+
+    /// The window used to put the grip's options (⋮) into the panel
+    /// itself; now they come with `Show`, are made again only for another
+    /// grip, and what they ask reaches the owner as an action.
+    fn options_are_the_panels() {
+        let (section, heard) = heard_section();
+        let width = Ident::new("width", stave_lang::ast::Span::default()).unwrap();
+        let options = |index: usize| GripOptions {
+            index,
+            switches: vec![SolverSwitch {
+                param: width.clone(),
+                value: super::super::grip_text::mm_amount(100.0).unwrap(),
+                solved: false,
+            }],
+        };
+        section.show(&two_choices(), Some(options(3)));
+        assert!(options_menu(&section).is_none(), "only queued");
+        settle();
+        let Some(menu) = options_menu(&section) else {
+            panic!("the grip's options are shown");
+        };
+        section.show(&two_choices(), Some(options(3)));
+        settle();
+        assert_eq!(
+            options_menu(&section).as_ref(),
+            Some(&menu),
+            "kept for the same grip"
+        );
+        section.show(&two_choices(), Some(options(4)));
+        settle();
+        let Some(other) = options_menu(&section) else {
+            panic!("another grip's options are shown");
+        };
+        assert_ne!(other, menu, "made again for another grip");
+        // "Make it solved", as people would press it.
+        let Some(content) = other.popover().and_then(|popover| popover.child()) else {
+            panic!("the menu has its content");
+        };
+        let make = std::iter::successors(Some(content.upcast::<gtk::Widget>()), |widget| {
+            widget
+                .first_child()
+                .or_else(|| widget.next_sibling())
+                .or_else(|| {
+                    std::iter::successors(widget.parent(), gtk::Widget::parent)
+                        .find_map(|parent| parent.next_sibling())
+                })
+        })
+        .find_map(|widget| widget.downcast::<gtk::Button>().ok());
+        let Some(make) = make else {
+            panic!("the menu has its Make it solved button");
+        };
+        make.emit_clicked();
+        assert!(heard.borrow().is_empty(), "only queued");
+        settle();
+        let Some(PanelAction::Switch {
+            index: 4,
+            ask: SwitchAsk::MakeSolved { param, .. },
+        }) = heard.borrow().first().cloned()
+        else {
+            panic!("the owner hears what was asked: {:?}", heard.borrow());
+        };
+        assert_eq!(param, width);
+        section.close_options();
+        settle();
+        section.show(&two_choices(), None);
+        settle();
+        assert!(options_menu(&section).is_none(), "no options, no menu");
     }
 
     /// A readout launched as the window launches it.

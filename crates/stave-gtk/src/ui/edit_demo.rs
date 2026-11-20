@@ -1,8 +1,12 @@
 //! Shows the editing menu over the design, or the card in the Edit
 //! panel, from the contract's hand-built fixture (`stave_app::edit::clothing_cabinet_fixture`), for
 //! seeing them before the edit loop drives them: `--edit-fixture menu`
-//! (or `refused`, `fits`, `choose`, `greyed`). What the user does on them
-//! is printed, nothing else; nothing here edits the design.
+//! (or `refused`, `fits`, `choose`, `greyed`). The window owns the
+//! showcase's controller and its outputs are forwarded into the window's
+//! input at launch, as the real menu's and card's are, but as their own
+//! message ([`ShowcaseOutput`], `EditingInput::Showcase`), whose handler
+//! ([`heard`]) only prints what the user did: nothing here edits the
+//! design.
 //!
 //! The fixture's ids are illustrative indexes, so the words for them
 //! (`door_bay[left]`, `drawer[top]`) are the fixture's own documented
@@ -150,10 +154,43 @@ impl Shown {
     }
 }
 
+/// What the showcase's menu or card said, forwarded to its owner.
+#[derive(Debug)]
+pub enum ShowcaseOutput {
+    /// The menu's output.
+    Menu(EditMenuOutput),
+    /// The card's output.
+    Card(EditCardOutput),
+}
+
+/// Prints what the user did on the showcase: the fixture's ids are only
+/// illustrative, so nothing acts on it.
+pub(super) fn heard(output: &ShowcaseOutput) {
+    match output {
+        ShowcaseOutput::Menu(EditMenuOutput::Chosen(declaration)) => {
+            eprintln!("edit menu: chose {declaration:?}");
+        }
+        ShowcaseOutput::Card(EditCardOutput::Action(action)) => {
+            eprintln!("edit card: {action:?}");
+        }
+        ShowcaseOutput::Menu(EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace)
+        | ShowcaseOutput::Card(
+            EditCardOutput::OptionsOpen(_) | EditCardOutput::Link(_) | EditCardOutput::Hover(_),
+        ) => {}
+    }
+}
+
 /// Shows the showcase: the menu over the design near the left door, or
 /// the card in the Edit panel (`panel`, the panel's content, whose own
-/// card it replaces). `None` when the fixture didn't build.
-pub(super) fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> Option<Shown> {
+/// card it replaces). Its outputs go to `owner` as `message(output)`.
+/// `None` when the fixture didn't build.
+pub(super) fn show<M: 'static>(
+    design: &gtk::Overlay,
+    panel: &gtk::Box,
+    showcase: Showcase,
+    owner: &relm4::Sender<M>,
+    message: fn(ShowcaseOutput) -> M,
+) -> Option<Shown> {
     let Some(fixture) = clothing_cabinet_fixture() else {
         eprintln!("the editing fixture didn't build");
         return None;
@@ -190,16 +227,12 @@ pub(super) fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) 
             }
             let menu = EditMenuComponent::builder()
                 .launch(())
-                .connect_receiver(|_, output| match output {
-                    EditMenuOutput::Chosen(declaration) => {
-                        eprintln!("edit menu: chose {declaration:?}");
-                    }
-                    EditMenuOutput::Drawn => {}
-                });
+                .forward(owner, move |output| message(ShowcaseOutput::Menu(output)));
             // Only fails once the menu has shut down.
             let _ = menu.sender().send(EditMenuInput::Show {
                 heading,
                 items: MenuEntry::list(&items),
+                from_space: false,
             });
             place(menu.widget(), gtk::Align::Start, 470);
             design.add_overlay(menu.widget());
@@ -226,11 +259,7 @@ pub(super) fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) 
             };
             let card = EditCardComponent::builder()
                 .launch(CardSlots::new())
-                .connect_receiver(|_, output| {
-                    if let EditCardOutput::Action(action) = output {
-                        eprintln!("edit card: {action:?}");
-                    }
-                });
+                .forward(owner, move |output| message(ShowcaseOutput::Card(output)));
             let view = CardView::new(
                 &CardModel {
                     applied: &[],

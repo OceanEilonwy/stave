@@ -160,40 +160,26 @@ impl Component for InspectorComponent {
                 set_description: Some(&tr("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written.")),
                 add_css_class: "compact",
             },
-            add_named[Some(Page::Details.name())] = &gtk::ScrolledWindow {
-                set_hscrollbar_policy: gtk::PolicyType::Never,
-                set_propagate_natural_height: true,
-                set_max_content_height: 640,
-
-                #[name = "details"]
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 0,
-                    add_css_class: "stave-inspector-compact",
-                },
+            // The pages are as tall as what they show, and the Details
+            // panel scrolls them: a page that scrolled itself inside it
+            // was squeezed by the cards below it (the Edit panel's
+            // Change card shares the panel) and cut its words off.
+            #[name = "details"]
+            add_named[Some(Page::Details.name())] = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 0,
+                add_css_class: "stave-inspector-compact",
             },
-            add_named[Some(Page::Focus.name())] = &gtk::ScrolledWindow {
-                set_hscrollbar_policy: gtk::PolicyType::Never,
-                set_propagate_natural_height: true,
-                set_max_content_height: 640,
-
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    add_css_class: "stave-inspector",
-                    append: &focus,
-                },
+            add_named[Some(Page::Focus.name())] = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                add_css_class: "stave-inspector",
+                append: &focus,
             },
-            add_named[Some(Page::Note.name())] = &gtk::ScrolledWindow {
-                set_hscrollbar_policy: gtk::PolicyType::Never,
-                set_propagate_natural_height: true,
-                set_max_content_height: 640,
-
-                #[name = "note"]
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 12,
-                    add_css_class: "stave-inspector",
-                },
+            #[name = "note"]
+            add_named[Some(Page::Note.name())] = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 12,
+                add_css_class: "stave-inspector",
             },
 
             #[watch]
@@ -440,6 +426,11 @@ impl Drawer<'_> {
                 .tooltip_text(tr("Show it in the editor"))
                 .build(),
         );
+        // In a narrow panel the link gives way ("box.st…:34") rather than
+        // pushing the header past the panel's edge.
+        if let Some(label) = link.child().and_downcast::<gtk::Label>() {
+            label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        }
         let location = source.location.clone();
         self.on_click(&link, move || {
             InspectorInput::SourceClicked(location.clone())
@@ -937,6 +928,57 @@ mod tests {
                 InspectorOutput::Link(target),
                 InspectorOutput::Hover(None),
             ]
+        );
+    }
+
+    #[test]
+    fn a_short_panel_scrolls_the_details_whole() {
+        on_gtk_thread(details_are_never_squeezed);
+    }
+
+    /// In a short Details panel, with the Edit panel's Change card below
+    /// the inspector (as the window docks them), the inspector is as tall
+    /// as all it shows and the panel scrolls: it used to scroll itself
+    /// inside the panel, was squeezed to what the card left, and cut its
+    /// words off through the middle of a line.
+    fn details_are_never_squeezed() {
+        let (to, _heard) = recorder();
+        let inspector = inspector_to(&to);
+        let mut shown = inspection();
+        if let Some(shown) = &mut shown {
+            shown.description = Some(
+                "The left end is the ground part; the other sides are placed from it, \
+                 and the lid turns on hinges along its back edge."
+                    .to_owned(),
+            );
+        }
+        inspector.show(shown.as_ref());
+        settle();
+        let card = gtk::Box::builder().height_request(120).build();
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&inspector.root);
+        column.append(&card);
+        let panel = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&column)
+            .build();
+        let window = gtk::Window::builder()
+            .default_width(260)
+            .default_height(180)
+            .child(&panel)
+            .build();
+        window.present();
+        for _ in 0..2 {
+            window.allocate(260, 180, -1, None);
+            settle();
+        }
+        let root = &inspector.root;
+        let (_, natural, _, _) = root.measure(gtk::Orientation::Vertical, root.width());
+        let height = root.height();
+        window.destroy();
+        assert!(
+            height >= natural,
+            "the inspector shows {height} px of the {natural} px it draws"
         );
     }
 }

@@ -330,6 +330,9 @@ pub(in crate::ui) struct RepeatFoldSlots {
 pub(in crate::ui) struct RepeatFoldInit {
     /// The smallest count the stepper offers.
     pub(in crate::ui) least: usize,
+    /// Style classes its root takes beside its own, to sit among its
+    /// owner's rows.
+    pub(in crate::ui) classes: &'static [&'static str],
     /// Where its parts go, if not in its own root.
     pub(in crate::ui) apart: Option<RepeatFoldSlots>,
 }
@@ -442,6 +445,9 @@ impl Component for RepeatFoldComponent {
                 }
             },
         );
+        for class in init.classes {
+            root.add_css_class(class);
+        }
         let row_root = row.widget().clone();
         row_root.set_visible(false);
         match &init.apart {
@@ -876,11 +882,10 @@ impl ItemTools {
         let repeat = RepeatFoldComponent::builder()
             .launch(RepeatFoldInit {
                 least: 1,
+                classes: &["stave-card-row", "stave-edit-row"],
                 apart: None,
             })
             .forward(input, |output| EditingInput::ItemRepeat(output).into());
-        repeat.widget().add_css_class("stave-card-row");
-        repeat.widget().add_css_class("stave-edit-row");
         let controller = ItemToolsComponent::builder()
             .launch(ItemToolsInit {
                 title,
@@ -1435,7 +1440,11 @@ mod tests {
         let heard: Rc<RefCell<Vec<RepeatFoldOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
         let fold = RepeatFoldComponent::builder()
-            .launch(RepeatFoldInit { least: 1, apart })
+            .launch(RepeatFoldInit {
+                least: 1,
+                classes: &[],
+                apart,
+            })
             .connect_receiver(move |_, output| log.borrow_mut().push(output));
         (fold, heard)
     }
@@ -1460,6 +1469,7 @@ mod tests {
         let fold = RepeatFoldComponent::builder()
             .launch(RepeatFoldInit {
                 least: 1,
+                classes: &[],
                 apart: None,
             })
             .connect_receiver(move |_, _| {
@@ -1563,6 +1573,26 @@ mod tests {
     }
 
     #[test]
+    fn a_repeat_folds_classes_come_with_it() {
+        on_gtk_thread(repeat_fold_classes);
+    }
+
+    /// The item's tools used to style the fold's root themselves; now the
+    /// classes come in its init and it puts them on its own root.
+    fn repeat_fold_classes() {
+        let fold = RepeatFoldComponent::builder()
+            .launch(RepeatFoldInit {
+                least: 1,
+                classes: &["stave-card-row", "stave-edit-row"],
+                apart: None,
+            })
+            .detach();
+        let root = fold.widget();
+        assert!(root.has_css_class("stave-repeat-fold"), "its own class");
+        assert!(root.has_css_class("stave-card-row") && root.has_css_class("stave-edit-row"));
+    }
+
+    #[test]
     fn a_press_made_while_a_fold_output_is_handled_is_queued() {
         on_gtk_thread(fold_presses_are_queued);
     }
@@ -1577,6 +1607,7 @@ mod tests {
         let fold = RepeatFoldComponent::builder()
             .launch(RepeatFoldInit {
                 least: 1,
+                classes: &[],
                 apart: None,
             })
             .connect_receiver(move |input, output| {

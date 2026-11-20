@@ -36,6 +36,11 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             if let Some(settings) = gtk::Settings::default() {
                 settings.set_gtk_im_module(Some("gtk-im-context-simple"));
             }
+            // What the application puts on the display at startup that
+            // the windows tests build rely on: the grips' sizes.
+            if let Some(display) = gtk::gdk::Display::default() {
+                crate::ui::edit_view::grip_panel::install_style(&display);
+            }
             for (job, done) in received {
                 let _ = done.send(catch_unwind(AssertUnwindSafe(job)));
             }

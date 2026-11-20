@@ -33,16 +33,15 @@
 //! (`files::FilesComponent`): its model owns the [`Editor`] and only its
 //! `update` calls it, so [`Editor::show_buffer`] and [`Editor::go_to`]
 //! take effect at once inside that update, which reads the cursor straight
-//! after. The editor's own widgets only send: a lens's links call the one
-//! function given to [`Editor::new`], which sends the component a message
-//! ([`LensClick`]), each lens's handlers made again for the declaration it
-//! shows; Escape asks an [`EscapeProbe`] (widgets only) whether anything
+//! after. The editor's own widgets only send: a lens's links send a
+//! [`LensClick`] on the sender given to [`Editor::new`], whose receiver
+//! the component forwards into its own input, each lens's handlers made
+//! again for the declaration it shows; Escape asks an [`EscapeProbe`] (widgets only) whether anything
 //! is open to close. Its state is plain fields of that one owner, changed
 //! only through `&mut self`; the two GObject subclasses that draw in the
 //! light or dark style read it from their own CSS class.
 
 use stave_app::i18n::{fill_in, ntr, tr};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -1178,8 +1177,9 @@ pub struct Editor {
     /// The frame callback of a go-to's scroll still waiting for the
     /// text's size: a newer go-to removes it.
     scroll: Option<gtk::TickCallbackId>,
-    /// What a lens's links call: it sends the owner a message.
-    lens: Rc<dyn Fn(LensClick)>,
+    /// Where a lens's links send their clicks: the owner forwards them
+    /// into its own input.
+    lens: relm4::Sender<LensClick>,
 }
 
 /// Which link of a lens was clicked.
@@ -1261,9 +1261,9 @@ struct LensSlot {
 }
 
 impl Editor {
-    /// An empty editor whose buffers share `table`; a lens's links call
-    /// `lens`.
-    pub fn new(table: &gtk::TextTagTable, lens: impl Fn(LensClick) + 'static) -> Editor {
+    /// An empty editor whose buffers share `table`; a lens's links send
+    /// their clicks on `lens`.
+    pub fn new(table: &gtk::TextTagTable, lens: relm4::Sender<LensClick>) -> Editor {
         let table = table.clone();
         let tags = Tags::new(&table);
         let code: CodeView = glib::Object::builder::<CodeView>()
@@ -1353,7 +1353,7 @@ impl Editor {
             peek_tagged: None,
             card_box,
             scroll: None,
-            lens: Rc::new(lens),
+            lens,
         };
         let mut editor = editor;
         editor.colour(adw::StyleManager::default().is_dark());
@@ -1602,9 +1602,9 @@ impl Editor {
         }
     }
 
-    /// Makes a lens row's links call for `symbol` (or nothing, `None`),
-    /// replacing the handlers it had.
-    fn link_lens(lens: &Rc<dyn Fn(LensClick)>, slot: &mut LensSlot, symbol: Option<SymbolId>) {
+    /// Makes a lens row's links send clicks for `symbol` (or nothing,
+    /// `None`), replacing the handlers it had.
+    fn link_lens(lens: &relm4::Sender<LensClick>, slot: &mut LensSlot, symbol: Option<SymbolId>) {
         for (object, handler) in slot.links.drain(..) {
             object.disconnect(handler);
         }
@@ -1617,12 +1617,12 @@ impl Editor {
         ];
         for (button, press, click) in links {
             // From the keyboard.
-            let call = Rc::clone(lens);
-            let keyboard = button.connect_clicked(move |_| call(click(symbol)));
+            let send = lens.clone();
+            let keyboard = button.connect_clicked(move |_| send.emit(click(symbol)));
             slot.links.push((button.clone().upcast(), keyboard));
             // From the mouse, on release.
-            let call = Rc::clone(lens);
-            let mouse = press.connect_released(move |_, _, _, _| call(click(symbol)));
+            let send = lens.clone();
+            let mouse = press.connect_released(move |_, _, _, _| send.emit(click(symbol)));
             slot.links.push((press.clone().upcast(), mouse));
         }
     }
@@ -1898,9 +1898,10 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
 
     #[test]
     fn a_dropped_editor_frees_its_search_bar() {
@@ -1912,7 +1913,7 @@ mod tests {
     /// model (with the search and the input channel the runtime held) and
     /// the editor's widgets are all freed.
     fn search_bar_is_freed() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
         let buffer = editor.new_buffer("door\nshelf\n");
         editor.show_buffer(&buffer, true);
         editor.find("door");
@@ -1943,7 +1944,7 @@ mod tests {
     /// is at the cursor: the match must be selected before `find` returns.
     /// The bar opening when the main loop runs leaves the match selected.
     fn find_selects_at_once() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
         let text = "shelf\npart side\nshelf\n";
         let lines = LineStarts::new(text);
         let buffer = editor.new_buffer(text);
@@ -2001,11 +2002,8 @@ mod tests {
         let [first, second, ..] = symbols.as_slice() else {
             panic!("the wall shelf declares two things");
         };
-        let heard: Rc<RefCell<Vec<LensClick>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), move |click| {
-            log.borrow_mut().push(click);
-        });
+        let (lens, heard) = recorder();
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), lens);
         let buffer = editor.new_buffer("a\nb\n");
         editor.show_buffer(&buffer, true);
         let lens = |symbol: SymbolId| LensLine {
@@ -2026,6 +2024,7 @@ mod tests {
         show.emit_clicked();
         editor.set_lenses(&[]);
         uses.emit_clicked();
+        settle();
         assert_eq!(
             *heard.borrow(),
             vec![
@@ -2048,7 +2047,7 @@ mod tests {
     /// the keyboard mid-step. Now what the bar is told is queued, and a
     /// close asked for from inside its step waits until the step is done.
     fn search_is_queued() {
-        let mut editor = Editor::new(&gtk::TextTagTable::new(), |_| {});
+        let mut editor = Editor::new(&gtk::TextTagTable::new(), relm4::channel().0);
         let buffer = editor.new_buffer("door\nshelf\ndoor\n");
         editor.show_buffer(&buffer, true);
         let editor = Rc::new(editor);

@@ -2082,7 +2082,7 @@ mod tests {
             EditMenuComponent::builder().launch(()).connect_receiver(
                 move |_, output| match output {
                     EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
-                    EditMenuOutput::Drawn => {}
+                    EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace => {}
                 },
             )
         };
@@ -2108,6 +2108,7 @@ mod tests {
                 .send(EditMenuInput::Show {
                     heading: fixture.picked.heading(),
                     items: MenuEntry::list(&items),
+                    from_space: false,
                 })
                 .unwrap();
             settle();
