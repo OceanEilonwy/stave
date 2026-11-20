@@ -639,7 +639,7 @@ fn build_body(
     frame: &CardFrame,
     view: &CardView,
     open: Option<&str>,
-    links: &LinkHandlers,
+    links: &LinkHandlers<EditCardInput>,
     report: &impl Report,
 ) -> Built {
     let body = &frame.body;
@@ -1310,7 +1310,7 @@ pub struct EditCardComponent {
     /// What the last show drew that the card keeps.
     built: Built,
     /// Where the links in "Placed in" report: to the card's own input.
-    links: LinkHandlers,
+    links: LinkHandlers<EditCardInput>,
     /// A row to bring into sight once the layout has room for it.
     scroll_target: Option<gtk::Widget>,
 }
@@ -1530,15 +1530,7 @@ impl Component for EditCardComponent {
                 .vadjustment()
                 .connect_changed(move |_| input.emit(EditCardInput::LaidOut));
         }
-        let links = LinkHandlers::default();
-        {
-            let input = input.clone();
-            links.connect_click(move |target| input.emit(EditCardInput::Link(target)));
-        }
-        {
-            let input = input.clone();
-            links.connect_hover(move |target| input.emit(EditCardInput::Hover(target)));
-        }
+        let links = LinkHandlers::new(input.clone(), EditCardInput::Link, EditCardInput::Hover);
         ComponentParts {
             model: EditCardComponent {
                 open_options: None,
@@ -1711,7 +1703,11 @@ fn focused_choice(list: &ChoiceList) -> Option<String> {
 
 /// A place param's row: what fills it (each name a link to what it
 /// names), or the prompt to point at it.
-fn place_row(param: &PlaceParam, words: &PlaceWords, handlers: &LinkHandlers) -> gtk::Box {
+fn place_row(
+    param: &PlaceParam,
+    words: &PlaceWords,
+    handlers: &LinkHandlers<EditCardInput>,
+) -> gtk::Box {
     let row = row_box();
     row.append(&key_label(param.name.as_str(), &param.prompt));
     match &words.value {
