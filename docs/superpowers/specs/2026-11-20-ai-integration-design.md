@@ -219,7 +219,13 @@ project?".
 - A folder that is already the root of a git repository keeps its `.git`
   and its history: the repository in `.stave/history/` uses that `.git` as
   its store (jj's "external git" setup), and main is the branch the folder
-  is on, so the user's git tools keep working.
+  is on, so the user's git tools keep working: every step that moves main
+  moves that branch (and git's index, while `HEAD` is on it), and commits
+  made to it with git become main's latest when versions are next opened
+  or main next moves. (jj's `refs/jj/keep/*` refs, which keep Stave's
+  revisions from git's garbage collection, do show in `git log --all`.)
+- No revision holds a file inside `.git` (at any depth, any case) or
+  `.stave/history`, so nothing from a patch is written into a repository.
 - A folder inside a bigger repository (as `examples/` sits inside Stave's
   own) is refused in plain words, with an offer to copy the project to a
   folder of its own. Nested repositories are not made.
@@ -231,7 +237,9 @@ A per-project setting, `off`, `ask` (default) or `auto`, kept beside the
 project, not in a `.stave` file (*my call:* `.stave/agents.toml` in the
 project folder, recorded with the project). A global default in
 `~/.config/stave/agents.toml` (itself defaulting to `ask`) covers a
-project without one, `new_project` included.
+project without one, `new_project` included. Only the person changes the
+project's settings in `.stave/`: a suggestion (or an apply) that changes
+any file there is refused, so an agent can't raise its own policy.
 
 - `off`: agents can suggest; only the user applies, from the window.
 - `ask`: the `apply_suggestion` tool is marked as changing the project
