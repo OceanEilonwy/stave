@@ -1094,6 +1094,15 @@ impl Renderer {
         Ok(())
     }
 
+    /// GTK refused a frame as a dmabuf (the window heard
+    /// `Shown::Refused` from the 3D view): the live view's frames go
+    /// by readback from now on.
+    pub fn refuse_dmabufs(&mut self) {
+        if let Some(exporter) = &mut self.dmabuf {
+            exporter.refuse();
+        }
+    }
+
     /// Whether the live view's frames go to GTK as dmabufs.
     #[cfg(test)]
     pub fn uses_dmabufs(&self) -> bool {
@@ -2771,6 +2780,28 @@ mod tests {
         drop(held);
         // No readback buffer was ever needed.
         assert_eq!(renderer.ring.made(), 0);
+    }
+
+    #[test]
+    fn frames_go_by_readback_once_gtk_refuses_a_dmabuf() {
+        let Some(mut renderer) = dmabuf_renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        drop(wait_and_take_dmabuf(&mut renderer));
+        // The window heard `Shown::Refused` and says so.
+        renderer.refuse_dmabufs();
+        assert!(!renderer.uses_dmabufs());
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        assert!(
+            matches!(
+                wait_and_take_live(&mut renderer),
+                Some(LiveFrame::Mapped(_))
+            ),
+            "the next frame goes by readback"
+        );
     }
 
     #[test]

@@ -1065,7 +1065,12 @@ impl Window {
                 match shown {
                     Shown::Yes => crate::render::profile::frame_shown(),
                     Shown::No => {}
-                    Shown::Refused => self.request_render(),
+                    Shown::Refused => {
+                        // Frames from now on go by readback; this one
+                        // again too.
+                        renderer.refuse_dmabufs();
+                        self.request_render();
+                    }
                 }
                 self.show_pins();
                 // Save the window once a frame drawn at the view's real
