@@ -1,0 +1,11 @@
+id = "stave"
+name = "Stave"
+version = "0.1.0"
+schema_version = 1
+authors = ["Stave contributors"]
+description = "The Stave woodworking language: diagnostics, completion and navigation from stave-lsp."
+repository = "https://github.com/OceanEilonwy/stave"
+
+[language_servers.stave-lsp]
+name = "stave-lsp"
+languages = ["Stave"]
