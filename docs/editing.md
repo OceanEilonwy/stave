@@ -569,6 +569,42 @@ written for it) and tries the candidate again.
 A value can always be typed in the setting's entry, a refused one
 included; a typed value that is refused is blamed as above.
 
+## Conflicts
+
+A file can hold two versions of the same lines between conflict marker
+lines (grammar, "Conflicts"): the window's saved work and a change an
+agent applied, or a suggestion whose patches no longer fit the project as
+it is now. Settling one is a text edit, not a patch, and goes through
+`stave_app::conflicts`, which the window and the AI tools share:
+
+- `conflicts(text)` lists each conflict with its lines (from 1) and its
+  actions: "Keep this side", "Keep the other side", "Keep side 3" and on,
+  and "Keep both" only when every side is whole items with different
+  names. Each action is a `Resolution` and the same as one text edit.
+- `check_sides(folder, files)` opens the project once per side, that side
+  chosen in every conflict of every file, so each side's problems are
+  known before choosing (`SideFiles` is the file source that chooses).
+- `side_change(text, conflict, side)` is what a side changes from the
+  conflict's base, as the base's lines (`- `) and the side's (`+ `), so an
+  AI reads "yours sets `box_length = 320mm`; theirs sets `350mm`".
+- `try_resolution(folder, files, path, conflict, resolution)` settles one
+  conflict on a scratch copy and opens the project as it would then be.
+  It writes nothing.
+
+In the window the actions are links above the conflict (`docs/gui.md`,
+"The editor"). Through the AI tools, `list_conflicts` describes every
+conflict (each side's text, where it came from, its change against the
+base and its error count), `try_resolution` tries one and
+`resolve_conflict` writes it. A conflict in the project's own files is
+written to the file, and recorded as a version by the agent when versions
+are on, only when the result checks with no errors (an agent's change
+never reaches the main line unchecked), the project's merge policy is not
+`off`, and the file still holds the text it was resolved from (so nothing
+written meanwhile is lost; the window keeps unsaved changes over a file
+changed on disk). A conflict in a suggestion is written to the
+suggestion whatever is left, since the suggestion is checked again before
+it can be applied; the tool reports any problems that remain.
+
 ## The command line
 
 `stave edit` runs the whole loop with no window. Its output is the
