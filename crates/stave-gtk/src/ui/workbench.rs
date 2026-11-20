@@ -1228,6 +1228,10 @@ impl Component for WorkbenchComponent {
             output_button,
         };
         widgets.show_status_tabs();
+        // Where the tool groups start, published as every later move is:
+        // the owner hears it once it forwards the outputs, and the
+        // floating controls take their spots from it.
+        let _ = sender.output(WorkbenchOutput::ToolsChanged(model.tools.clone()));
         ComponentParts { model, widgets }
     }
 
@@ -1463,8 +1467,9 @@ impl Workbench {
     }
 
     /// Where the 3D view's tool groups are docked, as of the last message
-    /// the workbench handled: where the view's floating controls start.
-    /// Later moves are told as [`WorkbenchOutput::ToolsChanged`].
+    /// the workbench handled (tests: the window hears every change,
+    /// the first at launch, as [`WorkbenchOutput::ToolsChanged`]).
+    #[cfg(test)]
     pub fn tool_spots(&self) -> Spots {
         self.controller.model().tools.clone()
     }
@@ -1998,7 +2003,7 @@ show bottom true
 
     /// Presenting, moving and counting change the dock and the model but
     /// tell nobody; only the tool groups moving (a group docked, a layout
-    /// applied) is told.
+    /// applied) is told, besides where they start, told once at launch.
     fn setters_do_not_call_back() {
         let (owner, outputs) = relm4::channel();
         let Ok(workbench) = workbench_for(labels(), &owner) else {
@@ -2036,7 +2041,12 @@ show bottom true
             Some(Side::End),
             "a move is saved as the last layout"
         );
-        assert!(heard.borrow().is_empty(), "setters never call back");
+        assert_eq!(
+            *heard.borrow(),
+            vec![Spots::default()],
+            "where the groups start is told at launch; setters never call back"
+        );
+        heard.borrow_mut().clear();
         let mut docked = Spots::default();
         docked.dock(Group::Camera, Spot::BottomLeft);
         workbench.dock_tool(Group::Camera, Spot::BottomLeft);
@@ -2126,6 +2136,13 @@ show bottom true
         let Ok(workbench) = workbench_for(labels(), &owner) else {
             panic!("the dock is built");
         };
+        // Where the tool groups start, told at launch: forwarded once the
+        // main loop runs, then waiting here.
+        settle();
+        assert!(matches!(
+            outputs.recv_sync(),
+            Some(WorkbenchOutput::ToolsChanged(_))
+        ));
         let workbench = Rc::new(workbench);
         // (whether Output showed when the owner heard, and straight after
         // it asked for it)
