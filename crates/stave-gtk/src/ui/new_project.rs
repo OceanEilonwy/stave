@@ -668,7 +668,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle};
+    use crate::ui::gtk_test::{listener, on_gtk_thread, recorder, settle, settle_until};
 
     /// The dialog's buttons, by their words.
     fn button(widget: &gtk::Widget, words: &str) -> Option<gtk::Button> {
@@ -744,8 +744,14 @@ mod tests {
         if let Some(dialog) = shown.upgrade() {
             dialog.force_close();
         }
-        settle();
-        assert!(shown.upgrade().is_none(), "the dialog is freed once closed");
+        // A dialog over a shown window fades out on its frame clock even
+        // when force-closed, holding itself until the last frame.
+        assert!(
+            settle_until(std::time::Duration::from_secs(10), || shown
+                .upgrade()
+                .is_none()),
+            "the dialog is freed once closed"
+        );
         window.destroy();
     }
 

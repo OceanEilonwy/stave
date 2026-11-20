@@ -105,7 +105,18 @@ pub(super) struct GripPanelComponent {
 
 /// The menu beside a grip's value or number: "Let the solver move this",
 /// with the range a solved param needs, or the switch to make it plain.
-/// What people ask of it goes to `asked`, with the menu.
+///
+/// A stateless builder of plain widgets, not a component: the size
+/// section builds it into its own view (its options, ⋮), and the window
+/// builds it beside the field of its Sizes card's size editor. Its
+/// handlers touch only the menu's own widgets, made here: the switch
+/// shows or hides the range under it and, switched off on a solved
+/// param, pops the menu down; "Make it solved" reads the two range fields
+/// beside it. Each then hands what was asked, with the menu button (held
+/// weakly until then), to `asked`, which every caller makes send one
+/// message and do nothing else (`GripPanelInput::Switched`, or the
+/// window's `EditingInput` with [`SwitchMenu::Row`]). No Rust state is
+/// shared.
 pub(super) fn switch_menu(
     switches: &[SolverSwitch],
     asked: impl Fn(SwitchAsk, gtk::MenuButton) + Clone + 'static,

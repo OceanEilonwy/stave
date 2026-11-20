@@ -56,6 +56,9 @@ pub enum Floating {
     ProblemCard,
     /// The chip naming a problem off screen.
     EdgePin,
+    /// The line saying why editing in 3D is off while the text doesn't
+    /// read: low in the view, just above the foot.
+    BlockLine,
 }
 
 /// A control's place in the view, in pixels from its top left corner.
@@ -582,8 +585,14 @@ pub fn place(width: i32, height: i32, measure: &impl Measure, spots: &Spots) -> 
     }
     foot = if row_top < foot { row_top - GAP } else { foot };
 
-    // Above them, in the middle: the cards, then the off-screen chip.
-    for item in [Floating::StepCard, Floating::ProblemCard, Floating::EdgePin] {
+    // Above them, in the middle: why editing in 3D is off, the cards,
+    // then the off-screen chip.
+    for item in [
+        Floating::BlockLine,
+        Floating::StepCard,
+        Floating::ProblemCard,
+        Floating::EdgePin,
+    ] {
         let widest = match item {
             Floating::StepCard | Floating::ProblemCard => room.min(CARD_WIDTH),
             _ => room,
@@ -744,6 +753,36 @@ mod tests {
         assert!(pin.bottom() <= card.y);
         let key = placement.get(Floating::ContactKey).unwrap();
         assert_eq!(key.y, EDGE);
+        assert_apart(&placement);
+    }
+
+    #[test]
+    fn the_block_line_stands_low_in_the_middle_just_above_the_foot() {
+        let placement = place(
+            1000,
+            700,
+            &controls(&[
+                (Floating::Moves, 300, 38),
+                (Floating::Motion, 300, 40),
+                (Floating::BlockLine, 420, 40),
+                (Floating::EdgePin, 200, 32),
+                (Floating::Hint, 260, 20),
+            ]),
+            &Spots::default(),
+        );
+        let line = placement.get(Floating::BlockLine).unwrap();
+        let moves = placement.get(Floating::Moves).unwrap();
+        let motion = placement.get(Floating::Motion).unwrap();
+        assert_eq!(
+            line.bottom(),
+            moves.y.min(motion.y) - GAP,
+            "just above the foot"
+        );
+        assert_eq!(line.x, (1000 - line.width) / 2, "in the middle");
+        let pin = placement.get(Floating::EdgePin).unwrap();
+        assert!(pin.bottom() <= line.y, "the off-screen chip above it");
+        let hint = placement.get(Floating::Hint).unwrap();
+        assert_eq!(hint.y, EDGE, "the hint stays at the top");
         assert_apart(&placement);
     }
 

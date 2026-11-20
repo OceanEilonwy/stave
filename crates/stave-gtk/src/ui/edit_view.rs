@@ -51,7 +51,7 @@ use super::edit_card::{
     EditCardOutput, Words,
 };
 use super::edit_menu::{
-    Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem,
+    Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem, MenuPlace,
 };
 use super::edit_panel::EditPanel;
 use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearchOutput};
@@ -76,6 +76,9 @@ const GHOST_TINT: f32 = 0.62;
 pub(super) struct EditView {
     /// The menu for a selection, a pop-up at the click.
     pub(super) menu: Controller<EditMenuComponent>,
+    /// Where the menu last said it placed itself
+    /// ([`EditMenuOutput::Placed`]): floating labels keep clear of it.
+    pub(super) menu_place: Option<MenuPlace>,
     /// The card for a chosen candidate, in the Edit panel.
     pub(super) card: Controller<EditCardComponent>,
     /// The card's boxes the window fills (the repeat controls, the
@@ -186,6 +189,7 @@ impl EditView {
         let repeats = repeat_handles::Repeats::new(input, &card_slots);
         EditView {
             menu,
+            menu_place: None,
             card,
             card_slots,
             card_offers: None,
@@ -218,6 +222,7 @@ fn menu_heard(output: EditMenuOutput) -> WindowInput {
     match output {
         EditMenuOutput::Chosen(declaration) => EditingInput::MenuChosen(declaration),
         EditMenuOutput::Drawn => EditingInput::MenuDrawn,
+        EditMenuOutput::Placed(place) => EditingInput::MenuPlaced(place),
         EditMenuOutput::HoldFromSpace => EditingInput::HoldFromSpace,
     }
     .into()
@@ -1073,6 +1078,15 @@ impl Window {
         }
     }
 
+    /// The menu says where it placed itself: kept, so the problem pins
+    /// keep clear of where it now stands, and the pins placed again.
+    pub(in crate::ui) fn menu_placed(&mut self, place: MenuPlace) {
+        self.editing.menu_place = Some(place);
+        if !self.pins.pins.is_empty() {
+            self.place_pins();
+        }
+    }
+
     /// The card says which setting's short list is open now.
     pub(in crate::ui) fn card_options_open(&mut self, setting: Option<String>) {
         self.editing.card_open_options = setting;
@@ -1563,6 +1577,8 @@ pub(super) use links::Hovered;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;
+#[cfg(test)]
+pub(super) use repeat_handles::{Rect, clear_of};
 mod size_slider;
 mod sizes;
 #[cfg(test)]
