@@ -1,0 +1,150 @@
+// SYNTAX TEST "source.stave" "Stave TextMate grammar: one assertion per rule"
+stave 1
+// <----- storage.type.stave.stave
+//    ^ constant.numeric.integer.stave
+
+/// The left end is the ground part.
+// <--- comment.line.documentation.stave punctuation.definition.comment.documentation.stave
+//  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ comment.line.documentation.stave
+// A plain comment.
+// <-- comment.line.double-slash.stave punctuation.definition.comment.stave
+/* a block
+   comment */
+// <-------------- comment.block.stave
+
+import "./hardware" as hw
+// <------ storage.type.import.stave
+//     ^ string.quoted.double.stave punctuation.definition.string.begin.stave
+//      ^^^^^^^^^^ string.quoted.double.stave
+//                  ^^ keyword.other.as.stave
+//                     ^^ entity.name.namespace.stave
+
+project "Box" {
+  units:      mm
+//^^^^^ variable.other.property.stave
+//            ^^ constant.language.enum.unit.stave
+  resolution: 0.5mm
+//            ^^^ constant.numeric.stave
+//               ^^ keyword.other.unit.stave
+}
+
+private locked param reveal = 1.5mm within 1mm..3mm
+// <------- storage.modifier.private.stave
+//      ^^^^^^ storage.modifier.locked.stave
+//             ^^^^^ storage.type.param.stave
+//                   ^^^^^^ entity.name.param.stave
+//                          ^ keyword.operator.assignment.stave
+//                            ^^^ constant.numeric.stave
+//                               ^^ keyword.other.unit.stave
+//                                  ^^^^^^ keyword.other.within.stave
+//                                         ^ constant.numeric.stave
+//                                          ^^ keyword.other.unit.stave
+//                                            ^^ keyword.operator.range.stave
+solved param thick : Length = 3/4in
+// <------ storage.modifier.solved.stave
+//                 ^ punctuation.separator.colon.stave
+//                   ^^^^^^ entity.name.type.stave
+//                            ^^^ constant.numeric.stave
+//                               ^^ keyword.other.unit.stave
+let drop = 1-1/2in + 110deg - 3/4 + 18mmx
+//  ^^^^ entity.name.let.stave
+//         ^^^^^ constant.numeric.stave
+//              ^^ keyword.other.unit.stave
+//                   ^^^ constant.numeric.stave
+//                      ^^^ keyword.other.unit.stave
+//                            ^ constant.numeric.integer.stave
+//                             ^ keyword.operator.arithmetic.stave
+//                              ^ constant.numeric.integer.stave
+//                                  ^^ constant.numeric.stave
+//                                    ^^^ invalid.illegal.unit.stave
+
+stock walnut_12 { species: walnut, form: solid, thickness: 12mm }
+// <----- storage.type.stock.stave
+//    ^^^^^^^^^ entity.name.stock.stave
+//                ^^^^^^^ variable.other.property.stave
+//                         ^^^^^^ constant.language.enum.stave
+//                                       ^^^^^ constant.language.enum.stave
+
+part end_r : walnut_12 {
+// <---- storage.type.part.stave
+//   ^^^^^ entity.name.part.stave
+  length: fit
+//        ^^^ keyword.other.fit.stave
+  place {
+//^^^^^ keyword.other.place.stave
+    against(end_l.right, gap: box_length - 2 * walnut_12.thickness)
+//  ^^^^^^^ entity.name.function.call.stave
+//          ^^^^^ variable.other.stave
+//               ^ punctuation.accessor.stave
+//                ^^^^^ variable.other.member.stave
+//                       ^^^ variable.other.property.stave
+  }
+}
+
+joint corners : rabbet([front, back], into: [end_l, end_r], glue: false)
+// <----- storage.type.joint.stave
+//    ^^^^^^^ entity.name.joint.stave
+//              ^^^^^^ entity.name.function.call.stave
+//                      ^^^^^ constant.language.enum.stave
+//                                                                ^^^^^ constant.language.boolean.false.stave
+
+kind euro_hinge : hinge {
+// <---- storage.type.kind.stave
+//   ^^^^^^^^^^ entity.name.type.kind.stave
+//                ^^^^^ entity.other.inherited-class.stave
+  roles {
+//^^^^^ keyword.other.roles.stave
+    on:    Part
+//  ^^ variable.other.property.stave
+//         ^^^^ entity.name.type.stave
+  }
+  member arm {
+//^^^^^^ keyword.other.member.stave
+    shape knuckle: box(along: 16mm, across: 8mm..15mm)
+//  ^^^^^ keyword.other.shape.stave
+//        ^^^^^^^ variable.other.property.stave
+    shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm)
+//  ^^^^^ variable.other.property.stave
+  }
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+//^^^ keyword.other.cut.stave
+//                                                                     ^^^^^^^ constant.language.enum.stave
+}
+
+component Lid {
+// <--------- storage.type.component.stave
+//        ^^^ entity.name.type.component.stave
+}
+
+recipe saw_kerf : cut {
+// <------ storage.type.recipe.stave
+//     ^^^^^^^^ entity.name.function.recipe.stave
+}
+
+require useful : box_height >= 60mm "at least {box_height}mm \{deep\} inside\n"
+// <------- storage.type.require.stave
+//      ^^^^^^ entity.name.require.stave
+//                          ^^ keyword.operator.comparison.stave
+//                                   ^^^^^^^^^ string.quoted.double.stave
+//                                            ^ punctuation.section.interpolation.begin.stave
+//                                             ^^^^^^^^^^ variable.other.interpolated.stave
+//                                                       ^ punctuation.section.interpolation.end.stave
+//                                                        ^^ string.quoted.double.stave
+//                                                           ^^ constant.character.escape.stave
+//                                                                          ^^ constant.character.escape.stave
+//                                                                            ^ punctuation.definition.string.end.stave
+
+scene lid_open "Lid open" {
+// <----- storage.type.scene.stave
+//    ^^^^^^^^ entity.name.scene.stave
+  pose lid = open
+//^^^^ keyword.other.pose.stave
+//           ^^^^ constant.language.enum.stave
+}
+
+patch {
+// <----- storage.type.patch.stave
+  set stock.thickness = 19mm
+//^^^ keyword.other.set.stave
+//          ^^^^^^^^^ variable.other.member.stave
+}

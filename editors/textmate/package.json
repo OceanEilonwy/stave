@@ -1,0 +1,17 @@
+{
+  "name": "stave-textmate-grammar-tests",
+  "private": true,
+  "description": "Tests for the Stave TextMate grammar: scope assertions and a check over every .stave file in examples/ and std/.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:assertions && npm run test:corpus",
+    "test:assertions": "vscode-tmgrammar-test --grammar stave.tmLanguage.json \"test/*.test.stave\"",
+    "test:corpus": "node test/check.mjs"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2",
+    "vscode-tmgrammar-test": "0.1.3"
+  }
+}

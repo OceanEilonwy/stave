@@ -1,0 +1,22 @@
+# Stave for Helix. Append this to ~/.config/helix/languages.toml (or a
+# project's .helix/languages.toml) and put stave-lsp on PATH.
+#
+# Helix colours from tree-sitter grammars, and Stave has none yet, so files
+# are shown uncoloured; diagnostics, completion, signature help, hover,
+# go to definition, references, rename, symbols, formatting and code actions
+# all come from stave-lsp.
+
+[language-server.stave-lsp]
+command = "stave-lsp"
+args = []
+
+[[language]]
+name = "stave"
+scope = "source.stave"
+file-types = ["stave"]
+roots = []
+comment-tokens = ["//", "///"]
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["stave-lsp"]
+auto-format = false

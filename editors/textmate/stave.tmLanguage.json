@@ -1,0 +1,294 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Stave",
+  "scopeName": "source.stave",
+  "fileTypes": ["stave"],
+  "uuid": "6f3c2a8e-5b1d-4c7e-9a0f-2d8b4e6c1a37",
+  "comment": "Colours .stave files before the language server starts and where there is none (GitHub, editors without semantic tokens). Derived from the lexer (crates/stave-lang/src/lexer.rs), the keyword list (stave_lang::KEYWORDS), the contextual words (stave_lang::CONTEXTUAL_WORDS), the units (stave_lang::ast::Unit) and the closed word lists (stave_schema::words). editors/textmate/test/check.mjs keeps these lists in step with the Rust sources. The semantic tokens of stave-lsp refine everything here: TextMate cannot know whether a name is a part, a joint or a param.",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#quantities" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#import-alias" },
+    { "include": "#output-units" },
+    { "include": "#contextual-entries" },
+    { "include": "#keys" },
+    { "include": "#members" },
+    { "include": "#keywords" },
+    { "include": "#calls" },
+    { "include": "#types" },
+    { "include": "#enum-words" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#names" },
+    { "include": "#invalid-characters" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "comment": "`///` (and any longer run of slashes) is a doc comment, as in the lexer.",
+          "name": "comment.line.documentation.stave",
+          "match": "(///).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.documentation.stave" }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.stave",
+          "match": "(//).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.stave" }
+          }
+        },
+        {
+          "comment": "Block comments do not nest: the first `*/` ends one.",
+          "name": "comment.block.stave",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.begin.stave" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.comment.end.stave" }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "comment": "A string ends at its closing quote or, unclosed, at the end of the line.",
+      "name": "string.quoted.double.stave",
+      "begin": "\"",
+      "end": "\"|(?=$)",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.stave" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.stave" }
+      },
+      "patterns": [
+        { "include": "#string-escapes" },
+        { "include": "#interpolations" }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.stave",
+          "match": "\\\\(?:[\"\\\\nt{]|u\\{[0-9A-Fa-f]+\\})"
+        },
+        {
+          "name": "invalid.illegal.escape.stave",
+          "match": "\\\\.?"
+        }
+      ]
+    },
+    "interpolations": {
+      "patterns": [
+        {
+          "comment": "`{name}` or `{name.member}`, with no spaces, as the lexer reads it.",
+          "name": "meta.interpolation.stave",
+          "match": "(\\{)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)(\\})",
+          "captures": {
+            "1": { "name": "punctuation.section.interpolation.begin.stave" },
+            "2": {
+              "name": "variable.other.interpolated.stave",
+              "patterns": [
+                { "name": "punctuation.accessor.stave", "match": "\\." }
+              ]
+            },
+            "3": { "name": "punctuation.section.interpolation.end.stave" }
+          }
+        },
+        {
+          "comment": "A brace that opens no interpolation: write `\\{` for a literal one.",
+          "name": "invalid.illegal.brace.stave",
+          "match": "\\{"
+        }
+      ]
+    },
+    "quantities": {
+      "comment": "A number with a unit right after it, longest match first: `1-1/2in`, `3/4in`, `18.5mm`, `18mm`. The number and the unit are scoped apart, as the language server's `number` and `unit` tokens are. A suffix that is not a unit is the lexer's error[unknown-unit].",
+      "patterns": [
+        {
+          "name": "meta.quantity.stave",
+          "match": "(?<![A-Za-z0-9_])((?:[0-9][0-9_]*-[0-9][0-9_]*/[0-9][0-9_]*)|(?:[0-9][0-9_]*/[0-9][0-9_]*)|(?:[0-9][0-9_]*(?:\\.[0-9]+)?))(?:(mm|cm|m|in|ft|deg)|([A-Za-z_][A-Za-z0-9_]*))(?![A-Za-z0-9_])",
+          "captures": {
+            "1": { "name": "constant.numeric.stave" },
+            "2": { "name": "keyword.other.unit.stave" },
+            "3": { "name": "invalid.illegal.unit.stave" }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "comment": "A number without a unit: an `INT_NUMBER` or a `DECIMAL_NUMBER`. A fraction without a unit is two numbers and a `/`.",
+      "patterns": [
+        {
+          "name": "constant.numeric.decimal.stave",
+          "match": "(?<![A-Za-z0-9_])[0-9][0-9_]*\\.[0-9]+"
+        },
+        {
+          "name": "constant.numeric.integer.stave",
+          "match": "(?<![A-Za-z0-9_])[0-9][0-9_]*"
+        }
+      ]
+    },
+    "declarations": {
+      "comment": "An item keyword and the name it declares. `kind name : base` also scopes the base kind.",
+      "patterns": [
+        {
+          "match": "(?<![A-Za-z0-9_])(kind)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*))?",
+          "captures": {
+            "1": { "name": "storage.type.kind.stave" },
+            "2": { "name": "entity.name.type.kind.stave" },
+            "3": { "name": "punctuation.separator.declaration.stave" },
+            "4": { "name": "entity.other.inherited-class.stave" }
+          }
+        },
+        {
+          "match": "(?<![A-Za-z0-9_])(component)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.component.stave" },
+            "2": { "name": "entity.name.type.component.stave" }
+          }
+        },
+        {
+          "match": "(?<![A-Za-z0-9_])(recipe)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.recipe.stave" },
+            "2": { "name": "entity.name.function.recipe.stave" }
+          }
+        },
+        {
+          "match": "(?<![A-Za-z0-9_])(param|let|region|stock|part|joint|hardware|assembly|profile|scene|require)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.$1.stave" },
+            "2": { "name": "entity.name.$1.stave" }
+          }
+        }
+      ]
+    },
+    "import-alias": {
+      "comment": "`import \"./hardware\" as hw`: `as` is contextual, only after an import's string.",
+      "match": "(?<=\")\\s*(as)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.as.stave" },
+        "2": { "name": "entity.name.namespace.stave" }
+      }
+    },
+    "output-units": {
+      "comment": "`units: mm`: a project's output unit is a word of a closed list, not a quantity.",
+      "match": "(?<![A-Za-z0-9_])(units)\\s*(:)\\s*(mm|cm|m|in|ft)(?![A-Za-z0-9_])",
+      "captures": {
+        "1": { "name": "variable.other.property.stave" },
+        "2": { "name": "punctuation.separator.key-value.stave" },
+        "3": { "name": "constant.language.enum.unit.stave" }
+      }
+    },
+    "contextual-entries": {
+      "comment": "Contextual words at the start of an entry, when not followed by `:` (grammar, \"Contextual words\"). `shape name:` is a named shape, `shape:` a field.",
+      "patterns": [
+        {
+          "match": "^\\s*(shape)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=:)",
+          "captures": {
+            "1": { "name": "keyword.other.shape.stave" },
+            "2": { "name": "variable.other.property.stave" }
+          }
+        },
+        {
+          "match": "^\\s*(roles|cut|makes|member|mechanism|adjust|mount|pivot|slot|rail|couple|mark|replace|unset|rename)(?![A-Za-z0-9_])(?!\\s*:)",
+          "captures": {
+            "1": { "name": "keyword.other.$1.stave" }
+          }
+        }
+      ]
+    },
+    "keys": {
+      "comment": "A field, a named argument or a role: a name directly before a `:`. A keyword is allowed here (`stock: oak_19`).",
+      "match": "(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "captures": {
+        "1": { "name": "variable.other.property.stave" },
+        "2": { "name": "punctuation.separator.key-value.stave" }
+      }
+    },
+    "members": {
+      "comment": "A member after `.`: `side_l.right`, `into.stock`. A keyword is allowed here.",
+      "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.accessor.stave" },
+        "2": { "name": "variable.other.member.stave" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "storage.type.$1.stave",
+          "match": "(?<![A-Za-z0-9_])(stave|project|library|import|kind|recipe|param|let|region|stock|part|joint|hardware|assembly|profile|component|scene|require|patch)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "storage.modifier.$1.stave",
+          "match": "(?<![A-Za-z0-9_])(private|locked|solved)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "constant.language.boolean.$1.stave",
+          "match": "(?<![A-Za-z0-9_])(true|false)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "keyword.other.$1.stave",
+          "match": "(?<![A-Za-z0-9_])(add|set|remove|place|pose|at|within|fit)(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "calls": {
+      "comment": "A call head: a fixed-position term (`flush`, `against`), a built-in function, a kind or a component. The language server tells them apart.",
+      "match": "(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.stave" }
+      }
+    },
+    "types": {
+      "comment": "Components, kinds named with a capital, and the language's types (`Length`, `Part`, `HingeKind`).",
+      "name": "entity.name.type.stave",
+      "match": "(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_]*"
+    },
+    "enum-words": {
+      "comment": "The closed word lists (stave_schema::words::WordSet) except the output units, which only `units:` takes. Faces and directions may also name parts and labels; the language server tells them apart.",
+      "name": "constant.language.enum.stave",
+      "match": "(?<![A-Za-z0-9_])(up|across|deep|down|left|right|front|back|top|bottom|length|width|thickness|white_oak|red_oak|hard_maple|soft_maple|walnut|cherry|ash|beech|birch|pine|spruce|fir|cedar|hinoki|poplar|mahogany|teak|solid|plywood|mdf|dowel|diameter|radius|open|closed|through|evenly|ends)(?![A-Za-z0-9_])"
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.range.stave", "match": "\\.\\." },
+        { "name": "keyword.operator.comparison.stave", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.stave", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.assignment.stave", "match": "=" },
+        { "name": "keyword.operator.arithmetic.stave", "match": "[-+*/]" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.block.begin.stave", "match": "\\{" },
+        { "name": "punctuation.section.block.end.stave", "match": "\\}" },
+        { "name": "punctuation.section.parens.begin.stave", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.stave", "match": "\\)" },
+        { "name": "punctuation.section.brackets.begin.stave", "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.stave", "match": "\\]" },
+        { "name": "punctuation.separator.comma.stave", "match": "," },
+        { "name": "punctuation.separator.colon.stave", "match": ":" },
+        { "name": "punctuation.accessor.stave", "match": "\\." }
+      ]
+    },
+    "names": {
+      "name": "variable.other.stave",
+      "match": "(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "invalid-characters": {
+      "comment": "A character that starts no token: the lexer's ERROR_TOKEN.",
+      "name": "invalid.illegal.character.stave",
+      "match": "[^\\s]"
+    }
+  }
+}
