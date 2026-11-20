@@ -8,7 +8,8 @@
 //! for its host: `files` maps each file's path to its text, `suggestion`
 //! (optional) maps the files an agent's suggestion changes to their new
 //! text, and `folder` is the project folder (`/p`). Without WebGPU the
-//! page says "This preview needs WebGPU." and does nothing else.
+//! page says "This preview needs WebGPU." and does nothing else, and where
+//! its host forbids WebAssembly it says so ([`WASM_BLOCKED`]).
 
 /// The page, with the places the glue and the WASM go marked.
 pub const TEMPLATE: &str = include_str!("viewer.html");
@@ -28,6 +29,13 @@ const CURRENT_SCRIPT_WITH_SOURCE: &str =
 
 /// The message a browser without WebGPU shows.
 pub const NEEDS_WEBGPU: &str = "This preview needs WebGPU.";
+
+/// The message a page shows when its host won't let it compile
+/// WebAssembly: an MCP App page under the MCP Apps default Content
+/// Security Policy, which has no `'wasm-unsafe-eval'` and no field to
+/// ask for it.
+pub const WASM_BLOCKED: &str = "This app can't run the 3D preview here. Open the link from the \
+                                preview's answer in a web browser.";
 
 /// The page with `glue` (the JS `wasm-bindgen --target no-modules`
 /// writes) and `wasm` (the module) inlined.

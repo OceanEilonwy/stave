@@ -219,6 +219,33 @@ pub enum McpError {
         "'{0}' changed while the clash was being settled, so nothing was written. Call list_conflicts again."
     )]
     ChangedMeanwhile(String),
+    /// `preview` or `show_in_stave` named a suggestion that isn't there.
+    #[error("There is no suggestion '{0}'. Call list_suggestions to see them.")]
+    NoSuchSuggestion(String),
+    /// The design places nothing, so there is nothing to draw.
+    #[error("The design has nothing to draw yet.")]
+    NothingToDraw,
+    /// `render_view` was given a camera that can't be.
+    #[error("The camera can't be set that way: {0}.")]
+    Camera(String),
+    /// There is no graphics adapter to draw a picture with.
+    #[error(
+        "Stave can't draw a picture on this computer: it has no graphics adapter Stave can use \
+         ({0}). Call preview for the 3D view in a web browser instead."
+    )]
+    NoGraphics(String),
+    /// The picture couldn't be drawn.
+    #[error("Stave couldn't draw the picture: {0}.")]
+    Render(stave_render::RenderError),
+    /// The localhost viewer couldn't be started.
+    #[error("Stave couldn't start the preview: {0}.")]
+    Viewer(#[from] crate::viewer_server::ViewerError),
+    /// The Stave window isn't running, so it can't show anything.
+    #[error("Stave isn't running. Open it and ask again.")]
+    StaveNotRunning,
+    /// The Stave window couldn't be asked.
+    #[error("Stave couldn't ask its window to show the project: {0}.")]
+    ShowInStave(#[from] stave_link::LinkError),
 }
 
 /// `text` as a sentence: a capital first letter and a full stop.

@@ -88,6 +88,7 @@
 (function () {
   "use strict";
   var NEEDS_WEBGPU = "This preview needs WebGPU.";
+  var WASM_BLOCKED = "This app can't run the 3D preview here. Open the link from the preview's answer in a web browser.";
   var WASM = "@STAVE_WASM_BASE64@";
   var canvas = document.getElementById("view");
   var message = document.getElementById("message");
@@ -95,6 +96,30 @@
   function say(text) {
     message.textContent = text;
     message.hidden = false;
+  }
+
+  // Whether this page may compile WebAssembly. A host whose Content
+  // Security Policy leaves out 'wasm-unsafe-eval' (the MCP Apps default)
+  // refuses even the smallest module.
+  function wasmAllowed() {
+    if (typeof WebAssembly !== "object") return false;
+    try {
+      new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // An error's words, or WASM_BLOCKED when it is the host refusing
+  // WebAssembly.
+  function plain(error) {
+    var text = String((error && error.message) || error);
+    if ((typeof WebAssembly === "object" && error instanceof WebAssembly.CompileError) ||
+        /Content Security Policy/i.test(text)) {
+      return WASM_BLOCKED;
+    }
+    return text;
   }
 
   function wasmBytes() {
@@ -221,6 +246,10 @@
   }
 
   async function boot() {
+    if (!wasmAllowed()) {
+      say(WASM_BLOCKED);
+      return null;
+    }
     if (!navigator.gpu) {
       say(NEEDS_WEBGPU);
       return null;
@@ -241,7 +270,7 @@
   }
 
   var ready = boot().catch(function (error) {
-    say(String((error && error.message) || error));
+    say(plain(error));
     return null;
   });
 
