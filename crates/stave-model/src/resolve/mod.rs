@@ -15,6 +15,7 @@
 //!    `let` whose type is needed before its turn is lowered early and the
 //!    result kept, so nothing is reported twice.
 
+mod edges;
 mod expr;
 mod hardware;
 mod items;

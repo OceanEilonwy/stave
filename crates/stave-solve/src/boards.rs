@@ -930,7 +930,7 @@ impl Solver<'_> {
                         other: owner(other),
                         footprint,
                     },
-                    member @ CutPlace::Member { .. } => member,
+                    member @ (CutPlace::Member { .. } | CutPlace::Edge { .. }) => member,
                 };
                 let cut = Cut {
                     source,
@@ -965,6 +965,9 @@ impl Solver<'_> {
             CutOperation::DovetailSocket => "a dovetail socket",
             CutOperation::DovetailTail => "a dovetail tail",
             CutOperation::Outline => "an outline",
+            CutOperation::Diagonal => "a diagonal",
+            CutOperation::Chamfer => "a chamfer",
+            CutOperation::Roundover => "a roundover",
         };
         self.report(
             Diagnostic::warning(
@@ -992,6 +995,14 @@ pub(crate) fn made_on_boards(kind: &CutKind) -> bool {
         | CutKind::DovetailSocket { .. }
         | CutKind::DovetailTail { .. }
         | CutKind::Outline { .. } => true,
-        CutKind::Spigot { .. } | CutKind::Round { .. } | CutKind::Drill { .. } => false,
+        // A diagonal is worked out from the other part's place, which a
+        // board between two boards doesn't have; an edge profile is the
+        // part's own, never a board joint's.
+        CutKind::Spigot { .. }
+        | CutKind::Round { .. }
+        | CutKind::Drill { .. }
+        | CutKind::Diagonal
+        | CutKind::Chamfer { .. }
+        | CutKind::Roundover { .. } => false,
     }
 }

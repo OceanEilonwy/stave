@@ -960,7 +960,7 @@ fn an_unknown_operation_lists_the_operations() {
     only_error(&opened, "unknown-name", "unknown name 'chop'");
     assert_eq!(
         common::help(&opened),
-        "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline"
+        "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, diagonal"
     );
 }
 

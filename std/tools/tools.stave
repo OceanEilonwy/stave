@@ -29,14 +29,17 @@ kind screwdriver    : tool { title: "screwdriver" }
 kind clamps         : tool { title: "clamps" }
 
 // ---- power tools and what goes in them ----
-kind drill        : tool { title: "drill", powered: true }
-kind depth_stop   : tool { title: "drill depth stop" }
-kind router       : tool { title: "router", powered: true }
-kind straight_bit : tool { title: "straight router bit" }
-kind dovetail_bit : tool { title: "dovetail router bit" }
-kind table_saw    : tool { title: "table saw", powered: true }
-kind dado_stack   : tool { title: "dado stack" }
-kind bandsaw      : tool { title: "bandsaw", powered: true }
+kind drill         : tool { title: "drill", powered: true }
+kind depth_stop    : tool { title: "drill depth stop" }
+kind router        : tool { title: "router", powered: true }
+kind straight_bit  : tool { title: "straight router bit" }
+kind dovetail_bit  : tool { title: "dovetail router bit" }
+kind table_saw     : tool { title: "table saw", powered: true }
+kind dado_stack    : tool { title: "dado stack" }
+kind bandsaw       : tool { title: "bandsaw", powered: true }
+kind mitre_saw     : tool { title: "mitre saw", powered: true }
+kind chamfer_bit   : tool { title: "chamfer router bit" }
+kind roundover_bit : tool { title: "roundover router bit" }
 
 // ---- turning ----
 kind lathe          : tool { title: "lathe", powered: true }

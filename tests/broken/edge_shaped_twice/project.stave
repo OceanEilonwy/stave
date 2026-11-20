@@ -1,0 +1,21 @@
+// expect: error[duplicate-name] the edge where front meets top is shaped twice
+stave 1
+
+// A tabletop rounded over all round its top, with a chamfer on its front
+// top edge as well. around(top) already takes in the front top edge, and
+// an edge can only have one profile.
+
+project "Edge shaped twice" {
+  units: mm
+}
+
+stock oak_25 { species: white_oak, form: solid, thickness: 25mm, max_width: 300mm, max_length: 2400mm }
+
+part top : oak_25 {
+  length: 900mm
+  width:  250mm
+  edges:  [roundover(6mm, on: around(top)), chamfer(3mm, on: edge(front, top))]
+  place {
+    ground
+  }
+}

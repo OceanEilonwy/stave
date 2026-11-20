@@ -701,6 +701,10 @@ impl<'a> Checker<'a> {
                     self.part_place(part),
                     format!("{}'s boards", self.part_name(part)),
                 ),
+                SourceKey::Edges(part) => (
+                    self.part_place(part),
+                    format!("{}'s edges", self.part_name(part)),
+                ),
             };
             let note = format!(
                 "{owner}: {} is drawn without this cut until it is fixed",
@@ -746,6 +750,10 @@ impl<'a> Checker<'a> {
                 SourceKey::Boards(part) => (
                     self.part_place(part),
                     format!("{}'s boards", self.part_name(part)),
+                ),
+                SourceKey::Edges(part) => (
+                    self.part_place(part),
+                    format!("{}'s edges", self.part_name(part)),
                 ),
             };
             let note = if names.len() == 1 {
@@ -1359,6 +1367,7 @@ enum SourceKey {
     Joint(stave_model::solved::JointId),
     Hardware(HardwareId),
     Boards(PartId),
+    Edges(PartId),
 }
 
 impl SourceKey {
@@ -1367,6 +1376,7 @@ impl SourceKey {
             CutSource::Joint { joint, .. } => SourceKey::Joint(joint),
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
             CutSource::Boards { part, .. } => SourceKey::Boards(part),
+            CutSource::Edges { part } => SourceKey::Edges(part),
         }
     }
 }

@@ -220,11 +220,15 @@ pub enum Measurement {
     Angle,
     /// `slope`: the slope.
     Slope,
+    /// `size`: how far a chamfer runs back from its edge.
+    Size,
+    /// `radius`: the radius of a roundover.
+    Radius,
 }
 
 impl Measurement {
     /// Every measurement, in the order the grammar first lists them.
-    pub const ALL: [Measurement; 10] = [
+    pub const ALL: [Measurement; 12] = [
         Measurement::Length,
         Measurement::Largest,
         Measurement::Depth,
@@ -235,6 +239,8 @@ impl Measurement {
         Measurement::Neck,
         Measurement::Angle,
         Measurement::Slope,
+        Measurement::Size,
+        Measurement::Radius,
     ];
 
     /// The word as written.
@@ -250,6 +256,8 @@ impl Measurement {
             Measurement::Neck => "neck",
             Measurement::Angle => "angle",
             Measurement::Slope => "slope",
+            Measurement::Size => "size",
+            Measurement::Radius => "radius",
         }
     }
 
@@ -349,6 +357,13 @@ pub const MARK_ARGUMENTS: &[ArgumentSpec] = &[
         ArgumentDefault::Required,
     ),
 ];
+
+/// `edge(a, b)` in an edge profile's `on:`: the edge where two faces of
+/// the part meet (grammar, "Edge profiles").
+pub const EDGE: &str = "edge";
+
+/// `around(face)` in an edge profile's `on:`: the four edges of a face.
+pub const AROUND: &str = "around";
 
 /// The catalog entry of an operation.
 pub fn operation(operation: Operation) -> &'static OperationSpec {
@@ -496,6 +511,32 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         measurements: &[M::Depth],
         removes: FaceRemoval::EdgesWhenThrough,
     };
+    const DIAGONAL: OperationSpec = OperationSpec {
+        operation: Operation::Cut(CutOperation::Diagonal),
+        arguments: &[],
+        selectors: &[Crossing],
+        features: &[F::Outline, F::Waste],
+        measurements: &[],
+        removes: FaceRemoval::TheEnd,
+    };
+    // The edge profiles are written in a part's `edges:`, under no
+    // selector.
+    const CHAMFER: OperationSpec = OperationSpec {
+        operation: Operation::Cut(CutOperation::Chamfer),
+        arguments: &[argument("size", LENGTH, D::Required)],
+        selectors: &[],
+        features: &[F::Waste],
+        measurements: &[M::Size],
+        removes: FaceRemoval::Never,
+    };
+    const ROUNDOVER: OperationSpec = OperationSpec {
+        operation: Operation::Cut(CutOperation::Roundover),
+        arguments: &[argument("radius", LENGTH, D::Required)],
+        selectors: &[],
+        features: &[F::Waste],
+        measurements: &[M::Radius],
+        removes: FaceRemoval::Never,
+    };
     match cut {
         CutOperation::Notch => &NOTCH,
         CutOperation::Slot => &SLOT,
@@ -507,6 +548,9 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         CutOperation::DovetailSocket => &DOVETAIL_SOCKET,
         CutOperation::DovetailTail => &DOVETAIL_TAIL,
         CutOperation::Outline => &OUTLINE,
+        CutOperation::Diagonal => &DIAGONAL,
+        CutOperation::Chamfer => &CHAMFER,
+        CutOperation::Roundover => &ROUNDOVER,
     }
 }
 
@@ -545,6 +589,13 @@ mod tests {
                 "{}",
                 cut.word()
             );
+            // An edge profile is written under no selector, in a part's
+            // `edges:`.
+            if cut.is_edge_profile() {
+                assert!(spec.selectors.is_empty(), "{}", cut.word());
+                assert_eq!(row[1], "`edges:`", "{}", cut.word());
+                continue;
+            }
             let on = words(&row[1]);
             assert_eq!(
                 on,
@@ -587,7 +638,7 @@ mod tests {
     #[test]
     fn features_and_measurements_match_the_grammar() {
         let rows = table_rows("| Operation | Features | Measurements |\n");
-        assert_eq!(rows.len(), 11);
+        assert_eq!(rows.len(), 14);
         for row in rows {
             let operation = Operation::from_word(row[0].trim_matches('`')).unwrap();
             let spec = super::operation(operation);

@@ -1,0 +1,20 @@
+// expect: error[type-mismatch] top and bottom are opposite faces, so they don't meet at an edge
+stave 1
+
+// A shelf whose chamfer names the top and the bottom. An edge is where
+// two faces meet, so it is named by two faces that do: edge(top, front).
+
+project "Chamfer between opposite faces" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  200mm
+  edges:  chamfer(3mm, on: edge(top, bottom))
+  place {
+    ground
+  }
+}

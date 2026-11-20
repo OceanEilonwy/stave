@@ -111,7 +111,10 @@ fn cut_words(cut: &Cut) -> String {
             | CutOperation::Round
             | CutOperation::DovetailSocket
             | CutOperation::DovetailTail
-            | CutOperation::Outline => "cut".to_owned(),
+            | CutOperation::Outline
+            | CutOperation::Diagonal => "cut".to_owned(),
+            CutOperation::Chamfer => "chamfer".to_owned(),
+            CutOperation::Roundover => "roundover".to_owned(),
         },
     }
 }
@@ -133,7 +136,10 @@ fn end_reach(kind: &CutKind, length: Length) -> Length {
         | CutKind::Outline { depth, .. } => depth_or(*depth, length),
         CutKind::Tenon { length: reach, .. } | CutKind::Spigot { length: reach, .. } => *reach,
         CutKind::DovetailSocket { depth, .. } | CutKind::DovetailTail { depth, .. } => *depth,
-        CutKind::Round { .. } => length,
+        CutKind::Round { .. }
+        | CutKind::Diagonal
+        | CutKind::Chamfer { .. }
+        | CutKind::Roundover { .. } => length,
     }
 }
 
@@ -173,8 +179,12 @@ pub(crate) fn along_extent(cut: &Cut, length: Length) -> (Length, Length) {
             | CutKind::Round { .. }
             | CutKind::Drill { .. }
             | CutKind::DovetailSocket { .. }
-            | CutKind::DovetailTail { .. } => whole,
+            | CutKind::DovetailTail { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => whole,
         },
+        CutPlace::Edge { .. } => whole,
     }
 }
 
@@ -200,7 +210,7 @@ fn shifted(mut cut: Cut, offset: Length, piece: Length, whole: Length) -> Solved
             shape.min.length = shift(shape.min.length)?;
             shape.max.length = shift(shape.max.length)?;
         }
-        CutPlace::End { .. } => {}
+        CutPlace::End { .. } | CutPlace::Edge { .. } => {}
         CutPlace::Side { along_from, .. } => {
             // Marks measured from the start move with the piece's start;
             // marks measured from the end, with its end.
@@ -1120,6 +1130,29 @@ impl Solver<'_> {
             })
             .collect();
         for cut in foreign {
+            // An edge profile runs the whole edge: along the length, it is
+            // made on every piece; across an end, on the piece at that end
+            // (grammar, "Edge profiles").
+            if let CutPlace::Edge { other } = cut.place {
+                let end = [cut.face, other]
+                    .into_iter()
+                    .find(|face| face.axis == PartAxis::Length)
+                    .map(|face| face.end);
+                for (piece, (low, high)) in pieces.iter().zip(&ranges) {
+                    let takes = match end {
+                        None => true,
+                        Some(End::Start) => *low == Length::ZERO,
+                        Some(End::End) => *high == whole,
+                    };
+                    if takes {
+                        piece_cuts
+                            .entry(piece.stand_in)
+                            .or_default()
+                            .push(cut.clone());
+                    }
+                }
+                continue;
+            }
             let (low, high) = along_extent(&cut, whole);
             if let Some((splice, zone)) = zones
                 .iter()
@@ -1215,6 +1248,7 @@ impl Solver<'_> {
                 )
             }
             CutSource::Boards { part, .. } => (format!("{}'s boards", self.part_name(part)), None),
+            CutSource::Edges { part } => (format!("{}'s edges", self.part_name(part)), None),
         };
         let what = cut_words(cut);
         let mut diagnostic = Diagnostic::error(
@@ -1500,7 +1534,7 @@ fn remap_cut(mut cut: Cut, real: &impl Fn(PartId) -> PartId) -> Cut {
             other: real(other),
             footprint,
         },
-        member @ CutPlace::Member { .. } => member,
+        member @ (CutPlace::Member { .. } | CutPlace::Edge { .. }) => member,
     };
     cut
 }
@@ -1714,7 +1748,9 @@ fn rebind_split(design: &mut DesignDraft, split: Split) {
         for cut in &mut part.cuts {
             let piece = match cut.source {
                 CutSource::Joint { joint, pair } => chosen.get(&(joint, pair)).copied(),
-                CutSource::Hardware { .. } | CutSource::Boards { .. } => None,
+                CutSource::Hardware { .. } | CutSource::Boards { .. } | CutSource::Edges { .. } => {
+                    None
+                }
             };
             let Some(piece) = piece else {
                 continue;
@@ -1726,7 +1762,8 @@ fn rebind_split(design: &mut DesignDraft, split: Split) {
                 CutPlace::End { .. }
                 | CutPlace::Side { .. }
                 | CutPlace::Crossing { .. }
-                | CutPlace::Member { .. } => {}
+                | CutPlace::Member { .. }
+                | CutPlace::Edge { .. } => {}
             }
         }
     }

@@ -1,0 +1,19 @@
+// expect: error[type-mismatch] rod is round, so it has no edges to round over
+stave 1
+
+// A length of dowel with a roundover along its top. Round stock has no
+// edges where two flat faces meet, so there is nothing to round over.
+
+project "Roundover on a dowel" {
+  units: mm
+}
+
+stock birch_rod { species: birch, form: dowel, diameter: 25mm, max_length: 1200mm }
+
+part rod : birch_rod {
+  length: 600mm
+  edges:  roundover(3mm, on: edge(top, front))
+  place {
+    ground
+  }
+}

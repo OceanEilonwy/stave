@@ -40,6 +40,9 @@ pub enum Special {
     Uses,
     /// `needs: [flat_face, before(drill)]`.
     Needs,
+    /// `edges: [chamfer(3mm, on: edge(top, front)), roundover(6mm, on:
+    /// around(top))]`: a part's edge profiles.
+    Edges,
 }
 
 /// Whether a field must be written.
@@ -145,6 +148,7 @@ pub const PART: &[FieldSpec] = &[
     field("boards", Type(TypeName::Boards), Optional, false),
     field("lengths", Type(TypeName::Splices), Optional, false),
     field("loose", Type(TypeName::Bool), Optional, false),
+    field("edges", ValueType::Special(Special::Edges), Optional, false),
 ];
 
 /// Members readable on every part besides its readable fields.

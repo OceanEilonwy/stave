@@ -158,6 +158,9 @@ fn cut_kind(kind: &CutKind) -> String {
             depth(*d),
             mm(*from_depth)
         ),
+        CutKind::Diagonal => "diagonal".into(),
+        CutKind::Chamfer { size } => format!("chamfer size {}", mm(*size)),
+        CutKind::Roundover { radius } => format!("roundover radius {}", mm(*radius)),
     }
 }
 
@@ -492,6 +495,7 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
                 ),
+                CutPlace::Edge { other } => format!("edge with {}", face(*other)),
             };
             let _ = writeln!(
                 out,

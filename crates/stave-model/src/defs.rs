@@ -849,11 +849,39 @@ pub struct PartBodyDef {
     /// `loose:`: `true` for a part meant to lift out, which nothing needs
     /// to hold (grammar, "Held").
     pub loose: Option<RExpr>,
+    /// `edges:`: its chamfers and roundovers, in the order written
+    /// (grammar, "Edge profiles").
+    pub edges: Vec<EdgeProfileDef>,
     /// The `place { }` terms in order.
     pub place: Vec<PlaceTerm>,
     /// The `place { }` block, when written.
     pub place_span: Option<Span>,
     /// The body's braces.
+    pub span: Span,
+}
+
+/// One profile of a part's `edges:`: `chamfer(3mm, on: ...)` or
+/// `roundover(6mm, on: ...)` (grammar, "Edge profiles").
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeProfileDef {
+    /// [`CutOperation::Chamfer`] or [`CutOperation::Roundover`].
+    pub operation: CutOperation,
+    /// The chamfer's size or the roundover's radius.
+    pub size: RExpr,
+    /// The edges it shapes, each once, in the order written (`around`
+    /// written out).
+    pub edges: Vec<EdgeDef>,
+    /// The whole call.
+    pub span: Span,
+}
+
+/// An edge of a part, named by the two faces that meet there, as they
+/// face once the part is placed. The two faces are never on one axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeDef {
+    /// The two faces, as written (the face `around` names first).
+    pub faces: [Face; 2],
+    /// The `edge(...)` or `around(...)` it was written with.
     pub span: Span,
 }
 

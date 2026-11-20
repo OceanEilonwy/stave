@@ -295,7 +295,10 @@ fn shelf_on_pins_rests_on_them_with_a_row_of_spare_holes() {
             .iter()
             .filter_map(|cut| match &cut.place {
                 CutPlace::Member { shape, .. } => Some(shape.min.length),
-                CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Crossing { .. } => None,
+                CutPlace::End { .. }
+                | CutPlace::Side { .. }
+                | CutPlace::Crossing { .. }
+                | CutPlace::Edge { .. } => None,
             })
             .collect();
         starts.sort();

@@ -73,7 +73,7 @@ fn body_owner(source: CutSource) -> Option<BodyOwner> {
     match source {
         CutSource::Joint { joint, pair } => Some(BodyOwner::Joint { joint, pair }),
         CutSource::Hardware { hardware } => Some(BodyOwner::Hardware { hardware }),
-        CutSource::Boards { .. } => None,
+        CutSource::Boards { .. } | CutSource::Edges { .. } => None,
     }
 }
 
@@ -94,6 +94,7 @@ impl Checker<'_> {
             CutSource::Joint { joint, .. } => self.joint_name(joint),
             CutSource::Hardware { hardware } => self.hardware_name(hardware),
             CutSource::Boards { part, .. } => format!("{}'s boards", self.part_name(part)),
+            CutSource::Edges { part } => format!("{}'s edges", self.part_name(part)),
         }
     }
 
@@ -105,7 +106,7 @@ impl Checker<'_> {
         match source {
             CutSource::Joint { joint, .. } => self.joint_place(joint),
             CutSource::Hardware { hardware } => self.hardware_place(hardware),
-            CutSource::Boards { part, .. } => self.part_place(part),
+            CutSource::Boards { part, .. } | CutSource::Edges { part } => self.part_place(part),
         }
     }
 
@@ -124,6 +125,7 @@ impl Checker<'_> {
             }
             CutSource::Hardware { hardware } => self.hardware_name(hardware),
             CutSource::Boards { part, .. } => format!("{}'s boards", self.part_name(part)),
+            CutSource::Edges { part } => format!("{}'s edges", self.part_name(part)),
         }
     }
 
