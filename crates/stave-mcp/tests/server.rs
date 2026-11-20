@@ -24,11 +24,14 @@ async fn initialize_lists_tools() {
             "describe",
             "fixes_for",
             "grammar",
+            "list_conflicts",
             "list_projects",
             "new_project",
             "open_project",
+            "resolve_conflict",
             "std_lookup",
             "try_patch",
+            "try_resolution",
         ]
     );
 }

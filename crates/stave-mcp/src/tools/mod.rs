@@ -14,12 +14,16 @@ use serde_json::{Value, json};
 use crate::{McpError, StaveServer};
 
 pub mod changing;
+pub mod conflicts;
 pub mod looking;
 pub mod projects;
 
 /// Every tool the server offers.
 pub(crate) fn router() -> ToolRouter<StaveServer> {
-    StaveServer::projects_router() + StaveServer::looking_router() + StaveServer::changing_router()
+    StaveServer::projects_router()
+        + StaveServer::looking_router()
+        + StaveServer::changing_router()
+        + StaveServer::conflicts_router()
 }
 
 /// A tool's answer: `text` for a person to read, `structured` for a

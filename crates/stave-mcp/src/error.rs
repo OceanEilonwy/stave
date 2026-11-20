@@ -112,4 +112,70 @@ pub enum McpError {
     /// Where Stave keeps its settings couldn't be worked out.
     #[error("Stave can't find your home folder: HOME is not set.")]
     NoHome,
+    /// The project's versions couldn't be read or written.
+    #[error("{}", capitalised(&.0.to_string()))]
+    History(#[from] stave_history::HistoryError),
+    /// A clash couldn't be settled as asked.
+    #[error("Stave can't settle that clash: {0}")]
+    Conflict(#[from] stave_app::conflicts::ConflictError),
+    /// A file of the project isn't text Stave can read.
+    #[error("'{0}' isn't text Stave can read.")]
+    NotText(String),
+    /// `try_resolution` or `resolve_conflict` named a file with no clash.
+    #[error("'{0}' has no clashes. Call list_conflicts to see where they are.")]
+    NoConflicts(String),
+    /// `try_resolution` or `resolve_conflict` named a clash the file
+    /// doesn't have.
+    #[error("'{file}' has no clash {number}: it has {count}, numbered from 1.")]
+    NoSuchClash {
+        /// The file.
+        file: String,
+        /// The number asked for, from 1.
+        number: usize,
+        /// How many clashes the file has.
+        count: usize,
+    },
+    /// A resolution kept a side the clash doesn't have.
+    #[error("That clash has no side {number}: it has {count}, numbered from 1.")]
+    NoSuchSide {
+        /// The number asked for, from 1.
+        number: usize,
+        /// How many sides the clash has.
+        count: usize,
+    },
+    /// A resolution of the project's own files that doesn't check clean
+    /// isn't written: an agent's change never reaches the project
+    /// unchecked.
+    #[error(
+        "Nothing was written: with this resolution the project would have {errors}. \
+         Settle it another way (try it with try_resolution first), or leave it for the \
+         person using Stave.\n{problems}"
+    )]
+    NotClean {
+        /// How many errors, in words.
+        errors: String,
+        /// The problems, as `stave check` prints them.
+        problems: String,
+    },
+    /// The project's merge policy is `off`, so only the person changes its
+    /// own files.
+    #[error(
+        "Only the person using Stave can change this project's own files (its merge policy is \
+         off). They can settle the clash in the Stave window."
+    )]
+    PolicyOff,
+    /// The file changed while a clash in it was being settled.
+    #[error(
+        "'{0}' changed while the clash was being settled, so nothing was written. Call list_conflicts again."
+    )]
+    ChangedMeanwhile(String),
+}
+
+/// `text` with its first letter made a capital, for a message from
+/// another crate that starts a sentence here.
+fn capitalised(text: &str) -> String {
+    let mut letters = text.chars();
+    letters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(letters).collect()
+    })
 }

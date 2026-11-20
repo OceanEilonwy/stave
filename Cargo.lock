@@ -4299,6 +4299,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stave-app",
+ "stave-history",
  "stave-lang",
  "stave-model",
  "stave-modules",
