@@ -20,17 +20,15 @@
 //! "Revisions".
 
 #![forbid(unsafe_code)]
-#![expect(
-    dead_code,
-    reason = "saving, catching up and suggestions, which use these helpers, come next"
-)]
 
 mod actor;
 mod error;
 mod folder;
 mod history;
+mod merging;
 mod paths;
 mod store;
+mod suggestions;
 
 use std::fmt;
 
@@ -38,11 +36,12 @@ pub use actor::{Actor, ActorKind};
 pub use error::HistoryError;
 pub use folder::VersionsStatus;
 pub use history::History;
+pub use merging::CatchUp;
 pub use paths::{PathError, ProjectFiles, RelativePath};
 
 /// A revision's id: the hex id of its commit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RevisionId(String);
+pub struct RevisionId(pub(crate) String);
 
 impl RevisionId {
     /// Wraps a revision id as [`History`] reported it.
@@ -64,7 +63,7 @@ impl fmt::Display for RevisionId {
 
 /// A suggestion's id: the end of its bookmark's name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SuggestionId(String);
+pub struct SuggestionId(pub(crate) String);
 
 impl SuggestionId {
     /// Wraps a suggestion id as [`History`] reported it.

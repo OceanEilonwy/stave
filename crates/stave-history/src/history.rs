@@ -1,7 +1,7 @@
 //! [`History`]: one project's repository, opened from its folder.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use jj_lib::backend::{Backend, BackendInitError, CommitId};
 use jj_lib::default_backend_factories::{
@@ -11,17 +11,19 @@ use jj_lib::default_backend_factories::{
 };
 use jj_lib::file_util::relative_path;
 use jj_lib::git_backend::GitBackend;
+use jj_lib::lock::FileLock;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::ref_name::RefNameBuf;
 use jj_lib::repo::{ReadonlyRepo, Repo as _, RepoLoader};
 use jj_lib::settings::UserSettings;
 use jj_lib::signing_factory::signer_from_settings;
+use jj_lib::transaction::Transaction;
 
 use crate::actor::{Actor, ActorKind, Description};
 use crate::error::HistoryError;
 use crate::folder::{self, HISTORY_DIRECTORY, VersionsStatus};
 use crate::paths::ProjectFiles;
-use crate::store::{self, ACTION_ATTRIBUTE, MAIN};
+use crate::store::{self, ACTION_ATTRIBUTE, ACTOR_ATTRIBUTE, MAIN};
 use crate::{RevisionId, Version};
 
 /// One project's versions, opened from its folder.
@@ -30,9 +32,13 @@ use crate::{RevisionId, Version};
 /// several handles (in one process or several) can work on one project; the
 /// steps that move main take the lock file `.stave/history/main.lock`.
 pub struct History {
-    folder: PathBuf,
-    settings: UserSettings,
-    loader: RepoLoader,
+    pub(crate) folder: PathBuf,
+    pub(crate) settings: UserSettings,
+    pub(crate) loader: RepoLoader,
+    /// Main as this handle last reported it (through [`History::main`] or
+    /// [`History::files_at`] on main): the base files given to
+    /// [`History::apply`] were built on.
+    pub(crate) observed_main: Mutex<Option<CommitId>>,
 }
 
 impl std::fmt::Debug for History {
@@ -44,7 +50,7 @@ impl std::fmt::Debug for History {
     }
 }
 
-fn block_on<T>(future: impl Future<Output = T>) -> T {
+pub(crate) fn block_on<T>(future: impl Future<Output = T>) -> T {
     pollster::block_on(future)
 }
 
@@ -184,6 +190,7 @@ impl History {
             folder,
             settings,
             loader,
+            observed_main: Mutex::new(None),
         })
     }
 
@@ -215,6 +222,9 @@ impl History {
             let id = self.resolve(&repo, revision)?;
             let commit = store::commit(repo.store(), &id).await?;
             let (files, _conflicted) = store::files_of(&commit.tree()).await?;
+            if id == store::main_id(&repo) {
+                self.observe_main(id);
+            }
             Ok(files)
         })
     }
@@ -227,7 +237,10 @@ impl History {
     pub fn main(&self) -> Result<RevisionId, HistoryError> {
         block_on(async {
             let repo = self.head().await?;
-            Ok(RevisionId(store::hex(&store::main_id(&repo))))
+            let main = store::main_id(&repo);
+            let revision = RevisionId(store::hex(&main));
+            self.observe_main(main);
+            Ok(revision)
         })
     }
 
@@ -265,8 +278,46 @@ impl History {
         })
     }
 
+    /// Remembers `main` as the main this handle last reported.
+    pub(crate) fn observe_main(&self, main: CommitId) {
+        let mut observed = self
+            .observed_main
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *observed = Some(main);
+    }
+
+    /// The main this handle last reported, if any.
+    pub(crate) fn observed_main(&self) -> Option<CommitId> {
+        self.observed_main
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Takes the lock that guards moving main, waiting for it. It is let go
+    /// when the returned value is dropped.
+    pub(crate) fn lock_main(&self) -> Result<FileLock, HistoryError> {
+        FileLock::lock(self.folder.join(HISTORY_DIRECTORY).join("main.lock"))
+            .map_err(HistoryError::store)
+    }
+
+    /// Starts a transaction whose operation records `actor` and `action`.
+    pub(crate) fn transaction(
+        repo: &Arc<ReadonlyRepo>,
+        actor: Option<&Actor>,
+        action: &str,
+    ) -> Transaction {
+        let mut transaction = repo.start_transaction();
+        if let Some(actor) = actor {
+            transaction.set_attribute(ACTOR_ATTRIBUTE.to_owned(), actor.to_line());
+        }
+        transaction.set_attribute(ACTION_ATTRIBUTE.to_owned(), action.to_owned());
+        transaction
+    }
+
     /// The repository as it is on disk now.
-    async fn head(&self) -> Result<Arc<ReadonlyRepo>, HistoryError> {
+    pub(crate) async fn head(&self) -> Result<Arc<ReadonlyRepo>, HistoryError> {
         self.loader
             .load_at_head(None)
             .await

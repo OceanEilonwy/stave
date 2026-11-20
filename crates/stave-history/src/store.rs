@@ -19,12 +19,12 @@ use jj_lib::merged_tree_builder::MergedTreeBuilder;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::op_store::RefTarget;
 use jj_lib::ref_name::RefNameBuf;
-use jj_lib::repo::{ReadonlyRepo, Repo as _};
+use jj_lib::repo::{MutableRepo, ReadonlyRepo, Repo as _};
 use jj_lib::repo_path::RepoPathBuf;
 use jj_lib::settings::UserSettings;
 use jj_lib::store::Store;
 
-use crate::actor::Actor;
+use crate::actor::{Actor, Description};
 use crate::error::HistoryError;
 use crate::paths::{ProjectFiles, RelativePath};
 
@@ -41,6 +41,7 @@ pub(crate) const ACTOR_ATTRIBUTE: &str = "stave-actor";
 /// The operation attribute describing an operation in plain words.
 pub(crate) const ACTION_ATTRIBUTE: &str = "stave-action";
 /// The operation attribute an undo carries: the operation it reverted.
+#[expect(dead_code, reason = "undo and the suggestions list use it, next")]
 pub(crate) const UNDOES_ATTRIBUTE: &str = "stave-undoes";
 /// The operation attribute set when an operation moved main.
 pub(crate) const MOVED_MAIN_ATTRIBUTE: &str = "stave-moved-main";
@@ -187,6 +188,30 @@ pub(crate) async fn merge_trees(
     ]))
     .await
     .map_err(HistoryError::store)
+}
+
+/// Records a revision on `parent` holding `tree`, made by `actor`.
+pub(crate) async fn record(
+    repo: &mut MutableRepo,
+    parent: &CommitId,
+    tree: MergedTree,
+    description: &Description,
+    actor: &Actor,
+) -> Result<Commit, HistoryError> {
+    let signature = signature(actor);
+    repo.new_commit(vec![parent.clone()], tree)
+        .set_description(description.to_text())
+        .set_author(signature.clone())
+        .set_committer(signature)
+        .write()
+        .await
+        .map_err(HistoryError::store)
+}
+
+/// Points the bookmark `name` at `id`, or removes it.
+pub(crate) fn set_bookmark(repo: &mut MutableRepo, name: &str, id: Option<&CommitId>) {
+    let target = id.map_or_else(RefTarget::absent, target);
+    repo.set_local_bookmark_target(RefNameBuf::from(name).as_ref(), target);
 }
 
 /// The signature recorded for `actor` now.
