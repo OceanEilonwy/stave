@@ -26,7 +26,11 @@
 //! Lenses and the peek are overlay children placed in the room a tag's
 //! `pixels-above-lines` / `pixels-below-lines` makes for them; the room is
 //! as tall as they are (a lens row grows with Large Text), and they follow
-//! the text's layout for a while after each change.
+//! the text's layout for a while after each change. So are the links above
+//! a conflict ("Keep yours · Keep both"), which [`Editor::paint`] puts
+//! there while it tints the conflict's sides. A conflict link is the one
+//! widget here that changes something itself: it edits the buffer, as
+//! typing does, and the page hears the change as it hears typing.
 //!
 //! The search bar is a relm4 component, [`EditorSearch`]
 //! (docs/relm4-migration.md), whose controller the editor owns: what it
@@ -321,6 +325,16 @@ struct Tags {
     used: gtk::TextTag,
     lens: gtk::TextTag,
     peek: gtk::TextTag,
+    /// A conflict's marker lines (grammar, "Conflicts").
+    conflict_marker: gtk::TextTag,
+    /// A conflict's first side.
+    conflict_side: gtk::TextTag,
+    /// A conflict's other sides.
+    conflict_other: gtk::TextTag,
+    /// What a conflict's sides changed from.
+    conflict_base: gtk::TextTag,
+    /// The room above a conflict's opening line for its links.
+    conflict_links: gtk::TextTag,
 }
 
 impl Tags {
@@ -346,6 +360,13 @@ impl Tags {
             warning: tag("warning"),
             lens: tag("lens"),
             peek: tag("peek"),
+            // The marker lines' tint first, so the sides' (added later,
+            // so stronger) cover the lines they share with it.
+            conflict_marker: tag("conflict-marker"),
+            conflict_side: tag("conflict-side"),
+            conflict_other: tag("conflict-other"),
+            conflict_base: tag("conflict-base"),
+            conflict_links: tag("conflict-links"),
         };
         tags.comment.set_style(gtk::pango::Style::Italic);
         tags.doc.set_style(gtk::pango::Style::Italic);
@@ -353,7 +374,20 @@ impl Tags {
         tags.declared.set_weight(600);
         tags.lens
             .set_pixels_above_lines(LINE_SPACING.saturating_add(LENS_HEIGHT));
+        tags.conflict_links
+            .set_pixels_above_lines(LINE_SPACING.saturating_add(LENS_HEIGHT));
         tags
+    }
+
+    /// The tags that show conflicts.
+    fn conflict(&self) -> [&gtk::TextTag; 5] {
+        [
+            &self.conflict_marker,
+            &self.conflict_side,
+            &self.conflict_other,
+            &self.conflict_base,
+            &self.conflict_links,
+        ]
     }
 
     fn class(&self, class: TokenClass) -> Option<&gtk::TextTag> {
@@ -426,6 +460,13 @@ impl Tags {
             .set_background_rgba(Some(&rgba(if dark { "#1e3a5f" } else { "#d3e4f9" })));
         self.used
             .set_background_rgba(Some(&rgba(if dark { "#25344a" } else { "#e6eefa" })));
+        let tint = |tag: &gtk::TextTag, light: &str, darker: &str| {
+            tag.set_paragraph_background_rgba(Some(&rgba(if dark { darker } else { light })));
+        };
+        tint(&self.conflict_marker, "#deddda", "#3d3846");
+        tint(&self.conflict_side, "#e0f5e6", "#1f3a29");
+        tint(&self.conflict_other, "#e0ebfa", "#1e3047");
+        tint(&self.conflict_base, "#fbf0d9", "#3f3420");
     }
 }
 
@@ -1145,6 +1186,19 @@ pub struct Editor {
     /// Where a lens's links send their clicks: the owner forwards them
     /// into its own input.
     lens: relm4::Sender<LensClick>,
+    /// The rows of links above conflicts, made as needed and kept, like
+    /// the lens rows.
+    conflict_rows: Vec<ConflictRow>,
+    /// How many of the conflict rows are in use.
+    conflict_rows_used: usize,
+}
+
+/// The links above one conflict: "Keep yours · Keep theirs ·
+/// Keep both".
+struct ConflictRow {
+    root: gtk::Box,
+    /// The conflict's opening line, from 0.
+    line: i32,
 }
 
 /// What the editor's search hears, for its owner to hand back to
@@ -1189,6 +1243,89 @@ impl EscapeProbe {
                 .upgrade()
                 .is_some_and(|search| EditorSearch::is_open(&search))
     }
+}
+
+/// A link above a conflict that settles conflict number `index` (from 0)
+/// of `buffer` by `resolution`, if the conflict still reads `original`.
+fn conflict_link(
+    buffer: &gtk::TextBuffer,
+    index: usize,
+    label: &str,
+    resolution: &stave_lang::conflict::Resolution,
+    original: &str,
+) -> gtk::Button {
+    let button = super::style::as_link(
+        gtk::Button::builder()
+            .label(label)
+            .css_classes(["flat", "stave-lens-link"])
+            .build(),
+    );
+    // As on a lens: the text view under the row would take the press too
+    // and start selecting, so the press is claimed and the link works on
+    // release.
+    let mouse = gtk::GestureClick::builder()
+        .button(gtk::gdk::BUTTON_PRIMARY)
+        .propagation_phase(gtk::PropagationPhase::Capture)
+        .build();
+    mouse.connect_pressed(|gesture, _, _, _| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+    });
+    let settle = {
+        let buffer = buffer.downgrade();
+        let resolution = resolution.clone();
+        let original = original.to_owned();
+        move || {
+            if let Some(buffer) = buffer.upgrade() {
+                settle_conflict(&buffer, index, &resolution, &original);
+            }
+        }
+    };
+    let from_mouse = settle.clone();
+    mouse.connect_released(move |_, _, _, _| from_mouse());
+    button.add_controller(mouse);
+    button.connect_clicked(move |_| settle());
+    button
+}
+
+/// Settles conflict number `index` (from 0) of `buffer` by `resolution`
+/// as one undoable change, if it still reads `original`. `false` when it
+/// doesn't (the text changed since the link was made), and nothing is
+/// changed.
+fn settle_conflict(
+    buffer: &gtk::TextBuffer,
+    index: usize,
+    resolution: &stave_lang::conflict::Resolution,
+    original: &str,
+) -> bool {
+    let text = buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), true)
+        .to_string();
+    let still = stave_lang::conflict::find_conflicts(&text)
+        .get(index)
+        .is_some_and(|conflict| text.get(conflict.range.clone()) == Some(original));
+    if !still {
+        return false;
+    }
+    let Some(action) = stave_app::conflicts::actions(&text, index)
+        .into_iter()
+        .find(|action| action.resolution == *resolution)
+    else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (
+        u32::try_from(action.edit.range.start),
+        u32::try_from(action.edit.range.end),
+    ) else {
+        return false;
+    };
+    let lines = LineStarts::new(&text);
+    let mut from = iter_at(buffer, &lines, start);
+    let mut to = iter_at(buffer, &lines, end);
+    buffer.begin_user_action();
+    buffer.delete(&mut from, &mut to);
+    buffer.insert(&mut from, &action.edit.text);
+    buffer.end_user_action();
+    true
 }
 
 /// A new buffer for a document, sharing the editor's tags (`table`). Its
@@ -1340,6 +1477,8 @@ impl Editor {
             card_box,
             scroll: None,
             lens,
+            conflict_rows: Vec::new(),
+            conflict_rows_used: 0,
         };
         let mut editor = editor;
         editor.colour(adw::StyleManager::default().is_dark());
@@ -1409,8 +1548,14 @@ impl Editor {
         let _ = self.search.sender().send(input);
     }
 
-    /// Colours a buffer by its tokens.
-    pub fn paint(&self, buffer: &gtk::TextBuffer, lines: &LineStarts, runs: &[(Run, TokenClass)]) {
+    /// Colours a buffer by its tokens, and tints its conflicts with their
+    /// links above them ([`Editor::mark_conflicts`]).
+    pub fn paint(
+        &mut self,
+        buffer: &gtk::TextBuffer,
+        lines: &LineStarts,
+        runs: &[(Run, TokenClass)],
+    ) {
         let (start, end) = buffer.bounds();
         for tag in self.tags.syntax() {
             buffer.remove_tag(tag, &start, &end);
@@ -1424,6 +1569,97 @@ impl Editor {
                 );
             }
         }
+        self.mark_conflicts(buffer);
+    }
+
+    /// Tints each conflict in the buffer (grammar, "Conflicts"): the
+    /// marker lines grey, the first side green, the other sides blue and
+    /// the base amber, and puts a row of links above its opening line,
+    /// one for each way to settle it (`stave_app::conflicts::actions`).
+    ///
+    /// A link edits the buffer itself, as typing does, in one undoable
+    /// change; the Files page then hears the buffer change as it hears
+    /// typing. It reads the conflict from the buffer when clicked and
+    /// settles nothing if the conflict is no longer the one it was made
+    /// for.
+    fn mark_conflicts(&mut self, buffer: &gtk::TextBuffer) {
+        let (start, end) = buffer.bounds();
+        for tag in self.tags.conflict() {
+            buffer.remove_tag(tag, &start, &end);
+        }
+        let text = buffer.text(&start, &end, true).to_string();
+        let found = stave_app::conflicts::conflicts(&text);
+        let lines = LineStarts::new(&text);
+        let range_tag = |tag: &gtk::TextTag, range: &std::ops::Range<usize>| {
+            let (Ok(from), Ok(to)) = (u32::try_from(range.start), u32::try_from(range.end)) else {
+                return;
+            };
+            buffer.apply_tag(
+                tag,
+                &iter_at(buffer, &lines, from),
+                &iter_at(buffer, &lines, to),
+            );
+        };
+        for file_conflict in &found {
+            let conflict = &file_conflict.conflict;
+            range_tag(&self.tags.conflict_marker, &conflict.range);
+            for (index, side) in conflict.sides.iter().enumerate() {
+                let tag = if index == 0 {
+                    &self.tags.conflict_side
+                } else {
+                    &self.tags.conflict_other
+                };
+                range_tag(tag, &side.range);
+            }
+            for base in conflict.base.iter().chain(&conflict.later_bases) {
+                range_tag(&self.tags.conflict_base, &base.range);
+            }
+        }
+        while self.conflict_rows.len() < found.len() {
+            let root = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(4)
+                .css_classes(["stave-lens"])
+                .build();
+            self.view.add_overlay(&root, 0, 0);
+            self.conflict_rows.push(ConflictRow { root, line: 0 });
+        }
+        for (index, row) in self.conflict_rows.iter_mut().enumerate() {
+            while let Some(child) = row.root.first_child() {
+                row.root.remove(&child);
+            }
+            let Some(file_conflict) = found.get(index) else {
+                row.root.set_visible(false);
+                continue;
+            };
+            let original = text
+                .get(file_conflict.conflict.range.clone())
+                .unwrap_or_default()
+                .to_owned();
+            for (number, action) in file_conflict.actions.iter().enumerate() {
+                if number > 0 {
+                    let dot = gtk::Label::new(Some("·"));
+                    dot.add_css_class("stave-lens-dot");
+                    row.root.append(&dot);
+                }
+                row.root.append(&conflict_link(
+                    buffer,
+                    file_conflict.index,
+                    &action.label,
+                    &action.resolution,
+                    &original,
+                ));
+            }
+            row.line = i32::try_from(file_conflict.lines.start().saturating_sub(1)).unwrap_or(0);
+            row.root.set_visible(true);
+            if let Some(from) = buffer.iter_at_line(row.line) {
+                let mut to = from;
+                to.forward_to_line_end();
+                buffer.apply_tag(&self.tags.conflict_links, &from, &to);
+            }
+        }
+        self.conflict_rows_used = found.len();
+        self.place_overlays();
     }
 
     /// Underlines problems: errors red, warnings amber.
@@ -1628,6 +1864,10 @@ impl Editor {
     }
 
     fn clear_overlays(&mut self) {
+        for row in &self.conflict_rows {
+            row.root.set_visible(false);
+        }
+        self.conflict_rows_used = 0;
         self.set_lenses(&[]);
         self.set_peek(None);
         self.hide_card();
@@ -1902,6 +2142,16 @@ impl Editor {
                 self.view.move_overlay(&slot.root, 2, y);
             }
         }
+        for row in self.conflict_rows.iter().take(self.conflict_rows_used) {
+            if let Some(iter) = buffer.iter_at_line(row.line) {
+                let text_top = self.view.iter_location(&iter).y();
+                let y = text_top
+                    .saturating_sub(LINE_SPACING)
+                    .saturating_sub(LENS_HEIGHT)
+                    .saturating_add(2);
+                self.view.move_overlay(&row.root, 2, y);
+            }
+        }
         if let Some(line) = self.peek_line
             && let Some(iter) = buffer.iter_at_line(line)
         {
@@ -2033,6 +2283,108 @@ mod tests {
                 editor.search_event(event);
             }
         }
+    }
+
+    #[test]
+    fn a_conflict_is_tinted_and_its_links_settle_it() {
+        on_gtk_thread(conflict_links_settle);
+    }
+
+    /// The links of a conflict row, in order.
+    fn links(row: &ConflictRow) -> Vec<gtk::Button> {
+        let mut found = Vec::new();
+        let mut child = row.root.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                found.push(button.clone());
+            }
+            child = widget.next_sibling();
+        }
+        found
+    }
+
+    /// The link of a conflict row whose text is `label`.
+    fn link(row: &ConflictRow, label: &str) -> gtk::Button {
+        links(row)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no link {label}"))
+    }
+
+    fn whole_text(buffer: &gtk::TextBuffer) -> String {
+        buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .to_string()
+    }
+
+    /// A conflict's sides are tinted, a row of links sits above its
+    /// opening line, and a link replaces the conflict in the buffer as one
+    /// undoable change. A link left from before the conflict changed
+    /// settles nothing.
+    fn conflict_links_settle() {
+        let mut editor = Editor::new(
+            &gtk::TextTagTable::new(),
+            relm4::channel().0,
+            relm4::channel().0,
+        );
+        let text = "stave 1\n\n<<<<<<< conflict 1 of 1\n+++++++ yours\nlet a = 1\n------- before\n+++++++ theirs\nlet b = 2\n>>>>>>> conflict 1 of 1 ends\n";
+        let buffer = editor.new_buffer(text);
+        editor.show_buffer(&buffer, true);
+        editor.paint(&buffer, &LineStarts::new(text), &[]);
+
+        assert_eq!(editor.conflict_rows_used, 1);
+        let row = editor.conflict_rows.first().expect("a row of links");
+        assert!(row.root.is_visible());
+        assert_eq!(row.line, 2, "above the opening marker line");
+        let labels: Vec<String> = links(row)
+            .iter()
+            .map(|button| {
+                button
+                    .label()
+                    .map(|label| label.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(labels, ["Keep yours", "Keep theirs", "Keep both"]);
+        let tagged = |line: i32, name: &str| {
+            buffer.iter_at_line(line).is_some_and(|iter| {
+                iter.tags()
+                    .iter()
+                    .any(|tag| tag.name().as_deref() == Some(name))
+            })
+        };
+        assert!(tagged(2, "conflict-marker"));
+        assert!(tagged(4, "conflict-side"));
+        assert!(tagged(7, "conflict-other"));
+        assert!(!tagged(0, "conflict-marker"));
+
+        // A link from before the conflict changed settles nothing.
+        let stale = link(row, "Keep yours");
+        if let Some(mut at) = buffer.iter_at_line(4) {
+            buffer.insert(&mut at, "let c = 3\n");
+        }
+        let changed = whole_text(&buffer);
+        stale.emit_clicked();
+        assert_eq!(whole_text(&buffer), changed);
+
+        // Painted again, the new row's link settles the conflict, as one
+        // change that undo takes back.
+        editor.paint(&buffer, &LineStarts::new(&changed), &[]);
+        let row = editor.conflict_rows.first().expect("a row of links");
+        link(row, "Keep both").emit_clicked();
+        assert_eq!(
+            whole_text(&buffer),
+            "stave 1\n\nlet c = 3\nlet a = 1\nlet b = 2\n"
+        );
+        let settled = whole_text(&buffer);
+        editor.paint(&buffer, &LineStarts::new(&settled), &[]);
+        assert_eq!(editor.conflict_rows_used, 0);
+        assert!(!editor.conflict_rows.iter().any(|row| row.root.is_visible()));
+        if let Some(source) = buffer.downcast_ref::<sourceview5::Buffer>() {
+            source.undo();
+        }
+        assert_eq!(whole_text(&buffer), changed);
+        settle();
     }
 
     #[test]

@@ -93,7 +93,8 @@ impl Category {
             | Code::ReservedWord
             | Code::UnknownUnit
             | Code::UnclosedBracket
-            | Code::MissingBrace => Category::Syntax,
+            | Code::MissingBrace
+            | Code::Conflict => Category::Syntax,
             Code::UnknownName
             | Code::DuplicateName
             | Code::AmbiguousName

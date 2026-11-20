@@ -10,8 +10,13 @@ members = [
   "crates/stave-geom",
   "crates/stave-check",
   "crates/stave-scene",
+  "crates/stave-render",
+  "crates/stave-web",
   "crates/stave-ide",
+  "crates/stave-history",
+  "crates/stave-link",
   "crates/stave-app",
+  "crates/stave-mcp",
   "crates/stave-cli",
   "crates/stave-gtk",
 ]

@@ -1279,7 +1279,8 @@ impl Window {
             | ChangeRequest::MoveShares { .. }
             | ChangeRequest::RepeatPart { .. }
             | ChangeRequest::ParamKind { .. }
-            | ChangeRequest::Grip { .. } => None,
+            | ChangeRequest::Grip { .. }
+            | ChangeRequest::Patch { .. } => None,
         }
     }
 }

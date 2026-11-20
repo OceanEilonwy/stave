@@ -64,8 +64,8 @@ invalid states unrepresentable.
   allowed it, `stave-gtk` denies it everywhere else, and each `unsafe`
   block there carries a `// SAFETY:` comment.
 - **Floats** (`f32`/`f64`) only at the geometry and rendering boundary
-  (`stave-geom`, `stave-scene`, `stave-gtk`, drawings in `stave-output`).
-  Convert from exact values in one place.
+  (`stave-geom`, `stave-scene`, `stave-render`, `stave-gtk`, drawings in
+  `stave-output`). Convert from exact values in one place.
 - **Determinism:** outputs (diagnostics order, cut lists, PDFs, plans) must be
   identical run to run. Use `BTreeMap`/sorted `Vec`s where order is observable.
 - **Performance:** no needless clones or allocation in hot paths; prefer
@@ -79,15 +79,42 @@ invalid states unrepresentable.
 Dependency order (a crate depends only on crates above it):
 `stave-lang` → `stave-schema` → `stave-modules` → `stave-model` → `stave-solve`
 → `stave-geom` → `stave-check` → `stave-workplan` → `stave-scene` →
-`stave-output` → `stave-app` → `stave-cli`, `stave-gtk`.
+`stave-render` → `stave-output` → `stave-app` → `stave-mcp` → `stave-cli`,
+`stave-gtk`.
 
-`stave-ide` (the editor's navigation layer: names, uses, hovers, colours,
-open buffers) sits beside that chain after `stave-modules` and before
-`stave-app`: it depends only on `stave-lang`, `stave-schema` and
-`stave-modules`, has no GTK types, and the future `stave-lsp` builds on it.
+Beside that chain (`docs/superpowers/specs/2026-11-20-ai-integration-design.md`,
+"Crates", and [`docs/ai.md`](docs/ai.md)):
 
-- Only `stave-gtk` may depend on GTK, libadwaita or wgpu.
+- `stave-ide` (the editor's navigation layer: names, uses, hovers, colours,
+  open buffers) sits after `stave-modules` and before `stave-app`: it
+  depends only on `stave-lang`, `stave-schema` and `stave-modules`, has no
+  GTK types, and the future `stave-lsp` builds on it.
+- `stave-history` (versions: a project's revisions, suggestions and main
+  line in `.stave/history/`, on `jj-lib` at an exact pin, Stave standing in
+  for the working copy) depends on no Stave crate and sits before
+  `stave-app`; `stave-app` and `stave-mcp` use it. No jj or git type
+  appears in its public API.
+- `stave-link` (setting Stave up in the AI apps; asking the running window
+  to show a project over D-Bus) depends on no Stave crate; `stave-mcp`,
+  `stave-cli` and `stave-gtk` use it.
+- `stave-web` (the browser viewer, built for `wasm32-unknown-unknown`)
+  sits after `stave-render`: it depends on `stave-lang` through
+  `stave-scene` and on `stave-render`, never on `stave-app` (which can't
+  build for WASM: z3, `notify`, gettext) except in its tests.
+- `stave-mcp` (the MCP server: tools, the MCP App page, the localhost
+  viewer) sits after `stave-app` and is used only by `stave-cli`
+  (`stave mcp`).
+
+- Only `stave-gtk` may depend on GTK or libadwaita; only `stave-render`,
+  `stave-web` and `stave-gtk` may depend on wgpu. `stave-render` (the
+  renderer, moved out of `stave-gtk`) has no GTK, sets its device up
+  `async` (no `pollster` inside) and builds for `wasm32-unknown-unknown`.
 - `stave-gtk` contains no business logic: handlers call into `stave-app`.
+- Only `stave-mcp` may depend on `tokio`. Stave makes no network call
+  but the MCP server's standard input and output and its viewer page,
+  bound to `127.0.0.1` only behind a per-session token, and pushes
+  nothing unless the user asks. The window's words never name jj, git or
+  MCP.
 - **No kind in the core.** `stave-lang`, `stave-schema`, `stave-modules`,
   `stave-model`, `stave-solve`, `stave-geom`, `stave-check`,
   `stave-workplan` and `stave-scene` never name a joint or hardware kind
