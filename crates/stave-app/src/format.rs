@@ -2,7 +2,7 @@
 //! editor's "Format" alike.
 
 use stave_lang::diagnostics::SourceMapError;
-use stave_lang::{FormatError, SourceMap};
+use stave_lang::{FormatError, SourceMap, TextEdit};
 
 /// What laying a file out gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,16 @@ pub fn format_text(path: &str, text: &str) -> Result<Formatted, FormatTextError>
     })
 }
 
+/// Lays out one file's text as `stave fmt` does, as the smallest edits to
+/// it (last in the file first; none when it is already laid out), for an
+/// editor to apply to its buffer so the cursor and undo history stay.
+pub fn format_edits(path: &str, text: &str) -> Result<Vec<TextEdit>, FormatTextError> {
+    Ok(match format_text(path, text)? {
+        Formatted::Changed(formatted) => stave_lang::text_edits(text, &formatted),
+        Formatted::Unchanged => Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +59,21 @@ mod tests {
             panic!("the badly spaced file changes");
         };
         assert_eq!(format_text("box.stave", &once), Ok(Formatted::Unchanged));
+    }
+
+    #[test]
+    fn layout_is_given_as_edits_to_the_text() {
+        let text = "stave   1\n\npart  a:s{\n}\n";
+        let edits = format_edits("box.stave", text).unwrap();
+        assert!(!edits.is_empty());
+        let Ok(Formatted::Changed(whole)) = format_text("box.stave", text) else {
+            panic!("the badly spaced file changes");
+        };
+        assert_eq!(
+            stave_lang::apply_text_edits(text, &edits).as_deref(),
+            Some(whole.as_str())
+        );
+        assert_eq!(format_edits("box.stave", &whole), Ok(Vec::new()));
     }
 
     #[test]

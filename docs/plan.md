@@ -287,6 +287,18 @@ word. What is missing is listed step by step below.
    - Formatting through `stave fmt` on the lossless tree.
    - Quick fixes from each diagnostic's patches, as workspace edits.
    - Code lens "show in 3D" and "show work card".
+   - Status (2026-11-20): done. Values are worked out in the background
+     check (`stave_app::editor_check`, reading every param, `let`, part
+     size and `between(...)` off one solver run in
+     `stave_solve::values`) and held in `stave_ide::WorkedValues`, which
+     shows each only while its text is unchanged; outline, folds and
+     help-line fixes are `stave_ide` queries on the lossless tree;
+     formatting is `stave_app::format::format_edits`; a diagnostic's
+     fixes are applied as patches to the checked text. `stave-lsp`
+     serves hover values, inlay hints, document symbols, folding ranges,
+     formatting, quick fixes and the "show work card" lens. Left out: a
+     fix that creates a file (no resource operations), and the GTK editor
+     does not show inlay hints yet.
 6. **Other editors** (`editors/`).
    - A TextMate grammar, so files are coloured before the server starts
      and on GitHub.

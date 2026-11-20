@@ -1,13 +1,16 @@
 //! Stave's answers as protocol values: diagnostics, completions,
-//! signature help, hovers and code lenses.
+//! signature help, hovers, code lenses, inlay hints, document symbols,
+//! folding ranges and text edits.
 
 use lsp_types::{
     CodeLens, Command, CompletionItem, CompletionItemKind, CompletionTextEdit,
-    DiagnosticRelatedInformation, DiagnosticSeverity, Documentation, Hover, HoverContents,
-    Location, MarkupContent, MarkupKind, NumberOrString, ParameterInformation, ParameterLabel,
-    SignatureHelp, SignatureInformation, TextEdit,
+    DiagnosticRelatedInformation, DiagnosticSeverity, DocumentSymbol, Documentation, FoldingRange,
+    FoldingRangeKind, Hover, HoverContents, InlayHint, InlayHintLabel, Location, MarkupContent,
+    MarkupKind, NumberOrString, ParameterInformation, ParameterLabel, SignatureHelp,
+    SignatureInformation, TextEdit,
 };
-use stave_ide::{CompletionKind, Document, SymbolKind};
+use stave_ide::{CompletionKind, Document, FoldKind, OutlineEntry, OutlineKind, SymbolKind};
+use stave_lang::ast::Span;
 use stave_lang::{Diagnostic, FileId, Severity};
 
 use crate::line_index::{LineIndex, PositionEncoding};
@@ -22,6 +25,10 @@ pub const SHOW_USES_COMMAND: &str = "stave.showUses";
 
 /// The command a "show in 3D" lens runs: the argument is the item's name.
 pub const SHOW_IN_3D_COMMAND: &str = "stave.showIn3d";
+
+/// The command a "show work card" lens runs: the argument is the part's
+/// name.
+pub const SHOW_WORK_CARD_COMMAND: &str = "stave.showWorkCard";
 
 /// Where the text of a file a diagnostic names comes from: the document
 /// and its text, as the diagnostic was found in.
@@ -224,6 +231,11 @@ fn utf16_length(text: &str) -> Option<u32> {
 /// its doc comment.
 pub fn hover(found: &stave_ide::Hover, index: &LineIndex<'_>, encoding: PositionEncoding) -> Hover {
     let mut value = format!("```stave\n{}\n```\n\n*{}*", found.signature, found.kind);
+    if let Some(worked_out) = &found.value {
+        value.push_str(" `");
+        value.push_str(worked_out);
+        value.push('`');
+    }
     if let Some(docs) = &found.docs {
         value.push_str("\n\n");
         value.push_str(docs);
@@ -279,8 +291,153 @@ pub fn code_lenses(
                 data: None,
             });
         }
+        if lens.shows_work_card() {
+            shown.push(CodeLens {
+                range,
+                command: Some(Command::new(
+                    "show work card".to_owned(),
+                    SHOW_WORK_CARD_COMMAND.to_owned(),
+                    Some(vec![serde_json::Value::String(lens.name.clone())]),
+                )),
+                data: None,
+            });
+        }
     }
     shown
+}
+
+/// Inlay hints as the protocol shows them: `= 844mm` just after the text,
+/// with a space before it.
+pub fn inlay_hints(
+    hints: &[stave_ide::InlayHint],
+    index: &LineIndex<'_>,
+    encoding: PositionEncoding,
+) -> Vec<InlayHint> {
+    hints
+        .iter()
+        .filter_map(|hint| {
+            let position = index.position(usize::try_from(hint.offset).ok()?, encoding)?;
+            Some(InlayHint {
+                position,
+                label: InlayHintLabel::String(hint.label.clone()),
+                kind: None,
+                text_edits: None,
+                tooltip: None,
+                padding_left: Some(true),
+                padding_right: None,
+                data: None,
+            })
+        })
+        .collect()
+}
+
+/// The protocol's kind for an outline entry.
+fn symbol_kind(kind: OutlineKind) -> lsp_types::SymbolKind {
+    match kind {
+        OutlineKind::Header => lsp_types::SymbolKind::FILE,
+        OutlineKind::Block => lsp_types::SymbolKind::NAMESPACE,
+        OutlineKind::Item(kind) => match kind {
+            SymbolKind::Module => lsp_types::SymbolKind::MODULE,
+            SymbolKind::Component | SymbolKind::Kind | SymbolKind::Recipe => {
+                lsp_types::SymbolKind::CLASS
+            }
+            SymbolKind::Param | SymbolKind::Let => lsp_types::SymbolKind::CONSTANT,
+            SymbolKind::Role => lsp_types::SymbolKind::TYPE_PARAMETER,
+            SymbolKind::Member | SymbolKind::MadePart | SymbolKind::Label => {
+                lsp_types::SymbolKind::FIELD
+            }
+            SymbolKind::Stock | SymbolKind::Profile => lsp_types::SymbolKind::STRUCT,
+            SymbolKind::Scene => lsp_types::SymbolKind::EVENT,
+            SymbolKind::Region => lsp_types::SymbolKind::ARRAY,
+            SymbolKind::Part | SymbolKind::Hardware | SymbolKind::Assembly => {
+                lsp_types::SymbolKind::OBJECT
+            }
+            SymbolKind::Joint => lsp_types::SymbolKind::OPERATOR,
+            SymbolKind::Require => lsp_types::SymbolKind::BOOLEAN,
+        },
+    }
+}
+
+/// A file's outline as nested document symbols.
+pub fn document_symbols(
+    entries: &[OutlineEntry],
+    index: &LineIndex<'_>,
+    encoding: PositionEncoding,
+) -> Vec<DocumentSymbol> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let range = index.range(entry.span, encoding)?;
+            let selection_range = index.range(entry.name_span, encoding)?;
+            #[expect(
+                deprecated,
+                reason = "lsp-types requires the deprecated field to be written"
+            )]
+            let symbol = DocumentSymbol {
+                name: entry.name.clone(),
+                detail: (!entry.detail.is_empty()).then(|| entry.detail.clone()),
+                kind: symbol_kind(entry.kind),
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range,
+                children: Some(document_symbols(&entry.children, index, encoding)),
+            };
+            Some(symbol)
+        })
+        .collect()
+}
+
+/// Folds as protocol folding ranges, by line. A block keeps its closing
+/// line showing; one that ends on the line after it starts has nothing to
+/// fold and is left out.
+pub fn folding_ranges(
+    folds: &[stave_ide::Fold],
+    index: &LineIndex<'_>,
+    encoding: PositionEncoding,
+) -> Vec<FoldingRange> {
+    let mut ranges: Vec<FoldingRange> = folds
+        .iter()
+        .filter_map(|fold| {
+            let range = index.range(fold.span, encoding)?;
+            let (end_line, kind) = match fold.kind {
+                FoldKind::Block => (range.end.line.checked_sub(1)?, None),
+                FoldKind::Comment => (range.end.line, Some(FoldingRangeKind::Comment)),
+                FoldKind::Imports => (range.end.line, Some(FoldingRangeKind::Imports)),
+            };
+            (end_line > range.start.line).then_some(FoldingRange {
+                start_line: range.start.line,
+                start_character: None,
+                end_line,
+                end_character: None,
+                kind,
+                collapsed_text: None,
+            })
+        })
+        .collect();
+    ranges.dedup_by(|later, earlier| {
+        later.start_line == earlier.start_line && later.end_line == earlier.end_line
+    });
+    ranges
+}
+
+/// Byte-range edits of a text as protocol text edits.
+pub fn text_edits(
+    edits: &[stave_lang::TextEdit],
+    index: &LineIndex<'_>,
+    encoding: PositionEncoding,
+) -> Option<Vec<TextEdit>> {
+    edits
+        .iter()
+        .map(|edit| {
+            let start = u32::try_from(edit.range.start).ok()?;
+            let end = u32::try_from(edit.range.end).ok()?;
+            Some(TextEdit::new(
+                index.range(Span::new(start, end), encoding)?,
+                edit.text.clone(),
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

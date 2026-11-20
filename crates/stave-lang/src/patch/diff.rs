@@ -43,8 +43,10 @@ pub fn apply_text_edits(text: &str, edits: &[TextEdit]) -> Option<String> {
 /// reached only by a rewrite of most of a large file.
 const MOST_STEPS: usize = 4096;
 
-/// The smallest edits that turn `old` into `new`, last in the file first.
-pub(super) fn text_edits(old: &str, new: &str) -> Vec<TextEdit> {
+/// The smallest edits that turn `old` into `new`, last in the file first,
+/// as [`apply_text_edits`] takes them: what a formatter or a patch hands an
+/// open editor instead of a whole new text.
+pub fn text_edits(old: &str, new: &str) -> Vec<TextEdit> {
     let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
     let old_starts = starts(&old_lines);

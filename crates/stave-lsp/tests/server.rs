@@ -2,8 +2,10 @@
 //! would: open an example, edit it (with non-ASCII text before the
 //! edits, so UTF-16 columns matter), and receive diagnostics from both
 //! tiers, completions, signature help, semantic tokens, a definition in
-//! the standard library, hover, code lenses and a rename. Nothing is
-//! written to disk: the edits live in the server's buffers.
+//! the standard library, hover (with worked-out values), inlay hints,
+//! document symbols, folding ranges, code lenses, a rename, quick fixes
+//! (from a help line and from a diagnostic's patch) and formatting.
+//! Nothing is written to disk: the edits live in the server's buffers.
 
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -15,13 +17,17 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeLensRequest, Completion, GotoDefinition, HoverRequest, Initialize, Rename, Request as _,
-    SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
+    CodeActionRequest, CodeLensRequest, Completion, DocumentSymbolRequest, FoldingRangeRequest,
+    Formatting, GotoDefinition, HoverRequest, Initialize, InlayHintRefreshRequest,
+    InlayHintRequest, Rename, Request as _, SemanticTokensFullRequest, Shutdown,
+    SignatureHelpRequest,
 };
 use lsp_types::{
-    CompletionResponse, DocumentChanges, GotoDefinitionResponse, InitializeResult, NumberOrString,
-    OneOf, Position, PublishDiagnosticsParams, Range, SemanticTokensResult, SignatureHelp,
-    TextDocumentContentChangeEvent, Uri, WorkspaceEdit,
+    CodeActionOrCommand, CompletionResponse, DocumentChanges, DocumentSymbol,
+    DocumentSymbolResponse, FoldingRange, GotoDefinitionResponse, InitializeResult, InlayHint,
+    InlayHintLabel, NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range,
+    SemanticTokensResult, SignatureHelp, TextDocumentContentChangeEvent, TextEdit, Uri,
+    WorkspaceEdit,
 };
 use serde_json::json;
 use stave_ide::Document;
@@ -169,6 +175,56 @@ fn position_of(text: &str, needle: &str) -> Position {
     position(text, text.find(needle).unwrap())
 }
 
+/// The byte offset of a protocol position, in UTF-16 units.
+fn offset(text: &str, at: Position) -> usize {
+    let line_start: usize = text
+        .split_inclusive('\n')
+        .take(at.line as usize)
+        .map(str::len)
+        .sum();
+    let line = &text[line_start..];
+    let mut units = 0;
+    let mut bytes = 0;
+    for c in line.chars() {
+        if units >= at.character as usize {
+            break;
+        }
+        units += c.len_utf16();
+        bytes += c.len_utf8();
+    }
+    line_start + bytes
+}
+
+/// `text` with protocol edits made, as an editor makes them.
+fn edited(text: &str, edits: &[TextEdit]) -> String {
+    let mut edits = edits.to_vec();
+    edits
+        .sort_by_key(|edit| std::cmp::Reverse((edit.range.start.line, edit.range.start.character)));
+    let mut out = text.to_owned();
+    for edit in &edits {
+        let (start, end) = (offset(&out, edit.range.start), offset(&out, edit.range.end));
+        out.replace_range(start..end, &edit.new_text);
+    }
+    out
+}
+
+/// The whole of a text, as a protocol range.
+fn whole(text: &str) -> Range {
+    Range::new(Position::new(0, 0), position(text, text.len()))
+}
+
+/// Every name in a document symbol tree, with its depth.
+fn symbol_names(symbols: &[DocumentSymbol], depth: usize, out: &mut Vec<(usize, String)>) {
+    for symbol in symbols {
+        out.push((depth, symbol.name.clone()));
+        symbol_names(
+            symbol.children.as_deref().unwrap_or_default(),
+            depth + 1,
+            out,
+        );
+    }
+}
+
 /// One incremental change: `range` of `text` becomes `new_text`.
 fn change(
     client: &Client,
@@ -206,7 +262,10 @@ fn an_editor_session_over_the_protocol() {
         Initialize::METHOD,
         json!({
             "capabilities": {
-                "workspace": { "workspaceEdit": { "documentChanges": true } },
+                "workspace": {
+                    "workspaceEdit": { "documentChanges": true },
+                    "inlayHint": { "refreshSupport": true },
+                },
             },
             "rootUri": document_uri(&Document::File(folder.clone())).unwrap(),
         }),
@@ -246,6 +305,104 @@ fn an_editor_session_over_the_protocol() {
             .all(|d| d.severity != Some(lsp_types::DiagnosticSeverity::ERROR)),
         "{clean:?}"
     );
+
+    // The background check worked out the design's values: the client is
+    // asked for its inlay hints again.
+    client.wait(|message| {
+        matches!(message, Message::Request(request) if request.method == InlayHintRefreshRequest::METHOD)
+    });
+    // Inlay hints on a file of the project that is not open: `length:
+    // fit` and `between(base, top)` show what they work out to.
+    let carcass_path = folder.join("carcass.stave");
+    let carcass_uri = document_uri(&Document::File(carcass_path.clone())).unwrap();
+    let carcass = std::fs::read_to_string(&carcass_path).unwrap();
+    let hints = client.ok(
+        InlayHintRequest::METHOD,
+        json!({ "textDocument": { "uri": carcass_uri }, "range": whole(&carcass) }),
+    );
+    let hints: Vec<InlayHint> = serde_json::from_value(hints).unwrap();
+    let label_at = |needle: &str| {
+        let at = position(&carcass, carcass.find(needle).unwrap() + needle.len());
+        hints
+            .iter()
+            .find(|hint| hint.position == at)
+            .map(|hint| match &hint.label {
+                InlayHintLabel::String(label) => label.clone(),
+                InlayHintLabel::LabelParts(parts) => {
+                    parts.iter().map(|part| part.value.as_str()).collect()
+                }
+            })
+            .unwrap_or_else(|| panic!("no hint after {needle}: {hints:?}"))
+    };
+    let fit = label_at("length: fit");
+    assert!(fit.starts_with("= ") && fit.contains("mm"), "{fit}");
+    let between = label_at("between(base, top)");
+    assert!(
+        between.starts_with("= ") && between.ends_with("mm"),
+        "{between}"
+    );
+    // Hovering `fit` shows its value.
+    let on_fit = position(
+        &carcass,
+        carcass.find("length: fit").unwrap() + "length: f".len(),
+    );
+    let hover = client.ok(
+        HoverRequest::METHOD,
+        json!({ "textDocument": { "uri": carcass_uri }, "position": on_fit }),
+    );
+    let shown = hover["contents"]["value"].as_str().unwrap();
+    assert!(shown.contains(&fit), "{shown}");
+
+    // Document symbols: items with the blocks inside them.
+    let symbols = client.ok(
+        DocumentSymbolRequest::METHOD,
+        json!({ "textDocument": { "uri": carcass_uri } }),
+    );
+    let DocumentSymbolResponse::Nested(symbols) = serde_json::from_value(symbols).unwrap() else {
+        panic!("expected nested symbols");
+    };
+    let mut names = Vec::new();
+    symbol_names(&symbols, 0, &mut names);
+    assert!(names.contains(&(0, "base".to_owned())), "{names:?}");
+    assert!(names.contains(&(1, "place".to_owned())), "{names:?}");
+    // Folding: every block over several lines.
+    let folds = client.ok(
+        FoldingRangeRequest::METHOD,
+        json!({ "textDocument": { "uri": carcass_uri } }),
+    );
+    let folds: Vec<FoldingRange> = serde_json::from_value(folds).unwrap();
+    let place_line = position_of(&carcass, "place {").line;
+    assert!(
+        folds
+            .iter()
+            .any(|fold| fold.start_line == place_line && fold.end_line > place_line),
+        "{folds:?}"
+    );
+    // A part has "show in 3D" and "show work card" lenses.
+    let lenses = client.ok(
+        CodeLensRequest::METHOD,
+        json!({ "textDocument": { "uri": carcass_uri } }),
+    );
+    let commands: Vec<&str> = lenses
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|lens| lens["command"]["command"].as_str().unwrap())
+        .collect();
+    assert!(
+        commands.contains(&stave_lsp::SHOW_IN_3D_COMMAND),
+        "{commands:?}"
+    );
+    assert!(
+        commands.contains(&stave_lsp::SHOW_WORK_CARD_COMMAND),
+        "{commands:?}"
+    );
+    // The example is laid out already.
+    let formatted = client.ok(
+        Formatting::METHOD,
+        json!({ "textDocument": { "uri": uri }, "options": { "tabSize": 2, "insertSpaces": true } }),
+    );
+    assert_eq!(formatted, json!([]));
 
     // Non-ASCII text in a comment before the name the edits change, so
     // a wrong column conversion would edit the wrong bytes.
@@ -440,8 +597,7 @@ fn an_editor_session_over_the_protocol() {
         .find(|file| file.text_document.uri == uri)
         .unwrap();
     assert_eq!(doors.text_document.version, Some(6));
-    let mut renamed = text.clone();
-    let mut edits: Vec<_> = doors
+    let edits: Vec<TextEdit> = doors
         .edits
         .iter()
         .map(|edit| match edit {
@@ -449,34 +605,134 @@ fn an_editor_session_over_the_protocol() {
             OneOf::Right(annotated) => annotated.text_edit.clone(),
         })
         .collect();
-    edits
-        .sort_by_key(|edit| std::cmp::Reverse((edit.range.start.line, edit.range.start.character)));
-    for edit in &edits {
-        let offset = |p: Position| {
-            let line_start: usize = renamed
-                .split_inclusive('\n')
-                .take(p.line as usize)
-                .map(str::len)
-                .sum();
-            let line = &renamed[line_start..];
-            let mut units = 0;
-            let mut bytes = 0;
-            for c in line.chars() {
-                if units >= p.character as usize {
-                    break;
-                }
-                units += c.len_utf16();
-                bytes += c.len_utf8();
-            }
-            line_start + bytes
-        };
-        let (start, end) = (offset(edit.range.start), offset(edit.range.end));
-        renamed.replace_range(start..end, &edit.new_text);
-    }
+    let renamed = edited(&text, &edits);
     assert!(renamed.contains("assembly door_left : casework.FramePanelDoor"));
     assert!(renamed.contains("mirror(door_left, about"));
     assert!(!renamed.contains("door_l "));
 
+    // A quick fix from a help line, on every keystroke: an import named
+    // with a reserved word gets an `as` name.
+    let alias = text.find(" as hw").unwrap();
+    change(
+        &client,
+        &uri,
+        7,
+        &mut text,
+        alias..alias + " as hw".len(),
+        "",
+    );
+    let reserved = client.diagnostics(&uri, |d| codes(d).iter().any(|c| c == "reserved-word"));
+    let reserved = reserved
+        .iter()
+        .find(|d| d.code == Some(NumberOrString::String("reserved-word".to_owned())))
+        .unwrap();
+    let actions = client.ok(
+        CodeActionRequest::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "range": reserved.range,
+            "context": { "diagnostics": [reserved] },
+        }),
+    );
+    let actions: Vec<CodeActionOrCommand> = serde_json::from_value(actions).unwrap();
+    let CodeActionOrCommand::CodeAction(action) = actions
+        .iter()
+        .find(|action| matches!(action, CodeActionOrCommand::CodeAction(a) if a.title.starts_with("Add \"as ")))
+        .unwrap_or_else(|| panic!("{actions:?}"))
+    else {
+        unreachable!()
+    };
+    let Some(DocumentChanges::Edits(files)) = action.edit.clone().unwrap().document_changes else {
+        panic!("expected document changes");
+    };
+    let edits: Vec<TextEdit> = files[0]
+        .edits
+        .iter()
+        .map(|edit| match edit {
+            OneOf::Left(edit) => edit.clone(),
+            OneOf::Right(annotated) => annotated.text_edit.clone(),
+        })
+        .collect();
+    let fixed = edited(&text, &edits);
+    assert!(fixed.contains("import \"./hardware\" as "), "{fixed}");
+    change(&client, &uri, 8, &mut text, alias..alias, " as hw");
+
+    // Formatting lays out the buffer as `stave fmt` does: the blank lines
+    // added at the end go, and the fields line up again round the
+    // comment typed into one.
+    let end = text.len();
+    change(&client, &uri, 9, &mut text, end..end, "\n\n\n");
+    let formatted = client.ok(
+        Formatting::METHOD,
+        json!({ "textDocument": { "uri": uri }, "options": { "tabSize": 2, "insertSpaces": true } }),
+    );
+    let formatted: Vec<TextEdit> = serde_json::from_value(formatted).unwrap();
+    let laid_out = edited(&text, &formatted);
+    let Ok(stave_app::format::Formatted::Changed(expected)) =
+        stave_app::format::format_text("doors.stave", &text)
+    else {
+        panic!("the buffer is not laid out");
+    };
+    assert_eq!(laid_out, expected);
+    assert!(laid_out.ends_with("across))\n"), "{laid_out}");
+
+    client.stop();
+}
+
+#[test]
+fn a_diagnostics_fix_is_a_quick_fix() {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/broken/out_of_range")
+        .canonicalize()
+        .unwrap();
+    let path = folder.join("project.stave");
+    let uri = document_uri(&Document::File(path.clone())).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut client = Client::start();
+    // A client that takes workspace edits as a map of changes.
+    client.ok(Initialize::METHOD, json!({ "capabilities": {} }));
+    client.notify(Initialized::METHOD, json!({}));
+    client.notify(
+        DidOpenTextDocument::METHOD,
+        json!({
+            "textDocument": { "uri": uri, "languageId": "stave", "version": 1, "text": text },
+        }),
+    );
+    let found = client.diagnostics(&uri, |d| codes(d).iter().any(|c| c == "out-of-range"));
+    let out_of_range = found
+        .iter()
+        .find(|d| d.code == Some(NumberOrString::String("out-of-range".to_owned())))
+        .unwrap();
+    let actions = client.ok(
+        CodeActionRequest::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "range": out_of_range.range,
+            "context": { "diagnostics": [out_of_range] },
+        }),
+    );
+    let actions: Vec<CodeActionOrCommand> = serde_json::from_value(actions).unwrap();
+    let CodeActionOrCommand::CodeAction(action) = actions
+        .iter()
+        .find(
+            |action| matches!(action, CodeActionOrCommand::CodeAction(a) if a.title == "Use 300mm"),
+        )
+        .unwrap_or_else(|| panic!("{actions:?}"))
+    else {
+        unreachable!()
+    };
+    assert_eq!(action.is_preferred, Some(true));
+    assert_eq!(
+        action.diagnostics.as_deref(),
+        Some(std::slice::from_ref(out_of_range))
+    );
+    #[expect(
+        clippy::mutable_key_type,
+        reason = "lsp-types' WorkspaceEdit keys its changes by Uri"
+    )]
+    let changes = action.edit.clone().unwrap().changes.unwrap();
+    let fixed = edited(&text, &changes[&uri]);
+    assert!(fixed.contains("length: 300mm"), "{fixed}");
     client.stop();
 }
 

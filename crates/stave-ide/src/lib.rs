@@ -14,6 +14,15 @@
 //!   above declarations ([`Analysis::lenses`]: "2 uses · show in 3D"),
 //!   "Go to file or name" ([`Analysis::search`]) and the fast tier of
 //!   diagnostics ([`Analysis::diagnostics`]).
+//! - [`Analysis::outline`] and [`Analysis::folds`] give a file's
+//!   declarations and the blocks inside them, and the ranges an editor
+//!   can fold; [`Analysis::help_fixes`] turns a fast diagnostic's help
+//!   line into a text edit when it says exactly what to write.
+//! - [`WorkedValues`] holds the values the background check worked out
+//!   (`stave_app::editor_check`), shown as inlay hints
+//!   ([`WorkedValues::inlay_hints`]: `length: fit` shows `= 844mm`) and
+//!   on hover ([`Analysis::hover_with_values`]) while the text they were
+//!   worked out for is unchanged.
 //! - [`Analysis::rename`] gives the text edits that rename an item and
 //!   every reference to it, refusing a name that would clash, and
 //!   [`Analysis::dependants`] lists the items that name an item, directly
@@ -116,10 +125,13 @@ mod analysis;
 mod buffers;
 mod completion;
 mod document;
+mod fixes;
 mod host;
 mod index;
+mod outline;
 mod rename;
 mod tokens;
+mod values;
 pub mod words;
 
 use std::path::{Path, PathBuf};
@@ -130,10 +142,13 @@ pub use completion::{
     Completion, CompletionKind, ParameterKind, SignatureHelp, SignatureParameter,
 };
 pub use document::{Document, STD_SCHEME};
+pub use fixes::HelpFix;
 pub use host::{AnalysisHost, QueryStats};
 pub use index::{Symbol, SymbolId, SymbolKind, UseKind};
+pub use outline::{Fold, FoldKind, OutlineEntry, OutlineKind};
 pub use rename::{RenameEdit, RenameError};
 pub use tokens::{SemanticToken, TokenClass, TokenModifier, TokenModifiers};
+pub use values::{InlayHint, ValueKind, ValueNote, WorkedValues};
 
 /// How deep [`project_files`] looks into subfolders.
 const FOLDER_DEPTH: usize = 4;

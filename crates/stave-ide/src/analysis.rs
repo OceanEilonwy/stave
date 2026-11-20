@@ -105,6 +105,9 @@ pub struct Hover {
     pub docs: Option<String>,
     /// Where it is declared, for a symbol.
     pub location: Option<Location>,
+    /// What it works out to in the project's units (`= 844mm`), when the
+    /// background check has worked it out ([`Analysis::hover_with_values`]).
+    pub value: Option<String>,
 }
 
 /// One step of the breadcrumbs: `doors.stave › assembly door_l › mount`.
@@ -116,7 +119,7 @@ pub struct Crumb {
     pub span: Span,
 }
 
-/// The note above a declaration: "2 uses · show in 3D".
+/// The note above a declaration: "2 uses · show in 3D · show work card".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lens {
     /// The declaration.
@@ -144,6 +147,12 @@ impl Lens {
     /// `true` when the 3D view can show it.
     pub fn shows_in_3d(&self) -> bool {
         self.kind.is_shown_in_3d()
+    }
+
+    /// `true` when it has a work card: a part (grammar, "Tooling and
+    /// editors": "show work card" on parts).
+    pub fn shows_work_card(&self) -> bool {
+        self.kind == SymbolKind::Part
     }
 }
 
@@ -416,6 +425,7 @@ impl Analysis {
                 signature: symbol.signature.clone(),
                 docs: (!docs.is_empty()).then_some(docs),
                 location: self.location(symbol.file, symbol.name_span),
+                value: None,
             });
         }
         // A word that is no item: a built-in function or an enum word.
@@ -439,6 +449,7 @@ impl Analysis {
                 signature,
                 docs: None,
                 location: None,
+                value: None,
             });
         }
         if let Some(set) = WordSet::ALL.iter().find(|set| set.contains(text)) {
@@ -448,9 +459,36 @@ impl Analysis {
                 signature: text.to_owned(),
                 docs: Some(format!("'{text}' is {}.", set.description())),
                 location: None,
+                value: None,
             });
         }
         None
+    }
+
+    /// [`Analysis::hover`] with the value the word's param, `let`, size or
+    /// `between(...)` works out to, when `values` has it: hovering
+    /// `cabinet_width` or the `fit` of `length: fit` shows `= 844mm`.
+    pub fn hover_with_values(
+        &self,
+        position: FilePosition,
+        values: &crate::values::WorkedValues,
+    ) -> Option<Hover> {
+        let hover = self.hover(position);
+        let Some(note) = values.at(self, position) else {
+            return hover;
+        };
+        let value = Some(format!("= {}", note.text));
+        Some(match hover {
+            Some(hover) => Hover { value, ..hover },
+            None => Hover {
+                span: note.span,
+                kind: note.kind.word().to_owned(),
+                signature: note.covers.split_whitespace().collect::<Vec<_>>().join(" "),
+                docs: None,
+                location: None,
+                value,
+            },
+        })
     }
 
     /// `true` when the word at a position stands where an item's name
