@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use stave_ide::{Analysis, AnalysisHost, Document, FilePosition, Overlay, UseKind};
+use stave_ide::{Analysis, AnalysisHost, Document, FilePosition, Overlay};
 use stave_lang::FileId;
 
 fn examples() -> PathBuf {
@@ -262,6 +262,56 @@ fn a_new_name_that_hides_the_prelude_resolves_its_users_again() {
     );
 }
 
+/// Edits in one module that change what other modules' files find: a
+/// member made private, renamed, a module losing its header, an assembly
+/// made an instance of another component, an import renamed, applied one
+/// on top of the other and then undone, each compared with a fresh load.
+#[test]
+fn edits_across_modules_give_what_a_fresh_load_gives() {
+    let folder = examples().join("clothing_cabinet");
+    let handles = folder.join("hardware/handles.stave");
+    let library = folder.join("hardware/library.stave");
+    let doors = folder.join("doors.stave");
+    let cabinet = folder.join("cabinet.stave");
+    let steps: [(&Path, &str, &str); 6] = [
+        (&handles, "kind brass_knob_26", "private kind brass_knob_26"),
+        (
+            &handles,
+            "private kind brass_knob_26",
+            "private kind brass_knob_27",
+        ),
+        (&library, "library \"Shop hardware\"", ""),
+        (&doors, "casework.FramePanelDoor", "casework.Drawer"),
+        (&doors, "as hw ", "as hx "),
+        (&cabinet, "project \"Clothing cabinet\"", "settings"),
+    ];
+    let mut host = AnalysisHost::new();
+    host.analyse(&folder, &Overlay::new()).unwrap();
+    let mut texts: Vec<(PathBuf, String)> = Vec::new();
+    let check = |host: &mut AnalysisHost, texts: &[(PathBuf, String)], what: &str| {
+        let mut overlay = Overlay::new();
+        for (path, text) in texts {
+            overlay.insert(path, text.clone());
+        }
+        let incremental = host.analyse(&folder, &overlay).unwrap();
+        let fresh = Analysis::load(&folder, &overlay).unwrap();
+        assert_eq!(everything(&incremental), everything(&fresh), "{what}");
+    };
+    for (path, from, to) in steps {
+        let text = match texts.iter().position(|(kept, _)| kept == path) {
+            Some(at) => texts.remove(at).1,
+            None => std::fs::read_to_string(path).unwrap(),
+        };
+        assert!(text.contains(from), "{} has no {from:?}", path.display());
+        texts.push((path.to_path_buf(), text.replacen(from, to, 1)));
+        check(&mut host, &texts, &format!("{from:?} -> {to:?}"));
+    }
+    // Undone one file at a time.
+    while let Some((path, _)) = texts.pop() {
+        check(&mut host, &texts, &format!("{} undone", path.display()));
+    }
+}
+
 fn mean(durations: &[Duration]) -> Duration {
     let total: Duration = durations.iter().sum();
     total / u32::try_from(durations.len().max(1)).unwrap()
@@ -337,5 +387,4 @@ fn keystrokes_on_the_largest_example() {
     );
     let keystroke = mean(&analyse) + mean(&tokens) + mean(&completions);
     println!("  a keystroke, all three           {keystroke:?}");
-    let _ = UseKind::Declared;
 }
