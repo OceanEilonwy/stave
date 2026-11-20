@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use stave_web::page::{NEEDS_WEBGPU, assemble};
+use stave_web::page::{NEEDS_WEBGPU, WASM_BLOCKED, assemble};
 
 /// What would make the page reach out to another origin.
 fn outside_references(page: &str) -> Vec<&'static str> {
@@ -30,6 +30,7 @@ fn viewer_html_is_self_contained() {
     assert!(page.contains("AGFzbQEAAAA="), "the module is inlined");
     assert!(page.contains("window.staveViewer"));
     assert!(page.contains(NEEDS_WEBGPU));
+    assert!(page.contains(WASM_BLOCKED));
 
     // The page tools/build-viewer.sh built, when it has been run.
     let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/viewer/stave-viewer.html");

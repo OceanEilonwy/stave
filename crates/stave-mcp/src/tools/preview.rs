@@ -16,6 +16,13 @@
 //! the project to `staveViewer.show` and calls no tool: the preview never
 //! changes anything. Every tool's text stands on its own, since Claude
 //! Code and Codex show no page.
+//!
+//! The viewer is WebAssembly, and the MCP Apps spec's default Content
+//! Security Policy for a page (`script-src 'self' 'unsafe-inline'`) has
+//! no `'wasm-unsafe-eval'`, nor any `_meta.ui.csp` field to ask for it. A
+//! host that applies that policy as it stands keeps the page from
+//! compiling the viewer; the page then says so and points to the link in
+//! `preview`'s answer, which opens the same preview in a web browser.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -30,14 +37,14 @@ use rmcp::{tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, json};
-use stave_history::{ProjectFiles, SuggestionId};
-use stave_link::Shown;
+use stave_history::{ProjectFiles, RevisionId, SuggestionId};
+use stave_link::{LinkError, Shown};
 use stave_render::{Backdrop, Frame, RenderError, Renderer};
 use stave_scene::Orbit;
 
 use super::projects::open;
 use super::{blocking, finish};
-use crate::agent_line;
+use crate::agent_line::{self, Replay};
 use crate::tools::changing::with_header;
 use crate::{McpError, StaveServer};
 
@@ -343,21 +350,37 @@ impl StaveServer {
         let project = self.require_project().await?;
         let folder = project.folder.clone();
         let (shown, title) = blocking(move || {
-            let mut shown = json!({
-                "folder": folder.display().to_string(),
-                "files": project_files(&folder)?,
-            });
+            let mut files = project_files(&folder)?;
             let mut title = None;
+            let mut fields = Map::new();
             if let Some(id) = suggestion {
-                let (changes, suggestion_title) = suggestion_changes(&folder, &id)?;
-                if let Some(fields) = shown.as_object_mut() {
-                    fields.insert("suggestion".to_owned(), json!(changes));
-                    fields.insert("suggestion_id".to_owned(), json!(id));
-                    fields.insert("suggestion_title".to_owned(), json!(suggestion_title));
+                let view = suggestion_view(&folder, &id)?;
+                fields.insert("suggestion".to_owned(), json!(view.changes));
+                fields.insert("suggestion_id".to_owned(), json!(id));
+                fields.insert("suggestion_title".to_owned(), json!(view.title));
+                match &view.over {
+                    Over::Project => {
+                        fields.insert("suggestion_over".to_owned(), json!("project"));
+                    }
+                    Over::Base {
+                        revision,
+                        files: base,
+                    } => {
+                        // The ghost is drawn over the project as the
+                        // suggestion found it, so the person's later
+                        // edits aren't shown as the suggestion undoing them.
+                        files.extend(text_files(base));
+                        fields.insert("suggestion_over".to_owned(), json!("base"));
+                        fields.insert("suggestion_base".to_owned(), json!(revision.as_str()));
+                    }
                 }
-                title = Some((id, suggestion_title));
+                title = Some((id, view));
             }
-            Ok((shown, title))
+            let mut shown = Map::new();
+            shown.insert("folder".to_owned(), json!(folder.display().to_string()));
+            shown.insert("files".to_owned(), json!(files));
+            shown.extend(fields);
+            Ok((serde_json::Value::Object(shown), title))
         })
         .await?;
         let viewer = self.viewer_server().await?;
@@ -370,11 +393,21 @@ impl StaveServer {
              this app stays connected to Stave.",
             project.folder.display()
         );
-        if let Some((id, suggestion_title)) = &title {
-            text.push_str(&format!(
-                "\nSuggestion {id} (\"{suggestion_title}\") is drawn as a ghost over the \
-                 project, tinted by whether it checks clean."
-            ));
+        if let Some((id, view)) = &title {
+            let suggestion_title = &view.title;
+            match &view.over {
+                Over::Project => text.push_str(&format!(
+                    "\nSuggestion {id} (\"{suggestion_title}\") is drawn as a ghost over the \
+                     project as it is now, tinted by whether it checks clean."
+                )),
+                Over::Base { revision, .. } => text.push_str(&format!(
+                    "\nSuggestion {id} (\"{suggestion_title}\") no longer fits the project as it \
+                     is now, so the preview shows the project as it was when the suggestion was \
+                     made (revision {revision}), with the suggestion drawn as a ghost over it, \
+                     tinted by whether it checks clean. Changes made to the project since then \
+                     aren't shown."
+                )),
+            }
         }
         let mut structured = shown;
         if let Some(fields) = structured.as_object_mut() {
@@ -397,7 +430,7 @@ impl StaveServer {
             ),
             None => None,
         };
-        match stave_link::show_in_stave(&project.folder, patch.as_deref()).await? {
+        match window_answer(stave_link::show_in_stave(&project.folder, patch.as_deref()).await)? {
             Shown::NotRunning => Err(McpError::StaveNotRunning),
             Shown::Opened => {
                 let text = match &suggestion {
@@ -482,6 +515,17 @@ impl StaveServer {
     }
 }
 
+/// The window's answer in the server's words: with no session bus (a
+/// headless or SSH session) the window can't be running there, so that
+/// is said as plainly as a window that isn't open.
+fn window_answer(answer: Result<Shown, LinkError>) -> Result<Shown, McpError> {
+    match answer {
+        Ok(shown) => Ok(shown),
+        Err(LinkError::NoSessionBus(_)) => Err(McpError::StaveNotRunning),
+        Err(other) => Err(McpError::ShowInStave(other)),
+    }
+}
+
 /// `error` in the server's words: no adapter is said plainly.
 fn render_error(error: RenderError) -> McpError {
     match error {
@@ -542,17 +586,66 @@ fn find_suggestion(
         .ok_or_else(|| McpError::NoSuchSuggestion(id.to_owned()))
 }
 
-/// The text files suggestion `id` changes or adds, against the main line
-/// it started from, with its title.
-fn suggestion_changes(
-    folder: &Path,
-    id: &str,
-) -> Result<(BTreeMap<String, String>, String), McpError> {
+/// What a previewed suggestion is drawn over.
+enum Over {
+    /// The project as it is in its folder now.
+    Project,
+    /// The project as the suggestion found it: it no longer fits the
+    /// project as it is.
+    Base {
+        /// The revision on main the suggestion starts from.
+        revision: RevisionId,
+        /// The project's files at that revision.
+        files: ProjectFiles,
+    },
+}
+
+/// A suggestion as the preview shows it.
+struct SuggestionView {
+    /// The text files it changes or adds against what it is drawn over.
+    changes: BTreeMap<String, String>,
+    /// What it is drawn over.
+    over: Over,
+    /// Its title.
+    title: String,
+}
+
+/// Suggestion `id` of the project in `folder`, laid over the project as
+/// it is now: its own files when the project hasn't changed since it was
+/// made, else its patches tried again on the project. When they no
+/// longer fit it is laid over the revision it started from instead, so a
+/// change made since is never shown as the suggestion taking it out.
+fn suggestion_view(folder: &Path, id: &str) -> Result<SuggestionView, McpError> {
     let history = agent_line::history(folder)?;
     let suggestion = find_suggestion(&history, id)?;
+    let base = history.files_at(&suggestion.base)?;
+    let now = history.read_folder()?;
+    if now == base {
+        let after = history.suggestion_files(&suggestion.id)?;
+        return Ok(SuggestionView {
+            changes: changed_text(&base, &after),
+            over: Over::Project,
+            title: suggestion.title,
+        });
+    }
+    // A project that doesn't load or a patch that no longer fits leaves
+    // the revision the suggestion started from to draw it over.
+    if let Ok(Replay::Fits { files, .. }) = agent_line::replay(folder, &now, &suggestion.patches) {
+        return Ok(SuggestionView {
+            changes: changed_text(&now, &files),
+            over: Over::Project,
+            title: suggestion.title,
+        });
+    }
     let after = history.suggestion_files(&suggestion.id)?;
-    let before = history.files_at(&suggestion.base)?;
-    Ok((changed_text(&before, &after), suggestion.title))
+    Ok(SuggestionView {
+        changes: changed_text(&base, &after),
+        over: Over::Base {
+            revision: suggestion.base,
+            files: base,
+        },
+        title: suggestion.title,
+    })
 }
 
 /// The files of `after` that `before` doesn't hold as they are, those
@@ -567,6 +660,15 @@ fn changed_text(before: &ProjectFiles, after: &ProjectFiles) -> BTreeMap<String,
                 .map(|text| (path.to_string(), text.to_owned()))
         })
         .collect()
+}
+
+/// The text files of `files`, by their paths in the project folder.
+fn text_files(files: &ProjectFiles) -> impl Iterator<Item = (String, String)> + '_ {
+    files.iter().filter_map(|(path, contents)| {
+        std::str::from_utf8(contents)
+            .ok()
+            .map(|text| (path.to_string(), text.to_owned()))
+    })
 }
 
 /// A suggestion's patches as one patch file: one `stave` header, then
@@ -617,6 +719,29 @@ mod tests {
         assert!(!page.contains("@PROTOCOL@") && !page.contains("@HEIGHT@"));
         assert!(!page.contains("tools/call"));
         assert!(local_page().contains("/scene?token="));
+    }
+
+    #[test]
+    fn no_session_bus_is_stave_not_running() {
+        let refused = window_answer(Err(LinkError::NoSessionBus(zbus::Error::Address(
+            "no such socket".to_owned(),
+        ))));
+        let Err(error) = refused else {
+            panic!("refused: {refused:?}");
+        };
+        assert!(matches!(error, McpError::StaveNotRunning), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "Stave isn't running. Open it and ask again."
+        );
+        assert!(matches!(
+            window_answer(Ok(Shown::NotRunning)),
+            Ok(Shown::NotRunning)
+        ));
+        assert!(matches!(
+            window_answer(Err(LinkError::Bus(zbus::Error::Unsupported))),
+            Err(McpError::ShowInStave(_))
+        ));
     }
 
     #[test]

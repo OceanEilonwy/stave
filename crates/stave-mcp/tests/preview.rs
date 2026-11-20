@@ -375,3 +375,203 @@ async fn preview_shows_a_suggestion_over_the_project() {
     assert!(is_error(&missing), "{missing:?}");
     assert!(common::text(&missing).contains("list_suggestions"));
 }
+
+/// An edit the person makes to `carcass.stave` after the suggestion.
+const LATER_EDIT: &str = "\n// Edited by the person after the suggestion.\n";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suggestion_is_drawn_over_the_project_as_it_is_now() {
+    let test = "a_suggestion_is_drawn_over_the_project_as_it_is_now";
+    let connection = connect(options(test)).await;
+    let folder = example_copy("clothing_cabinet", test);
+    let opened = connection
+        .call(
+            "open_project",
+            json!({ "path": folder.display().to_string(), "start_versions": true }),
+        )
+        .await;
+    assert!(!is_error(&opened), "{opened:?}");
+    let suggested = connection
+        .call("suggest", json!({ "patch": SHOE_SHELF, "title": "Shoes" }))
+        .await;
+    assert!(!is_error(&suggested), "{suggested:?}");
+    let id = structured(&suggested)["id"].as_str().unwrap().to_owned();
+
+    // The person edits the file the suggestion changes.
+    let carcass = folder.join("carcass.stave");
+    let mut text = std::fs::read_to_string(&carcass).unwrap();
+    text.push_str(LATER_EDIT);
+    std::fs::write(&carcass, &text).unwrap();
+
+    let result = connection
+        .call("preview", json!({ "suggestion": id }))
+        .await;
+    assert!(!is_error(&result), "{result:?}");
+    let shown = structured(&result);
+    assert_eq!(shown["suggestion_over"], "project", "{shown}");
+    let project = shown["files"]["carcass.stave"].as_str().unwrap();
+    assert!(
+        project.contains(LATER_EDIT.trim()),
+        "the project as it is now"
+    );
+    let ghost = shown["suggestion"]["carcass.stave"].as_str().unwrap();
+    // The ghost keeps the person's edit: it isn't shown as taken out.
+    assert!(ghost.contains("shoe_shelf"), "{ghost}");
+    assert!(ghost.contains(LATER_EDIT.trim()), "{ghost}");
+    assert!(common::text(&result).contains("as it is now"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suggestion_that_no_longer_fits_is_drawn_over_its_base() {
+    let test = "a_suggestion_that_no_longer_fits_is_drawn_over_its_base";
+    let connection = connect(options(test)).await;
+    let folder = example_copy("clothing_cabinet", test);
+    let opened = connection
+        .call(
+            "open_project",
+            json!({ "path": folder.display().to_string(), "start_versions": true }),
+        )
+        .await;
+    assert!(!is_error(&opened), "{opened:?}");
+    let suggested = connection
+        .call("suggest", json!({ "patch": SHOE_SHELF, "title": "Shoes" }))
+        .await;
+    assert!(!is_error(&suggested), "{suggested:?}");
+    let id = structured(&suggested)["id"].as_str().unwrap().to_owned();
+
+    // The person renames the divider the shoe shelf is placed against,
+    // so the suggestion's patch no longer fits.
+    let carcass = folder.join("carcass.stave");
+    let before = std::fs::read_to_string(&carcass).unwrap();
+    let after = before.replace("divider", "partition");
+    assert_ne!(before, after);
+    std::fs::write(&carcass, &after).unwrap();
+
+    let result = connection
+        .call("preview", json!({ "suggestion": id }))
+        .await;
+    assert!(!is_error(&result), "{result:?}");
+    let shown = structured(&result);
+    assert_eq!(shown["suggestion_over"], "base", "{shown}");
+    assert!(shown["suggestion_base"].is_string(), "{shown}");
+    // The project is drawn as the suggestion found it, not with the
+    // rename, so the ghost shows only what the suggestion changes.
+    assert_eq!(shown["files"]["carcass.stave"].as_str().unwrap(), before);
+    let ghost = shown["suggestion"]["carcass.stave"].as_str().unwrap();
+    assert!(ghost.contains("shoe_shelf") && ghost.contains("divider"));
+    let text = common::text(&result);
+    assert!(text.contains("no longer fits"), "{text}");
+}
+
+/// The Content Security Policy the MCP Apps spec (2026-01-26) gives a UI
+/// resource that declares no domains: it has no `'wasm-unsafe-eval'`.
+const APPS_DEFAULT_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; \
+                                style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
+                                media-src 'self' data:; connect-src 'none'";
+
+/// What the page says when its host won't let it compile WebAssembly.
+const WASM_BLOCKED: &str = "This app can't run the 3D preview here. Open the link from the \
+                            preview's answer in a web browser.";
+
+/// A Chromium to load pages in: `STAVE_CHROMIUM`, or one on `PATH`.
+fn chromium() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("STAVE_CHROMIUM") {
+        return Some(path.into());
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .flat_map(|folder| {
+            [
+                "chromium",
+                "chromium-browser",
+                "google-chrome",
+                "google-chrome-stable",
+            ]
+            .map(|name| folder.join(name))
+        })
+        .find(|candidate| candidate.is_file())
+}
+
+/// Serves `page` with `csp` as its Content-Security-Policy header to
+/// every request, on a loopback port; returns the address.
+async fn serve_with_csp(page: String, csp: &'static str) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let page = std::sync::Arc::new(page);
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let page = page.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+                     Content-Security-Policy: {csp}\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n",
+                    page.len()
+                );
+                let _ = stream.write_all(head.as_bytes()).await;
+                let _ = stream.write_all(page.as_bytes()).await;
+            });
+        }
+    });
+    address
+}
+
+/// The MCP App page under the host's default Content Security Policy:
+/// Chromium (which Claude Desktop is built on) refuses to compile its
+/// WebAssembly, and the page says so in plain words instead of staying
+/// blank or showing the browser's error.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_page_says_why_under_the_apps_default_csp() {
+    let page = stave_mcp::tools::preview::app_page();
+    if page.contains("Viewer not built") {
+        eprintln!("the viewer isn't built (run tools/build-viewer.sh); skipped");
+        return;
+    }
+    let Some(chromium) = chromium() else {
+        eprintln!("no Chromium on PATH (or STAVE_CHROMIUM); skipped");
+        return;
+    };
+    let address = serve_with_csp(page, APPS_DEFAULT_CSP).await;
+    let profile = common::scratch_folder("the_app_page_says_why_under_the_apps_default_csp");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(chromium)
+            .arg("--headless")
+            .arg("--no-sandbox")
+            .arg("--no-first-run")
+            .arg("--enable-unsafe-webgpu")
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg("--virtual-time-budget=10000")
+            .arg("--dump-dom")
+            .arg(format!("http://{address}/"))
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let dom = String::from_utf8_lossy(&output.stdout);
+    let message = dom
+        .split_once("<p id=\"message\"")
+        .and_then(|(_, rest)| rest.split_once("</p>"))
+        .map(|(message, _)| message)
+        .unwrap_or_else(|| {
+            panic!(
+                "no message in the page; Chromium said: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert!(
+        message.contains(WASM_BLOCKED),
+        "the page says why it can't draw: {message}"
+    );
+    assert!(!message.contains("hidden"), "the message shows: {message}");
+}

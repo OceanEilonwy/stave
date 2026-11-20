@@ -36,6 +36,8 @@ base64 = "0.22"
 glam = "0.30"
 rmcp = { version = "3.11", features = ["client", "server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "net"] }
+# To make stave_link's "no session bus" error in a unit test.
+zbus = "5"
 
 [lints]
 workspace = true
