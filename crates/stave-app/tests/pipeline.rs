@@ -76,6 +76,7 @@ fn every_example_and_standard_module_checks_clean() {
             "side_table",
             "side_table_from_box",
             "stool",
+            "tapered_table",
             "wall_shelf",
         ],
         "every example project solves with no diagnostics"

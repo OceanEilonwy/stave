@@ -1,0 +1,112 @@
+stave 1
+
+// A small hall table: four legs tapered on their two inside faces, the
+// Shaker way, and aprons joined to the legs with mortise and tenon. The
+// front and back aprons have a shallow arch sawn into their lower edges.
+// The top is screwed on from below through two cleats.
+//
+// The top is the ground part: the legs hang from its corners, and the floor
+// is wherever the legs end.
+
+project "Tapered hall table" {
+  goal:       "A small oak hall table with tapered legs and arched aprons"
+  units:      mm
+  resolution: 0.5mm
+  style:      "shaker"
+}
+
+// ---- parameters ----
+param table_height = 760mm within 700mm..800mm
+param top_length   = 900mm within 700mm..1100mm
+param top_depth    = 350mm within 300mm..450mm
+let leg_inset   = 25mm                        // from the edge of the top to the outside of a leg
+let setback     = 5mm                         // aprons sit this far in from the leg faces
+let apron_width = 110mm
+
+// ---- stock ----
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+
+// ---- the top and legs ----
+
+part top : oak_19 {
+  length: top_length
+  width:  top_depth
+  place {
+    ground
+  }
+}
+
+/// The front left leg. It stays square where the aprons join, then tapers
+/// on its two inside faces (right and back) to 25mm at the foot. The other
+/// three legs are its mirror images, so each tapers on its own inside
+/// faces.
+part leg_front_left : oak_45_sq {
+  length: table_height - top.thickness
+  shape:  tapered(to: 25mm, toward: bottom, on: [right, back], square: apron_width + 15mm)
+  place {
+    orient(length: up, width: right)
+    flush(top.left, inset: leg_inset)
+    flush(top.front, inset: leg_inset)
+    against(top.bottom)
+  }
+}
+
+part leg_front_right = mirror(leg_front_left, about: mid(top, across))
+part leg_back_left   = mirror(leg_front_left, about: mid(top, deep))
+part leg_back_right  = mirror(leg_front_right, about: mid(top, deep))
+
+// ---- aprons: the frame under the top ----
+
+/// The front apron, with an arch rising 30mm into its lower edge, leaving
+/// 40mm straight at each end beside the legs.
+part apron_front : oak_19 {
+  length: fit
+  width:  apron_width
+  shape:  arched(rise: 30mm, on: bottom, ends: 40mm)
+  place {
+    orient(length: right, width: up)
+    against(top.bottom)
+    center(top, across)
+    flush(leg_front_left.front, inset: setback)
+  }
+}
+
+part apron_left : oak_19 {
+  length: fit
+  width:  apron_width
+  place {
+    orient(length: back, width: up)
+    against(top.bottom)
+    flush(leg_front_left.left, inset: setback)
+    center(top, deep)
+  }
+}
+
+part apron_back  = mirror(apron_front, about: mid(top, deep))
+part apron_right = mirror(apron_left, about: mid(top, across))
+
+/// The cleats are glued inside the front and back aprons, flush with their
+/// top edges; the top is screwed on through them.
+part cleat_front : oak_19 {
+  length: between(leg_front_left, leg_front_right)
+  width:  30mm
+  note:   "Glue to the inside of the apron, flush with its top edge; slot the screw holes across the grain so the top can move"
+  place {
+    against(top.bottom)
+    center(top, across)
+    against(apron_front.back)
+  }
+}
+
+part cleat_back = mirror(cleat_front, about: mid(top, deep))
+
+// ---- joints ----
+joint apron_tenons : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: [leg_front_left, leg_front_right, leg_back_left, leg_back_right], length: 20mm)
+joint top_screws   : screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
+joint cleat_glue   : glued_face([cleat_front, cleat_back], into: [apron_front, apron_back])
+
+// ---- scenes ----
+scene frame "Without the top" {
+  hide: top
+}

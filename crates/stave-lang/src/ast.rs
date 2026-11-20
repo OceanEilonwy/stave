@@ -1989,7 +1989,7 @@ pub enum TypeName {
     Direction,
     /// `overlay(...)` or `inset(...)`.
     Mount,
-    /// `turned(profile)`.
+    /// `turned(profile)`, `tapered(...)` or `arched(...)`.
     Shape,
     /// `joined(by: ...)`: how the boards of a part are joined.
     Boards,

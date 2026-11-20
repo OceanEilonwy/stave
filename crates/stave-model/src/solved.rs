@@ -1158,6 +1158,13 @@ pub enum CutSource {
         /// source, for a mirror image).
         part: PartId,
     },
+    /// The part's own `shape:`, a taper or an arch (grammar, "Shaped
+    /// parts").
+    Shape {
+        /// The part whose `shape:` it is written in (a mirror image's
+        /// source, for a mirror image).
+        part: PartId,
+    },
 }
 
 /// A depth: a length below the face, or all the way through.

@@ -389,6 +389,26 @@ pub enum BuiltinCall {
         /// The profile turned.
         profile: RExpr,
     },
+    /// `tapered(to:, toward:, on:, square:)` (grammar, "Shaped parts").
+    Tapered {
+        /// The size at the narrow end.
+        to: RExpr,
+        /// The end the taper runs to, as placed.
+        toward: RExpr,
+        /// The face or faces planed, as placed.
+        on: RExpr,
+        /// How far it stays square from the wide end.
+        square: Option<RExpr>,
+    },
+    /// `arched(rise:, on:, ends:)` (grammar, "Shaped parts").
+    Arched {
+        /// How far the arch rises into the part at its middle.
+        rise: RExpr,
+        /// The face it is sawn into, as placed.
+        on: RExpr,
+        /// How much of the face stays straight at each end.
+        ends: Option<RExpr>,
+    },
     /// `joined(by:)`
     Joined {
         /// The joint kind or kinds.
@@ -539,6 +559,8 @@ impl BuiltinCall {
             BuiltinCall::Overlay { .. } => Builtin::Overlay,
             BuiltinCall::Inset { .. } => Builtin::Inset,
             BuiltinCall::Turned { .. } => Builtin::Turned,
+            BuiltinCall::Tapered { .. } => Builtin::Tapered,
+            BuiltinCall::Arched { .. } => Builtin::Arched,
             BuiltinCall::Joined { .. } => Builtin::Joined,
             BuiltinCall::Spliced { .. } => Builtin::Spliced,
             BuiltinCall::Box { .. } => Builtin::Box,
@@ -567,6 +589,8 @@ impl BuiltinCall {
             | BuiltinCall::Overlay { .. }
             | BuiltinCall::Inset { .. }
             | BuiltinCall::Turned { .. }
+            | BuiltinCall::Tapered { .. }
+            | BuiltinCall::Arched { .. }
             | BuiltinCall::Joined { .. }
             | BuiltinCall::Spliced { .. }
             | BuiltinCall::Box { .. }
@@ -635,6 +659,22 @@ impl BuiltinCall {
             | BuiltinCall::Gap { distance: one } => [Some(one), None, None, None, None, None],
             BuiltinCall::Spliced { by, at, from } => {
                 [Some(by), Some(at), Some(from), None, None, None]
+            }
+            BuiltinCall::Tapered {
+                to,
+                toward,
+                on,
+                square,
+            } => [
+                Some(to),
+                Some(toward),
+                Some(on),
+                square.as_ref(),
+                None,
+                None,
+            ],
+            BuiltinCall::Arched { rise, on, ends } => {
+                [Some(rise), Some(on), ends.as_ref(), None, None, None]
             }
             BuiltinCall::Box {
                 length,

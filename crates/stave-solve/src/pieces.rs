@@ -1249,6 +1249,7 @@ impl Solver<'_> {
             }
             CutSource::Boards { part, .. } => (format!("{}'s boards", self.part_name(part)), None),
             CutSource::Edges { part } => (format!("{}'s edges", self.part_name(part)), None),
+            CutSource::Shape { part } => (format!("{}'s shape", self.part_name(part)), None),
         };
         let what = cut_words(cut);
         let mut diagnostic = Diagnostic::error(
@@ -1748,9 +1749,10 @@ fn rebind_split(design: &mut DesignDraft, split: Split) {
         for cut in &mut part.cuts {
             let piece = match cut.source {
                 CutSource::Joint { joint, pair } => chosen.get(&(joint, pair)).copied(),
-                CutSource::Hardware { .. } | CutSource::Boards { .. } | CutSource::Edges { .. } => {
-                    None
-                }
+                CutSource::Hardware { .. }
+                | CutSource::Boards { .. }
+                | CutSource::Edges { .. }
+                | CutSource::Shape { .. } => None,
             };
             let Some(piece) = piece else {
                 continue;
