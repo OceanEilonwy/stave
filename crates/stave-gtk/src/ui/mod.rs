@@ -1391,8 +1391,9 @@ pub(in crate::ui) fn build_widgets(
         update::project::workbench_said,
     )?;
 
-    // Each tool group laid out for the spot the workbench starts it in.
-    floats.refresh(workbench.tool_spots());
+    // Each tool group is laid out for the spot the workbench starts it
+    // in when the workbench's first `ToolsChanged` reaches the window
+    // (`RenderingInput::ToolsMoved`), before the window is first drawn.
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)

@@ -582,6 +582,12 @@ impl Component for NewProjectComponent {
 pub(super) struct NewProjectDialog {
     /// The dialog.
     pub(super) dialog: adw::Dialog,
+    /// Held so the component lives while the dialog shows (tests read
+    /// its model).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only held: dropping it shuts the dialog down")
+    )]
     controller: Controller<NewProjectComponent>,
 }
 
@@ -607,13 +613,7 @@ impl NewProjectDialog {
     }
 
     /// What the fields hold.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "kept for the dialog's API; only tests read the fields from outside now"
-        )
-    )]
+    #[cfg(test)]
     pub(super) fn answers(&self) -> Answers {
         self.controller.model().form.answers()
     }

@@ -1307,10 +1307,8 @@ impl Window {
     /// Enter and Escape work there again.
     pub(in crate::ui) fn option_search_closed(&mut self) {
         self.editing.search_open = None;
-        let card = self.editing.card.widget();
-        if card.is_visible() {
-            card.grab_focus();
-        }
+        // Only fails once the card has shut down, with the window.
+        let _ = self.editing.card.sender().send(EditCardInput::Focus);
     }
 
     /// Opens the search over a setting's options, `query` typed; the
