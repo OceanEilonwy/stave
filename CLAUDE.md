@@ -64,8 +64,8 @@ invalid states unrepresentable.
   allowed it, `stave-gtk` denies it everywhere else, and each `unsafe`
   block there carries a `// SAFETY:` comment.
 - **Floats** (`f32`/`f64`) only at the geometry and rendering boundary
-  (`stave-geom`, `stave-scene`, `stave-gtk`, drawings in `stave-output`).
-  Convert from exact values in one place.
+  (`stave-geom`, `stave-scene`, `stave-render`, `stave-gtk`, drawings in
+  `stave-output`). Convert from exact values in one place.
 - **Determinism:** outputs (diagnostics order, cut lists, PDFs, plans) must be
   identical run to run. Use `BTreeMap`/sorted `Vec`s where order is observable.
 - **Performance:** no needless clones or allocation in hot paths; prefer
@@ -79,14 +79,17 @@ invalid states unrepresentable.
 Dependency order (a crate depends only on crates above it):
 `stave-lang` → `stave-schema` → `stave-modules` → `stave-model` → `stave-solve`
 → `stave-geom` → `stave-check` → `stave-workplan` → `stave-scene` →
-`stave-output` → `stave-app` → `stave-cli`, `stave-gtk`.
+`stave-render` → `stave-output` → `stave-app` → `stave-cli`, `stave-gtk`.
 
 `stave-ide` (the editor's navigation layer: names, uses, hovers, colours,
 open buffers) sits beside that chain after `stave-modules` and before
 `stave-app`: it depends only on `stave-lang`, `stave-schema` and
 `stave-modules`, has no GTK types, and the future `stave-lsp` builds on it.
 
-- Only `stave-gtk` may depend on GTK, libadwaita or wgpu.
+- Only `stave-gtk` may depend on GTK or libadwaita; only `stave-render`,
+  `stave-web` and `stave-gtk` may depend on wgpu. `stave-render` (the
+  renderer, moved out of `stave-gtk`) has no GTK, sets its device up
+  `async` (no `pollster` inside) and builds for `wasm32-unknown-unknown`.
 - `stave-gtk` contains no business logic: handlers call into `stave-app`.
 - **No kind in the core.** `stave-lang`, `stave-schema`, `stave-modules`,
   `stave-model`, `stave-solve`, `stave-geom`, `stave-check`,
