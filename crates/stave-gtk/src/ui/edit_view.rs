@@ -155,8 +155,9 @@ struct GhostView {
 }
 
 impl EditView {
-    /// The widgets, hidden until an edit starts. The menu's and the
-    /// card's outputs go to the window's input as [`EditingInput`]s.
+    /// The widgets, hidden until an edit starts. The outputs of the menu,
+    /// the card, the change's card and dialog, the hold card and the
+    /// item's tools go to the window's input as [`EditingInput`]s.
     pub(super) fn new(input: &relm4::Sender<WindowInput>) -> EditView {
         let menu = EditMenuComponent::builder()
             .launch(())
@@ -177,12 +178,12 @@ impl EditView {
             .margin_bottom(16)
             .visible(false)
             .build();
-        let changes = changes::Changes::new();
-        let hold = hold::Hold::new();
+        let changes = changes::Changes::new(input);
+        let hold = hold::Hold::new(input);
         let panel = EditPanel::new(&[
             card.widget().upcast_ref(),
             changes.card.root.upcast_ref(),
-            hold.card.root.upcast_ref(),
+            hold.card.widget().upcast_ref(),
         ]);
         EditView {
             menu,
@@ -200,7 +201,7 @@ impl EditView {
             grips: grips::GripView::new(),
             state: EditState::default(),
             changes,
-            tools: item_tools::ItemTools::new(),
+            tools: item_tools::ItemTools::new(input),
             hold,
             repeats: repeat_handles::Repeats::new(),
             pending: editor_link::PendingPanel::new(),

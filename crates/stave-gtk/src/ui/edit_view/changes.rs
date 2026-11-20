@@ -14,10 +14,10 @@
 //!
 //! The card and the removal's dialog are relm4 components
 //! ([`ChangeCardComponent`], [`DependantsComponent`]) following
-//! `docs/relm4-migration.md`; [`ChangeCard`] and [`DependantsDialog`] keep
-//! the older API in front of them while the window (`impl Window`) is old
-//! code. The window shows and hides them at once; what they say is drawn
-//! when the main loop next runs.
+//! `docs/relm4-migration.md`. The window owns their controllers
+//! ([`ChangeCard`], [`DependantsDialog`] in [`Changes`]), launched with
+//! their outputs forwarded to its input. It shows and hides them at once;
+//! what they say is drawn when the main loop next runs.
 //!
 //! ```text
 //! ┌────────────────────────────────────────┐
@@ -37,16 +37,15 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::change::{Change, ChangeDetail, ChangeRequest};
 use stave_app::edit::Verdict;
 use stave_app::editing::{EditCommand, Progress};
 use stave_app::remove::Dependants;
 
-use super::super::Window;
 use super::super::edit_card::diagnostic_head;
-use super::super::relm4_shim::Bridge;
 use super::super::sections;
+use super::super::{Window, WindowInput};
 use super::card_verdict;
 use crate::ui::update::editing::EditingInput;
 
@@ -670,10 +669,10 @@ fn verdict_section(words: &ChangeWords, sender: &ComponentSender<ChangeCardCompo
     section
 }
 
-/// The card for a change of the design, behind the API the window still
-/// uses: it owns the component (dropping it shuts the component down),
-/// passes [`ChangeCard::show`] on as a message and the card's actions to
-/// the callback.
+/// The card for a change of the design as the window holds it: the
+/// controller (launched with its outputs forwarded to the window's input,
+/// so dropping it shuts the component down) and the widgets the window
+/// places and fills.
 pub(in crate::ui) struct ChangeCard {
     /// The card, in the Edit panel; its owner shows and hides it.
     pub(in crate::ui) root: gtk::Box,
@@ -681,41 +680,50 @@ pub(in crate::ui) struct ChangeCard {
     pub(in crate::ui) grip_slot: gtk::Box,
     /// Where the window puts the "Pending" section.
     pub(in crate::ui) pending_slot: gtk::Box,
-    bridge: Bridge<ChangeCardComponent>,
+    controller: Controller<ChangeCardComponent>,
 }
 
 impl ChangeCard {
-    /// An empty card, hidden.
-    pub(in crate::ui) fn new() -> ChangeCard {
+    /// An empty card, hidden, whose actions reach `input` as
+    /// [`EditingInput::ChangeAction`].
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> ChangeCard {
+        let (init, grip_slot, pending_slot) = ChangeCardInit::new();
+        let controller = ChangeCardComponent::builder()
+            .launch(init)
+            .forward(input, change_card_heard);
+        ChangeCard {
+            root: controller.widget().clone(),
+            grip_slot,
+            pending_slot,
+            controller,
+        }
+    }
+}
+
+impl ChangeCardInit {
+    /// Two empty slots, with clones of them for the owner to fill.
+    fn new() -> (ChangeCardInit, gtk::Box, gtk::Box) {
         let grip_slot = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
         let pending_slot = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        let bridge = Bridge::<ChangeCardComponent>::launch(ChangeCardInit {
-            grip_slot: grip_slot.clone(),
-            pending_slot: pending_slot.clone(),
-        });
-        ChangeCard {
-            root: bridge.widget().clone(),
+        (
+            ChangeCardInit {
+                grip_slot: grip_slot.clone(),
+                pending_slot: pending_slot.clone(),
+            },
             grip_slot,
             pending_slot,
-            bridge,
-        }
+        )
     }
+}
 
-    /// Calls `callback` with each thing the user does on the card.
-    pub(in crate::ui) fn connect_action(&self, callback: impl Fn(ChangeAction) + 'static) {
-        self.bridge.connect(move |output| match output {
-            ChangeCardOutput::Action(action) => callback(action),
-        });
-    }
-
-    /// Shows what a change's card says, when the main loop next runs.
-    pub(in crate::ui) fn show(&self, words: &ChangeWords) {
-        self.bridge
-            .send(ChangeCardInput::Show(Box::new(words.clone())));
+/// What the change's card tells the window, as the window's input.
+fn change_card_heard(output: ChangeCardOutput) -> WindowInput {
+    match output {
+        ChangeCardOutput::Action(action) => EditingInput::ChangeAction(action).into(),
     }
 }
 
@@ -926,58 +934,47 @@ impl Component for DependantsComponent {
     }
 }
 
-/// The removal's dialog, behind the API the window still uses: it owns the
-/// component and passes the answers to the callback.
+/// The removal's dialog as the window holds it: the controller (its
+/// answers forwarded to the window's input) and its root, which the window
+/// puts over the 3D view and shows and hides itself.
 pub(in crate::ui) struct DependantsDialog {
-    /// The backdrop, filling the 3D view, with the dialog in its middle;
-    /// shown by [`DependantsDialog::show`], hidden by its owner.
+    /// The backdrop, filling the 3D view, with the dialog in its middle.
     pub(in crate::ui) root: gtk::Box,
-    bridge: Bridge<DependantsComponent>,
+    controller: Controller<DependantsComponent>,
 }
 
 impl DependantsDialog {
-    fn new() -> DependantsDialog {
-        let bridge = Bridge::<DependantsComponent>::launch(());
+    /// The dialog, hidden, whose answers reach `input` as
+    /// [`EditingInput::DependantsAnswered`].
+    fn new(input: &relm4::Sender<WindowInput>) -> DependantsDialog {
+        let controller = DependantsComponent::builder()
+            .launch(())
+            .forward(input, dependants_heard);
         DependantsDialog {
-            root: bridge.widget().clone(),
-            bridge,
+            root: controller.widget().clone(),
+            controller,
         }
-    }
-
-    /// Shows the dialog at once, asking about `item`; what it says is
-    /// drawn when the main loop next runs.
-    fn show(&self, item: &str, dependants: &[String]) {
-        self.root.set_visible(true);
-        self.bridge.send(DependantsInput::Show {
-            item: item.to_owned(),
-            dependants: dependants.to_vec(),
-        });
-    }
-
-    /// Calls `callback` with each answer: `true` to remove the dependants
-    /// too.
-    fn connect_answered(&self, callback: impl Fn(bool) + 'static) {
-        self.bridge.connect(move |output| match output {
-            DependantsOutput::Include => callback(true),
-            DependantsOutput::Cancel => callback(false),
-        });
     }
 }
 
+/// What the removal's dialog tells the window, as the window's input.
+fn dependants_heard(output: DependantsOutput) -> WindowInput {
+    EditingInput::DependantsAnswered(match output {
+        DependantsOutput::Include => true,
+        DependantsOutput::Cancel => false,
+    })
+    .into()
+}
+
 impl Window {
-    /// Connects the change's card (in the Edit panel) and puts the
-    /// removal's dialog over the 3D view.
+    /// Puts the removal's dialog over the 3D view (the change's card is in
+    /// the Edit panel).
     pub(in crate::ui) fn connect_changes(&self) {
-        install_style();
-        let card = &self.editing.changes.card;
-        let dialog = &self.editing.changes.dialog;
-        self.widgets.design.add_overlay(&dialog.root);
-        let input = self.input();
-        dialog.connect_answered(move |include| {
-            input.emit(EditingInput::DependantsAnswered(include).into());
-        });
-        let input = self.input();
-        card.connect_action(move |action| input.emit(EditingInput::ChangeAction(action).into()));
+        // The card's and the dialog's outputs were forwarded to the window
+        // when they were launched (`Changes::new`).
+        self.widgets
+            .design
+            .add_overlay(&self.editing.changes.dialog.root);
     }
 
     /// Draws the change in progress on its card, or hides the card.
@@ -1000,7 +997,11 @@ impl Window {
             return false;
         };
         card.root.set_visible(true);
-        card.show(&words);
+        // Gone only once the window is: nobody to tell.
+        let _ = card
+            .controller
+            .sender()
+            .send(ChangeCardInput::Show(Box::new(words.clone())));
         if words.waiting_on_dependants {
             self.ask_about_dependants(item.unwrap_or_default(), &words.dependants);
         } else {
@@ -1014,8 +1015,14 @@ impl Window {
         if self.editing.changes.asked.as_deref() == Some(item.as_str()) {
             return;
         }
-        self.editing.changes.asked = Some(item.clone());
-        self.editing.changes.dialog.show(&item, dependants);
+        let dialog = &self.editing.changes.dialog;
+        // Shown at once; what it says is drawn when the main loop next runs.
+        dialog.root.set_visible(true);
+        let _ = dialog.controller.sender().send(DependantsInput::Show {
+            item: item.clone(),
+            dependants: dependants.to_vec(),
+        });
+        self.editing.changes.asked = Some(item);
     }
 
     /// The removal's dialog was answered: remove what uses the item too,
@@ -1138,25 +1145,16 @@ const STYLE: &str = r#"
 .stave-pending-new-value { font-weight: 700; }
 "#;
 
-/// Puts the changes' stylesheet on the display, once.
-fn install_style() {
-    thread_local! {
-        static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    let Some(display) = gdk::Display::default() else {
-        return;
-    };
-    if INSTALLED.with(std::cell::Cell::get) {
-        return;
-    }
+/// Puts the changes' stylesheet on the display. The application calls it
+/// once, at startup, beside the window's own style (`style::install`).
+pub(in crate::ui) fn install_style(display: &gdk::Display) {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(STYLE);
     gtk::style_context_add_provider_for_display(
-        &display,
+        display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
     );
-    INSTALLED.with(|installed| installed.set(true));
 }
 
 /// The change card and what only it needs.
@@ -1170,12 +1168,12 @@ pub(in crate::ui) struct Changes {
 }
 
 impl Changes {
-    /// The card, hidden.
-    pub(in crate::ui) fn new() -> Changes {
+    /// The card and the dialog, hidden, their outputs going to `input`.
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> Changes {
         Changes {
-            card: ChangeCard::new(),
+            card: ChangeCard::new(input),
             asked: None,
-            dialog: DependantsDialog::new(),
+            dialog: DependantsDialog::new(input),
         }
     }
 }
@@ -1253,11 +1251,31 @@ mod tests {
     }
 
     /// The card's Cancel and Apply.
-    fn footer(card: &ChangeCard) -> (gtk::Button, gtk::Button) {
-        match buttons_with(card.root.upcast_ref(), "stave-footer-button").as_slice() {
+    fn footer(root: &gtk::Box) -> (gtk::Button, gtk::Button) {
+        match buttons_with(root.upcast_ref(), "stave-footer-button").as_slice() {
             [cancel, apply] => (cancel.clone(), apply.clone()),
             other => panic!("the card has Cancel and Apply, not {} buttons", other.len()),
         }
+    }
+
+    /// A card launched as the window launches it, its actions recorded.
+    fn launch_card() -> (
+        Controller<ChangeCardComponent>,
+        Rc<RefCell<Vec<ChangeAction>>>,
+    ) {
+        let heard: Rc<RefCell<Vec<ChangeAction>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let (init, _, _) = ChangeCardInit::new();
+        let card = ChangeCardComponent::builder()
+            .launch(init)
+            .connect_receiver(move |_, ChangeCardOutput::Action(action)| {
+                log.borrow_mut().push(action);
+            });
+        (card, heard)
+    }
+
+    fn show(card: &Controller<ChangeCardComponent>, words: ChangeWords) {
+        let _ = card.sender().send(ChangeCardInput::Show(Box::new(words)));
     }
 
     #[test]
@@ -1265,21 +1283,23 @@ mod tests {
         on_gtk_thread(change_card_is_freed);
     }
 
-    /// Dropping the card drops its controller: the widget, the model and
-    /// the callback are freed once the main loop runs.
+    /// Dropping the controller shuts the card down: the widget, the model
+    /// and the receiver's captures are freed once the main loop runs.
     fn change_card_is_freed() {
-        let card = ChangeCard::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        card.connect_action(move |_| {
-            let _ = &held;
-        });
+        let (init, _, _) = ChangeCardInit::new();
+        let card = ChangeCardComponent::builder()
+            .launch(init)
+            .connect_receiver(move |_, _| {
+                let _ = &held;
+            });
         let callback = Rc::downgrade(&token);
         drop(token);
-        card.show(&rename_words());
+        show(&card, rename_words());
         settle();
-        let root = card.root.downgrade();
-        let input = card.bridge.sender().clone();
+        let root = card.widget().downgrade();
+        let input = card.sender().clone();
         drop(card);
         settle();
         assert!(root.upgrade().is_none(), "the card is freed");
@@ -1287,7 +1307,68 @@ mod tests {
             input.send(ChangeCardInput::Enter).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the receiver is freed");
+    }
+
+    #[test]
+    fn the_windows_change_card_and_dialog_are_freed_with_it() {
+        on_gtk_thread(changes_are_freed);
+    }
+
+    /// What the window holds (`Changes`): dropping it frees the card, its
+    /// slots and the dialog.
+    fn changes_are_freed() {
+        let (input, _receiver) = relm4::channel::<WindowInput>();
+        let changes = Changes::new(&input);
+        let card = changes.card.root.downgrade();
+        let slot = changes.card.grip_slot.downgrade();
+        let dialog = changes.dialog.root.downgrade();
+        let card_input = changes.card.controller.sender().clone();
+        let dialog_input = changes.dialog.controller.sender().clone();
+        settle();
+        drop(changes);
+        settle();
+        assert!(card.upgrade().is_none(), "the card is freed");
+        assert!(slot.upgrade().is_none(), "its slots are freed");
+        assert!(dialog.upgrade().is_none(), "the dialog is freed");
+        assert!(card_input.send(ChangeCardInput::Enter).is_err());
+        assert!(dialog_input.send(DependantsInput::Answer(false)).is_err());
+    }
+
+    #[test]
+    fn the_cards_and_the_dialogs_outputs_reach_the_window() {
+        on_gtk_thread(outputs_reach_the_window);
+    }
+
+    /// Launched as the window launches them, a press on the card and an
+    /// answer in the dialog arrive as the window's editing input.
+    fn outputs_reach_the_window() {
+        let (input, receiver) = relm4::channel::<WindowInput>();
+        let changes = Changes::new(&input);
+        let _ = changes
+            .card
+            .controller
+            .sender()
+            .send(ChangeCardInput::Show(Box::new(rename_words())));
+        settle();
+        footer(&changes.card.root).1.emit_clicked();
+        settle();
+        assert!(matches!(
+            receiver.recv_sync(),
+            Some(WindowInput::Editing(EditingInput::ChangeAction(
+                ChangeAction::Add
+            )))
+        ));
+        let _ = changes
+            .dialog
+            .controller
+            .sender()
+            .send(DependantsInput::Answer(true));
+        settle();
+        assert!(matches!(
+            receiver.recv_sync(),
+            Some(WindowInput::Editing(EditingInput::DependantsAnswered(true)))
+        ));
     }
 
     #[test]
@@ -1296,26 +1377,27 @@ mod tests {
     }
 
     fn showing_a_card_reports_nothing() {
-        let card = ChangeCard::new();
-        let heard: Rc<RefCell<Vec<ChangeAction>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        card.connect_action(move |action| log.borrow_mut().push(action));
+        let (card, heard) = launch_card();
         let mut words = rename_words();
         words.switch = Some("And the other side".to_owned());
-        card.show(&words);
-        card.show(&rename_words());
+        show(&card, words);
+        show(&card, rename_words());
         settle();
-        let (_, apply) = footer(&card);
+        let (_, apply) = footer(card.widget());
         assert!(apply.is_sensitive(), "Apply follows the words");
         assert!(heard.borrow().is_empty(), "drawing it does nothing");
         // Enter presses Apply only while it can be pressed.
         let mut waiting = rename_words();
         waiting.can_add = false;
-        card.show(&waiting);
-        card.bridge.send(ChangeCardInput::Enter);
+        show(&card, waiting);
+        let _ = card.sender().send(ChangeCardInput::Enter);
         settle();
         assert!(!apply.is_sensitive());
         assert!(heard.borrow().is_empty(), "Enter did nothing");
+        show(&card, rename_words());
+        let _ = card.sender().send(ChangeCardInput::Enter);
+        settle();
+        assert_eq!(*heard.borrow(), vec![ChangeAction::Add], "Enter is Apply");
     }
 
     #[test]
@@ -1323,30 +1405,33 @@ mod tests {
         on_gtk_thread(presses_are_queued);
     }
 
-    /// A press only queues a message; the action reaches the callback
-    /// after the card's update has returned. The callback redraws the card
+    /// A press only queues a message; the action reaches the receiver
+    /// after the card's update has returned. The receiver redraws the card
     /// and presses Cancel, as a window handling Apply might: both wait
     /// their turn instead of running under it.
     fn presses_are_queued() {
-        let card = Rc::new(ChangeCard::new());
-        card.show(&rename_words());
-        settle();
         let heard: Rc<RefCell<Vec<ChangeAction>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&card);
-        card.connect_action(move |action| {
-            let Some(card) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(action);
-            if first {
-                card.show(&rename_words());
-                footer(&card).0.emit_clicked();
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
-            }
-        });
-        footer(&card).1.emit_clicked();
+        let root: Rc<RefCell<Option<gtk::Box>>> = Rc::default();
+        let inner = Rc::clone(&root);
+        let (init, _, _) = ChangeCardInit::new();
+        let card = ChangeCardComponent::builder()
+            .launch(init)
+            .connect_receiver(move |input, ChangeCardOutput::Action(action)| {
+                let first = log.borrow().is_empty();
+                log.borrow_mut().push(action);
+                if first {
+                    let _ = input.send(ChangeCardInput::Show(Box::new(rename_words())));
+                    if let Some(root) = inner.borrow().as_ref() {
+                        footer(root).0.emit_clicked();
+                    }
+                    assert_eq!(log.borrow().len(), 1, "nothing ran under the receiver");
+                }
+            });
+        *root.borrow_mut() = Some(card.widget().clone());
+        show(&card, rename_words());
+        settle();
+        footer(card.widget()).1.emit_clicked();
         assert!(heard.borrow().is_empty(), "the press is only queued");
         settle();
         assert_eq!(
@@ -1362,19 +1447,22 @@ mod tests {
     }
 
     fn dependants_dialog_is_freed() {
-        let dialog = DependantsDialog::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        dialog.connect_answered(move |_| {
-            let _ = &held;
-        });
+        let dialog = DependantsComponent::builder()
+            .launch(())
+            .connect_receiver(move |_, _| {
+                let _ = &held;
+            });
         let callback = Rc::downgrade(&token);
         drop(token);
-        dialog.show("back", &["drawer".to_owned()]);
-        assert!(dialog.root.is_visible(), "shown at once");
+        let _ = dialog.sender().send(DependantsInput::Show {
+            item: "back".to_owned(),
+            dependants: vec!["drawer".to_owned()],
+        });
         settle();
-        let root = dialog.root.downgrade();
-        let input = dialog.bridge.sender().clone();
+        let root = dialog.widget().downgrade();
+        let input = dialog.sender().clone();
         drop(dialog);
         settle();
         assert!(root.upgrade().is_none(), "the dialog is freed");
@@ -1382,7 +1470,7 @@ mod tests {
             input.send(DependantsInput::Answer(false)).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the receiver is freed");
     }
 
     #[test]
@@ -1392,31 +1480,35 @@ mod tests {
 
     /// The old dialog's buttons called the window from inside their own
     /// signal. Now an answer is queued, and an answer given from inside
-    /// the callback (a second click) waits its turn.
+    /// the receiver (a second click) waits its turn.
     fn answers_are_queued() {
-        let dialog = Rc::new(DependantsDialog::new());
-        dialog.show("back", &["drawer_bay".to_owned(), "drawer".to_owned()]);
-        settle();
         let heard: Rc<RefCell<Vec<bool>>> = Rc::default();
         let log = Rc::clone(&heard);
-        let weak = Rc::downgrade(&dialog);
-        dialog.connect_answered(move |include| {
-            let Some(dialog) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(include);
-            if first {
-                if let Some(cancel) = buttons_with(dialog.root.upcast_ref(), "pill").first() {
-                    cancel.emit_clicked();
-                }
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
-            }
+        let cancel: Rc<RefCell<Option<gtk::Button>>> = Rc::default();
+        let inner = Rc::clone(&cancel);
+        let dialog =
+            DependantsComponent::builder()
+                .launch(())
+                .connect_receiver(move |_, output| {
+                    let first = log.borrow().is_empty();
+                    log.borrow_mut().push(output == DependantsOutput::Include);
+                    if first {
+                        if let Some(cancel) = inner.borrow().as_ref() {
+                            cancel.emit_clicked();
+                        }
+                        assert_eq!(log.borrow().len(), 1, "nothing ran under the receiver");
+                    }
+                });
+        let _ = dialog.sender().send(DependantsInput::Show {
+            item: "back".to_owned(),
+            dependants: vec!["drawer_bay".to_owned(), "drawer".to_owned()],
         });
-        let buttons = buttons_with(dialog.root.upcast_ref(), "pill");
-        let Some(include) = buttons.get(1) else {
+        settle();
+        let buttons = buttons_with(dialog.widget().upcast_ref(), "pill");
+        let (Some(first), Some(include)) = (buttons.first(), buttons.get(1)) else {
             panic!("the dialog has Cancel and the button that removes them too");
         };
+        *cancel.borrow_mut() = Some(first.clone());
         assert_eq!(include.label().as_deref(), Some("Remove back and all 2"));
         include.emit_clicked();
         assert!(heard.borrow().is_empty(), "the answer is only queued");

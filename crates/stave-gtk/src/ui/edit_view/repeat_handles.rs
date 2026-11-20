@@ -576,7 +576,7 @@ impl Window {
         if self.editing.repeats.row.press() {
             return true;
         }
-        self.editing.tools.repeat_fold().press()
+        self.press_item_repeat()
     }
 
     // ---- the boundaries between pieces ----

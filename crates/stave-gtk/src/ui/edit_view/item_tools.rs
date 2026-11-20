@@ -6,12 +6,16 @@
 //! finder calls the same method of the window, which sends the session's
 //! command: one path for the mouse and the keyboard.
 //!
-//! The count stepper and the item's tools are relm4 components
-//! ([`RepeatRowComponent`], [`ItemToolsComponent`]) following
-//! `docs/relm4-migration.md`; [`RepeatRow`] and [`ItemTools`] keep the
-//! older API in front of them while the window (`impl Window`) is old
-//! code. "Repeat…" ([`RepeatFoldRow`]) stays plain widgets: scripts press
-//! it and read whether it opened in one step.
+//! The count stepper, the repeat controls folded behind "Repeat…" and the
+//! item's tools are relm4 components ([`RepeatRowComponent`],
+//! [`RepeatFoldComponent`], [`ItemToolsComponent`]) following
+//! `docs/relm4-migration.md`. The window owns the tools' and their repeat
+//! controls' controllers ([`ItemTools`]), launched with their outputs
+//! forwarded to its input, and keeps its own copy of what the repeat
+//! controls show ([`RepeatFoldShown`]), which scripts read and press in
+//! one step. [`RepeatRow`] and [`RepeatFoldRow`] keep the older callback
+//! API for the candidate card's repeat controls (`repeat_handles.rs`)
+//! until they move to [`RepeatFoldComponent`].
 //!
 //! ```text
 //! ▾ Change                          drawer   (a section of the Inspector)
@@ -38,9 +42,9 @@ use stave_app::session::Selection;
 use stave_lang::placement::Axis;
 use stave_model::solved::SolvedDesign;
 
-use super::super::Window;
 use super::super::relm4_shim::Bridge;
 use super::super::sections;
+use super::super::{Window, WindowInput};
 
 /// The axes a repeat can split along, in the order the list shows them,
 /// with the word for how the pieces stand.
@@ -1105,85 +1109,111 @@ struct Shown {
     offer: Option<ItemOffer>,
 }
 
-/// The changes a selected item's card offers, behind the API the window
-/// still uses: the section it sits in (its owner shows and hides it), the
-/// component that draws it, and the repeat controls placed on it.
+/// The changes a selected item's card offers, as the window holds them:
+/// the section they sit in (the window shows and hides it), the
+/// controllers of the component that draws them and of the repeat controls
+/// placed on it (launched with their outputs forwarded to the window's
+/// input), and the window's own copies of what they show.
 pub(in crate::ui) struct ItemTools {
     /// The panel, at the bottom of the part's card.
     pub(in crate::ui) root: gtk::Box,
-    repeat: RepeatFoldRow,
-    bridge: Bridge<ItemToolsComponent>,
+    controller: relm4::Controller<ItemToolsComponent>,
+    repeat: relm4::Controller<RepeatFoldComponent>,
+    /// What the repeat controls show, readable at once.
+    repeat_shown: RepeatFoldShown,
     /// The owner's cache of the offer for the item shown, kept by
     /// `Window::update_item_tools`.
     shown: Option<Shown>,
 }
 
 impl ItemTools {
-    /// The panel, hidden.
-    pub(in crate::ui) fn new() -> ItemTools {
+    /// The panel, hidden; what people ask for on it goes to `input`.
+    pub(in crate::ui) fn new(input: &relm4::Sender<WindowInput>) -> ItemTools {
         // A section of the Inspector, "Change" with the item as its note.
         let (root, body, title) = sections::section_noted(&tr("Change"), true);
         root.add_css_class("stave-item-tools");
         root.add_css_class("stave-edit-card");
         root.set_visible(false);
-        let repeat = RepeatFoldRow::new(1);
-        repeat.root.add_css_class("stave-card-row");
-        repeat.root.add_css_class("stave-edit-row");
-        let bridge = Bridge::<ItemToolsComponent>::launch(ItemToolsInit {
-            title,
-            repeat: repeat.root.clone(),
-        });
-        body.append(bridge.widget());
+        let repeat = RepeatFoldComponent::builder()
+            .launch(RepeatFoldInit {
+                least: 1,
+                apart: None,
+            })
+            .forward(input, |output| EditingInput::ItemRepeat(output).into());
+        repeat.widget().add_css_class("stave-card-row");
+        repeat.widget().add_css_class("stave-edit-row");
+        let controller = ItemToolsComponent::builder()
+            .launch(ItemToolsInit {
+                title,
+                repeat: repeat.widget().clone(),
+            })
+            .forward(input, |output| EditingInput::ItemTools(output).into());
+        body.append(controller.widget());
         ItemTools {
             root,
+            controller,
             repeat,
-            bridge,
+            repeat_shown: RepeatFoldShown::new(1),
             shown: None,
         }
     }
 
-    /// Its count stepper.
-    pub(in crate::ui) fn repeat_row(&self) -> &RepeatRow {
-        &self.repeat.row
+    /// What its count stepper shows.
+    pub(in crate::ui) fn repeat_row(&self) -> &RepeatFoldShown {
+        &self.repeat_shown
     }
 
-    /// Its repeat controls, folded or open.
-    pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldRow {
-        &self.repeat
+    /// What its repeat controls show, folded or open.
+    pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldShown {
+        &self.repeat_shown
     }
 
-    /// Calls `callback` with each change people ask for on it.
-    pub(in crate::ui) fn connect(&self, callback: impl Fn(ItemToolsOutput) + 'static) {
-        self.bridge.connect(callback);
+    /// Queues a message for the component that draws it. It is gone only
+    /// once the window is, when nobody needs to know.
+    fn send(&self, message: ItemToolsInput) {
+        let _ = self.controller.sender().send(message);
     }
 
-    /// Shows these when the main loop next runs.
-    fn show(&self, shown: ItemToolsShown) {
-        self.bridge.send(ItemToolsInput::Show(shown));
-    }
-
-    /// Puts the keyboard in the name when the main loop next runs.
-    fn start_editing(&self) {
-        self.bridge.send(ItemToolsInput::StartEditing);
+    /// Queues a message for its repeat controls.
+    fn send_repeat(&self, message: RepeatFoldInput) {
+        let _ = self.repeat.sender().send(message);
     }
 }
 
 impl Window {
     /// Puts the item's changes in the Details panel, under the
-    /// selection's account, and connects them.
+    /// selection's account. (Their outputs were forwarded to the window
+    /// when they were launched, `ItemTools::new`.)
     pub(in crate::ui) fn connect_item_tools(&self) {
-        let tools = &self.editing.tools;
-        self.widgets.details.append(&tools.root);
-        let input = self.input();
-        tools.connect(move |output| input.emit(EditingInput::ItemTools(output).into()));
-        let input = self.input();
-        tools
-            .repeat
-            .connect_unfold(move || input.emit(EditingInput::ItemRepeatUnfolded.into()));
-        let input = self.input();
-        tools.repeat.row.connect_changed(move |count, axis| {
-            input.emit(EditingInput::RepeatChanged { count, axis }.into());
-        });
+        self.widgets.details.append(&self.editing.tools.root);
+    }
+
+    /// The item's repeat controls said something: "Repeat…" was pressed,
+    /// or people changed the count or the axis.
+    pub(in crate::ui) fn item_repeat_heard(&mut self, output: RepeatFoldOutput) {
+        match output {
+            RepeatFoldOutput::Unfold => {
+                self.editing.tools.repeat_shown.unfolded();
+                self.update_item_tools();
+            }
+            RepeatFoldOutput::Changed { count, axis, shows } => {
+                self.editing
+                    .tools
+                    .repeat_shown
+                    .take_change(count, axis, shows);
+                self.repeat_selected(count, Some(axis));
+            }
+        }
+    }
+
+    /// Presses "Repeat…" on the selected item's card, as a click does
+    /// (scripts): `false` when it doesn't show.
+    pub(in crate::ui) fn press_item_repeat(&mut self) -> bool {
+        if !self.editing.tools.repeat_shown.press() {
+            return false;
+        }
+        self.send(EditingInput::ItemRepeat(RepeatFoldOutput::Unfold));
+        true
     }
 
     /// The item's tools asked for something.
@@ -1238,7 +1268,7 @@ impl Window {
         if stale {
             // Another item: "Repeat…" is asked for again.
             if another_item {
-                self.editing.tools.repeat.forget();
+                self.editing.tools.repeat_shown.forget();
             }
             // The offer reads the project, so it is worked out once per
             // item and result.
@@ -1249,18 +1279,20 @@ impl Window {
                 offer,
             });
         }
-        let tools = &self.editing.tools;
+        let tools = &mut self.editing.tools;
         let offer = tools.shown.as_ref().and_then(|shown| shown.offer.clone());
         let Some(offer) = offer else {
             tools.root.set_visible(false);
             return;
         };
         let count = offer.pieces;
-        tools
-            .repeat
-            .row
-            .show(count, tools.repeat.row.axis(), count < 2);
-        tools.repeat.show(offer.repeat_fold(tools.repeat.asked()));
+        let axis = tools.repeat_shown.axis();
+        let message = tools.repeat_shown.show_count(count, axis, count < 2);
+        tools.send_repeat(message);
+        let message = tools
+            .repeat_shown
+            .show(offer.repeat_fold(tools.repeat_shown.asked()));
+        tools.send_repeat(message);
         let mirror = offer.mirror.as_ref().map(|gesture| match gesture {
             MirrorGesture::Image(image) => fill_in(
                 &tr("And the other side · adds {image}"),
@@ -1270,11 +1302,11 @@ impl Window {
                 tr("And the other side · splits its space across into a mirrored pair")
             }
         });
-        tools.show(ItemToolsShown {
+        tools.send(ItemToolsInput::Show(ItemToolsShown {
             item,
             mirror,
             unmeasurable,
-        });
+        }));
         tools.root.set_visible(true);
     }
 
@@ -1282,7 +1314,7 @@ impl Window {
     pub(in crate::ui) fn focus_item_name(&self) {
         let tools = &self.editing.tools;
         if tools.root.is_visible() {
-            tools.start_editing();
+            tools.send(ItemToolsInput::StartEditing);
         } else {
             self.edit_toast(&tr("Select a part or an assembly first, then rename it"));
         }
@@ -1838,23 +1870,29 @@ mod tests {
         on_gtk_thread(item_tools_are_freed);
     }
 
+    /// Dropping the controller shuts the tools down: the rows, the model
+    /// and the receiver's captures go.
     fn item_tools_are_freed() {
-        let tools = ItemTools::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        tools.connect(move |_| {
-            let _ = &held;
-        });
+        let tools = ItemToolsComponent::builder()
+            .launch(ItemToolsInit {
+                title: gtk::Label::new(None),
+                repeat: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            })
+            .connect_receiver(move |_, _| {
+                let _ = &held;
+            });
         let callback = Rc::downgrade(&token);
         drop(token);
-        tools.show(ItemToolsShown {
+        let _ = tools.sender().send(ItemToolsInput::Show(ItemToolsShown {
             item: "drawer".to_owned(),
             mirror: None,
             unmeasurable: None,
-        });
+        }));
         settle();
-        let rows = tools.bridge.widget().downgrade();
-        let input = tools.bridge.sender().clone();
+        let rows = tools.widget().downgrade();
+        let input = tools.sender().clone();
         drop(tools);
         settle();
         assert!(rows.upgrade().is_none(), "the rows are freed");
@@ -1862,7 +1900,75 @@ mod tests {
             input.send(ItemToolsInput::Hold).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
-        assert!(callback.upgrade().is_none(), "the callback is freed");
+        assert!(callback.upgrade().is_none(), "the receiver is freed");
+    }
+
+    #[test]
+    fn the_windows_item_tools_are_freed_with_it_and_reach_the_window() {
+        on_gtk_thread(window_item_tools);
+    }
+
+    /// Launched as the window launches them (`ItemTools::new`), the tools'
+    /// buttons and the repeat controls' "Repeat…" arrive as the window's
+    /// editing input; dropping them frees the section, the rows and the
+    /// repeat controls.
+    fn window_item_tools() {
+        let (input, receiver) = relm4::channel::<WindowInput>();
+        let mut tools = ItemTools::new(&input);
+        tools.send(ItemToolsInput::Show(ItemToolsShown {
+            item: "drawer".to_owned(),
+            mirror: None,
+            unmeasurable: None,
+        }));
+        let message = tools.repeat_shown.show(RepeatFold::Folded);
+        tools.send_repeat(message);
+        // As the window shows it (`is_visible` asks the parents too).
+        tools.root.set_visible(true);
+        settle();
+        let root: gtk::Widget = tools.root.clone().upcast();
+        let buttons = descendants::<gtk::Button>(&root);
+        let Some(remove) = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Remove…"))
+        else {
+            panic!("the tools have Remove");
+        };
+        remove.emit_clicked();
+        settle();
+        assert!(matches!(
+            receiver.recv_sync(),
+            Some(WindowInput::Editing(EditingInput::ItemTools(
+                ItemToolsOutput::Remove
+            )))
+        ));
+        let Some(unfold) = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Repeat…"))
+        else {
+            panic!("the tools have Repeat…");
+        };
+        assert!(unfold.is_visible(), "folded: Repeat… shows");
+        unfold.emit_clicked();
+        settle();
+        assert!(matches!(
+            receiver.recv_sync(),
+            Some(WindowInput::Editing(EditingInput::ItemRepeat(
+                RepeatFoldOutput::Unfold
+            )))
+        ));
+        let section = tools.root.downgrade();
+        let rows = tools.controller.widget().downgrade();
+        let repeat = tools.repeat.widget().downgrade();
+        let tools_input = tools.controller.sender().clone();
+        let repeat_input = tools.repeat.sender().clone();
+        drop((buttons, root));
+        drop(tools);
+        settle();
+        assert!(section.upgrade().is_none(), "the section is freed");
+        assert!(rows.upgrade().is_none(), "the rows are freed");
+        assert!(tools_input.send(ItemToolsInput::Hold).is_err());
+        assert!(repeat_input.send(RepeatFoldInput::Unfold).is_err());
+        assert!(repeat.upgrade().is_none(), "the repeat controls are freed");
     }
 
     #[test]
@@ -1872,40 +1978,45 @@ mod tests {
 
     /// The old tools kept a `filling` flag so filling them in reported
     /// nothing. Now showing them blocks their handlers, and people's input
-    /// only queues a message: the callback runs after the update, and
+    /// only queues a message: the receiver runs after the update, and
     /// Mirror switched on from inside it waits its turn.
     fn item_tools_are_queued() {
-        let tools = Rc::new(ItemTools::new());
-        let heard: Rc<RefCell<Vec<ItemToolsOutput>>> = Rc::default();
-        let log = Rc::clone(&heard);
-        let rows: gtk::Widget = tools.bridge.widget().clone().upcast();
-        let Some(mirror) = descendants::<gtk::Switch>(&rows).first().cloned() else {
-            panic!("the tools have a Mirror switch");
-        };
         let shown = ItemToolsShown {
             item: "door".to_owned(),
             mirror: Some("And the other side · adds door_right".to_owned()),
             unmeasurable: Some("pick one of its parts to measure from".to_owned()),
         };
+        let heard: Rc<RefCell<Vec<ItemToolsOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let mirror_slot: Rc<RefCell<Option<gtk::Switch>>> = Rc::default();
+        let inner = Rc::clone(&mirror_slot);
+        let again = shown.clone();
+        let tools = ItemToolsComponent::builder()
+            .launch(ItemToolsInit {
+                title: gtk::Label::new(None),
+                repeat: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            })
+            .connect_receiver(move |input, output| {
+                let first = log.borrow().is_empty();
+                log.borrow_mut().push(output);
+                if first {
+                    let _ = input.send(ItemToolsInput::Show(again.clone()));
+                    if let Some(mirror) = inner.borrow().as_ref() {
+                        mirror.set_active(true);
+                    }
+                    assert_eq!(log.borrow().len(), 1, "nothing ran under the receiver");
+                }
+            });
+        let rows: gtk::Widget = tools.widget().clone().upcast();
+        let Some(mirror) = descendants::<gtk::Switch>(&rows).first().cloned() else {
+            panic!("the tools have a Mirror switch");
+        };
+        // Switched on before anything is shown: reported, then forgotten.
         mirror.set_active(true);
         settle();
         heard.borrow_mut().clear();
-        let weak = Rc::downgrade(&tools);
-        let again = shown.clone();
-        let inner = mirror.clone();
-        tools.connect(move |output| {
-            let Some(tools) = weak.upgrade() else {
-                return;
-            };
-            let first = log.borrow().is_empty();
-            log.borrow_mut().push(output);
-            if first {
-                tools.show(again.clone());
-                inner.set_active(true);
-                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
-            }
-        });
-        tools.show(shown.clone());
+        *mirror_slot.borrow_mut() = Some(mirror.clone());
+        let _ = tools.sender().send(ItemToolsInput::Show(shown));
         settle();
         assert!(!mirror.is_active(), "showing turns Mirror off");
         let names = descendants::<gtk::EditableLabel>(&rows);
@@ -1934,7 +2045,7 @@ mod tests {
         assert_eq!(
             *heard.borrow(),
             vec![ItemToolsOutput::Remove, ItemToolsOutput::Mirror],
-            "the switch made in the callback came after it"
+            "the switch made in the receiver came after it"
         );
     }
 }

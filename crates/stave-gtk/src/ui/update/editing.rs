@@ -9,7 +9,7 @@ use crate::ui::edit_card::CardAction;
 use crate::ui::edit_view::changes::ChangeAction;
 use crate::ui::edit_view::grip_panel::PanelAction;
 use crate::ui::edit_view::hold::HoldCardOutput;
-use crate::ui::edit_view::item_tools::ItemToolsOutput;
+use crate::ui::edit_view::item_tools::{ItemToolsOutput, RepeatFoldOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 use stave_app::edit::Declaration;
@@ -78,8 +78,8 @@ pub(in crate::ui) enum EditingInput {
     HoldCard(HoldCardOutput),
     /// The item's tools asked for something.
     ItemTools(ItemToolsOutput),
-    /// The item's repeat row was unfolded.
-    ItemRepeatUnfolded,
+    /// The item's repeat controls said something.
+    ItemRepeat(RepeatFoldOutput),
     /// The card's repeat row was unfolded.
     CardRepeatUnfolded,
     /// A repeat count or direction changed.
@@ -240,7 +240,7 @@ impl Window {
             EditingInput::HoldFromSpace => self.hold_from_space(),
             EditingInput::HoldCard(output) => self.hold_card_asked(output),
             EditingInput::ItemTools(output) => self.item_tools_asked(output),
-            EditingInput::ItemRepeatUnfolded => self.update_item_tools(),
+            EditingInput::ItemRepeat(output) => self.item_repeat_heard(output),
             EditingInput::CardRepeatUnfolded => {
                 self.update_repeat_row();
                 self.request_render();
