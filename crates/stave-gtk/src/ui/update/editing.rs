@@ -32,6 +32,8 @@ pub(in crate::ui) enum EditingInput {
     MenuChosen(Declaration),
     /// The menu has drawn what it was shown: place it by its new size.
     MenuDrawn,
+    /// The menu has placed itself here: floating labels keep clear of it.
+    MenuPlaced(crate::ui::edit_menu::MenuPlace),
     /// The card asked for something.
     CardAction(CardAction),
     /// The setting whose short list is open on the card changed.
@@ -182,6 +184,7 @@ impl Window {
             }
             EditingInput::MenuChosen(declaration) => self.choose_later(declaration),
             EditingInput::MenuDrawn => self.menu_drawn(),
+            EditingInput::MenuPlaced(place) => self.menu_placed(place),
             EditingInput::CardAction(action) => self.card_action(action),
             EditingInput::CardOptionsOpen(setting) => self.card_options_open(setting),
             EditingInput::Showcase(output) => crate::ui::edit_demo::heard(&output),
@@ -456,6 +459,129 @@ mod tests {
         assert_ne!(controller.model().session.selection(), Some(&part));
         settle();
         assert_eq!(controller.model().session.selection(), Some(&part));
+
+        controller.widget().close();
+        settle();
+        drop(controller);
+        settle();
+    }
+
+    #[test]
+    fn pins_keep_clear_of_where_the_menu_has_just_placed_itself() {
+        on_gtk_thread(pins_clear_the_placed_menu);
+    }
+
+    /// The menu places itself and says where (`EditMenuOutput::Placed`):
+    /// the panels the window keeps the problem pins clear of hold the
+    /// menu's new place as soon as the window has heard it, never the
+    /// margins it had before the queued `Place` was handled, and a pin
+    /// wanted on that place is moved off it.
+    fn pins_clear_the_placed_menu() {
+        use crate::ui::edit_menu::EditMenuInput;
+        use crate::ui::edit_view::{Rect, clear_of};
+        let application = adw::Application::new(
+            Some("org.stave.WindowTest.MenuPlace"),
+            gio::ApplicationFlags::NON_UNIQUE,
+        );
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let controller = launch(&application, door_project());
+        // Shown, so the view has a size to keep the menu inside.
+        controller.widget().set_default_size(1400, 1000);
+        controller.widget().present();
+        let checked = settle_until(Duration::from_secs(60), || {
+            controller.model().session.drawable().is_some()
+        });
+        assert!(checked, "the project is checked and drawable");
+        let bay = {
+            let model = controller.model();
+            let (design, _) = model.session.drawable().unwrap();
+            design
+                .regions()
+                .iter()
+                .find(|r| r.name == "bay")
+                .unwrap()
+                .id
+        };
+        send(
+            &controller,
+            EditingInput::Dispatch(Command::Edit(EditCommand::Start(Picked::Region(bay)))),
+        );
+        settle();
+        assert!(controller.model().editing.menu.widget().is_visible());
+        let before = controller.model().editing.menu_place;
+        assert!(before.is_some(), "the menu said where it first went");
+
+        // The menu is told to stand somewhere else: until it has handled
+        // that and said so, the window keeps where it was.
+        let menu = controller.model().editing.menu.sender().clone();
+        let view = {
+            let design = &controller.model().widgets.design;
+            (f64::from(design.width()), f64::from(design.height()))
+        };
+        assert!(
+            view.0 > 400.0 && view.1 > 300.0,
+            "the view has a size: {view:?}"
+        );
+        // Where the window places it from, as `place_edit_widgets` does.
+        menu.send(EditMenuInput::Place {
+            point: (view.0 - 500.0, 40.0),
+            view,
+        })
+        .unwrap();
+        assert_eq!(controller.model().editing.menu_place, before, "only queued");
+        settle();
+        let place = controller
+            .model()
+            .editing
+            .menu_place
+            .expect("the menu said where it went");
+        assert_ne!(Some(place), before, "it moved");
+        let root = controller.model().editing.menu.widget().clone();
+        assert_eq!(
+            (place.start, place.top),
+            (root.margin_start(), root.margin_top())
+        );
+
+        let panels = controller.model().floating_panels();
+        let (view_width, view_height) = {
+            let design = &controller.model().widgets.design;
+            (design.width(), design.height())
+        };
+        let x = crate::convert::f32_of_int(place.start);
+        let y = crate::convert::f32_of_int(place.top);
+        let menu_rect = panels
+            .iter()
+            .find(|panel| panel.x == x && panel.y == y)
+            .copied()
+            .expect("the menu's new place is a panel to keep clear of");
+        assert!(menu_rect.width > 0.0 && menu_rect.height > 0.0);
+        // A pin wanted on the menu's new place is moved off it.
+        let pin = Rect {
+            x: x + 10.0,
+            y: y + 10.0,
+            width: 40.0,
+            height: 24.0,
+        };
+        let room = (
+            crate::convert::f32_of_int(view_width),
+            crate::convert::f32_of_int(view_height),
+        );
+        let (dx, dy) = clear_of(pin, &panels, room).expect("a clear spot");
+        let moved = Rect {
+            x: pin.x + dx,
+            y: pin.y + dy,
+            ..pin
+        };
+        let overlaps = moved.x < menu_rect.x + menu_rect.width
+            && menu_rect.x < moved.x + moved.width
+            && moved.y < menu_rect.y + menu_rect.height
+            && menu_rect.y < moved.y + moved.height;
+        assert!(
+            !overlaps,
+            "the pin {moved:?} is clear of the menu {menu_rect:?}"
+        );
 
         controller.widget().close();
         settle();

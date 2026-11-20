@@ -43,7 +43,7 @@ use stave_app::edit::Verdict;
 use stave_app::editing::{EditCommand, Progress};
 use stave_app::remove::Dependants;
 
-use super::super::edit_card::diagnostic_head;
+use super::super::edit_card::{diagnostic_head, take_focus};
 use super::super::sections;
 use super::super::{Window, WindowInput};
 use super::card_verdict;
@@ -347,6 +347,9 @@ pub(in crate::ui) enum ChangeCardInput {
     Pressed(ChangeAction),
     /// People pressed Enter: Apply, if it can be pressed.
     Enter,
+    /// The card came on screen: it takes the keyboard, unless the
+    /// keyboard is in it already.
+    Mapped,
 }
 
 /// What a change's card tells its owner.
@@ -401,16 +404,9 @@ impl Component for ChangeCardComponent {
         root.append(&scrolled);
         root.append(&foot);
         // Shown, it takes the keyboard (Enter and Escape), unless the
-        // keyboard is already in it.
-        root.connect_map(|root| {
-            if let Some(window) = root.root()
-                && !window.focus().is_some_and(|focus| {
-                    focus == *root.upcast_ref::<gtk::Widget>() || focus.is_ancestor(root)
-                })
-            {
-                root.grab_focus();
-            }
-        });
+        // keyboard is already in it: from its own update.
+        let input = sender.input_sender().clone();
+        root.connect_map(move |_| input.emit(ChangeCardInput::Mapped));
         let input = sender.input_sender().clone();
         add.connect_clicked(move |_| input.emit(ChangeCardInput::Pressed(ChangeAction::Add)));
         let input = sender.input_sender().clone();
@@ -455,6 +451,10 @@ impl Component for ChangeCardComponent {
             }
             ChangeCardInput::Pressed(action) => Some(action),
             ChangeCardInput::Enter => self.can_add.then_some(ChangeAction::Add),
+            ChangeCardInput::Mapped => {
+                take_focus(root);
+                None
+            }
         };
         if let Some(action) = action {
             // Nobody listening is not a mistake.
@@ -1379,6 +1379,47 @@ mod tests {
             receiver.recv_sync(),
             Some(WindowInput::Editing(EditingInput::DependantsAnswered(true)))
         ));
+    }
+
+    #[test]
+    fn a_change_card_takes_the_keyboard_from_its_own_update_when_it_appears() {
+        on_gtk_thread(change_card_takes_focus);
+    }
+
+    /// Coming on screen, the card takes the keyboard (Enter and Escape)
+    /// from the keyboard's place elsewhere: its `map` handler only queues
+    /// [`ChangeCardInput::Mapped`], and the card's update moves it.
+    fn change_card_takes_focus() {
+        let (card, _) = launch_card();
+        show(&card, rename_words());
+        let root = card.widget().clone();
+        let other = gtk::Button::with_label("Elsewhere");
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        layout.append(&other);
+        layout.append(&root);
+        let window = gtk::Window::builder()
+            .default_width(420)
+            .default_height(600)
+            .child(&layout)
+            .build();
+        gtk::prelude::GtkWindowExt::set_focus(&window, Some(&other));
+        window.present();
+        settle();
+        assert!(!root.is_mapped(), "hidden until its owner shows it");
+        root.set_visible(true);
+        let context = glib::MainContext::default();
+        let started = std::time::Instant::now();
+        while !root.is_mapped() && started.elapsed() < std::time::Duration::from_secs(10) {
+            context.iteration(false);
+        }
+        assert!(root.is_mapped(), "the window never came up");
+        settle();
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
+            Some(root.upcast_ref::<gtk::Widget>()),
+            "the card took the keyboard"
+        );
+        window.destroy();
     }
 
     #[test]

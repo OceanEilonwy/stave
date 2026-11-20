@@ -23,7 +23,8 @@
 //! It is a relm4 component, [`EditMenuComponent`], owned by the window
 //! (docs/relm4-migration.md): its entries only send it messages, and it
 //! tells the window what was chosen, and when it has drawn what it was
-//! shown (the window places it by its new size then). Under the list, for
+//! shown (the window places it by its new size then), and where it placed
+//! itself ([`EditMenuOutput::Placed`]). Under the list, for
 //! a space, it offers "Hold a distance from this space…", heard as
 //! [`EditMenuOutput::HoldFromSpace`].
 
@@ -401,6 +402,40 @@ fn from_space_button() -> gtk::Button {
         .build()
 }
 
+/// Where the menu stands over the view, in its pixels: its margins from
+/// the view's top left and its natural size (margins left out). The menu
+/// publishes it each time it places itself ([`EditMenuOutput::Placed`]),
+/// so its owner keeps floating labels clear of it without reading the
+/// menu's widgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuPlace {
+    /// From the view's left edge.
+    pub start: i32,
+    /// From the view's top edge.
+    pub top: i32,
+    /// Its natural width.
+    pub width: i32,
+    /// Its natural height at that width.
+    pub height: i32,
+}
+
+/// Where the menu (`root`) stands now: its margins and its natural size
+/// without them. A hidden menu measures nothing.
+fn place_of(root: &gtk::Box) -> MenuPlace {
+    let (_, across, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+    let (_, down, _, _) = root.measure(gtk::Orientation::Vertical, across);
+    MenuPlace {
+        start: root.margin_start(),
+        top: root.margin_top(),
+        width: across
+            .saturating_sub(root.margin_start())
+            .saturating_sub(root.margin_end()),
+        height: down
+            .saturating_sub(root.margin_top())
+            .saturating_sub(root.margin_bottom()),
+    }
+}
+
 /// Places the menu (`root`, floating at the top left of the view) near
 /// `(x, y)`, where it was asked for, inside a view `width` by `height`:
 /// as high as it must be to show whole, clear of the dock at the bottom.
@@ -515,6 +550,9 @@ pub enum EditMenuOutput {
     /// The menu has drawn what [`EditMenuInput::Show`] gave it, so its
     /// owner can place it by its new size.
     Drawn,
+    /// The menu has placed itself ([`EditMenuInput::Place`] or
+    /// [`EditMenuInput::PlaceAt`]) here.
+    Placed(MenuPlace),
     /// People pressed "Hold a distance from this space…": the next click
     /// picks what to keep the distance to.
     HoldFromSpace,
@@ -587,11 +625,17 @@ impl Component for EditMenuComponent {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(EditMenuOutput::Chosen(declaration));
             }
-            EditMenuInput::Place { point, view } => place(root, point, view),
+            EditMenuInput::Place { point, view } => {
+                place(root, point, view);
+                // Nobody listening is not a mistake.
+                let _ = sender.output(EditMenuOutput::Placed(place_of(root)));
+            }
             EditMenuInput::PlaceAt { start, top, bottom } => {
                 root.set_margin_start(start);
                 root.set_margin_top(top);
                 root.set_margin_bottom(bottom);
+                // Nobody listening is not a mistake.
+                let _ = sender.output(EditMenuOutput::Placed(place_of(root)));
             }
             EditMenuInput::FromSpacePressed => {
                 let _ = sender.output(EditMenuOutput::HoldFromSpace);
@@ -876,10 +920,21 @@ pub(super) mod tests {
 
     /// The window used to measure the menu and set its margins; now it
     /// says where the menu was asked for and the menu places itself,
-    /// measured after what it was shown before.
+    /// measured after what it was shown before, and says where it went.
     fn menu_places_itself() {
         use crate::ui::gtk_test::settle;
         let menu = Bridge::<EditMenuComponent>::launch(());
+        let heard: Rc<std::cell::RefCell<Vec<EditMenuOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        menu.connect(move |output| log.borrow_mut().push(output));
+        let placed = || {
+            heard.borrow().iter().rev().find_map(|output| match output {
+                EditMenuOutput::Placed(place) => Some(*place),
+                EditMenuOutput::Chosen(_)
+                | EditMenuOutput::Drawn
+                | EditMenuOutput::HoldFromSpace => None,
+            })
+        };
         let (heading, items, _) = fixture_entries();
         menu.send(EditMenuInput::Show {
             heading,
@@ -891,9 +946,16 @@ pub(super) mod tests {
             view: (1000.0, 2000.0),
         });
         assert_eq!(menu.widget().margin_start(), 0, "only queued");
+        assert_eq!(placed(), None, "only queued");
         settle();
         assert_eq!(menu.widget().margin_start(), 124, "beside the point");
         assert_eq!(menu.widget().margin_top(), 140, "a little above it");
+        let place = placed().expect("the menu says where it went");
+        assert_eq!((place.start, place.top), (124, 140));
+        assert!(
+            place.width >= 320 && place.height > 0,
+            "its own size, without its margins: {place:?}"
+        );
         // Near the right edge it stays inside the view.
         menu.send(EditMenuInput::Place {
             point: (990.0, 200.0),
@@ -901,6 +963,10 @@ pub(super) mod tests {
         });
         settle();
         assert_eq!(menu.widget().margin_start(), 1000 - MENU_WIDTH - EDGE);
+        assert_eq!(
+            placed().map(|place| place.start),
+            Some(1000 - MENU_WIDTH - EDGE)
+        );
         // The showcase's fixed place, by message too.
         menu.send(EditMenuInput::PlaceAt {
             start: 470,
@@ -913,6 +979,10 @@ pub(super) mod tests {
         assert_eq!(
             (root.margin_start(), root.margin_top(), root.margin_bottom()),
             (470, 16, 90)
+        );
+        assert_eq!(
+            placed().map(|place| (place.start, place.top)),
+            Some((470, 16))
         );
     }
 

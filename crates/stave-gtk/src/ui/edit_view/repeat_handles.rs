@@ -24,6 +24,7 @@ use super::item_tools::{
 };
 use crate::ui::WindowInput;
 use crate::ui::edit_card::CardSlots;
+use crate::ui::edit_menu::MenuPlace;
 use crate::ui::update::editing::EditingInput;
 
 /// The unit vector of a design axis in the 3D view's frame (across is x,
@@ -215,12 +216,21 @@ impl Window {
     /// or a label must not cover: the view's own controls (the scene menu,
     /// the camera column and Pull apart's slider, the moving assemblies'
     /// chips, the motion slider, the line and the key at the top, the
-    /// cards and the chip at the foot) and the editing's menu (its cards
-    /// are in the Edit panel).
+    /// cards and the chip at the foot), where each was last drawn (their
+    /// roots' own bounds; the floats place them), and the editing's menu
+    /// (its cards are in the Edit panel), where it last said it placed
+    /// itself ([`EditMenuOutput::Placed`]): it moves itself, so its
+    /// drawn bounds lag a move made since.
+    ///
+    /// [`EditMenuOutput::Placed`]: crate::ui::edit_menu::EditMenuOutput::Placed
     pub(in crate::ui) fn floating_panels(&self) -> Vec<Rect> {
         let design = &self.widgets.design;
         let editing = &self.editing;
         let widgets = &self.widgets;
+        let menu = editing
+            .menu_place
+            .filter(|_| editing.menu.widget().is_visible())
+            .map(|place| menu_rect(place, design.height()));
         [
             widgets.dock.scene.upcast_ref::<gtk::Widget>(),
             widgets.dock.moves.upcast_ref(),
@@ -233,11 +243,11 @@ impl Window {
             widgets.step_card.root.upcast_ref(),
             widgets.problem_card.root.upcast_ref(),
             widgets.edge_pin.upcast_ref(),
-            editing.menu.widget().upcast_ref(),
         ]
         .into_iter()
         .filter(|widget| widget.is_visible())
-        .flat_map(|widget| panel_rects(widget, design))
+        .filter_map(|widget| drawn_rect(widget, design))
+        .chain(menu)
         .collect()
     }
 
@@ -404,33 +414,31 @@ impl Window {
     }
 }
 
-/// Where a panel floating over the 3D view is: where it was last drawn,
-/// and, for a panel placed by its margins from the top left (a card beside
-/// the selection), also where its margins now put it at its natural size,
-/// since its allocation lags a move made in the same frame.
-fn panel_rects(widget: &gtk::Widget, design: &gtk::Overlay) -> Vec<Rect> {
-    let mut rects = Vec::new();
-    if widget.halign() == gtk::Align::Start && widget.valign() == gtk::Align::Start {
-        let (width, height) = natural_size(widget);
-        let room = crate::convert::f32_of_int(design.height() - widget.margin_top()).max(0.0);
-        rects.push(Rect {
-            x: crate::convert::f32_of_int(widget.margin_start()),
-            y: crate::convert::f32_of_int(widget.margin_top()),
-            width,
-            height: height.min(room),
-        });
+/// Where a panel floating over the 3D view was last drawn (its own
+/// bounds in the view), while it shows.
+fn drawn_rect(widget: &gtk::Widget, design: &gtk::Overlay) -> Option<Rect> {
+    let bounds = widget
+        .is_mapped()
+        .then(|| widget.compute_bounds(design))
+        .flatten()?;
+    Some(Rect {
+        x: bounds.x(),
+        y: bounds.y(),
+        width: bounds.width(),
+        height: bounds.height(),
+    })
+}
+
+/// Where the menu stands, as it said ([`MenuPlace`]), in a view this
+/// high: no lower than the view's foot.
+fn menu_rect(place: MenuPlace, view_height: i32) -> Rect {
+    let room = view_height.saturating_sub(place.top).max(0);
+    Rect {
+        x: crate::convert::f32_of_int(place.start),
+        y: crate::convert::f32_of_int(place.top),
+        width: crate::convert::f32_of_int(place.width),
+        height: crate::convert::f32_of_int(place.height.min(room)),
     }
-    if widget.is_mapped()
-        && let Some(bounds) = widget.compute_bounds(design)
-    {
-        rects.push(Rect {
-            x: bounds.x(),
-            y: bounds.y(),
-            width: bounds.width(),
-            height: bounds.height(),
-        });
-    }
-    rects
 }
 
 /// A widget's natural size, for placing it before it is drawn. A hidden

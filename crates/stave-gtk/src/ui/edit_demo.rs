@@ -173,7 +173,9 @@ pub(super) fn heard(output: &ShowcaseOutput) {
         ShowcaseOutput::Card(EditCardOutput::Action(action)) => {
             eprintln!("edit card: {action:?}");
         }
-        ShowcaseOutput::Menu(EditMenuOutput::Drawn | EditMenuOutput::HoldFromSpace)
+        ShowcaseOutput::Menu(
+            EditMenuOutput::Drawn | EditMenuOutput::Placed(_) | EditMenuOutput::HoldFromSpace,
+        )
         | ShowcaseOutput::Card(
             EditCardOutput::OptionsOpen(_) | EditCardOutput::Link(_) | EditCardOutput::Hover(_),
         ) => {}

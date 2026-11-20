@@ -319,8 +319,10 @@ impl FloatsComponent {
         widgets.outlines.queue_draw();
     }
 
-    /// The group was let go: it docks in the nearest free spot (or goes
-    /// back where it was if there is none).
+    /// The group was let go: the owner is told the nearest free spot,
+    /// for the keeper of the spots to dock it there, and the group moves
+    /// when the keeper's [`FloatsInput::Refresh`] comes back; with no
+    /// free spot it goes back where it was.
     fn finish(&mut self, widgets: &FloatsWidgets, sender: &ComponentSender<Self>) {
         let Some(drag) = self.drag.take() else {
             return;
@@ -329,14 +331,18 @@ impl FloatsComponent {
             widget.remove_css_class("stave-dragging");
         }
         widgets.figure.set_cursor(None);
-        if let Some(spot) = view_layout::nearest(drag.pointer(), &drag.targets) {
-            self.spots.dock(drag.group, spot);
-            let _ = sender.output(FloatsOutput::Docked {
-                group: drag.group,
-                spot,
-            });
+        match view_layout::nearest(drag.pointer(), &drag.targets) {
+            Some(spot) => {
+                // The spots are the workbench's: this copy changes only
+                // with its `Refresh`.
+                let _ = sender.output(FloatsOutput::Docked {
+                    group: drag.group,
+                    spot,
+                });
+                widgets.figure.queue_allocate();
+            }
+            None => self.refresh(&widgets.figure, sender),
         }
-        self.refresh(&widgets.figure, sender);
         widgets.outlines.queue_draw();
     }
 }
@@ -699,23 +705,40 @@ mod tests {
     }
 
     /// The camera column held and dragged to the bottom left corner, where
-    /// no group shows: it docks there, lying flat, the chips (hidden)
-    /// taking the right edge; the layout hears of it.
+    /// no group shows: the layout (the workbench, the spots' one keeper)
+    /// hears of it and docks it there, and the floats, refreshed by it,
+    /// lay it flat, the chips (hidden) taking the right edge.
     fn drag_to_a_corner() {
         let laid: Rc<RefCell<Vec<(Group, gtk::Orientation)>>> = Rc::default();
         let docked = Rc::new(Cell::new(None));
         let laid_by = laid.clone();
         let docked_by = docked.clone();
-        let workbench = workbench();
+        let (workbench_owner, workbench_outputs) = relm4::channel();
+        let workbench = Rc::new(workbench_for(&workbench_owner));
+        let layout = Rc::downgrade(&workbench);
         let (owner, outputs) = relm4::channel();
-        let floats = floats_for(controls(), workbench.tool_spots(), &owner);
+        let floats = Rc::new(floats_for(controls(), workbench.tool_spots(), &owner));
         let window = in_a_window(&floats);
         let figure = floats.root.clone();
         handle_each(outputs, move |output| match output {
             FloatsOutput::Orient { group, orientation } => {
                 laid_by.borrow_mut().push((group, orientation));
             }
-            FloatsOutput::Docked { group, spot } => docked_by.set(Some((group, spot))),
+            FloatsOutput::Docked { group, spot } => {
+                docked_by.set(Some((group, spot)));
+                // As the window passes it on.
+                if let Some(workbench) = layout.upgrade() {
+                    workbench.dock_tool(group, spot);
+                }
+            }
+        });
+        let refresher = Rc::downgrade(&floats);
+        handle_each(workbench_outputs, move |output| {
+            if let WorkbenchOutput::ToolsChanged(spots) = output
+                && let Some(floats) = refresher.upgrade()
+            {
+                floats.refresh(spots);
+            }
         });
         lay_out(&window);
         floats.send(FloatsInput::Held {
@@ -828,10 +851,11 @@ mod tests {
     /// The old floats ran a drag's steps inside GTK's signals, borrowing
     /// the drag as they went. Now the gestures only queue messages: the
     /// drag moves only when the main loop runs. The owner hears of the
-    /// dock after the update that docked the group (reading the model
+    /// dock after the update that let the group go (reading the model
     /// there would panic if it had not), and a gesture's signal fired
     /// while it handles that, a dock asked of the workbench there and the
-    /// refresh the workbench asks for after it, are queued too.
+    /// refresh the workbench asks for after it, which moves the group,
+    /// are queued too.
     fn signals_are_queued() {
         let floating = controls();
         let camera = floating
