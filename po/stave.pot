@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: stave\n"
 "Report-Msgid-Bugs-To: https://github.com/OceanEilonwy/stave/issues\n"
-"POT-Creation-Date: 2026-11-20 12:45+0800\n"
+"POT-Creation-Date: 2026-11-20 13:04+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -132,6 +132,43 @@ msgstr ""
 #: crates/stave-app/src/choices.rs:222
 #, rust-format
 msgid "Standard · {module}"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:100
+msgid "Keep both"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:101
+msgid "Use this text"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:109
+msgid "Keep yours"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:112
+msgid "Keep theirs"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:115
+msgid "Keep the suggestion's"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:118
+msgid "Keep the project's"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:121
+msgid "Keep the green side"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:122
+msgid "Keep the blue side"
+msgstr ""
+
+#: crates/stave-app/src/conflicts.rs:124
+#, rust-format
+msgid "Keep side {number}"
 msgstr ""
 
 #: crates/stave-app/src/edit.rs:65
@@ -1847,35 +1884,35 @@ msgstr ""
 msgid "checking it was stopped"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:257
+#: crates/stave-app/src/view.rs:251
 msgid "steel"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:274
+#: crates/stave-app/src/view.rs:268
 #, rust-format
 msgid "cylinder {diameter} mm across, {length} mm long"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:291
+#: crates/stave-app/src/view.rs:285
 #, rust-format
 msgid "cylinder {diameter} mm across, {length} mm long, slanted {angle}"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:299
+#: crates/stave-app/src/view.rs:293
 #, rust-format
 msgid "bar {thickness} mm thick"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:302
+#: crates/stave-app/src/view.rs:296
 msgid "outline"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:308
+#: crates/stave-app/src/view.rs:302
 #, rust-format
 msgid "box {size}"
 msgstr ""
 
-#: crates/stave-app/src/view.rs:313
+#: crates/stave-app/src/view.rs:307
 #, rust-format
 msgid "{count} shape"
 msgid_plural "{count} shapes"
@@ -3223,60 +3260,60 @@ msgstr ""
 msgid "'{file}' didn't come out as the edit says"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:960
+#: crates/stave-gtk/src/ui/editor.rs:1002
 msgid "Find in this file"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1003
+#: crates/stave-gtk/src/ui/editor.rs:1045
 msgid "Previous match (Shift+Enter)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1006
+#: crates/stave-gtk/src/ui/editor.rs:1048
 msgid "Previous match"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1016
+#: crates/stave-gtk/src/ui/editor.rs:1058
 msgid "Next match (Enter)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1019
+#: crates/stave-gtk/src/ui/editor.rs:1061
 msgid "Next match"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1029
+#: crates/stave-gtk/src/ui/editor.rs:1071
 msgid "Close the search (Escape)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1032
+#: crates/stave-gtk/src/ui/editor.rs:1074
 msgid "Close the search"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1129
+#: crates/stave-gtk/src/ui/editor.rs:1171
 msgid "No matches"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1136
+#: crates/stave-gtk/src/ui/editor.rs:1178
 #, rust-format
 msgid "{position} of {total}"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1141
+#: crates/stave-gtk/src/ui/editor.rs:1183
 #, rust-format
 msgid "{count} match"
 msgid_plural "{count} matches"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1571
+#: crates/stave-gtk/src/ui/editor.rs:1812
 msgid "show in 3D"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1644
+#: crates/stave-gtk/src/ui/editor.rs:1885
 #, rust-format
 msgid "List the uses of {name} (Shift+F12)"
 msgstr ""
 
-#: crates/stave-gtk/src/ui/editor.rs:1648
+#: crates/stave-gtk/src/ui/editor.rs:1889
 #, rust-format
 msgid "Select {name} in the 3D view"
 msgstr ""

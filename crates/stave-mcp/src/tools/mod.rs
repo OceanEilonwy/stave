@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::{McpError, StaveServer};
 
 pub mod changing;
+pub mod conflicts;
 pub mod looking;
 pub mod projects;
 pub mod revisions;
@@ -24,6 +25,7 @@ pub(crate) fn router() -> ToolRouter<StaveServer> {
         + StaveServer::looking_router()
         + StaveServer::changing_router()
         + StaveServer::revisions_router()
+        + StaveServer::conflicts_router()
 }
 
 /// A tool's answer: `text` for a person to read, `structured` for a

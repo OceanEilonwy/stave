@@ -1786,6 +1786,30 @@ step and changes nothing in the interface.
   unsaved changes asks: Save, Don't Save or Cancel. A file changed on disk
   by something else reloads when its buffer is clean and keeps unsaved
   changes otherwise (with a toast).
+- **Conflicts** (grammar, "Conflicts"): where a file holds two versions
+  of the same lines (the window caught up with a change someone else
+  applied and the two clash, or the user's own work outside Stave), the
+  editor tints them: the marker lines grey, the first side green, the
+  other sides blue and the base (what both changed from) amber, as a
+  paragraph background over the whole line. Above each conflict's
+  opening marker line a row of links, placed like a lens, offers the
+  ways to settle it, from `stave_app::conflicts::actions`: a "Keep" for
+  each side, named after it ("Keep yours", "Keep theirs"; the green or
+  blue side when its marker has no label Stave wrote; "Keep side 3" and
+  on), and "Keep both" only when every side is whole items with
+  different names. A link
+  replaces the conflict in the buffer as one undoable change (the file
+  is not written until it is saved, like any edit); it reads the
+  conflict from the buffer as it is when clicked, so a link left from
+  an older layout settles nothing rather than the wrong lines.
+  Deleting the marker lines by hand and saving settles it too.
+  `error[conflict]` is underlined at the opening marker line as any
+  problem is. The window never names jj or git.
+  *Not yet:* a clash in a suggestion can be settled only by an AI app
+  (`resolve_conflict`). A "Resolve" action on a conflicted suggestion in
+  the Versions panel, opening its files (`History::suggestion_files`) in
+  the editor and saving back through `History::write_suggestion_files`,
+  comes with that panel (Lane H).
 
 **Highlighting stays single-sourced.** The buffer's own syntax
 highlighting is off and there is no `.lang` file: a GtkSourceView

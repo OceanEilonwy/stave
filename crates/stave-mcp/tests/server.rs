@@ -26,14 +26,17 @@ async fn initialize_lists_tools() {
             "discard_suggestion",
             "fixes_for",
             "grammar",
+            "list_conflicts",
             "list_projects",
             "list_suggestions",
             "list_versions",
             "new_project",
             "open_project",
+            "resolve_conflict",
             "std_lookup",
             "suggest",
             "try_patch",
+            "try_resolution",
             "undo",
         ]
     );

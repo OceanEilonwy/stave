@@ -30,6 +30,7 @@ pub mod candidates;
 pub mod change;
 pub mod check;
 pub mod choices;
+pub mod conflicts;
 pub mod edit;
 pub mod editing;
 pub mod empty;
