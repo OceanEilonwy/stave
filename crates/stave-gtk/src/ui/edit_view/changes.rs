@@ -575,10 +575,7 @@ fn draw_change_card(
     } else {
         tr("It can be written once it fits")
     }));
-    if root.is_mapped()
-        && let Some(window) = root.root()
-        && !window.focus().is_some_and(|focus| focus.is_ancestor(root))
-    {
+    if root.is_mapped() && !crate::ui::keyboard_inside(root.upcast_ref()) {
         root.grab_focus();
     }
 }

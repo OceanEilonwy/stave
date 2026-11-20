@@ -296,13 +296,13 @@ impl Component for StartPageComponent {
                 // answer.
                 if self.new_project.is_none() {
                     let dialog =
-                        NewProjectDialog::new(sender.input_sender(), |output| match output {
+                        NewProjectDialog::new(sender.input_sender(), root, |output| match output {
                             NewProjectOutput::Created(folder) => {
                                 StartPageInput::NewProjectWritten(folder)
                             }
                             NewProjectOutput::Closed => StartPageInput::NewProjectClosed,
                         });
-                    dialog.present(root);
+                    dialog.present();
                     self.new_project = Some(dialog);
                 }
                 None

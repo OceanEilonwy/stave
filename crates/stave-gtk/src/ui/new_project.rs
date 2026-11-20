@@ -381,6 +381,20 @@ pub(super) struct NewProjectComponent {
     folder: Option<PathBuf>,
     /// What is wrong, said under the fields.
     error: Option<String>,
+    /// The window the folder chooser is modal to: the owner's, given at
+    /// launch ([`NewProjectInit::parent`]), so the dialog never walks up
+    /// to find it.
+    parent: gtk::Window,
+}
+
+/// What the New Project dialog is made with.
+#[derive(Debug)]
+pub(super) struct NewProjectInit {
+    /// The fields, filled in.
+    pub(super) form: Form,
+    /// The owner's window: the dialog shows over it, and the folder
+    /// chooser it asks with is modal to it.
+    pub(super) parent: gtk::Window,
 }
 
 /// What the New Project dialog is told.
@@ -431,7 +445,7 @@ fn folder_words(folder: Option<&std::path::Path>) -> String {
 
 #[relm4::component(pub(super))]
 impl Component for NewProjectComponent {
-    type Init = Form;
+    type Init = NewProjectInit;
     type Input = NewProjectInput;
     type Output = NewProjectOutput;
     type CommandOutput = ();
@@ -517,11 +531,17 @@ impl Component for NewProjectComponent {
         }
     }
 
-    fn init(form: Form, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        init: NewProjectInit,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let NewProjectInit { form, parent } = init;
         let model = NewProjectComponent {
             form,
             folder: None,
             error: None,
+            parent,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -538,15 +558,12 @@ impl Component for NewProjectComponent {
                 root.close();
             }
             NewProjectInput::ChooseFolder => {
-                let parent = root
-                    .root()
-                    .and_then(|window| window.downcast::<gtk::Window>().ok());
                 let chooser = gtk::FileDialog::builder()
                     .title(tr("Choose the folder for the new project"))
                     .modal(true)
                     .build();
                 let input = sender.input_sender().clone();
-                chooser.select_folder(parent.as_ref(), gio::Cancellable::NONE, move |result| {
+                chooser.select_folder(Some(&self.parent), gio::Cancellable::NONE, move |result| {
                     if let Ok(folder) = result
                         && let Some(path) = folder.path()
                     {
@@ -582,6 +599,8 @@ impl Component for NewProjectComponent {
 pub(super) struct NewProjectDialog {
     /// The dialog.
     pub(super) dialog: adw::Dialog,
+    /// The owner's window, which it shows over.
+    parent: gtk::Window,
     /// Held so the component lives while the dialog shows (tests read
     /// its model).
     #[cfg_attr(
@@ -592,24 +611,31 @@ pub(super) struct NewProjectDialog {
 }
 
 impl NewProjectDialog {
-    /// The dialog, filled with a small table's sizes and oak; what it
-    /// says is made the owner's message by `map` and sent to `to`.
+    /// The dialog, filled with a small table's sizes and oak, for the
+    /// owner's window `parent`; what it says is made the owner's message
+    /// by `map` and sent to `to`.
     pub(super) fn new<X: 'static>(
         to: &relm4::Sender<X>,
+        parent: &impl IsA<gtk::Window>,
         map: impl Fn(NewProjectOutput) -> X + 'static,
     ) -> NewProjectDialog {
+        let parent = parent.clone().upcast::<gtk::Window>();
         let controller = NewProjectComponent::builder()
-            .launch(Form::new())
+            .launch(NewProjectInit {
+                form: Form::new(),
+                parent: parent.clone(),
+            })
             .forward(to, map);
         NewProjectDialog {
             dialog: controller.widget().clone(),
+            parent,
             controller,
         }
     }
 
-    /// Shows the dialog over `parent`.
-    pub(super) fn present(&self, parent: &impl IsA<gtk::Widget>) {
-        self.dialog.present(Some(parent));
+    /// Shows the dialog over the owner's window.
+    pub(super) fn present(&self) {
+        self.dialog.present(Some(&self.parent));
     }
 
     /// What the fields hold.
@@ -644,14 +670,15 @@ impl Window {
         if self.state.new_project.is_some() {
             return;
         }
-        let dialog = NewProjectDialog::new(self.sender.input_sender(), |output| {
-            match output {
-                NewProjectOutput::Created(folder) => ProjectInput::NewProjectWritten(folder),
-                NewProjectOutput::Closed => ProjectInput::NewProjectClosed,
-            }
-            .into()
-        });
-        dialog.present(&self.widgets.window);
+        let dialog =
+            NewProjectDialog::new(self.sender.input_sender(), &self.widgets.window, |output| {
+                match output {
+                    NewProjectOutput::Created(folder) => ProjectInput::NewProjectWritten(folder),
+                    NewProjectOutput::Closed => ProjectInput::NewProjectClosed,
+                }
+                .into()
+            });
+        dialog.present();
         self.state.new_project = Some(dialog);
     }
 
@@ -697,7 +724,13 @@ mod tests {
     /// freed.
     fn dialog_is_freed() {
         let (to, _heard) = recorder();
-        let form = NewProjectDialog::new(&to, |output| output);
+        let window = gtk::Window::new();
+        let form = NewProjectDialog::new(&to, &window, |output| output);
+        assert_eq!(
+            form.controller.model().parent,
+            window,
+            "the folder chooser's parent is the owner's window, given at launch"
+        );
         let dialog = form.dialog.downgrade();
         let title = form.controller.model().form.title.downgrade();
         let input = form.controller.sender().clone();
@@ -711,6 +744,7 @@ mod tests {
             input.send(NewProjectInput::Create).is_err(),
             "the component's runtime, and with it the model, is gone"
         );
+        window.destroy();
     }
 
     #[test]
@@ -730,9 +764,9 @@ mod tests {
                 owner.replace(None);
             }
         });
-        let form = NewProjectDialog::new(&to, |output| output);
+        let form = NewProjectDialog::new(&to, &window, |output| output);
         drop(to);
-        form.present(&window);
+        form.present();
         owned.replace(Some(form));
         let Some(dialog) = window.visible_dialog() else {
             panic!("the dialog shows over the window");
@@ -765,7 +799,8 @@ mod tests {
     /// file chooser's answer would be) is handled in order after it.
     fn create_is_queued() {
         let (to, heard) = recorder();
-        let form = NewProjectDialog::new(&to, |output| output);
+        let window = gtk::Window::new();
+        let form = NewProjectDialog::new(&to, &window, |output| output);
         // A dialog not yet presented holds its content apart.
         let Some(create) = form
             .dialog
@@ -804,5 +839,7 @@ mod tests {
             Some(std::path::Path::new("/nowhere"))
         );
         assert!(heard.borrow().is_empty(), "nothing was created or closed");
+        drop(form);
+        window.destroy();
     }
 }

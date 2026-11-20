@@ -1719,11 +1719,11 @@ fn scroll_to_target(adjustment: &gtk::Adjustment, body: &gtk::Box, row: &gtk::Wi
 }
 
 /// The text of the short list's entry whose row holds the keyboard.
+/// Asks the list's own rows, never the window.
 fn focused_choice(list: &ChoiceList) -> Option<String> {
-    let focus = list.list.root()?.focus()?;
     list.rows
         .iter()
-        .find(|(_, row)| focus == *row.upcast_ref::<gtk::Widget>() || focus.is_ancestor(row))
+        .find(|(_, row)| super::keyboard_in(row))
         .map(|(text, _)| text.clone())
 }
 
@@ -1795,16 +1795,7 @@ fn applied_section(labels: &[String]) -> gtk::Box {
 /// Enter and Escape reach it. Does nothing until the card is on screen.
 /// Called from a card's own update (the edit card's, the change card's).
 pub(in crate::ui) fn take_focus(root: &gtk::Box) {
-    if !root.is_mapped() {
-        return;
-    }
-    let Some(window) = root.root() else {
-        return;
-    };
-    let inside = window
-        .focus()
-        .is_some_and(|focus| focus == *root.upcast_ref::<gtk::Widget>() || focus.is_ancestor(root));
-    if !inside {
+    if root.is_mapped() && !super::keyboard_in(root) {
         root.grab_focus();
     }
 }
