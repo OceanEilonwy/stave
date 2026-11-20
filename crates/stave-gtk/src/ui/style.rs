@@ -355,7 +355,11 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
 button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }
 button.stave-code-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-editor-column, .stave-details { background: @view_bg_color; color: @view_fg_color; }
+.stave-editor-column { background: @view_bg_color; color: @view_fg_color; }
+/* The Details panel's scrolled window takes the inspector's own colour, so
+   the panel reads as one surface: the inspector is only as tall as what
+   it shows, and the scrolled window fills the rest of the panel. */
+.stave-details { background: @window_bg_color; color: @window_fg_color; }
 .stave-editor-head { background: @headerbar_bg_color; border-bottom: 1px solid alpha(currentColor, 0.1); }
 .stave-pin { background: @error_bg_color; color: @error_fg_color; box-shadow: 0 0 0 4px alpha(@error_bg_color, 0.22); }
 .stave-pin.warning { background: @warning_bg_color; color: @warning_fg_color; box-shadow: 0 0 0 4px alpha(@warning_bg_color, 0.25); }
@@ -456,6 +460,24 @@ button.stave-status-tab.shown { color: currentColor; background: alpha(currentCo
 .stave-status-count.some { background: alpha(@warning_color, 0.2); color: @warning_color; }
 .stave-status-text { font-size: 0.784rem; color: alpha(currentColor, 0.7); }
 textview.stave-output { font-size: 0.818rem; background: transparent; }
+
+/* A panel's empty state ("No problems", "No files", "No file open"): every
+   one is a compact status page, and libadwaita's compact page (a 96 px
+   icon, 24 px margins and gaps, about 230 px tall) is taller than the
+   bottom dock's Problems panel (about 190 px at 1440x900), so its
+   description was cut off at the panel's edge. A 48 px icon and 12 px
+   margins and gaps make it about 130 px, with room for a second line of
+   description and Large Text. In a still shorter frame the page drops
+   its icon and shows a real scrollbar (empty_state.rs), and a shadow
+   marks the edge where the words go on (GTK draws a scrolled window's
+   undershoot only on a side with more to scroll to). */
+statuspage.compact > scrolledwindow > viewport > box { margin: 12px; border-spacing: 12px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box { border-spacing: 12px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > .icon { -gtk-icon-size: 48px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > box { border-spacing: 6px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > box > .title { font-size: 1.18rem; }
+statuspage.compact > scrolledwindow > undershoot.top { box-shadow: inset 0 1px color-mix(in srgb, var(--shade-color) 75%, transparent); background: linear-gradient(to bottom, color-mix(in srgb, var(--shade-color) 75%, transparent), transparent 8px); }
+statuspage.compact > scrolledwindow > undershoot.bottom { box-shadow: inset 0 -1px color-mix(in srgb, var(--shade-color) 75%, transparent); background: linear-gradient(to top, color-mix(in srgb, var(--shade-color) 75%, transparent), transparent 8px); }
 
 .stave-dock-targets { color: @accent_color; }
 .stave-dragging { opacity: 0.85; box-shadow: 0 6px 18px alpha(black, 0.35); }
@@ -788,6 +810,61 @@ mod tests {
             settings.set_gtk_xft_dpi(dpi);
             gtk::style_context_remove_provider_for_display(&display, &provider);
             assert!(large > normal, "{normal} then {large}");
+        });
+    }
+
+    /// The Problems panel's empty state fits the room the bottom dock
+    /// gives it at the default 1440x900 window (about 194 px under its
+    /// tab strip), whole: icon, title and description, at the panel's
+    /// width there and in a 760 px window (where the description wraps),
+    /// with normal and Large Text. libadwaita's own compact page needs
+    /// about 230 px and lost its description at the panel's edge.
+    #[test]
+    fn the_empty_problems_panel_fits_the_bottom_dock() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            use gtk::prelude::*;
+            let Some(display) = gtk::gdk::Display::default() else {
+                return;
+            };
+            const ROOM: i32 = 190;
+            let settings = gtk::Settings::for_display(&display);
+            let (dpi, font) = (settings.gtk_xft_dpi(), settings.gtk_font_name());
+            settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+            let sheets = gtk::CssProvider::new();
+            sheets.load_from_string(&format!("{SHARED}{COLOURS}{SHELL}"));
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &sheets,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let page = adw::StatusPage::builder()
+                .icon_name("object-select-symbolic")
+                .title("No problems")
+                .description(
+                    "Every part fits, every joint closes and everything that moves moves clear.",
+                )
+                .css_classes(["compact"])
+                .build();
+            let window = gtk::Window::builder().child(&page).build();
+            window.present();
+            let mut heights = Vec::new();
+            for scaled in [96 * 1024, 120 * 1024] {
+                settings.set_gtk_xft_dpi(scaled);
+                crate::ui::gtk_test::settle();
+                // The panel's width in a 1440 and a 760 px window.
+                for width in [1166, 540] {
+                    let (_, natural, _, _) = page.measure(gtk::Orientation::Vertical, width);
+                    heights.push((scaled / 1024, width, natural));
+                }
+            }
+            settings.set_gtk_xft_dpi(dpi);
+            settings.set_gtk_font_name(font.as_deref());
+            window.destroy();
+            gtk::style_context_remove_provider_for_display(&display, &sheets);
+            assert!(
+                heights.iter().all(|&(_, _, natural)| natural <= ROOM),
+                "(dpi, width, height): {heights:?}"
+            );
         });
     }
 }
