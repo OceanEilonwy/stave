@@ -146,10 +146,10 @@ fn the_ai_guides_tool_table_lists_exactly_the_servers_tools() {
 #[test]
 fn a_tool_the_server_doesnt_have_is_caught() {
     let text = "## The tools\n\n| Tool | What |\n|---|---|\n\
-                | `check` | ok |\n| `list_suggestions`, `preview(suggestion?)` | no |\n\n## Next\n";
+                | `check` | ok |\n| `list_suggestions`, `cut_list(project?)` | no |\n\n## Next\n";
     assert_eq!(
         tools_in_table(text),
-        ["check", "list_suggestions", "preview"]
+        ["check", "cut_list", "list_suggestions"]
     );
-    assert!(!tools_in_server().contains(&"preview".to_owned()));
+    assert!(!tools_in_server().contains(&"cut_list".to_owned()));
 }

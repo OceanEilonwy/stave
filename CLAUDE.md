@@ -95,15 +95,15 @@ Beside that chain (`docs/superpowers/specs/2026-11-20-ai-integration-design.md`,
   `stave-app`; `stave-app` and `stave-mcp` use it. No jj or git type
   appears in its public API.
 - `stave-link` (setting Stave up in the AI apps; asking the running window
-  to show a project over D-Bus) depends on no Stave crate; `stave-cli`
-  and `stave-gtk` use it (`stave-mcp` will, with the preview tools).
+  to show a project over D-Bus) depends on no Stave crate; `stave-mcp`,
+  `stave-cli` and `stave-gtk` use it.
 - `stave-web` (the browser viewer, built for `wasm32-unknown-unknown`)
   sits after `stave-render`: it depends on `stave-lang` through
   `stave-scene` and on `stave-render`, never on `stave-app` (which can't
   build for WASM: z3, `notify`, gettext) except in its tests.
-- `stave-mcp` (the MCP server: its tools, over standard input and output;
-  the MCP App page and the localhost viewer come with the preview tools)
-  sits after `stave-app` and is used only by `stave-cli` (`stave mcp`).
+- `stave-mcp` (the MCP server: tools, the MCP App page, the localhost
+  viewer) sits after `stave-app` and is used only by `stave-cli`
+  (`stave mcp`).
 
 - Only `stave-gtk` may depend on GTK or libadwaita; only `stave-render`,
   `stave-web` and `stave-gtk` may depend on wgpu. `stave-render` (the

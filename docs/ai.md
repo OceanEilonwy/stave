@@ -4,14 +4,14 @@ Stave works with the AI apps you may already use: **Claude Desktop**,
 **Claude Code** and **Codex**. Ask in plain words ("open my dresser",
 "widen the drawer to 500mm", "add a shoe rack to the dresser") and the app
 writes the change as a patch in the `.stave` language (grammar,
-"Patches"), Stave checks it exactly as `stave check` does, and you can see
-the result in 3D in the Stave window before anything is kept. Every change is recorded and can be
+"Patches"), Stave checks it exactly as `stave check` does, and you see the
+result in 3D before anything is kept. Every change is recorded and can be
 undone.
 
 The app's own model does the thinking. Stave sends nothing to any AI
 provider: it talks to the app over the app's own channel on your computer
-(standard input and output). Nothing is ever pushed anywhere unless you
-ask.
+(standard input and output) and, for the preview, a page served on your
+computer only. Nothing is ever pushed anywhere unless you ask.
 
 The design is in
 [superpowers/specs/2026-11-20-ai-integration-design.md](superpowers/specs/2026-11-20-ai-integration-design.md);
@@ -84,8 +84,7 @@ Talk about the project in woodworking words. Some things that work:
 - "Widen the drawer to 500mm", "Make the shelves from walnut", "Add a shoe
   rack under the dresser." The app tries the change first and tells you
   whether it fits and what it would break.
-- "Show me." Not through the app yet: open the project in the Stave window
-  and press Show on the suggestion (see "Previews").
+- "Show me." A 3D preview of the suggestion (see "Previews").
 - "Apply it", "Discard it", "Undo that."
 - "There's a clash in shelf.stave; keep mine." (see "Conflicts").
 
@@ -103,8 +102,9 @@ Nothing an AI app does reaches your project without checking clean.
    errors, is recorded as a **suggestion** (`suggest`), on the app's own
    line of changes. Your project folder does not change. More patches can
    be added to the same suggestion.
-3. **Look.** You see it in the Stave window (Versions panel → Show), as
-   a ghost over the design.
+3. **Look.** You see it in the app's preview, or in the Stave window
+   (Versions panel → Show, or `show_in_stave`), as a ghost over the
+   design.
 4. **Apply.** Applying (`apply_suggestion`, or Apply in the window) tries
    the suggestion's patches again on the project as it is now, so it still
    works if you changed something meanwhile. Only when every patch fits
@@ -177,17 +177,30 @@ under "How a change gets in" hold in every mode.
 
 ## Previews
 
-A 3D preview through the AI app itself isn't available yet: no tool shows
-the design as a page or a picture, and the app can't ask the Stave window
-to show a suggestion. Today you see a suggestion from the Stave window:
-open the project, and in the Versions panel press **Show** on the
-suggestion. It is drawn as a ghost over the design, with its card, and
-nothing is written unless you press Add ([gui.md](gui.md), "Versions").
+The preview shows the design in 3D: rotate and zoom, click a part to see
+what it is and what it is joined to, open doors and drawers, pull the
+design apart, and see a suggestion as a ghost over the design as it is
+now. It never edits.
 
-The browser viewer that previews will use is built from `crates/stave-web`
-by `tools/build-viewer.sh` (it needs the `wasm32-unknown-unknown` target
-and the matching `wasm-bindgen` CLI, and says how to get them). It needs
-WebGPU, with no fallback. No `stave` command serves it yet.
+- **`preview`**: in Claude Desktop, the 3D page shows in the
+  conversation. In every app, the answer also carries a link to the same
+  page served on your computer only (`http://127.0.0.1:<port>/?token=…`),
+  for Claude Code and Codex, which don't show pages. The link works only
+  with its token and only from this computer. When the app's own page
+  isn't allowed to run the viewer, the page says so: open the link in a
+  web browser.
+- **`show_in_stave`**: asks the running Stave window to open the project
+  and show the suggestion as a ghost, with its card; nothing is written
+  unless you press Add ([gui.md](gui.md), "Versions"). When the window
+  isn't running, the app says so: open Stave and ask again.
+- **`render_view`**: a picture of the design, drawn offscreen, for an app
+  that shows images but not pages.
+
+The page needs WebGPU; there is no fallback. Without it, the page says so.
+The page is built from `crates/stave-web` by `tools/build-viewer.sh`
+(it needs the `wasm32-unknown-unknown` target and the matching
+`wasm-bindgen` CLI, and says how to get them). A `stave` built before the
+viewer shows a page saying "Viewer not built: run tools/build-viewer.sh".
 
 ## Conflicts
 
@@ -246,9 +259,11 @@ own, plus structured content.
 | `list_conflicts(suggestion?)` | the clashes, each side and where it came from | no |
 | `try_resolution(file, conflict, resolution, suggestion?)` | tries settling one clash | no |
 | `resolve_conflict(file, conflict, resolution, suggestion?)` | settles one clash and records it | yes (refused under `off`) |
+| `preview(suggestion?)` | the 3D page, and its link on this computer | no |
+| `show_in_stave(suggestion?)` | shows it in the running Stave window | no |
+| `render_view(camera?)` | a picture of the design | no |
 
-There is no cut list tool yet (Stave has no cut list), and no preview tool
-yet (see "Previews").
+There is no cut list tool yet: Stave has no cut list.
 
 ## When something goes wrong
 

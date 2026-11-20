@@ -482,8 +482,8 @@ guide, and the design is
   looking (`check`, `describe`, `grammar`, `std_lookup`), changing
   (`try_patch`, `fixes_for`, `suggest`), versions (`list_suggestions`,
   `list_versions`, `apply_suggestion`, `discard_suggestion`, `undo`),
-  and conflicts (`list_conflicts`, `try_resolution`, `resolve_conflict`).
-  Every answer is
+  conflicts (`list_conflicts`, `try_resolution`, `resolve_conflict`) and
+  preview (`preview`, `show_in_stave`, `render_view`). Every answer is
   plain text that stands on its own, plus structured content.
 - **Versions** (`stave-history`, on `jj-lib`): each project's history in
   `.stave/history/`, Stave standing in for the working copy. Everyone
@@ -512,8 +512,9 @@ guide, and the design is
 - **The viewer** (`stave-web`, built by `tools/build-viewer.sh`): the
   renderer (`stave-render`, moved out of `stave-gtk`) on WebGPU in WASM,
   running the pipeline over the project's text; rotate, zoom, pick, open,
-  pull apart and a suggestion as a ghost. Read only. No server serves it
-  yet (see "Not done yet").
+  pull apart and a suggestion as a ghost. It is the MCP App page in
+  Claude Desktop and a page on `127.0.0.1` with a per-session token for
+  the other apps. Read only.
 
 ## Not done yet
 
@@ -569,11 +570,7 @@ guide, and the design is
   hints. (Patches, rename and smart edits exist for the 3D editor and
   `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).
-  For AI apps: no preview tools yet (`preview`, `show_in_stave`,
-  `render_view`): the viewer isn't served as the MCP App page in Claude
-  Desktop nor on `127.0.0.1` behind a per-session token, and an app can't
-  ask the window to show a suggestion (the window's Show does it); no
-  `cut_list` tool (there is no cut list yet); a clash
+  For AI apps: no `cut_list` tool (there is no cut list yet); a clash
   inside a suggestion can be settled only by an AI app
   (`resolve_conflict`), not yet from the window's Versions panel; the
   viewer needs WebGPU, with no fallback; Linux only.
