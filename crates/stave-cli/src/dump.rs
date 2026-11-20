@@ -114,8 +114,25 @@ fn cut_kind(kind: &CutKind) -> String {
             ),
             None => format!("round diameter {}", mm(*diameter)),
         },
-        CutKind::Drill { diameter, depth: d } => {
-            format!("drill diameter {} depth {}", mm(*diameter), depth(*d))
+        CutKind::Drill {
+            diameter,
+            depth: d,
+            from_depth,
+            tilt,
+        } => {
+            let mut text = format!("drill diameter {} depth {}", mm(*diameter), depth(*d));
+            if *from_depth != stave_lang::units::Length::ZERO {
+                text.push_str(&format!(" from {}", mm(*from_depth)));
+            }
+            if let Some(tilt) = tilt {
+                text.push_str(&format!(
+                    " tilt {} toward {} {:?}",
+                    tilt.angle,
+                    tilt.toward.axis.word(),
+                    tilt.toward.end
+                ));
+            }
+            text
         }
         CutKind::DovetailSocket {
             neck,
@@ -195,6 +212,23 @@ fn member_shape(shape: &MemberShape) -> String {
                 mm(centre[1])
             )
         }
+        MemberShape::Slanted {
+            centre,
+            axis,
+            toward,
+            angle,
+            diameter,
+            length,
+        } => format!(
+            "slanted cylinder diameter {} length {}, {} turned {angle} toward {}, centre across {} up {} deep {}",
+            mm(*diameter),
+            mm(*length),
+            axis.word(),
+            toward.word(),
+            mm(centre.across),
+            mm(centre.up),
+            mm(centre.deep)
+        ),
         MemberShape::Prism {
             axis, start, end, ..
         }

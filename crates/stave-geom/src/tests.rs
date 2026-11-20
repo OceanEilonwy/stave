@@ -640,6 +640,8 @@ fn a_hole_opens_in_its_face() {
         CutKind::Drill {
             diameter: mm(10),
             depth: Depth::Length(mm(8)),
+            from_depth: Length::ZERO,
+            tilt: None,
         },
     )];
     let solid = solid::Solid::of(&board, &design_of(&board));

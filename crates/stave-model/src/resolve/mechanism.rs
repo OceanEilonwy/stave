@@ -17,9 +17,9 @@ use stave_schema::words::WordSet;
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
-    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis,
-    KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex,
-    ShapeDef, StopDef,
+    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, CylinderTilt,
+    DriveDef, FrameAxis, KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr, RExprKind,
+    RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
@@ -540,6 +540,75 @@ impl Resolver<'_> {
         None
     }
 
+    /// A cylinder's `tilt:` and `toward:` (grammar, "Shapes"): both or
+    /// neither, and `toward` never the direction it runs along. `Some(None)`
+    /// for a straight cylinder, `None` after an error.
+    fn cylinder_tilt(
+        &mut self,
+        cx: &Cx,
+        found: &Arguments<'_>,
+        axis: FrameAxis,
+        span: Span,
+    ) -> Option<Option<CylinderTilt>> {
+        let (tilt, toward) = match (found.get("tilt"), found.get("toward")) {
+            (None, None) => return Some(None),
+            (Some(tilt), Some(toward)) => (tilt, toward),
+            (Some(_), None) | (None, Some(_)) => {
+                self.error_help(
+                    Code::MissingField,
+                    "a slanted cylinder needs both 'tilt' and 'toward'",
+                    cx.file,
+                    span,
+                    "write tilt: 15deg, toward: across, or leave both out for a straight cylinder",
+                );
+                return None;
+            }
+        };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
+        let parsed = match &toward.value.kind {
+            ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
+            _ => None,
+        };
+        let others: Vec<&str> = FrameAxis::ALL
+            .into_iter()
+            .filter(|other| *other != axis)
+            .map(FrameAxis::word)
+            .collect();
+        let help = format!("lean it toward {}", others.join(" or "));
+        let Some(toward_axis) = parsed else {
+            self.error_help(
+                Code::TypeMismatch,
+                "'toward' needs along, across or depth",
+                cx.file,
+                toward.value.span,
+                help,
+            );
+            return None;
+        };
+        if toward_axis == axis {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "a cylinder along {} can't lean toward {}",
+                    axis.word(),
+                    toward_axis.word()
+                ),
+                cx.file,
+                toward.value.span,
+                help,
+            );
+            return None;
+        }
+        let angle = self.value(cx, &tilt.value, &Expect::ty(Ty::Angle).named("tilt"));
+        Some(Some(CylinderTilt {
+            angle,
+            toward: toward_axis,
+        }))
+    }
+
     /// `box(...)`, `cylinder(...)`, `prism(...)` or `bar(...)`.
     fn shape(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<ShapeDef> {
         #[expect(
@@ -629,11 +698,13 @@ impl Resolver<'_> {
                     Some(arg) => self.point(cx, &arg.value, "at")?,
                     None => origin(span),
                 };
+                let tilt = self.cylinder_tilt(cx, &found, axis, span)?;
                 Some(ShapeDef::Cylinder {
                     diameter: self.frame_length(cx, diameter, "diameter"),
                     extent: self.range(cx, extent, axis.word()),
                     at: Box::new(at),
                     axis,
+                    tilt,
                 })
             }
             ShapeFunction::Prism => {

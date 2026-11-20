@@ -67,6 +67,7 @@ fn every_example_and_standard_module_checks_clean() {
             "clothing_cabinet",
             "clothing_cabinet_assemblies",
             "clothing_cabinet_from_box",
+            "face_frame",
             "joint_samples",
             "nightstand",
             "side_table",

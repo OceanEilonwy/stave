@@ -1013,6 +1013,8 @@ joint j : k(shelf, into: side)",
         == CutKind::Drill {
             diameter: mm("5"),
             depth: Depth::Length(mm("8")),
+            from_depth: stave_lang::units::Length::ZERO,
+            tilt: None,
         }));
     let shelf = part(design, "shelf");
     assert!(
@@ -1304,6 +1306,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
                 CutKind::Drill {
                     diameter,
                     depth: Depth::Through,
+                    ..
                 },
             ) if *diameter == mm("4") => Some((
                 design.hardware()[hardware.index()].name.clone(),
@@ -1336,6 +1339,8 @@ fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
         == CutKind::Drill {
             diameter: mm("35"),
             depth: Depth::Length(mm("13")),
+            from_depth: stave_lang::units::Length::ZERO,
+            tilt: None,
         }));
     // The plate stays on the side: it never reaches into it.
     let plate = common::member_bounds(common::hardware(design, "h"), "plate");

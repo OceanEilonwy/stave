@@ -453,6 +453,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         arguments: &[
             argument("diameter", LENGTH, D::Required),
             argument("depth", DEPTH, D::Required),
+            argument("from_depth", LENGTH, D::Length(0)),
         ],
         selectors: &[Crossing, End, Side],
         features: &[F::Centre],

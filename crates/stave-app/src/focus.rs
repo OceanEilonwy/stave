@@ -398,13 +398,30 @@ pub(crate) fn cut_row(kind: &CutKind) -> Row {
         Depth::Through => tr("all the way through"),
     };
     let (label, value) = match kind {
-        CutKind::Drill { diameter, depth } => (
-            tr_noop("Hole"),
-            fill_in(
+        CutKind::Drill {
+            diameter,
+            depth,
+            from_depth,
+            tilt,
+        } => {
+            let mut value = fill_in(
                 &tr("{diameter} across, {depth}"),
                 &[("diameter", &mm(*diameter)), ("depth", &deep(depth))],
-            ),
-        ),
+            );
+            if *from_depth > Length::ZERO {
+                value = fill_in(
+                    &tr("{hole}, starting {start} below the face"),
+                    &[("hole", &value), ("start", &mm(*from_depth))],
+                );
+            }
+            if let Some(tilt) = tilt {
+                value = fill_in(
+                    &tr("{hole}, slanted {angle}"),
+                    &[("hole", &value), ("angle", &tilt.angle.to_string())],
+                );
+            }
+            (tr_noop("Hole"), value)
+        }
         CutKind::Pocket {
             width,
             thickness,

@@ -1597,16 +1597,18 @@ pub enum ShapeDef {
         /// Its extent along `depth`.
         depth: RangeDef,
     },
-    /// `cylinder(diameter:, depth:, at:, axis:)`
+    /// `cylinder(diameter:, depth:, at:, axis:, tilt:, toward:)`
     Cylinder {
         /// Its diameter.
         diameter: RExpr,
-        /// Its extent along its axis.
+        /// Its extent along its axis (along the slant, when it has one).
         extent: RangeDef,
         /// The point its axis runs through.
         at: Box<KindPoint>,
         /// The frame direction its axis runs along.
         axis: FrameAxis,
+        /// How it is slanted, with `tilt:` and `toward:`.
+        tilt: Option<CylinderTilt>,
     },
     /// `prism(points: [...], along:)`
     Prism {
@@ -1626,6 +1628,16 @@ pub enum ShapeDef {
         /// Its extent along `along`.
         along: RangeDef,
     },
+}
+
+/// A slanted cylinder's `tilt:` and `toward:` (grammar, "Shapes"): its
+/// axis turned about `at` from the direction it runs along toward another.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CylinderTilt {
+    /// The angle it is turned by.
+    pub angle: RExpr,
+    /// The frame direction it leans toward; never the one it runs along.
+    pub toward: FrameAxis,
 }
 
 /// A range argument of a shape: `lo..hi`, or one length centred on the

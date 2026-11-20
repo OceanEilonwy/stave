@@ -340,6 +340,52 @@ impl Length {
     pub fn checked_neg(self) -> Option<Length> {
         self.0.checked_neg().map(Length)
     }
+
+    /// The length times a factor given in units of [`TRIG_SCALE`] (a sine
+    /// or cosine from [`Angle::sin_cos`]), rounded to the nearest
+    /// nanometre, halves away from zero. `None` on overflow.
+    pub fn scaled(self, factor: i128) -> Option<Length> {
+        let product = i128::from(self.0).checked_mul(factor)?;
+        let half = TRIG_SCALE / 2;
+        let rounded = if product >= 0 {
+            product.checked_add(half)?.div_euclid(TRIG_SCALE)
+        } else {
+            product
+                .checked_neg()?
+                .checked_add(half)?
+                .div_euclid(TRIG_SCALE)
+                .checked_neg()?
+        };
+        i64::try_from(rounded).ok().map(Length)
+    }
+}
+
+/// The fixed-point scale of [`Angle::sin_cos`]: a sine of `TRIG_SCALE` is
+/// one.
+pub const TRIG_SCALE: i128 = 1_000_000_000_000_000_000;
+
+/// π times [`TRIG_SCALE`], rounded down.
+const PI_SCALED: i128 = 3_141_592_653_589_793_238;
+
+/// The sine and cosine of an angle from 0 up to (not including) 90deg,
+/// given in micro-degrees, by their Taylor series in fixed point.
+fn first_quadrant(microdeg: i128) -> (i128, i128) {
+    let quarter = i128::from(MICRODEG_PER_DEG) * 180;
+    // Radians, scaled.
+    let x = microdeg * PI_SCALED / quarter;
+    let x2 = x * x / TRIG_SCALE;
+    let series = |first: i128, start: i128| {
+        let mut term = first;
+        let mut sum = first;
+        let mut n = start;
+        while term != 0 && n < 64 {
+            term = -term * x2 / TRIG_SCALE / ((n + 1) * (n + 2));
+            sum += term;
+            n += 2;
+        }
+        sum
+    };
+    (series(x, 1), series(TRIG_SCALE, 0))
 }
 
 impl fmt::Display for Length {
@@ -391,6 +437,25 @@ impl Angle {
     /// `self - rhs`; `None` on overflow.
     pub fn checked_sub(self, rhs: Angle) -> Option<Angle> {
         self.0.checked_sub(rhs.0).map(Angle)
+    }
+
+    /// The sine and cosine of the angle, each in units of [`TRIG_SCALE`]
+    /// and rounded toward zero. They are worked out in whole numbers, so
+    /// they are the same on every machine, and a length times one of them
+    /// ([`Length::scaled`]) is rounded once, to the nanometre, like every
+    /// other length worked out from an angle.
+    pub fn sin_cos(self) -> (i128, i128) {
+        let per_quarter = i128::from(MICRODEG_PER_DEG) * 90;
+        let turn = per_quarter * 4;
+        let within = i128::from(self.0).rem_euclid(turn);
+        let quadrant = within / per_quarter;
+        let (sin, cos) = first_quadrant(within % per_quarter);
+        match quadrant {
+            0 => (sin, cos),
+            1 => (cos, -sin),
+            2 => (-sin, -cos),
+            _ => (-cos, sin),
+        }
     }
 
     /// Radians as a float, for geometry and rendering only.
@@ -691,6 +756,35 @@ mod tests {
     use super::*;
     use crate::ast::{Decimal, Fraction};
     use std::num::NonZeroU64;
+
+    #[test]
+    fn sines_and_cosines_are_worked_out_in_whole_numbers() {
+        let (sin, cos) = Angle::from_deg(0).sin_cos();
+        assert_eq!((sin, cos), (0, TRIG_SCALE));
+        let (sin, cos) = Angle::from_deg(90).sin_cos();
+        assert_eq!((sin, cos), (TRIG_SCALE, 0));
+        let (sin, cos) = Angle::from_deg(-90).sin_cos();
+        assert_eq!((sin, cos), (-TRIG_SCALE, 0));
+        // sin 30deg is one half; cos 60deg too.
+        let (sin, _) = Angle::from_deg(30).sin_cos();
+        assert!((sin - TRIG_SCALE / 2).abs() < 100, "{sin}");
+        let (_, cos) = Angle::from_deg(60).sin_cos();
+        assert!((cos - TRIG_SCALE / 2).abs() < 100, "{cos}");
+        // 32mm along a screw at 15deg: 32 × sin 15deg = 8.282209mm across, 32 × cos 15deg = 30.909626mm along.
+        let (sin, cos) = Angle::from_deg(15).sin_cos();
+        assert_eq!(
+            Length::from_mm(32).scaled(sin),
+            Some(Length::from_nm(8_282_209))
+        );
+        assert_eq!(
+            Length::from_mm(32).scaled(cos),
+            Some(Length::from_nm(30_909_626))
+        );
+        assert_eq!(
+            Length::from_mm(-32).scaled(sin),
+            Some(Length::from_nm(-8_282_209))
+        );
+    }
 
     fn fraction(whole: u64, numerator: u64, denominator: u64, unit: Unit) -> Quantity {
         Quantity {

@@ -16,9 +16,7 @@ use std::num::NonZeroU32;
 use stave_lang::Code;
 use stave_lang::ast::Span;
 use stave_lang::units::ExactLength;
-use stave_model::defs::{
-    BodyId, Carrier, FrameAxis, KindDef, LayoutDef, RExpr, RExprKind, Symbol, Word,
-};
+use stave_model::defs::{BodyId, Carrier, KindDef, LayoutDef, RExpr, RExprKind, Symbol, Word};
 use stave_model::value::{KindValue, Patch, Spacing, Value};
 
 use crate::eval::{Env, midpoint};
@@ -57,6 +55,8 @@ pub(crate) struct WorldMemberCut {
     pub face: stave_lang::placement::Face,
     /// The shape's world box.
     pub shape: stave_model::value::ExactBox,
+    /// The shape's slant, when it is a slanted cylinder.
+    pub slant: Option<crate::hardware::WorldSlant>,
     pub kind: stave_model::solved::CutKind,
 }
 
@@ -313,7 +313,7 @@ impl Solver<'_> {
 fn placed_shape(
     frame: &Frame,
     frame_box: FrameBox,
-    cylinder: Option<FrameAxis>,
+    cylinder: Option<crate::hardware::Round>,
     outline: Option<Outline>,
 ) -> Solved<PlacedShape> {
     Ok(PlacedShape {
@@ -329,6 +329,7 @@ mod tests {
     use super::*;
     use stave_lang::placement::{Axis, PerAxis};
     use stave_lang::units::Length;
+    use stave_model::defs::FrameAxis;
 
     /// The world axis of a frame axis.
     fn axis_of(frame: &Frame, axis: FrameAxis) -> Axis {

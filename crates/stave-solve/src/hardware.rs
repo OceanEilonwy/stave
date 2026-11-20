@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis, PerAxis};
-use stave_lang::units::Length;
+use stave_lang::units::{Angle, Length};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::{
@@ -186,8 +186,8 @@ pub(crate) struct PlacedShape {
     pub frame: FrameBox,
     /// Its box in the world.
     pub world: ExactBox,
-    /// The frame axis a cylinder's axis runs along.
-    pub cylinder: Option<FrameAxis>,
+    /// The frame axis a cylinder's axis runs along, and its slant.
+    pub cylinder: Option<Round>,
     /// A prism's or a bar's outline on the across/depth plane, after the
     /// member's own mount.
     pub outline: Option<Outline>,
@@ -245,6 +245,16 @@ pub(crate) enum WorldShape {
         axis: Axis,
         bounds: ExactBox,
     },
+    /// A cylinder turned from `axis` toward `toward` by `angle` (0 to
+    /// 90deg), `length` long, centred in `bounds`.
+    Slanted {
+        axis: Axis,
+        toward: Direction,
+        angle: Angle,
+        diameter: ExactLength,
+        length: ExactLength,
+        bounds: ExactBox,
+    },
     /// A convex outline across `axis`, extruded over `bounds` along it;
     /// each point is a world point (its coordinate on `axis` carries no
     /// meaning).
@@ -300,7 +310,73 @@ pub(crate) struct HardwareCut {
     pub face: Face,
     /// The shape's world box; the footprint is where it meets the part.
     pub shape: ExactBox,
+    /// The shape's slant, when it is a slanted cylinder.
+    pub slant: Option<WorldSlant>,
     pub kind: CutKind,
+}
+
+/// How a slanted cylinder leans in the world: turned from `axis` toward
+/// `toward` by `angle` (grammar, "Slanted members").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorldSlant {
+    pub axis: Axis,
+    /// Read toward the positive end of `axis`.
+    pub toward: Direction,
+    pub angle: Angle,
+}
+
+impl WorldSlant {
+    /// The slant of a shape, when it is a slanted cylinder.
+    pub(crate) fn of(shape: &WorldShape) -> Option<WorldSlant> {
+        match shape {
+            WorldShape::Slanted {
+                axis,
+                toward,
+                angle,
+                ..
+            } => Some(WorldSlant {
+                axis: *axis,
+                toward: *toward,
+                angle: *angle,
+            }),
+            WorldShape::Box(_)
+            | WorldShape::Cylinder { .. }
+            | WorldShape::Prism { .. }
+            | WorldShape::Bar { .. } => None,
+        }
+    }
+
+    /// The same slant reflected through a plane across `mirror`.
+    pub(crate) fn reflected(self, mirror: Axis) -> WorldSlant {
+        WorldSlant {
+            toward: slant_reflected(self.axis, self.toward, mirror),
+            ..self
+        }
+    }
+}
+
+/// Which way a slanted cylinder turned from `along` toward `toward` leans
+/// once reflected through a plane across `mirror`: the other way, unless
+/// the plane is across the third axis, square to both.
+pub(crate) fn slant_reflected(along: Axis, toward: Direction, mirror: Axis) -> Direction {
+    if mirror == along || mirror == toward.axis() {
+        toward.opposite()
+    } else {
+        toward
+    }
+}
+
+/// The cuts one shape of a member makes in a part, for
+/// [`Solver::check_slanted_cut`].
+pub(crate) struct SlantedCut<'a> {
+    pub owner: &'a str,
+    pub member: &'a str,
+    pub part: PartId,
+    pub face: Face,
+    pub slant: Option<WorldSlant>,
+    pub kinds: &'a [CutKind],
+    pub file: stave_lang::FileId,
+    pub span: Span,
 }
 
 /// A placed piece of hardware.
@@ -364,7 +440,29 @@ pub(crate) fn positive_direction(axis: Axis) -> Direction {
 
 /// Each shape of a member in the kind's frame, with the axis of a cylinder
 /// and the outline of a prism or a bar.
-pub(crate) type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
+pub(crate) type FrameShapes = Vec<(FrameBox, Option<Round>, Option<Outline>)>;
+
+/// A cylinder's axis in the kind's frame: the direction it runs along and,
+/// for a slanted cylinder, its slant (grammar, "Shapes").
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Round {
+    pub axis: FrameAxis,
+    pub slant: Option<Slant>,
+}
+
+/// How a slanted cylinder is turned, and its size; its box in the frame is
+/// centred on the middle of its axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Slant {
+    /// The frame direction it leans toward.
+    pub toward: FrameAxis,
+    /// The angle it is turned by, toward `toward` when positive; more than
+    /// -90deg and less than 90deg, never 0.
+    pub angle: Angle,
+    pub diameter: ExactLength,
+    /// How long it is along its axis.
+    pub length: ExactLength,
+}
 
 /// The world plane an anchor names, and which way is into the part it
 /// belongs to.
@@ -1167,7 +1265,7 @@ impl Solver<'_> {
         &mut self,
         shape: &ShapeDef,
         env: &Env<'_>,
-    ) -> Solved<(FrameBox, Option<FrameAxis>, Option<Outline>)> {
+    ) -> Solved<(FrameBox, Option<Round>, Option<Outline>)> {
         match shape {
             ShapeDef::Box { .. } => Ok((self.frame_box(shape, env)?, None, None)),
             ShapeDef::Cylinder {
@@ -1175,7 +1273,20 @@ impl Solver<'_> {
                 extent,
                 at,
                 axis,
+                tilt,
             } => {
+                let slant = match tilt {
+                    Some(tilt) => self
+                        .cylinder_tilt(&tilt.angle, env)?
+                        .map(|angle| (tilt.toward, angle)),
+                    None => None,
+                };
+                if let Some((toward, angle)) = slant {
+                    let diameter = self.kind_length(diameter, env)?;
+                    let centre = self.kind_point(at, env)?;
+                    let range = self.frame_range(extent, env)?;
+                    return self.slanted_box(*axis, toward, angle, diameter, centre, range);
+                }
                 let radius = half(self.kind_length(diameter, env)?)?;
                 let centre = self.kind_point(at, env)?;
                 let range = self.frame_range(extent, env)?;
@@ -1202,7 +1313,14 @@ impl Solver<'_> {
                         around(centre.depth)?
                     },
                 };
-                Ok((frame_box, Some(*axis), None))
+                Ok((
+                    frame_box,
+                    Some(Round {
+                        axis: *axis,
+                        slant: None,
+                    }),
+                    None,
+                ))
             }
             ShapeDef::Prism { points, along } => {
                 let mut points_out = Vec::new();
@@ -1376,6 +1494,22 @@ impl Solver<'_> {
                         ),
                     ).into());
                 };
+                let slant = WorldSlant::of(&world_shape(shape, frame)?);
+                let member = kind
+                    .bodies
+                    .get(cut.body.index())
+                    .map(|body| body.name.as_str().to_owned())
+                    .unwrap_or_default();
+                self.check_slanted_cut(&SlantedCut {
+                    owner: name,
+                    member: &member,
+                    part,
+                    face,
+                    slant,
+                    kinds: &kinds,
+                    file,
+                    span,
+                })?;
                 for kind_of_cut in &kinds {
                     out.push(HardwareCut {
                         part,
@@ -1383,12 +1517,56 @@ impl Solver<'_> {
                         name: cut.name.clone(),
                         face,
                         shape: shape.world,
+                        slant,
                         kind: kind_of_cut.clone(),
                     });
                 }
             }
         }
         Ok(out)
+    }
+
+    /// The cuts a slanted member makes (grammar, "Slanted members"): only
+    /// `drill` follows a slant, and only into a face the cylinder runs
+    /// into end first. `error[type-mismatch]` at the call otherwise.
+    pub(crate) fn check_slanted_cut(&mut self, cut: &SlantedCut<'_>) -> Solved<()> {
+        let Some(slant) = cut.slant else {
+            return Ok(());
+        };
+        let part_name = self.part_name(cut.part);
+        let (owner, member) = (cut.owner, cut.member);
+        if let Some(other) = cut
+            .kinds
+            .iter()
+            .find(|kind| !matches!(kind, CutKind::Drill { .. }))
+        {
+            let word = other.operation().word();
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("{owner}: a {word} can't follow the slant of its {member}"),
+                    cut.file,
+                    cut.span,
+                    "cut round a slanted member with drill",
+                )
+                .into());
+        }
+        if cut.face.axis() != slant.axis {
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!(
+                        "{owner}: its {member} goes into {part_name} from the side, so its hole can't follow the slant"
+                    ),
+                    cut.file,
+                    cut.span,
+                    format!(
+                        "slant the shape less, or lay it out so it goes into {part_name} end first"
+                    ),
+                )
+                .into());
+        }
+        Ok(())
     }
 
     /// The environment a hardware kind's own expressions are evaluated
@@ -1410,6 +1588,109 @@ impl Solver<'_> {
             array: None,
         };
         body(self, &env)
+    }
+
+    /// A cylinder's `tilt:`: `None` for 0deg (a straight cylinder);
+    /// more than -90deg and less than 90deg, or `error[type-mismatch]` at
+    /// the tilt (grammar, "Shapes").
+    fn cylinder_tilt(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<Option<Angle>> {
+        let exact = self.kind_angle(expr, env)?;
+        let angle = exact.to_nearest_angle().ok_or(Fault::Overflow)?;
+        let right = Angle::from_deg(90);
+        if angle >= right || angle <= Angle::ZERO.checked_sub(right).ok_or(Fault::Overflow)? {
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("a cylinder can lean less than 90deg either way, found {angle}"),
+                    env.file,
+                    expr.span,
+                    "write a tilt between -90deg and 90deg, such as 15deg",
+                )
+                .into());
+        }
+        Ok((angle != Angle::ZERO).then_some(angle))
+    }
+
+    /// The box in the kind's frame around a slanted cylinder: its axis
+    /// turned about `at` from `axis` toward `toward` by `angle`, over
+    /// `range` along the turned axis. Each length worked out from the
+    /// angle is rounded once, to the nanometre.
+    fn slanted_box(
+        &mut self,
+        axis: FrameAxis,
+        toward: FrameAxis,
+        angle: Angle,
+        diameter: ExactLength,
+        at: ExactPoint,
+        range: (ExactLength, ExactLength),
+    ) -> Solved<(FrameBox, Option<Round>, Option<Outline>)> {
+        let (sin, cos) = angle.sin_cos();
+        let round = crate::joints::round_length;
+        let times = |value: Length, factor: i128| -> Solved<ExactLength> {
+            Ok(value.scaled(factor).ok_or(Fault::Overflow)?.to_exact())
+        };
+        let (low, high) = range;
+        let length = high.checked_sub(low).ok_or(Fault::Overflow)?;
+        let middle = round(midpoint(low, high).ok_or(Fault::Overflow)?)?;
+        let half_length = round(half(length)?)?;
+        let radius = round(half(diameter)?)?;
+        let magnitude = |value: i128| value.abs();
+        // The middle of the axis, and how far the shape reaches from it.
+        let shift_axis = times(middle, cos)?;
+        let shift_toward = times(middle, sin)?;
+        let reach_axis = times(half_length, magnitude(cos))?
+            .checked_add(times(radius, magnitude(sin))?)
+            .ok_or(Fault::Overflow)?;
+        let reach_toward = times(half_length, magnitude(sin))?
+            .checked_add(times(radius, magnitude(cos))?)
+            .ok_or(Fault::Overflow)?;
+        let reach_other = radius.to_exact();
+        let coordinate = |point: &ExactPoint, on: FrameAxis| match on {
+            FrameAxis::Along => point.along,
+            FrameAxis::Across => point.across,
+            FrameAxis::Depth => point.depth,
+        };
+        let range_on = |on: FrameAxis| -> Solved<(ExactLength, ExactLength)> {
+            let (centre, reach) = if on == axis {
+                (
+                    coordinate(&at, on)
+                        .checked_add(shift_axis)
+                        .ok_or(Fault::Overflow)?,
+                    reach_axis,
+                )
+            } else if on == toward {
+                (
+                    coordinate(&at, on)
+                        .checked_add(shift_toward)
+                        .ok_or(Fault::Overflow)?,
+                    reach_toward,
+                )
+            } else {
+                (coordinate(&at, on), reach_other)
+            };
+            Ok((
+                centre.checked_sub(reach).ok_or(Fault::Overflow)?,
+                centre.checked_add(reach).ok_or(Fault::Overflow)?,
+            ))
+        };
+        let frame_box = FrameBox {
+            along: range_on(FrameAxis::Along)?,
+            across: range_on(FrameAxis::Across)?,
+            depth: range_on(FrameAxis::Depth)?,
+        };
+        Ok((
+            frame_box,
+            Some(Round {
+                axis,
+                slant: Some(Slant {
+                    toward,
+                    angle,
+                    diameter,
+                    length,
+                }),
+            }),
+            None,
+        ))
     }
 
     #[expect(
@@ -1549,7 +1830,43 @@ pub(crate) fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldSha
             thickness: *thickness,
             bounds: shape.world,
         },
-        (None, Some(axis)) => WorldShape::Cylinder {
+        (
+            None,
+            Some(Round {
+                axis,
+                slant: Some(slant),
+            }),
+        ) => {
+            let along = frame.direction(axis);
+            let lean = frame.direction(slant.toward);
+            let lean = if slant.angle < Angle::ZERO {
+                lean.opposite()
+            } else {
+                lean
+            };
+            // Read toward the positive end of the axis it is turned from.
+            let toward = if along.is_positive() {
+                lean
+            } else {
+                lean.opposite()
+            };
+            let angle = if slant.angle < Angle::ZERO {
+                Angle::ZERO
+                    .checked_sub(slant.angle)
+                    .ok_or(Fault::Overflow)?
+            } else {
+                slant.angle
+            };
+            WorldShape::Slanted {
+                axis: along.axis(),
+                toward,
+                angle,
+                diameter: slant.diameter,
+                length: slant.length,
+                bounds: shape.world,
+            }
+        }
+        (None, Some(Round { axis, slant: None })) => WorldShape::Cylinder {
             axis: frame.direction(axis).axis(),
             bounds: shape.world,
         },
