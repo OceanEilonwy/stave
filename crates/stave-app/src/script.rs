@@ -1,8 +1,9 @@
-//! `stave edit` without a window: the edit loop as a script of steps
-//! (`docs/editing.md`, "The command line"). The same steps come from the
-//! command line's flags (`--region`, `--choose`, `--set`, `--commit`, ...)
-//! or from a script file (`--script`), one step a line. Every step drives
-//! the editor's session ([`stave_app::session::Session`]) with the same
+//! The edit loop without a window, as a script of steps (`docs/editing.md`,
+//! "The command line"): what `stave edit` runs, and what the MCP server's
+//! `new_project` runs. The same steps come from the command line's flags
+//! (`--region`, `--choose`, `--set`, `--commit`, ...) or from a script
+//! file (`--script`), one step a line. Every step drives
+//! the editor's session ([`crate::session::Session`]) with the same
 //! commands a window sends, so a whole piece of furniture can be built by
 //! a script:
 //!
@@ -56,34 +57,75 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Result, bail};
-use stave_app::Opened;
-use stave_app::candidates::Repeat;
-use stave_app::candidates::new_project::{BoardForm, NewProject, NewStock, StockCut};
-use stave_app::change::{Change, ChangeDetail, new_project_file};
-use stave_app::choices::ChoiceRole;
-use stave_app::edit::{
+use crate::Opened;
+use crate::candidates::Repeat;
+use crate::candidates::new_project::{BoardForm, NewProject, NewStock, StockCut};
+use crate::change::{Change, ChangeDetail, new_project_file};
+use crate::choices::ChoiceRole;
+use crate::edit::{
     Applicability, Blame, Candidate, FacingPair, MenuGroup, OptionFit, PartFace, Picked, PlaceSlot,
     SettingParam, SettingValue, Verdict,
 };
-use stave_app::editing::{
+use crate::editing::{
     Edit, EditCommand, EditEvent, Progress, entry_matches, parse_length, parse_name, parse_value,
     write_all,
 };
-use stave_app::gripping::{GripChoice, GripDetail, GripList, GripStops};
-use stave_app::grips::{FollowKind, GripAction, GripSelection};
-use stave_app::hold::{HoldRequest, Measured};
-use stave_app::naming::{Bound, RepeatCount};
-use stave_app::remove::Dependants;
-use stave_app::scratch::DiskWriter;
-use stave_app::session::{Command, Event, Session};
-use stave_app::stops::{Side, SideEnd, amount_text};
+use crate::gripping::{GripChoice, GripDetail, GripList, GripStops};
+use crate::grips::{FollowKind, GripAction, GripSelection};
+use crate::hold::{HoldRequest, Measured};
+use crate::naming::{Bound, RepeatCount};
+use crate::remove::Dependants;
+use crate::scratch::DiskWriter;
+use crate::session::{Command, Event, Session};
+use crate::stops::{Side, SideEnd, amount_text};
 use stave_lang::ast::Ident;
 use stave_lang::placement::{Axis, Face};
 use stave_lang::render_diagnostics;
 use stave_model::nonempty::NonEmpty;
 use stave_model::trace::{Amount, Freedom};
 use stave_schema::species::Species;
+
+/// Why a script couldn't be read, or a step of it couldn't be run.
+#[derive(Debug, thiserror::Error)]
+pub enum ScriptError {
+    /// A line that isn't a step, or a step that failed, in plain words.
+    #[error("{0}")]
+    Step(String),
+    /// The project couldn't be opened.
+    #[error(transparent)]
+    Load(#[from] crate::LoadError),
+    /// A typed value isn't one.
+    #[error(transparent)]
+    Value(#[from] crate::editing::NotAValue),
+    /// A new project's description can't be written.
+    #[error(transparent)]
+    NewProject(#[from] crate::candidates::new_project::NewProjectError),
+    /// The files couldn't be written.
+    #[error(transparent)]
+    Commit(#[from] crate::editing::CommitError),
+    /// The transcript couldn't be put together.
+    #[error("can't write the transcript: {0}")]
+    Transcript(#[from] std::fmt::Error),
+    /// The output couldn't be written.
+    #[error("can't write the output: {0}")]
+    Output(#[from] std::io::Error),
+}
+
+type Result<T, E = ScriptError> = std::result::Result<T, E>;
+
+/// Fails the step with a message: `bail!("there is no grip {}", n)`.
+macro_rules! bail {
+    ($($message:tt)*) => {
+        return Err(ScriptError::Step(format!($($message)*)))
+    };
+}
+
+/// A step's failure with a message, for `ok_or_else` and `map_err`.
+macro_rules! failure {
+    ($($message:tt)*) => {
+        ScriptError::Step(format!($($message)*))
+    };
+}
 
 /// What a step points at, by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,7 +348,7 @@ pub fn parse_script(text: &str) -> Result<Vec<(String, Step)>> {
             continue;
         }
         let step = parse_step(line)
-            .map_err(|error| anyhow::anyhow!("line {}: {error:#}", index.saturating_add(1)))?;
+            .map_err(|error| failure!("line {}: {error:#}", index.saturating_add(1)))?;
         steps.push((line.to_owned(), step));
     }
     Ok(steps)
@@ -535,15 +577,14 @@ fn measured(opened: &Opened, text: &str) -> Measured {
 }
 
 fn axis(word: &str) -> Result<Axis> {
-    Axis::from_word(word)
-        .ok_or_else(|| anyhow::anyhow!("'{word}' is not an axis: across, up or deep"))
+    Axis::from_word(word).ok_or_else(|| failure!("'{word}' is not an axis: across, up or deep"))
 }
 
 fn repeat_count(word: &str) -> Result<RepeatCount> {
     word.parse::<usize>()
         .ok()
         .and_then(RepeatCount::new)
-        .ok_or_else(|| anyhow::anyhow!("'{word}' is not a count of two or more"))
+        .ok_or_else(|| failure!("'{word}' is not a count of two or more"))
 }
 
 /// `repeat 3 up` (three pieces split up), `repeat 1` (one again).
@@ -706,7 +747,7 @@ impl Runner<'_> {
                 write_all(std::slice::from_ref(&file), &mut DiskWriter)?;
                 self.new = None;
                 writeln!(out, "created {}", file.path.display())?;
-                let opened = stave_app::open(self.folder)?;
+                let opened = crate::open(self.folder)?;
                 let errors = opened.error_count();
                 writeln!(
                     out,
@@ -718,7 +759,7 @@ impl Runner<'_> {
             Step::Select(selection) => {
                 // The selection's names are looked up in the design as it
                 // is on disk now.
-                let opened = stave_app::open(self.folder)?;
+                let opened = crate::open(self.folder)?;
                 let picked = picked(&opened, selection)?;
                 let events = self.send(EditCommand::Start(picked));
                 if let Some(failed) = rejected(&events) {
@@ -861,7 +902,7 @@ impl Runner<'_> {
                 out,
             ),
             Step::Hold(line) => {
-                let opened = stave_app::open(self.folder)?;
+                let opened = crate::open(self.folder)?;
                 let (first, second) = (
                     measured(&opened, &line.first),
                     measured(&opened, &line.second),
@@ -872,7 +913,7 @@ impl Runner<'_> {
                         let now = self
                             .session
                             .measure(&first, &second)
-                            .map_err(anyhow::Error::msg)?;
+                            .map_err(|error| ScriptError::Step(error.to_string()))?;
                         writeln!(out, "the distance is {now} now")?;
                         now
                     }
@@ -887,11 +928,11 @@ impl Runner<'_> {
                 self.change(EditCommand::Hold(request), out)
             }
             Step::Measure(first, second) => {
-                let opened = stave_app::open(self.folder)?;
+                let opened = crate::open(self.folder)?;
                 let distance = self
                     .session
                     .measure(&measured(&opened, first), &measured(&opened, second))
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(|error| ScriptError::Step(error.to_string()))?;
                 writeln!(out, "{first} to {second}: {distance}")?;
                 Ok(true)
             }
@@ -912,7 +953,7 @@ impl Runner<'_> {
                 out,
             ),
             Step::Grips(of) => {
-                let opened = stave_app::open(self.folder)?;
+                let opened = crate::open(self.folder)?;
                 let selection = grip_selection(&opened, of)?;
                 let events = self.send(EditCommand::ListGrips(selection));
                 if let Some(failed) = rejected(&events) {
@@ -1064,7 +1105,7 @@ impl Runner<'_> {
                 for event in &events {
                     if let EditEvent::Rejected(rejection) = event {
                         match rejection {
-                            stave_app::editing::Rejection::CantWrite(message) => {
+                            crate::editing::Rejection::CantWrite(message) => {
                                 bail!("{message}")
                             }
                             other => writeln!(out, "not committed: {}", other.text())?,
@@ -1369,7 +1410,7 @@ fn amount(value: Amount) -> String {
 /// (`400mm`), an angle (`95deg`) or a plain number (`0.37`, `3`).
 fn amount_like(now: Amount, text: &str) -> Result<Amount> {
     let expr = parse_value(text)?;
-    let wrong = || anyhow::anyhow!("'{text}' is not the same kind of value as {}", amount(now));
+    let wrong = || failure!("'{text}' is not the same kind of value as {}", amount(now));
     Ok(match (now, &expr.kind) {
         (Amount::Length(_), stave_lang::ast::ExprKind::Quantity(quantity)) => {
             Amount::Length(stave_lang::units::quantity_to_length(*quantity).map_err(|_| wrong())?)
@@ -1589,7 +1630,7 @@ fn chosen_setting<'e>(edit: &'e Edit, name: &str) -> Result<&'e SettingParam> {
                 .iter()
                 .find(|setting| setting.name.as_str() == name)
         })
-        .ok_or_else(|| anyhow::anyhow!("there is no setting called '{name}'"))
+        .ok_or_else(|| failure!("there is no setting called '{name}'"))
 }
 
 /// A fit in the words the lists use.
@@ -1607,7 +1648,7 @@ fn fit_words(fit: &OptionFit) -> String {
 /// from 1, then how many options the search goes through.
 fn short_list(edit: &Edit, name: &str, out: &mut String) -> Result<()> {
     let setting = chosen_setting(edit, name)?;
-    let choices = stave_app::choices::short_list(setting);
+    let choices = crate::choices::short_list(setting);
     let recent = choices
         .iter()
         .filter(|choice| choice.role == ChoiceRole::Recent)
@@ -1649,7 +1690,7 @@ fn short_list(edit: &Edit, name: &str, out: &mut String) -> Result<()> {
 /// each with how it matched, its fit and its description.
 fn search_list(edit: &Edit, name: &str, query: &str, out: &mut String) -> Result<()> {
     let setting = chosen_setting(edit, name)?;
-    let groups = stave_app::choices::search(setting, query);
+    let groups = crate::choices::search(setting, query);
     let found: usize = groups.iter().map(|group| group.hits.len()).sum();
     writeln!(
         out,
@@ -1773,10 +1814,10 @@ fn card(edit: &Edit, out: &mut String) -> Result<()> {
                         .map_or("?", |assembly| assembly.name.as_str());
                     format!(
                         "{} (copied from {from})",
-                        stave_app::candidates::print::expr_text(value)
+                        crate::candidates::print::expr_text(value)
                     )
                 }
-                SettingValue::Chosen(value) => stave_app::candidates::print::expr_text(value),
+                SettingValue::Chosen(value) => crate::candidates::print::expr_text(value),
                 SettingValue::Unset => "choose one".to_owned(),
             };
             (setting.name.as_str().to_owned(), value)
@@ -1823,7 +1864,7 @@ fn card(edit: &Edit, out: &mut String) -> Result<()> {
 /// works out to, with the default as written when that says more (`220mm
 /// (default: opening.up - bottom_gap - top_gap)`, `dowel(count: 4)
 /// (default)`).
-fn default_text(setting: &stave_app::edit::SettingParam) -> String {
+fn default_text(setting: &crate::edit::SettingParam) -> String {
     match (&setting.default_value, &setting.default_text) {
         (Some(value), Some(written)) if value != written => {
             format!("{value} (default: {written})")

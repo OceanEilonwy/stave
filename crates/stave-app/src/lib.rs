@@ -52,6 +52,7 @@ pub mod remove;
 pub mod repeat;
 pub mod save_failure;
 pub mod scratch;
+pub mod script;
 pub mod session;
 pub mod solve_edit;
 pub mod spaces;
