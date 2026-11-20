@@ -479,3 +479,34 @@ fn an_editor_session_over_the_protocol() {
 
     client.stop();
 }
+
+#[test]
+fn exiting_without_shutdown_is_an_error() {
+    let (server, client) = Connection::memory();
+    let handle = std::thread::spawn(move || stave_lsp::run(&server, Config::default()));
+    let id = RequestId::from(1);
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            id.clone(),
+            Initialize::METHOD.to_owned(),
+            json!({ "capabilities": {} }),
+        )))
+        .unwrap();
+    let answer = client.receiver.recv_timeout(PATIENCE).unwrap();
+    assert!(matches!(answer, Message::Response(response) if response.id == id));
+    for method in [Initialized::METHOD, Exit::METHOD] {
+        client
+            .sender
+            .send(Message::Notification(Notification::new(
+                method.to_owned(),
+                json!({}),
+            )))
+            .unwrap();
+    }
+    let stopped = handle.join().unwrap();
+    assert!(matches!(
+        stopped,
+        Err(stave_lsp::ServerError::ExitWithoutShutdown)
+    ));
+}

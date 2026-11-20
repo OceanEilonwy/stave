@@ -287,6 +287,41 @@ pub fn code_lenses(
 mod tests {
     use super::*;
     use stave_ide::{ParameterKind, SignatureParameter};
+    use stave_lang::ast::Span;
+    use stave_lang::{Code, Label, SourceMap};
+    use std::path::PathBuf;
+
+    struct Map(SourceMap);
+
+    impl Sources for Map {
+        fn source(&self, file: FileId) -> Option<(Document, &str)> {
+            let source = self.0.get(file)?;
+            Some((Document::File(PathBuf::from(source.path())), source.text()))
+        }
+    }
+
+    #[test]
+    fn a_diagnostic_carries_its_help_notes_and_other_labels() {
+        let mut map = SourceMap::new();
+        let text = "// é 🪚\npart door : Panel\n  mirror(door_l, about: x)\n";
+        let file = map.add("/p/doors.stave", text).unwrap();
+        let at = |needle: &str| {
+            let start = u32::try_from(text.find(needle).unwrap()).unwrap();
+            Span::new(start, start + u32::try_from(needle.len()).unwrap())
+        };
+        let found = Diagnostic::error(
+            Code::UnknownName,
+            "no part named `door_l`",
+            Label::with_message(file, at("door_l"), "not declared"),
+        )
+        .with_label(Label::with_message(file, at("door"), "a similar name"))
+        .with_label(Label::new(file, at("Panel")))
+        .with_note("names are looked up in this component")
+        .with_help("did you mean `door`?");
+        let (document, shown) = diagnostic(&found, &Map(map), PositionEncoding::Utf16).unwrap();
+        assert_eq!(document, Document::File(PathBuf::from("/p/doors.stave")));
+        insta::assert_snapshot!(serde_json::to_string_pretty(&shown).unwrap());
+    }
 
     #[test]
     fn parameter_labels_point_into_the_signature() {

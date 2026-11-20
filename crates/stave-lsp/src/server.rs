@@ -3,7 +3,7 @@
 //! diagnostics published at once and the slow ones from a background
 //! check after typing pauses.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -77,7 +77,10 @@ pub(crate) fn run(connection: &Connection, config: Config) -> Result<(), ServerE
         versions: BTreeMap::new(),
         documents: BTreeMap::new(),
         projects: BTreeMap::new(),
+        generations: 0,
+        checking: BTreeSet::new(),
         slow_sender,
+        shut_down: false,
     };
     server.main_loop(connection, &slow_receiver)
 }
@@ -140,14 +143,14 @@ struct SlowResult {
 struct Project {
     /// The latest analysis; `None` when the folder could not be loaded.
     analysis: Option<Analysis>,
-    /// Counts changes, so a slow check's result for older text is dropped.
+    /// The text's generation, from the server-wide count of changes, so a
+    /// slow check's result for older text is dropped, even one started
+    /// before the project was closed and opened again.
     generation: u64,
     /// The slow tier's diagnostics for the current generation.
     slow: BTreeMap<Document, Vec<lsp_types::Diagnostic>>,
     /// When the next slow check starts, once typing has paused.
     due: Option<Instant>,
-    /// A slow check is running in the background.
-    checking: bool,
     /// What was last published for each file of the project.
     published: BTreeMap<Document, Vec<lsp_types::Diagnostic>>,
 }
@@ -180,7 +183,16 @@ struct Server {
     /// The project folder of each open file.
     documents: BTreeMap<Document, PathBuf>,
     projects: BTreeMap<PathBuf, Project>,
+    /// Counts changes across every project: each rebuild takes the next
+    /// number as its project's generation.
+    generations: u64,
+    /// The project folders with a slow check running in the background.
+    /// Kept apart from [`Project`] so a check outlives its project being
+    /// closed, and a project opened again waits for it.
+    checking: BTreeSet<PathBuf>,
     slow_sender: Sender<SlowResult>,
+    /// The client sent `shutdown`, so `exit` is expected.
+    shut_down: bool,
 }
 
 /// The texts of an analysis, for converting its diagnostics.
@@ -269,6 +281,7 @@ impl Server {
         match message {
             Message::Request(request) => {
                 if connection.handle_shutdown(&request)? {
+                    self.shut_down = true;
                     return Ok(Flow::Exit);
                 }
                 let response = self.respond(request);
@@ -276,7 +289,13 @@ impl Server {
             }
             Message::Notification(notification) => {
                 if notification.method == Exit::METHOD {
-                    return Ok(Flow::Exit);
+                    // The protocol asks for an error exit code when the
+                    // client exits without shutting the server down.
+                    return if self.shut_down {
+                        Ok(Flow::Exit)
+                    } else {
+                        Err(ServerError::ExitWithoutShutdown)
+                    };
                 }
                 self.notified(notification)?;
             }
@@ -354,11 +373,15 @@ impl Server {
                 document.source_path()
             ));
         }
-        let text = line_index::apply_changes(
-            self.buffers.text(&document).unwrap_or_default(),
-            &params.content_changes,
-            self.encoding,
-        );
+        let Some(old) = self.buffers.text(&document) else {
+            // The client changed a document it never opened: there is no
+            // text to apply the changes to.
+            return self.log(format!(
+                "{} was changed without being opened first",
+                document.source_path()
+            ));
+        };
+        let text = line_index::apply_changes(old, &params.content_changes, self.encoding);
         self.buffers.open_with_text(&document, &text);
         self.versions
             .insert(document.clone(), params.text_document.version);
@@ -405,11 +428,13 @@ impl Server {
     fn rebuild(&mut self, folder: &Path) -> Result<(), ServerError> {
         let loaded = Analysis::load(folder, &self.buffers.overlay());
         let delay = self.config.slow_delay;
+        self.generations = self.generations.wrapping_add(1);
+        let generation = self.generations;
         let problem = {
             let Some(project) = self.projects.get_mut(folder) else {
                 return Ok(());
             };
-            project.generation = project.generation.wrapping_add(1);
+            project.generation = generation;
             project.slow.clear();
             project.due = Some(Instant::now() + delay);
             match loaded {
@@ -515,9 +540,9 @@ impl Server {
     /// When the next slow check is due, of the projects not checking now.
     fn next_due(&self) -> Option<Instant> {
         self.projects
-            .values()
-            .filter(|project| !project.checking)
-            .filter_map(|project| project.due)
+            .iter()
+            .filter(|(folder, _)| !self.checking.contains(*folder))
+            .filter_map(|(_, project)| project.due)
             .min()
     }
 
@@ -528,11 +553,11 @@ impl Server {
         let overlay = self.buffers.overlay();
         let encoding = self.encoding;
         for (folder, project) in &mut self.projects {
-            if project.checking || !project.due.is_some_and(|due| due <= now) {
+            if self.checking.contains(folder) || !project.due.is_some_and(|due| due <= now) {
                 continue;
             }
             project.due = None;
-            project.checking = true;
+            self.checking.insert(folder.clone());
             let folder = folder.clone();
             let overlay = overlay.clone();
             let generation = project.generation;
@@ -553,10 +578,10 @@ impl Server {
     /// not changed since it started, dropped otherwise (a newer check is
     /// already due).
     fn slow_finished(&mut self, result: SlowResult) -> Result<(), ServerError> {
+        self.checking.remove(&result.folder);
         let Some(project) = self.projects.get_mut(&result.folder) else {
             return Ok(());
         };
-        project.checking = false;
         if result.generation != project.generation {
             return Ok(());
         }
@@ -1000,6 +1025,89 @@ mod tests {
             project_folder(&cabinet.join("hardware/handles.stave")),
             cabinet
         );
+    }
+
+    fn server() -> (Server, Receiver<Message>) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let (slow_sender, _) = crossbeam_channel::unbounded();
+        let server = Server {
+            sender,
+            config: Config::default(),
+            encoding: PositionEncoding::Utf16,
+            document_changes: false,
+            buffers: Buffers::new(),
+            versions: BTreeMap::new(),
+            documents: BTreeMap::new(),
+            projects: BTreeMap::new(),
+            generations: 0,
+            checking: BTreeSet::new(),
+            slow_sender,
+            shut_down: false,
+        };
+        (server, receiver)
+    }
+
+    fn uri(path: &Path) -> Uri {
+        document_uri(&Document::File(path.to_path_buf())).unwrap()
+    }
+
+    #[test]
+    fn a_check_started_before_a_project_closed_is_dropped_when_it_reopens() {
+        let cabinet = example("clothing_cabinet");
+        let doors = cabinet.join("doors.stave");
+        let text = std::fs::read_to_string(&doors).unwrap();
+        let (mut server, _messages) = server();
+        let item = |version| lsp_types::TextDocumentItem {
+            uri: uri(&doors),
+            language_id: "stave".to_owned(),
+            version,
+            text: text.clone(),
+        };
+        server.opened(item(1)).unwrap();
+        let first = server.projects[&cabinet].generation;
+        // A check of the first text starts, then the file is closed and
+        // opened again while it runs.
+        server.checking.insert(cabinet.clone());
+        server.closed(&uri(&doors)).unwrap();
+        server.opened(item(2)).unwrap();
+        assert_ne!(server.projects[&cabinet].generation, first);
+        // The reopened project waits for the running check.
+        assert_eq!(server.next_due(), None);
+        let stale = lsp_types::Diagnostic {
+            message: "stale".to_owned(),
+            ..lsp_types::Diagnostic::default()
+        };
+        server
+            .slow_finished(SlowResult {
+                folder: cabinet.clone(),
+                generation: first,
+                diagnostics: BTreeMap::from([(Document::File(doors.clone()), vec![stale])]),
+            })
+            .unwrap();
+        assert!(server.projects[&cabinet].slow.is_empty());
+        assert!(!server.checking.contains(&cabinet));
+        assert!(server.next_due().is_some());
+    }
+
+    #[test]
+    fn a_change_to_a_document_never_opened_is_ignored() {
+        let doors = example("clothing_cabinet").join("doors.stave");
+        let (mut server, _messages) = server();
+        server
+            .changed(lsp_types::DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier {
+                    uri: uri(&doors),
+                    version: 2,
+                },
+                content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "stave 1\n".to_owned(),
+                }],
+            })
+            .unwrap();
+        assert!(server.buffers.text(&Document::File(doors)).is_none());
+        assert!(server.projects.is_empty());
     }
 
     #[test]

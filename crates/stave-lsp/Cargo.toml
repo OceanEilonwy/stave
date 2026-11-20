@@ -21,5 +21,8 @@ stave-lang = { path = "../stave-lang" }
 stave-modules = { path = "../stave-modules" }
 thiserror = "2"
 
+[dev-dependencies]
+insta = "1"
+
 [lints]
 workspace = true

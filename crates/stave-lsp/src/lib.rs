@@ -159,16 +159,20 @@ pub enum ServerError {
     /// The client went away while the server was sending to it.
     #[error("the client disconnected")]
     Disconnected,
+    /// The client sent `exit` without `shutdown` first; the protocol asks
+    /// the server to stop with an error exit code then.
+    #[error("the client exited without shutting the server down")]
+    ExitWithoutShutdown,
 }
 
 /// Serves one client on a connection until it exits: the `initialize`
 /// handshake, then requests and notifications. Returns when the client
-/// sends `exit` (after `shutdown`, or without) or the connection closes.
+/// sends `exit` after `shutdown` or the connection closes.
 ///
 /// # Errors
 ///
-/// A broken connection or protocol, or an unreadable `initialize`
-/// request; see [`ServerError`].
+/// A broken connection or protocol, an unreadable `initialize`
+/// request, or `exit` without `shutdown`; see [`ServerError`].
 pub fn run(connection: &Connection, config: Config) -> Result<(), ServerError> {
     server::run(connection, config)
 }
