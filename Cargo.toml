@@ -11,6 +11,7 @@ members = [
   "crates/stave-check",
   "crates/stave-scene",
   "crates/stave-ide",
+  "crates/stave-history",
   "crates/stave-app",
   "crates/stave-cli",
   "crates/stave-gtk",

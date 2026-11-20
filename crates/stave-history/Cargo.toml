@@ -1,0 +1,22 @@
+[package]
+name = "stave-history"
+description = "Stave's versions: a project's revisions, suggestions and main line, kept with jj in .stave/history"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = "0.22"
+futures = "0.3"
+# The hash kind for a new git store; the same gix jj-lib's git backend uses.
+gix = { version = "0.90", default-features = false }
+ignore = "0.4"
+jj-lib = { version = "=0.47.1", features = ["git"] }
+pollster = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
