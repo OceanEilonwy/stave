@@ -92,7 +92,7 @@ pub(crate) fn settle() {
 /// an animation (libadwaita's dialogs fade out even when force-closed,
 /// holding the dialog until the last frame) runs on the frame clock's
 /// time, so it may still be running then, more so on a busy machine.
-pub(crate) fn settle_until(limit: std::time::Duration, done: impl Fn() -> bool) -> bool {
+pub(crate) fn settle_until(limit: std::time::Duration, mut done: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + limit;
     loop {
         settle();

@@ -2257,7 +2257,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::ui::gtk_test::{on_gtk_thread, recorder, settle};
+    use crate::ui::gtk_test::{on_gtk_thread, recorder, settle, settle_until};
 
     /// What an editor's search heard, kept until handed back.
     type Heard = Rc<RefCell<Vec<SearchEvent>>>;
@@ -2582,16 +2582,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
-        let laid_out = |editor: &mut Editor| {
-            // A few frames for GTK to lay the text out, the overlays
-            // following as the files page's settling has them.
-            for _ in 0..40 {
-                settle();
-                editor.place_overlays();
-                std::thread::sleep(std::time::Duration::from_millis(2));
-            }
-        };
-        let check = |editor: &Editor, when: &str| {
+        let check = |editor: &Editor, when: &str| -> Result<(), String> {
             let view = &editor.view;
             let buffer = view.buffer();
             for slot in editor.lenses.iter().take(editor.lenses_used) {
@@ -2606,11 +2597,12 @@ mod tests {
                 };
                 let top = f64::from(bounds.y());
                 let bottom = top + f64::from(bounds.height());
-                assert!(
-                    bottom <= f64::from(text_top),
-                    "{when}: the lens of line {} ends at {bottom}, below its text at {text_top}",
-                    slot.line
-                );
+                if bottom > f64::from(text_top) {
+                    return Err(format!(
+                        "{when}: the lens of line {} ends at {bottom}, below its text at {text_top}",
+                        slot.line
+                    ));
+                }
                 if slot.line > 0 {
                     let Some(before) = buffer.iter_at_line(slot.line - 1) else {
                         continue;
@@ -2621,19 +2613,42 @@ mod tests {
                         0,
                         place.y() + place.height(),
                     );
-                    assert!(
-                        top >= f64::from(before_bottom),
-                        "{when}: the lens of line {} starts at {top}, over the line before, which ends at {before_bottom}",
-                        slot.line
-                    );
+                    if top < f64::from(before_bottom) {
+                        return Err(format!(
+                            "{when}: the lens of line {} starts at {top}, over the line before, which ends at {before_bottom}",
+                            slot.line
+                        ));
+                    }
                 }
             }
+            Ok(())
         };
-        laid_out(&mut editor);
-        check(&editor, "laid out");
+        // Lays the window out until every lens is in its room, or a few
+        // seconds pass: the overlays follow the text as the files page's
+        // settling has them, and changing a lens's room lays the text out
+        // again. GTK lays a window out on its frame clock, which a private
+        // Broadway display with no browser never ticks, so each round also
+        // lays the editor out itself, at the size it has, as a frame would.
+        let laid_out = |editor: &mut Editor, when: &str| {
+            let mut last = Ok(());
+            let settled = settle_until(std::time::Duration::from_secs(5), || {
+                editor.place_overlays();
+                let root = &editor.root;
+                let (width, height) = (root.width(), root.height());
+                let _ = root.measure(gtk::Orientation::Horizontal, -1);
+                let _ = root.measure(gtk::Orientation::Vertical, width);
+                root.allocate(width, height, -1, None);
+                last = check(editor, when);
+                last.is_ok()
+            });
+            if let Err(problem) = last {
+                panic!("{problem}");
+            }
+            assert!(settled, "{when}: laid out");
+        };
+        laid_out(&mut editor, "laid out");
         editor.vadjustment().set_value(200.0);
-        laid_out(&mut editor);
-        check(&editor, "scrolled");
+        laid_out(&mut editor, "scrolled");
         let provider = gtk::CssProvider::new();
         provider.load_from_string("textview, .stave-lens { font-size: 20px; }");
         gtk::style_context_add_provider_for_display(
@@ -2641,8 +2656,7 @@ mod tests {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_USER,
         );
-        laid_out(&mut editor);
-        check(&editor, "with larger text");
+        laid_out(&mut editor, "with larger text");
         gtk::style_context_remove_provider_for_display(
             &gtk::prelude::WidgetExt::display(&window),
             &provider,
