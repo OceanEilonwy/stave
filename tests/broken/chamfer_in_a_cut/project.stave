@@ -1,0 +1,43 @@
+// expect: error[type-mismatch] 'chamfer' shapes a part's edge, so it can't be cut on crossing
+stave 1
+
+// A joint kind that tries to chamfer where its parts meet. A chamfer is a
+// part's own edge profile, written in the part's edges:, not a cut that a
+// joint makes.
+
+project "Chamfer in a joint" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+kind eased_butt : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  cut ease: crossing(into, piece) {
+    chamfer(size: 2mm)
+  }
+}
+
+part base : pine_19 {
+  length: 600mm
+  width:  200mm
+  place {
+    ground
+  }
+}
+
+part side : pine_19 {
+  length: 400mm
+  width:  200mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+joint corner : eased_butt(side, into: base)

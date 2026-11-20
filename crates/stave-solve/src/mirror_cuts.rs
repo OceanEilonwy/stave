@@ -161,6 +161,11 @@ impl Reframe {
                 (flats.is_none() || !reflected_around_length).then(|| kind.clone())
             }
             CutKind::Outline { .. } => (!reflected_in_face).then(|| kind.clone()),
+            // Worked out from the crossing, which is reflected with it; an
+            // edge profile is the same either way round.
+            CutKind::Diagonal | CutKind::Chamfer { .. } | CutKind::Roundover { .. } => {
+                Some(kind.clone())
+            }
         }
     }
 }
@@ -279,7 +284,9 @@ impl Solver<'_> {
                 other: self.rebind_outside_part(*other, mirrored)?,
                 footprint: reframe.local_box(footprint).ok_or(Fault::Overflow)?,
             },
-            CutPlace::Member { .. } => return Err(Fault::Internal("a mirrored joint's cut").into()),
+            CutPlace::Member { .. } | CutPlace::Edge { .. } => {
+                return Err(Fault::Internal("a mirrored joint's cut").into());
+            }
         };
         let kind = reframe
             .kind(cut.face, &cut.kind)

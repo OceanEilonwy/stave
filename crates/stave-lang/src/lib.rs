@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn operations_match_the_grammar() {
-        let sentence = between(GRAMMAR, "is one of the eleven operations: ", ".\n");
+        let sentence = between(GRAMMAR, "is one of the fourteen operations: ", ".\n");
         let listed: Vec<_> = sentence
             .split(',')
             .map(|word| word.trim().trim_matches('`'))

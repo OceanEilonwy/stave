@@ -2136,11 +2136,21 @@ pub enum CutOperation {
     DovetailTail,
     /// `outline(marks:, depth:)`: a marked-out shape.
     Outline,
+    /// `diagonal()`: where two parts cross at a corner, the half of the
+    /// overlap at this part's end, cut away on the line from the outside
+    /// corner to the inside corner (a mitre).
+    Diagonal,
+    /// `chamfer(size:)`: a part's edge planed off at 45deg. Written only in
+    /// a part's `edges:`, never in a `cut` block.
+    Chamfer,
+    /// `roundover(radius:)`: a part's edge rounded to a quarter circle.
+    /// Written only in a part's `edges:`, never in a `cut` block.
+    Roundover,
 }
 
 impl CutOperation {
     /// Every cut operation, in the order the grammar lists them.
-    pub const ALL: [CutOperation; 10] = [
+    pub const ALL: [CutOperation; 13] = [
         CutOperation::Notch,
         CutOperation::Slot,
         CutOperation::Pocket,
@@ -2151,6 +2161,9 @@ impl CutOperation {
         CutOperation::DovetailSocket,
         CutOperation::DovetailTail,
         CutOperation::Outline,
+        CutOperation::Diagonal,
+        CutOperation::Chamfer,
+        CutOperation::Roundover,
     ];
 
     /// The operation's name as written in source.
@@ -2166,6 +2179,9 @@ impl CutOperation {
             CutOperation::DovetailSocket => "dovetail_socket",
             CutOperation::DovetailTail => "dovetail_tail",
             CutOperation::Outline => "outline",
+            CutOperation::Diagonal => "diagonal",
+            CutOperation::Chamfer => "chamfer",
+            CutOperation::Roundover => "roundover",
         }
     }
 
@@ -2183,7 +2199,10 @@ impl CutOperation {
             | CutOperation::Round
             | CutOperation::DovetailSocket
             | CutOperation::DovetailTail
-            | CutOperation::Outline => "cut",
+            | CutOperation::Outline
+            | CutOperation::Diagonal => "cut",
+            CutOperation::Chamfer => "chamfer",
+            CutOperation::Roundover => "roundover",
         }
     }
 
@@ -2192,6 +2211,25 @@ impl CutOperation {
         CutOperation::ALL
             .into_iter()
             .find(|operation| operation.word() == word)
+    }
+
+    /// `true` for an edge profile (`chamfer`, `roundover`): written in a
+    /// part's `edges:`, never in a kind's `cut` block.
+    pub fn is_edge_profile(self) -> bool {
+        match self {
+            CutOperation::Chamfer | CutOperation::Roundover => true,
+            CutOperation::Notch
+            | CutOperation::Slot
+            | CutOperation::Pocket
+            | CutOperation::Tenon
+            | CutOperation::Spigot
+            | CutOperation::Round
+            | CutOperation::Drill
+            | CutOperation::DovetailSocket
+            | CutOperation::DovetailTail
+            | CutOperation::Outline
+            | CutOperation::Diagonal => false,
+        }
     }
 
     /// `true` when the operation removes only axis-aligned boxes and
@@ -2208,7 +2246,10 @@ impl CutOperation {
             CutOperation::Round
             | CutOperation::DovetailSocket
             | CutOperation::DovetailTail
-            | CutOperation::Outline => false,
+            | CutOperation::Outline
+            | CutOperation::Diagonal
+            | CutOperation::Chamfer
+            | CutOperation::Roundover => false,
         }
     }
 }
@@ -2451,7 +2492,7 @@ mod tests {
         for unit in Unit::ALL {
             assert_eq!(Unit::from_suffix(unit.suffix()), Some(unit));
         }
-        assert_eq!(Operation::all().count(), 11);
+        assert_eq!(Operation::all().count(), 14);
         assert_eq!(BaseKind::from_word("knob"), None);
         assert_eq!(TypeName::from_word("length"), None);
         assert_eq!(Operation::from_word("turning"), Some(Operation::Turning));

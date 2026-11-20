@@ -425,6 +425,91 @@ recipe outline_by_router : outline {
   check: "the key taps in flush with no gaps at its sides"
 }
 
+// ---- diagonal: the two halves of a mitre ----
+
+/// A mitre cut on the mitre saw, set to the angle of the line from the
+/// outside corner to the inside corner.
+recipe diagonal_by_mitre_saw : diagonal {
+  tools: [pencil, square, mitre_saw]
+  rank:  10
+  mark {
+    pencil(outline)                      // corner to corner, on the face
+  }
+  cut {
+    saw(outline, with: mitre_saw)        // cut every mitre at one setting
+  }
+  check: "two mitred parts held together make a square corner with no gap at the heel or the toe"
+}
+
+/// A mitre sawn by hand to a line set out with a sliding bevel and
+/// trued with a block plane.
+recipe diagonal_by_hand : diagonal {
+  tools: [marking_knife, sliding_bevel, tenon_saw, block_plane]
+  rank:  20
+  mark {
+    line(outline, with: sliding_bevel)   // the bevel set corner to corner
+    knife(outline)
+    hatch(waste)
+  }
+  cut {
+    saw(outline)
+    plane(outline, with: block_plane)    // to the knife line
+  }
+  check: "two mitred parts held together make a square corner with no gap at the heel or the toe"
+}
+
+// ---- chamfer and roundover: a part's edge profiles ----
+
+/// A chamfer routed with a bearing-guided chamfer bit.
+recipe chamfer_by_router : chamfer {
+  tools: [router, chamfer_bit]
+  rank:  10
+  needs: [flat_face]                     // the router base rides on a face beside the edge
+  cut {
+    rout(waste, to: size, passes: 2, with: chamfer_bit)
+  }
+  check: "the chamfer is the same width all along the edge"
+}
+
+/// A chamfer planed by hand to two pencil lines.
+recipe chamfer_by_hand : chamfer {
+  tools: [pencil, block_plane]
+  rank:  20
+  mark {
+    pencil(waste)                        // a line on each face, the chamfer's size back from the edge
+  }
+  cut {
+    plane(waste, to: size, with: block_plane)
+  }
+  check: "the chamfer is the same width all along the edge and meets both lines"
+}
+
+/// A roundover routed with a bearing-guided roundover bit of its radius.
+recipe roundover_by_router : roundover {
+  tools: [router, roundover_bit]
+  rank:  10
+  needs: [flat_face]
+  cut {
+    rout(waste, to: radius, passes: 2, with: roundover_bit)
+  }
+  check: "the curve runs smoothly into both faces with no step"
+}
+
+/// A roundover worked by hand: chamfered first, then the corners taken
+/// off and rasped round.
+recipe roundover_by_hand : roundover {
+  tools: [pencil, block_plane, rasp]
+  rank:  20
+  mark {
+    pencil(waste)                        // a line on each face, the radius back from the edge
+  }
+  cut {
+    plane(waste, to: radius, with: block_plane)
+    shave(waste, with: rasp)
+  }
+  check: "the curve runs smoothly into both faces and meets both lines"
+}
+
 // ---- turning: a part turned to a profile ----
 
 /// A part turned between centres on the lathe.

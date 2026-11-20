@@ -474,6 +474,18 @@ pub(crate) fn cut_row(kind: &CutKind) -> Row {
         CutKind::DovetailSocket { .. } => (tr_noop("Dovetail socket"), tr("angled sides")),
         CutKind::DovetailTail { .. } => (tr_noop("Dovetail tail"), tr("angled sides")),
         CutKind::Outline { .. } => (tr_noop("Outline"), tr("cut to a drawn shape")),
+        CutKind::Diagonal => (
+            tr_noop("Mitre"),
+            tr("cut on the diagonal, outside corner to inside corner"),
+        ),
+        CutKind::Chamfer { size } => (
+            tr_noop("Chamfer"),
+            fill_in(&tr("{size} back along each face"), &[("size", &mm(*size))]),
+        ),
+        CutKind::Roundover { radius } => (
+            tr_noop("Roundover"),
+            fill_in(&tr("{radius} radius"), &[("radius", &mm(*radius))]),
+        ),
     };
     Row { label, value }
 }

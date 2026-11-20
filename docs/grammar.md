@@ -604,7 +604,7 @@ without an import or a prefix:
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
+| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `pocket_screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`, `mitre`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
 | `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`, `shelf_pin`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
@@ -812,6 +812,7 @@ missing both is warned about its length only.
 | `boards` | `Boards` | no (default: the project's) | no | how its boards are joined, when it is made of boards; see [Boards](#boards) |
 | `lengths` | `Splices` | no | no | where it is spliced end to end into pieces, and by what joint, when it is longer than its stock: `spliced(by: kind, at: d, from: end)`; see [Splices](#splices) |
 | `loose` | `Bool` | no (default `false`) | no | `true` for a part meant to lift out (a loose shelf, a tray), which nothing needs to hold; see [Held](#held) |
+| `edges` | edge profiles | no | no | its chamfers and roundovers: `chamfer(3mm, on: edge(top, front))`, `roundover(6mm, on: around(top))`, or a list of them; see [Edge profiles](#edge-profiles) |
 | `place { }` | | yes | | see [Placement](#placement) |
 
 Also readable on every part: `diameter` (round parts only), `stock`, and the
@@ -1471,6 +1472,83 @@ a splice kind's members and `uses:` fasteners (not placed or listed), and
 a spliced part wider than its stock's `max_width` (its pieces are drawn
 as single boards).
 
+### Edge profiles
+
+A part's `edges:` shapes the edges where two of its faces meet: a chamfer
+planed off at 45deg, or a roundover rounded to a quarter circle. A table
+top rounded over all round, a shelf with its front edges eased, a frame
+chamfered on its inside edges:
+
+```
+part top : oak_25 {
+  length: 900mm
+  width:  450mm
+  edges:  roundover(6mm, on: around(top))
+  ...
+}
+part shelf : pine_19 {
+  ...
+  edges:  [chamfer(3mm, on: [edge(top, front), edge(bottom, front)]),
+           roundover(2mm, on: edge(top, back))]
+}
+```
+
+- **The profiles.** `chamfer(size, on: ...)` takes `size` back along each
+  face from the edge; `roundover(radius, on: ...)` rounds the edge to a
+  quarter circle of `radius`, running smoothly into both faces. The size
+  is a `Length`, written first or named (`chamfer(size: 3mm, ...)`,
+  `roundover(radius: 6mm, ...)`), and may read params and sizes like any
+  length. `edges:` takes one profile or a list of them.
+- **Naming an edge.** An edge is named by the two faces that meet there,
+  as they face once the part is placed, the way `face_side:` names a face:
+  `edge(top, front)` is the edge between the part's top and front faces,
+  in either order. `around(top)` is all four edges of the top face. `on:`
+  takes one of these or a list of them. These are relationships within the
+  part (principle 3): a chamfer stays on the edge it names wherever the
+  part is placed and whatever its size. A mirror image of a part has its
+  source's profiles on the mirrored edges (a chamfer on the left edge of
+  the source is on the right edge of its mirror about `across`).
+- **What is shaped.** A profile runs the whole of its edge along the
+  part's **drawn** box, as the faces are seen: what joints add past the
+  drawn box (a shelf's ends inside its dados, a tenon) is left square. It
+  is a cut of the part itself: drawn in the 3D view, made before the fit
+  and contact checks (a roundover that takes away the wood a joint bears
+  on is a `no-contact` like any other), listed on the part's work card
+  with its recipe (`chamfer` and `roundover` are operations with recipes
+  of their own, see [Work cards and recipes](#work-cards-and-recipes)),
+  and made on every piece of a spliced part (an edge across an end only on
+  the piece at that end). A roundover is drawn and checked as twelve flats
+  touching its quarter circle, which leaves a little more wood than the
+  true curve (at most about 0.2% of the radius), never less.
+- **Checks.**
+  - Two faces on one axis are `error[type-mismatch]` at the `edge(...)`:
+    `top and bottom are opposite faces, so they don't meet at an edge`
+    (`edge(top, top) names top twice`), with the help `name two faces of
+    the part that meet, as edge(top, front), or every edge of one face
+    with around(top)`. A word that isn't a face is `error[type-mismatch]`
+    too, and a call other than `edge` or `around` is `error[unknown-name]`.
+  - An edge shaped twice, in one profile or two (`around(top)` and
+    `edge(front, top)`), is `error[duplicate-name]` at the second:
+    `the edge where front meets top is shaped twice`, with the first as a
+    secondary place and the help `give each edge one profile: take it out
+    of one of the lists`.
+  - A size of 0mm or less is `error[out-of-range]` (`a chamfer must be more
+    than 0mm, found 0mm`), and so is one as big as the part is across
+    either face it runs back along: `a 20mm chamfer is too big for shelf:
+    it is only 19mm thick where top meets front`, with the help `make the
+    chamfer smaller than 19mm, so some of shelf's front face is left`.
+  - Round stock and turned parts have no edges: a profile on one is
+    `error[type-mismatch]` (`rod is round, so it has no edges to round
+    over`).
+  - `chamfer` and `roundover` in a kind's `cut` block are
+    `error[type-mismatch]`: `'chamfer' shapes a part's edge, so it can't be
+    cut on crossing`, with the help `write it in the part's edges:, as in
+    edges: chamfer(3mm, on: edge(top, front))`.
+- **Not checked.** Two profiles on the opposite edges of one face that
+  together are wider than the face are not an error: each is made, and
+  the face between them is planed away. Walls (see [Walls](#walls)) do not
+  measure an edge profile, as they don't measure an `outline`.
+
 ---
 
 ## Regions
@@ -2115,11 +2193,15 @@ than 0mm`).
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
+| `diagonal()` | crossing | a **mitre**: where the two parts cross at a corner, the half of their overlap at this part's end, cut away on the line from the outside corner to the inside corner, straight through the part (see "Angled cuts") |
+| `chamfer(size:)` | `edges:` | an edge of the part planed off at 45deg, `size` back along each face; written only in a part's `edges:` (see [Edge profiles](#edge-profiles)) |
+| `roundover(radius:)` | `edges:` | an edge of the part rounded to a quarter circle of `radius`; written only in a part's `edges:` |
 
-**Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline` and a `slot`
-turned by an angle that isn't a multiple of 90deg are each a flat shape marked
-on a face and cut straight down from it: a polygon in the plane of the face,
-between two depths. They are cut, drawn and checked like every other cut.
+**Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline`, `diagonal`
+and a `slot` turned by an angle that isn't a multiple of 90deg are each a flat
+shape marked on a face and cut straight down from it: a polygon in the plane
+of the face, between two depths. They are cut, drawn and checked like every
+other cut.
 
 - **`outline`**: the polygon is the marks, joined in the order written, the
   last back to the first (either way round). `along` is measured from the end
@@ -2162,6 +2244,40 @@ between two depths. They are cut, drawn and checked like every other cut.
   side; or `slope: 1 in 8`, the way dovetail markers are sold, for a spread
   of `depth / 8`. A slope is a `Ratio` more than 0 (`1 in 8` is `1/8`);
   `0 in 8` is `error[type-mismatch]`.
+- **`diagonal`**: on `crossing(p, q)` for two parts that cross square to
+  each other at a corner, each running right to the outside of it: the
+  crossing reaches one end of `p`'s length and one end of `q`'s. The
+  **outside corner** is the corner of the crossing at both ends; the
+  **inside corner** is the one opposite it. `diagonal` takes away the
+  triangle of the crossing on `p`'s end side of the line between them,
+  straight through `p` along the axis square to both lengths, so the same
+  cut on `q` takes the other half and the two parts meet on the line. The
+  line runs corner to corner whatever the parts' widths: two parts of one
+  width meet at 45deg. Parts that lie flat (a picture frame) are mitred
+  across their width; parts standing on edge (a box's sides) across their
+  thickness. Its points are corners of the crossing, so nothing is rounded.
+  Two parts that run the same way are `error[type-mismatch]` at the joint's
+  call (`j: its parts run the same way, so they make no corner to cut on
+  the diagonal`), and so are parts that don't cross at an end of each, or
+  only touch (`j: its parts don't cross at an end of each, so they make no
+  corner to cut on the diagonal`), with the help `draw the two parts square
+  to each other and crossing at the corner, each running right to the
+  outside of it, as a frame's corner is drawn before it is mitred`; the
+  part is drawn without the cut. A `diagonal` is not made between the
+  boards of a part made of boards (`warning[not-supported]`). std's
+  `mitre` is two of them:
+
+  ```
+  kind mitre : joint {
+    roles {
+      piece: Parts
+      into:  Parts
+    }
+    cut piece_mitre: crossing(piece, into) { diagonal() }
+    cut into_mitre: crossing(into, piece) { diagonal() }
+  }
+  joint corners : mitre([rail_front, rail_back], into: [stile_left, stile_right])
+  ```
 - **A `slot` at an angle**: the rectangle `width` wide through the
   footprint's centre (from it, with `from_centre: true`), turned in the face
   by `angle`, out past the part's edges.
@@ -2173,7 +2289,7 @@ corners of a slot turned by an angle), it is worked out once from the exact
 values and rounded to the nanometre, like a hole's position. A dovetail's
 `angle` must be less than 90deg (`error[type-mismatch]`).
 
-Turning a part to a profile (`shape: turned(profile)`) is the eleventh operation,
+Turning a part to a profile (`shape: turned(profile)`) is the fourteenth operation,
 `turning`. It isn't written in a `cut` block, but recipes are written for it
 like for the others.
 
@@ -2844,9 +2960,9 @@ recipe notch_by_hand : notch {
 }
 ```
 
-The word after `recipe name :` is one of the eleven operations: `notch`, `slot`,
+The word after `recipe name :` is one of the fourteen operations: `notch`, `slot`,
 `pocket`, `tenon`, `spigot`, `round`, `drill`, `dovetail_socket`, `dovetail_tail`,
-`outline`, `turning`.
+`outline`, `diagonal`, `chamfer`, `roundover`, `turning`.
 
 ### Tools
 
@@ -2896,6 +3012,9 @@ like `gauge(flats, on: flat_faces)` every word has one meaning:
 | `dovetail_socket` | `walls`, `floor`, `waste`, `outline` | `neck`, `depth`, `angle`, `slope` |
 | `dovetail_tail` | `cheeks`, `shoulders`, `waste`, `outline` | `neck`, `depth`, `angle`, `slope` |
 | `outline` | `outline`, `waste` | `depth` |
+| `diagonal` | `outline`, `waste` | |
+| `chamfer` | `waste` | `size` |
+| `roundover` | `waste` | `radius` |
 | `turning` | `shape`, `stations`, `blank`, `centre` | `length`, `largest` |
 
 ### Steps
@@ -2943,11 +3062,12 @@ constrains the order of operations:
 | `after(operation)` | this cut comes after every cut of that operation on the same part |
 
 A cut **removes a face** when nothing of that face is left to measure from:
-`tenon`, `spigot` and `dovetail_tail` remove the end (or, for a tongue, the
-edge) they are cut on, a
+`tenon`, `spigot`, `dovetail_tail` and `diagonal` remove the end (or, for a
+tongue, the edge) they are cut on, a
 `through` `outline` removes the edges it crosses, and `turning` removes every
 face. `notch`, `slot`, `pocket`, `drill` and `dovetail_socket` never remove a
-face.
+face, and nor do `chamfer` and `roundover`, which leave both faces at an
+edge to measure from.
 
 Order between the parts of one joint comes from the joint's `cut_first:`.
 

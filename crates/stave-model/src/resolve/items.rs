@@ -936,6 +936,10 @@ impl<'a> Resolver<'a> {
         let loose = found
             .get("loose")
             .map(|f| self.field_value(cx, f, fields::PART));
+        let edges = found
+            .get("edges")
+            .map(|f| self.lower_edges(cx, &f.value))
+            .unwrap_or_default();
         (
             PartBodyDef {
                 stock: stock_expr,
@@ -950,6 +954,7 @@ impl<'a> Resolver<'a> {
                 boards,
                 lengths,
                 loose,
+                edges,
                 place: Vec::new(),
                 place_span: None,
                 span: body.span,

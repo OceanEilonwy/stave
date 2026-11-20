@@ -33,6 +33,7 @@
 mod boards;
 mod build;
 mod contact;
+mod edges;
 mod eval;
 mod failure;
 mod fixes;

@@ -1,0 +1,146 @@
+stave 1
+
+// A picture frame lying face up, and a small mitred box beside it: a first
+// project in mitres and edge profiles.
+//
+// The frame's four members are drawn the way the frame looks before it is
+// mitred, crossing square at each corner and running right to the outside
+// of it; std's mitre cuts each corner on the diagonal. Its outside top
+// edges are rounded over and its inside top edges chamfered, so the
+// profiles meet on the mitres the way a router leaves them.
+//
+// The box's four sides stand on edge and cross at the corners the same
+// way, so their mitres run across their thickness: no end grain shows on
+// the outside. Its base is glued under the sides, and its top edges are
+// chamfered all round.
+
+project "Picture frame" {
+  goal:       "A mitred oak picture frame and a mitred box to match"
+  units:      mm
+  resolution: 0.5mm
+  tools:      [pencil, marking_knife, square, tape, sliding_bevel, tenon_saw,
+               block_plane, mitre_saw, router, chamfer_bit, roundover_bit, clamps]
+}
+
+// ---- parameters ----
+param frame_width  = 400mm within 200mm..800mm     // outside, left to right
+param frame_height = 300mm within 150mm..600mm     // outside, front to back as it lies
+param moulding     = 40mm within 25mm..70mm        // how wide each member is
+param box_length   = 240mm within 150mm..400mm
+param box_depth    = 160mm within 100mm..300mm
+param box_height   = 90mm within 50mm..200mm
+
+// ---- stock ----
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2400mm }
+stock oak_12 { species: white_oak, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+
+// ---- the frame ----
+part rail_front : oak_19 {
+  length: frame_width
+  width:  moulding
+  edges:  [roundover(6mm, on: edge(top, front)), chamfer(3mm, on: edge(top, back))]
+  place {
+    ground
+  }
+}
+
+part rail_back : oak_19 {
+  length: frame_width
+  width:  moulding
+  edges:  [roundover(6mm, on: edge(top, back)), chamfer(3mm, on: edge(top, front))]
+  place {
+    flush(rail_front.left)
+    flush(rail_front.bottom)
+    flush(rail_front.front, inset: frame_height - moulding)
+  }
+}
+
+part stile_left : oak_19 {
+  length: frame_height
+  width:  moulding
+  edges:  [roundover(6mm, on: edge(top, left)), chamfer(3mm, on: edge(top, right))]
+  place {
+    orient(length: back, width: right)
+    flush(rail_front.left)
+    flush(rail_front.front)
+    flush(rail_front.bottom)
+  }
+}
+
+part stile_right : oak_19 {
+  length: frame_height
+  width:  moulding
+  edges:  [roundover(6mm, on: edge(top, right)), chamfer(3mm, on: edge(top, left))]
+  place {
+    orient(length: back, width: right)
+    flush(rail_front.right)
+    flush(rail_front.front)
+    flush(rail_front.bottom)
+  }
+}
+
+joint frame_corners : mitre([rail_front, rail_back], into: [stile_left, stile_right])
+
+// ---- the box, to the right of the frame ----
+part box_front : oak_12 {
+  length: box_length
+  width:  box_height
+  edges:  chamfer(2mm, on: [edge(top, front), edge(top, back)])
+  loose:  true                                     // the box stands on its own beside the frame
+  place {
+    orient(length: right, width: up)
+    against(rail_front.right, gap: 100mm)
+    flush(rail_front.bottom)
+    flush(rail_front.front)
+  }
+}
+
+part box_back : oak_12 {
+  length: box_length
+  width:  box_height
+  edges:  chamfer(2mm, on: [edge(top, front), edge(top, back)])
+  place {
+    orient(length: right, width: up)
+    flush(box_front.left)
+    flush(box_front.bottom)
+    flush(box_front.front, inset: box_depth - 12mm)
+  }
+}
+
+part box_left : oak_12 {
+  length: box_depth
+  width:  box_height
+  edges:  chamfer(2mm, on: [edge(top, left), edge(top, right)])
+  place {
+    orient(length: back, width: up)
+    flush(box_front.left)
+    flush(box_front.bottom)
+    flush(box_front.front)
+  }
+}
+
+part box_right : oak_12 {
+  length: box_depth
+  width:  box_height
+  edges:  chamfer(2mm, on: [edge(top, left), edge(top, right)])
+  place {
+    orient(length: back, width: up)
+    flush(box_front.right)
+    flush(box_front.bottom)
+    flush(box_front.front)
+  }
+}
+
+part box_base : oak_12 {
+  length: box_length
+  width:  box_depth
+  edges:  roundover(3mm, on: around(bottom))
+  place {
+    flush(box_front.left)
+    against(box_front.bottom)
+    flush(box_front.front)
+  }
+}
+
+joint box_corners : mitre([box_front, box_back], into: [box_left, box_right])
+joint box_bottom  : glued_face([box_front, box_back, box_left, box_right], into: box_base)

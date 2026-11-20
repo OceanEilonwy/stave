@@ -1103,6 +1103,12 @@ pub enum CutSource {
         /// The seam; `None` for a kind across all of the part's boards.
         seam: Option<SeamIndex>,
     },
+    /// A profile of the part's own `edges:` (grammar, "Edge profiles").
+    Edges {
+        /// The part whose `edges:` it is written in (a mirror image's
+        /// source, for a mirror image).
+        part: PartId,
+    },
 }
 
 /// A depth: a length below the face, or all the way through.
@@ -1242,6 +1248,21 @@ pub enum CutKind {
         /// From here (zero: the face).
         from_depth: Length,
     },
+    /// Where two parts cross at a corner, the half of their overlap at
+    /// this part's end, on the line from the outside corner to the inside
+    /// corner (a mitre). Worked out from the crossing's footprint and the
+    /// other part.
+    Diagonal,
+    /// An edge planed off at 45deg, `size` back along each face.
+    Chamfer {
+        /// How far back along each face.
+        size: Length,
+    },
+    /// An edge rounded to a quarter circle.
+    Roundover {
+        /// The radius.
+        radius: Length,
+    },
 }
 
 impl CutKind {
@@ -1258,6 +1279,9 @@ impl CutKind {
             CutKind::DovetailSocket { .. } => CutOperation::DovetailSocket,
             CutKind::DovetailTail { .. } => CutOperation::DovetailTail,
             CutKind::Outline { .. } => CutOperation::Outline,
+            CutKind::Diagonal => CutOperation::Diagonal,
+            CutKind::Chamfer { .. } => CutOperation::Chamfer,
+            CutKind::Roundover { .. } => CutOperation::Roundover,
         }
     }
 }
@@ -1324,6 +1348,13 @@ pub enum CutPlace {
         footprint: LocalBox,
         /// The shape's whole box, in this part's frame.
         shape: LocalBox,
+    },
+    /// An edge of the part, where two of its faces meet (grammar, "Edge
+    /// profiles"): the profile runs the edge's whole drawn length.
+    Edge {
+        /// The other face that meets the cut's face at the edge; never on
+        /// the same axis.
+        other: LocalFace,
     },
 }
 

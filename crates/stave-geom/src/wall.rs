@@ -545,7 +545,10 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
         | CutKind::Round { .. }
         | CutKind::DovetailSocket { .. }
         | CutKind::DovetailTail { .. }
-        | CutKind::Outline { .. } => {}
+        | CutKind::Outline { .. }
+        | CutKind::Diagonal
+        | CutKind::Chamfer { .. }
+        | CutKind::Roundover { .. } => {}
     }
     if round {
         // Not made on round parts yet (the checker warns).
@@ -671,8 +674,12 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
                 .volumes
                 .push(block(min.with(face.axis, low), max.with(face.axis, high)));
         }
-        CutKind::DovetailSocket { .. } | CutKind::DovetailTail { .. } | CutKind::Outline { .. } => {
-        }
+        CutKind::DovetailSocket { .. }
+        | CutKind::DovetailTail { .. }
+        | CutKind::Outline { .. }
+        | CutKind::Diagonal
+        | CutKind::Chamfer { .. }
+        | CutKind::Roundover { .. } => {}
         CutKind::Drill { .. } | CutKind::Spigot { .. } => {}
     }
     shape
@@ -895,7 +902,10 @@ impl<'a> Walls<'a> {
             | CutKind::Spigot { .. }
             | CutKind::Round { .. }
             | CutKind::DovetailSocket { .. }
-            | CutKind::DovetailTail { .. } => return None,
+            | CutKind::DovetailTail { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => return None,
         };
         let Depth::Length(depth) = depth else {
             return None;
@@ -971,7 +981,10 @@ impl<'a> Walls<'a> {
             | CutKind::Drill { .. }
             | CutKind::DovetailSocket { .. }
             | CutKind::DovetailTail { .. }
-            | CutKind::Outline { .. } => None,
+            | CutKind::Outline { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => None,
         }
     }
 }

@@ -582,6 +582,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         }
     }
 
+    // 5b. Edge profiles: each part's chamfers and roundovers, before the
+    // mirrored assemblies copy their parts' cuts and splices hand them out.
+    solver.make_edge_profiles(&geoms, &mut cuts);
+
     // 6. Mirrored assemblies: reflect the source's results.
     solver.mirror_assemblies(
         &mut geoms,
@@ -1349,6 +1353,9 @@ impl Solver<'_> {
                             part: *part_map.get(&part).unwrap_or(&part),
                             seam,
                         },
+                        CutSource::Edges { part } => CutSource::Edges {
+                            part: *part_map.get(&part).unwrap_or(&part),
+                        },
                     };
                     cut.place = match cut.place {
                         CutPlace::End { toward } => CutPlace::End {
@@ -1388,6 +1395,7 @@ impl Solver<'_> {
                             footprint,
                             shape,
                         },
+                        edge @ CutPlace::Edge { .. } => edge,
                     };
                     cut
                 })

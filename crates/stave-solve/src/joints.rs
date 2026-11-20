@@ -1380,6 +1380,9 @@ impl Solver<'_> {
                     from_depth: length(self, "from_depth")?,
                 }
             }
+            CutOperation::Diagonal => CutKind::Diagonal,
+            // Never in a `cut` block: the resolver said so.
+            CutOperation::Chamfer | CutOperation::Roundover => return Err(Fault::Earlier.into()),
         })
     }
 
@@ -1521,6 +1524,9 @@ impl Solver<'_> {
                 ("depth", "deep", Some(*depth)),
             ],
             CutKind::Outline { depth, .. } => vec![("depth", "deep", length(depth))],
+            CutKind::Diagonal => Vec::new(),
+            CutKind::Chamfer { size } => vec![("size", "back from its edge", Some(*size))],
+            CutKind::Roundover { radius } => vec![("radius", "in radius", Some(*radius))],
         };
         let Some((argument, word, size)) = sizes.into_iter().find_map(|(argument, word, size)| {
             size.filter(|size| *size <= Length::ZERO)

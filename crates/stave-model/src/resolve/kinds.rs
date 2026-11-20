@@ -1285,10 +1285,20 @@ impl Resolver<'_> {
         for call in calls {
             let head = call.head.as_str();
             let Some(op) = CutOperation::from_word(head) else {
-                self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, CutOperation::ALL.map(CutOperation::word), "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline");
+                self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, CutOperation::ALL.map(CutOperation::word), "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, diagonal");
                 continue;
             };
             let spec = cut_operation(op);
+            if op.is_edge_profile() {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!("'{head}' shapes a part's edge, so it can't be cut on {}", selector.word()),
+                    cx.file,
+                    call.span,
+                    format!("write it in the part's edges:, as in edges: {head}(3mm, on: edge(top, front))"),
+                );
+                continue;
+            }
             if !spec.selectors.contains(&selector) {
                 let allowed: Vec<&str> = spec.selectors.iter().map(|s| s.word()).collect();
                 self.error_help(
@@ -1552,7 +1562,7 @@ impl Resolver<'_> {
         let op = match Operation::from_word(syntax.operation.as_str()) {
             Some(op) => op,
             None => {
-                self.unknown(Code::UnknownName, format!("unknown name '{}'", syntax.operation.as_str()), cx.file, syntax.operation.span(), syntax.operation.as_str(), Operation::all().map(Operation::word), "a recipe is for one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, turning");
+                self.unknown(Code::UnknownName, format!("unknown name '{}'", syntax.operation.as_str()), cx.file, syntax.operation.span(), syntax.operation.as_str(), Operation::all().map(Operation::word), "a recipe is for one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, diagonal, chamfer, roundover, turning");
                 Operation::Cut(CutOperation::Notch)
             }
         };

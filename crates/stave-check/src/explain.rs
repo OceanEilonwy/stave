@@ -154,7 +154,10 @@ fn dovetail(checker: &Checker<'_>, a: PartId, b: PartId, deepest: &Overlap) -> O
                     | CutKind::Spigot { .. }
                     | CutKind::Round { .. }
                     | CutKind::Drill { .. }
-                    | CutKind::Outline { .. } => false,
+                    | CutKind::Outline { .. }
+                    | CutKind::Diagonal
+                    | CutKind::Chamfer { .. }
+                    | CutKind::Roundover { .. } => false,
                 };
                 toward && kind
             })

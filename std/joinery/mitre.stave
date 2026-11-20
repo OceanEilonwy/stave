@@ -1,0 +1,31 @@
+stave 1
+
+/// A mitre: two parts meeting at a corner, each cut on the diagonal so the
+/// joint line runs from the outside corner to the inside corner and no end
+/// grain shows. A picture frame's corners, a mitred box's corners, a
+/// mitred face frame.
+///
+/// Draw the parts the way the frame looks before it is mitred: square to
+/// each other and crossing at the corner, each running right to the
+/// outside of it. Each part gives up the half of the crossing at its own
+/// end. Parts of the same width meet at 45deg; parts of different widths
+/// meet on the line from corner to corner, as a mitre between them is cut.
+///
+/// A mitre is glued end grain to end grain, so it is the weakest of the
+/// glued corners: for a frame that takes a load, choose a half lap or a
+/// mortise and tenon instead.
+kind mitre : joint {
+  roles {
+    piece: Parts
+    into:  Parts
+  }
+
+  cut piece_mitre: crossing(piece, into) {
+    diagonal()
+  }
+  cut into_mitre: crossing(into, piece) {
+    diagonal()
+  }
+
+  note: "Cut every mitre with the same saw setting and check one corner is square before cutting the rest; glue with a band clamp so all four corners close at once"
+}

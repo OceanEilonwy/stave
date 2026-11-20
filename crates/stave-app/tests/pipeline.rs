@@ -71,6 +71,7 @@ fn every_example_and_standard_module_checks_clean() {
             "face_frame",
             "joint_samples",
             "nightstand",
+            "picture_frame",
             "side_table",
             "side_table_from_box",
             "stool",

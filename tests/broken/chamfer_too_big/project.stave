@@ -1,0 +1,20 @@
+// expect: error[out-of-range] a 20mm chamfer is too big for shelf: it is only 19mm thick where top meets front
+stave 1
+
+// A chamfer bigger than the board is thick would plane away the whole
+// front edge and run into the bottom face.
+
+project "Chamfer too big" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  200mm
+  edges:  chamfer(20mm, on: edge(top, front))
+  place {
+    ground
+  }
+}

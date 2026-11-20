@@ -508,6 +508,9 @@ fn operation_noun(operation: CutOperation) -> &'static str {
         CutOperation::DovetailSocket => "a dovetail socket",
         CutOperation::DovetailTail => "a dovetail tail",
         CutOperation::Outline => "an outline",
+        CutOperation::Diagonal => "a diagonal",
+        CutOperation::Chamfer => "a chamfer",
+        CutOperation::Roundover => "a roundover",
     }
 }
 
@@ -534,6 +537,14 @@ pub enum ShapeError {
     /// A dovetail whose angle is 90deg or more.
     #[error("a dovetail's angle must be less than 90deg")]
     TooSteep,
+    /// A `diagonal` between two parts that run the same way.
+    #[error("its parts run the same way, so they make no corner to cut on the diagonal")]
+    DiagonalParallel,
+    /// A `diagonal` between two parts that don't cross at an end of each.
+    #[error(
+        "its parts don't cross at an end of each, so they make no corner to cut on the diagonal"
+    )]
+    DiagonalNotAtCorner,
 }
 
 impl ShapeError {
@@ -546,6 +557,9 @@ impl ShapeError {
             }
             ShapeError::TooSteep => {
                 "dovetails slope between about 7deg and 14deg; try 10deg".to_owned()
+            }
+            ShapeError::DiagonalParallel | ShapeError::DiagonalNotAtCorner => {
+                "draw the two parts square to each other and crossing at the corner, each running right to the outside of it, as a frame's corner is drawn before it is mitred".to_owned()
             }
         }
     }
@@ -803,7 +817,10 @@ impl Solid {
             | CutKind::Round { .. }
             | CutKind::DovetailSocket { .. }
             | CutKind::DovetailTail { .. }
-            | CutKind::Outline { .. } => {}
+            | CutKind::Outline { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => {}
         }
         if round_part {
             return Err(Unmade::NotSupported(Unsupported::OnRoundPart(operation)));
@@ -980,6 +997,18 @@ impl Solid {
                 let polygon = outline_polygon(part, cut, marks)?;
                 let range = outline_range(size, cut.face, *depth, *from_depth);
                 self.add_prism(cut.face.axis, polygon, range)?;
+            }
+            CutKind::Diagonal => {
+                let (axis, polygon) = diagonal_polygon(part, cut, design)?;
+                self.add_prism(axis, polygon, (Length::ZERO, size.get(axis)))?;
+            }
+            CutKind::Chamfer { size: back } => {
+                let (axis, polygon, range) = edge_profile(part, cut, EdgeShape::Chamfer(*back))?;
+                self.add_prism(axis, polygon, range)?;
+            }
+            CutKind::Roundover { radius } => {
+                let (axis, polygon, range) = edge_profile(part, cut, EdgeShape::Round(*radius))?;
+                self.add_prism(axis, polygon, range)?;
             }
             CutKind::Drill { .. } | CutKind::Spigot { .. } => {}
         }
@@ -1239,9 +1268,10 @@ pub(crate) fn slant_of(
                 Length::from_nm(i64::try_from(across_value).unwrap_or(0)),
             )
         }
-        CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Crossing { .. } => {
-            place_centre(part, &cut.place, face.axis).with(face.axis, plane)
-        }
+        CutPlace::End { .. }
+        | CutPlace::Side { .. }
+        | CutPlace::Crossing { .. }
+        | CutPlace::Edge { .. } => place_centre(part, &cut.place, face.axis).with(face.axis, plane),
     };
     let end = match depth {
         Depth::Length(depth) => depth,
@@ -1285,7 +1315,7 @@ pub(crate) fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Len
     let extent = match place {
         CutPlace::Member { shape, .. } => Some(shape),
         CutPlace::Crossing { footprint, .. } => Some(footprint),
-        CutPlace::End { .. } | CutPlace::Side { .. } => None,
+        CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Edge { .. } => None,
     };
     match extent {
         Some(extent) => (local_get(&extent.min, axis), local_get(&extent.max, axis)),
@@ -1310,7 +1340,7 @@ fn entering_part<'d>(place: &CutPlace, design: &'d SolvedDesign) -> Option<&'d P
         CutPlace::Crossing { other, .. } => design.part(*other),
         CutPlace::End { toward } => design.part(*toward),
         CutPlace::Side { from, .. } => design.part(*from),
-        CutPlace::Member { .. } => None,
+        CutPlace::Member { .. } | CutPlace::Edge { .. } => None,
     }
 }
 
@@ -1532,7 +1562,10 @@ impl Dovetail {
             | CutKind::Round { .. }
             | CutKind::Drill { .. }
             | CutKind::DovetailTail { .. }
-            | CutKind::Outline { .. } => Some(PartAxis::Width),
+            | CutKind::Outline { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => Some(PartAxis::Width),
         };
         let width_axis = preferred.filter(|axis| *axis != depth_axis).unwrap_or(
             if first == PartAxis::Width || second == PartAxis::Width {
@@ -1667,9 +1700,10 @@ fn outline_polygon(part: &Part, cut: &Cut, marks: &[Mark]) -> Result<Polygon, Po
             across_from,
             ..
         } => (PartAxis::Length, *along_from, *across_axis, *across_from),
-        CutPlace::End { .. } | CutPlace::Crossing { .. } | CutPlace::Member { .. } => {
-            (first, End::Start, second, End::Start)
-        }
+        CutPlace::End { .. }
+        | CutPlace::Crossing { .. }
+        | CutPlace::Member { .. }
+        | CutPlace::Edge { .. } => (first, End::Start, second, End::Start),
     };
     let measured = |axis: PartAxis, from: End, value: Length| match from {
         End::Start => value,
@@ -1705,6 +1739,189 @@ fn outline_range(
         End::Start => (from, to),
         End::End => (minus(full, to), minus(full, from)),
     }
+}
+
+/// The third of a part's axes, besides two different ones.
+fn third_axis(a: PartAxis, b: PartAxis) -> PartAxis {
+    PartAxis::ALL
+        .into_iter()
+        .find(|axis| *axis != a && *axis != b)
+        .unwrap_or(PartAxis::Thickness)
+}
+
+/// A point on the plane across `through`, from its coordinates along two
+/// other axes.
+fn plane_point(through: PartAxis, values: [(PartAxis, Length); 2]) -> Point2 {
+    let [first, second] = across(through);
+    let mut local = Local::default();
+    for (axis, value) in values {
+        local = local.with(axis, value);
+    }
+    Point2::new(local.get(first), local.get(second))
+}
+
+/// A `diagonal` (grammar, "Cut operations"): where this part and the other
+/// cross at a corner, the triangle of their overlap at this part's end,
+/// beyond the line from the outside corner (at the end of both) to the
+/// inside corner. Cut straight through along the axis square to both
+/// parts' lengths. The other part's diagonal takes the other half, so the
+/// two meet on the line.
+fn diagonal_polygon(
+    part: &Part,
+    cut: &Cut,
+    design: &SolvedDesign,
+) -> Result<(PartAxis, Polygon), ShapeError> {
+    let CutPlace::Crossing { other, footprint } = &cut.place else {
+        return Err(ShapeError::DiagonalNotAtCorner);
+    };
+    let other = design.part(*other).ok_or(ShapeError::DiagonalNotAtCorner)?;
+    let run = part
+        .pose
+        .orientation
+        .part_axis(other.pose.orientation.direction(PartAxis::Length).axis());
+    if run == PartAxis::Length {
+        return Err(ShapeError::DiagonalParallel);
+    }
+    let through = third_axis(PartAxis::Length, run);
+    let (l0, l1) = (footprint.min.length, footprint.max.length);
+    let (c0, c1) = (
+        local_get(&footprint.min, run),
+        local_get(&footprint.max, run),
+    );
+    if l0 >= l1 || c0 >= c1 {
+        return Err(ShapeError::DiagonalNotAtCorner);
+    }
+    // This part's end: the footprint reaches one end of its length, not
+    // both.
+    let length = part.cut.length;
+    let (outer_l, inner_l) = match (l0 == Length::ZERO, l1 == length) {
+        (true, false) => (l0, l1),
+        (false, true) => (l1, l0),
+        (true, true) | (false, false) => return Err(ShapeError::DiagonalNotAtCorner),
+    };
+    // The other part's end, along `run` in this part's frame: its cut box
+    // stops at one side of the footprint and runs on past the other.
+    let direction = part.pose.orientation.direction(run);
+    let world = direction.axis();
+    let other_box = other.cut_box();
+    let origin = part.pose.origin.get(world).nm();
+    let local = |value: Length| {
+        let offset = value.nm().saturating_sub(origin);
+        Length::from_nm(if direction.is_positive() {
+            offset
+        } else {
+            offset.saturating_neg()
+        })
+    };
+    let (a, b) = (
+        local(other_box.min().get(world)),
+        local(other_box.max().get(world)),
+    );
+    let (qa, qb) = (a.min(b), a.max(b));
+    let (outer_c, inner_c) = match (qa == c0 && qb > c1, qb == c1 && qa < c0) {
+        (true, false) => (c0, c1),
+        (false, true) => (c1, c0),
+        (true, true) | (false, false) => return Err(ShapeError::DiagonalNotAtCorner),
+    };
+    let point = |l: Length, c: Length| plane_point(through, [(PartAxis::Length, l), (run, c)]);
+    let polygon = Polygon::new(vec![
+        point(outer_l, outer_c),
+        point(outer_l, inner_c),
+        point(inner_l, inner_c),
+    ])?;
+    Ok((through, polygon))
+}
+
+/// The cross-section of an edge profile.
+#[derive(Clone, Copy)]
+enum EdgeShape {
+    /// A chamfer this far back along each face.
+    Chamfer(Length),
+    /// A roundover of this radius.
+    Round(Length),
+}
+
+/// How many flats a roundover's quarter circle is drawn and checked with.
+const ROUND_STEPS: i64 = 12;
+
+/// An edge profile (grammar, "Edge profiles"): the wood between the edge
+/// and the profile, on the plane across the edge, along the edge's whole
+/// drawn length. Both are measured on the part's drawn box, so what joints
+/// add past it is left square. A roundover's quarter circle is drawn as
+/// flats that touch the circle: a little more wood than the true curve,
+/// never less, and each corner is rounded once to the nanometre.
+fn edge_profile(
+    part: &Part,
+    cut: &Cut,
+    shape: EdgeShape,
+) -> Result<(PartAxis, Polygon, (Length, Length)), ShapeError> {
+    let CutPlace::Edge { other } = cut.place else {
+        return Err(ShapeError::Polygon(PolygonError::TooFewPoints { count: 0 }));
+    };
+    let faces = [cut.face, other];
+    let run = third_axis(cut.face.axis, other.axis);
+    // The corner, and which way is into the part, along each face's axis.
+    let corner = faces.map(|face| {
+        let start = part.drawn_offset.get(face.axis);
+        match face.end {
+            End::Start => (face.axis, start, 1i64),
+            End::End => (
+                face.axis,
+                start
+                    .checked_add(part.drawn.get(face.axis))
+                    .unwrap_or(start),
+                -1i64,
+            ),
+        }
+    });
+    // A point `into[0]` in from the first face and `into[1]` from the
+    // second.
+    let point = |into: [i64; 2]| {
+        let [(a, a0, a_sign), (b, b0, b_sign)] = corner;
+        plane_point(
+            run,
+            [
+                (
+                    a,
+                    Length::from_nm(a0.nm().saturating_add(into[0].saturating_mul(a_sign))),
+                ),
+                (
+                    b,
+                    Length::from_nm(b0.nm().saturating_add(into[1].saturating_mul(b_sign))),
+                ),
+            ],
+        )
+    };
+    let mut points = vec![point([0, 0])];
+    match shape {
+        EdgeShape::Chamfer(back) => {
+            points.push(point([back.nm(), 0]));
+            points.push(point([0, back.nm()]));
+        }
+        EdgeShape::Round(radius) => {
+            // Corners of the flats, each `radius / cos(half a step)` from
+            // the centre, half a step either side of where a flat touches
+            // the circle. The first and last lie on the faces.
+            let quarter = i128::from(Angle::from_deg(90).microdeg());
+            let steps = i128::from(ROUND_STEPS);
+            let (_, half_cos) =
+                Angle::from_microdeg(i64::try_from(quarter / (2 * steps)).unwrap_or(0)).sin_cos();
+            let r = i128::from(radius.nm());
+            for index in 0..steps {
+                let angle = quarter * (2 * index + 1) / (2 * steps);
+                let (sin, cos) = Angle::from_microdeg(i64::try_from(angle).unwrap_or(0)).sin_cos();
+                let along = |trig: i128| {
+                    let reach = r.saturating_mul(trig).checked_div(half_cos).unwrap_or(r);
+                    i64::try_from(r.saturating_sub(reach)).unwrap_or(0).max(0)
+                };
+                points.push(point([along(cos), along(sin)]));
+            }
+        }
+    }
+    let polygon = Polygon::new(distinct(points))?;
+    let start = part.drawn_offset.get(run);
+    let end = start.checked_add(part.drawn.get(run)).unwrap_or(start);
+    Ok((run, polygon, (start, end)))
 }
 
 /// Where a `drill`'s hole goes, on the two axes across the face's: the

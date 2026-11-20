@@ -297,7 +297,10 @@ fn joint_glyph<'d>(joint: &Joint, cuts: impl Iterator<Item = &'d CutKind>) -> Gl
             CutKind::Notch { .. } => channel = true,
             CutKind::Drill { .. } | CutKind::Round { .. } => hole = true,
             CutKind::DovetailSocket { .. } | CutKind::DovetailTail { .. } => dovetail = true,
-            CutKind::Outline { .. } => shaped = true,
+            CutKind::Outline { .. }
+            | CutKind::Diagonal
+            | CutKind::Chamfer { .. }
+            | CutKind::Roundover { .. } => shaped = true,
         }
     }
     if dovetail {
