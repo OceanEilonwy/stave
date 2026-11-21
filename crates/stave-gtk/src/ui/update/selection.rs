@@ -977,10 +977,11 @@ impl Window {
             let keep = state
                 .opening
                 .filter(|o| Some(o.assembly) == found.as_ref().map(|(id, _, _)| *id));
+            // A door or drawer moved before opens where it was left.
             state.opening = keep.or_else(|| {
                 found.as_ref().map(|(id, range, _)| Opening {
                     assembly: *id,
-                    amount: 0.0,
+                    amount: state.moved.get(id).copied().unwrap_or(0.0),
                     turns: range.turns(),
                 })
             });
@@ -1029,9 +1030,26 @@ impl Window {
                 } else {
                     value
                 };
+                state.moved.insert(opening.assembly, opening.amount);
             }
         }
         self.repose();
+        self.request_render();
+    }
+
+    /// The reset button: every door and drawer moved with the motion bar
+    /// goes back, the selection's too (its slider with it).
+    pub(in crate::ui) fn reset_moved(&mut self) {
+        let selected = {
+            let state = &mut self.state;
+            state.moved.clear();
+            state.opening.take().map(|o| o.assembly)
+        };
+        if selected.is_some() && self.state.focus.is_none() {
+            self.update_opening(selected);
+        } else {
+            self.repose();
+        }
         self.request_render();
     }
 

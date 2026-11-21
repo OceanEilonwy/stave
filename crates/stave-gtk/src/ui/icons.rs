@@ -157,6 +157,8 @@ pub const FRONT: Shape = stroke(
 );
 /// Turn to the back: a circling arrow.
 pub const TURN: Shape = stroke(1.5, &["M13 8a5 5 0 1 1-1.5-3.6", "M13 2.5v2.5h-2.5"]);
+/// Reset the moved parts: an arrow circling back the other way.
+pub const RESET: Shape = stroke(1.5, &["M3 8a5 5 0 1 0 1.5-3.6", "M3 2.5v2.5h2.5"]);
 /// From above: a plan of a box in a corner.
 pub const FROM_ABOVE: Shape = stroke(
     1.5,
