@@ -1570,9 +1570,9 @@ What Stave does with it:
   note saying where both run, measured from the `from` end, and the help
   `a splice needs its wood whole: move the splice with at: in side_l's
   lengths: so it clears the dado, or move shelf_dados`. A cut beside the
-  splice is the splice kind's judgement, written with `wall()` (std's
-  `lap_splice` keeps half the board's thickness between its laps and any
-  other cut); a hinge, a pull or a dowel near a splice is measured the
+  splice is the splice kind's judgement, written with its cuts' `wall:`
+  (std's `lap_splice` keeps half the board's thickness between its laps
+  and any other cut); a hinge, a pull or a dowel near a splice is measured the
   same way, by the same rules as anywhere else.
 - A joint pair or piece of hardware that named the part is joined to the
   piece it cuts (or, if it cuts none, the piece it touches most); an
@@ -2257,8 +2257,8 @@ like a hardware member (see [One collision model](#one-collision-model)):
     spaced: evenly
     shape:  cylinder(diameter: diameter, depth: -depth..depth)
   }
-  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
-  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth) }
+  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth, wall: wall) }
+  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth, wall: wall) }
 ```
 
 | Entry | Type | Required | Meaning |
@@ -2370,9 +2370,9 @@ rail, out through its end and into the edge of a stile. std's
     count: count
     shape: cylinder(diameter: pilot, depth: -(length - bite)..bite, tilt: tilt, toward: across)
   }
-  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite) }
-  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite) }
-  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite) }
+  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite, wall: 2mm) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite, wall: 2mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite, wall: 3mm) }
 ```
 
 - **The hole follows the slant.** A `drill` on `crossing(role, member)`
@@ -2442,7 +2442,7 @@ each piece of hardware, a joint member's once for each copy (see [Joint
 members](#joint-members)). Its operations are the same as a joint's:
 
 ```
-cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm, wall: 2mm) }
 cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
 ```
 
@@ -2533,19 +2533,33 @@ than 0mm`).
 
 | Operation | On | Removes |
 |---|---|---|
-| `notch(depth:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
-| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle`. An angle that turns it into the face it is cut from is `error[type-mismatch]` |
-| `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes. On `crossing(role, member)`, where a member has no axes of its own, it is centred on the member's shape, and `width` runs along the part's length and `thickness` across it (on an end, `width` along the part's width and `thickness` along its thickness): std's `slotted_screw` cuts its slots this way |
+| `notch(depth:, wall:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
+| `slot(width:, depth:, angle:, from_centre:, wall:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle`. An angle that turns it into the face it is cut from is `error[type-mismatch]` |
+| `pocket(width:, thickness:, depth:, wall:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes. On `crossing(role, member)`, where a member has no axes of its own, it is centred on the member's shape, and `width` runs along the part's length and `thickness` across it (on an end, `width` along the part's width and `thickness` along its thickness): std's `slotted_screw` cuts its slots this way |
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:, from_depth:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape, and along its axis when the shape is [slanted](#slanted-members). With `from_depth` (default `0mm`) the hole starts that far below the face instead of at it: the wider part of a stepped hole, a counterbore for a screw head that stops short of the face. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
+| `drill(diameter:, depth:, from_depth:, wall:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape, and along its axis when the shape is [slanted](#slanted-members). With `from_depth` (default `0mm`) the hole starts that far below the face instead of at it: the wider part of a stepped hole, a counterbore for a screw head that stops short of the face. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
 | `diagonal()` | crossing | a **mitre**: where the two parts cross at a corner, the half of their overlap at this part's end, cut away on the line from the outside corner to the inside corner, straight through the part (see "Angled cuts") |
 | `chamfer(size:)` | `edges:` | an edge of the part planed off at 45deg, `size` back along each face; written only in a part's `edges:` (see [Edge profiles](#edge-profiles)) |
 | `roundover(radius:)` | `edges:` | an edge of the part rounded to a quarter circle of `radius`; written only in a part's `edges:` |
+
+**`wall:`** is the least wood the cut must leave round it: to every face
+of its part it isn't open to, and to every other cut of that part (see
+[Walls](#walls)). A `drill` or `pocket` is a closed cut and must say it:
+without `wall:` it is `error[missing-field]` (`'drill' is missing 'wall'`,
+help `say how much wood the hole must leave round it, e.g. wall: 3mm`). A
+`notch` or `slot` may say it. A kind usually makes it a param so a design
+can ask for more:
+
+```
+  /// Wood left round the hole: to every face of the board and to its other cuts.
+  param wall = 6mm
+  cut socket: crossing(into, piece) { drill(diameter: piece.diameter, depth: depth, wall: wall) }
+```
 
 **Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline`, `diagonal`
 and a `slot` turned by an angle that isn't a multiple of 90deg are each a flat
@@ -2740,7 +2754,7 @@ kind brass_knob_26 : pull {
     with:  piece
     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
   }
-  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through, wall: 3mm) }
   model: model("./models/brass_knob_26.glb", align: node("mount"))
 }
 ```
@@ -2803,7 +2817,7 @@ kind shelf_pin : support {
     shape: cylinder(diameter: diameter, depth: -projection..0mm)
   }
   cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
-    drill(diameter: diameter, depth: hole_depth)
+    drill(diameter: diameter, depth: hole_depth, wall: 3mm)
   }
 }
 
@@ -2862,7 +2876,6 @@ kind tabletop_fastener : fitting {
   param plate_thickness = 3mm
   param screw_diameter  = 3.5mm
   param screw_length    = 13mm
-  require recess_fits : piece.thickness >= end_diameter + 2mm "the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron"
 
   mount {
     face:   top
@@ -2886,9 +2899,9 @@ kind tabletop_fastener : fitting {
     shape: cylinder(diameter: screw_diameter, depth: -screw_length..0mm, at: point(across: -centres))
   }
 
-  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness) }
-  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length) }
-  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length) }
+  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness, wall: 1mm) }
+  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length, wall: 3mm) }
+  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length, wall: 3mm) }
 }
 
 // Three along each long apron; the top is held by them, with no joint.
@@ -2919,7 +2932,7 @@ member makes them. A hardware kind's cut makes them with `row`:
 
 ```
 cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
-  drill(diameter: diameter, depth: hole_depth)
+  drill(diameter: diameter, depth: hole_depth, wall: 3mm)
 }
 ```
 
@@ -3568,7 +3581,6 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 | `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
 | `edge_to_edge(a, b)` | `Bool` | `true` when two parts lie side by side in one plane and meet along an edge of each; see below |
-| `wall(cut)` | `Length` | the least wood between one of the kind's named cuts and any face or other cut of the same part, read only in a kind's `require`; see [Walls](#walls) |
 
 **`contact(a, b)`** is where two parts touch: a flat patch, measured on
 the parts' drawn boxes, before joints lengthen them (a tenon reaching into
@@ -3839,32 +3851,23 @@ errors in the same item.
 
 ### Walls
 
-`wall(cut)` is the least wood between one of the kind's own cuts and
-everything else of the part it is cut in: the part's faces, and every other
-cut of that part, whichever joint or hardware makes it. It is how a kind
-says how much wood a cut must leave round it, in the kind's own words:
+A cut's **wall** is the least wood between it and everything else of the
+part it is cut in: the part's faces, and every other cut of that part,
+whichever joint or hardware makes it. A cut says the least wall it needs
+with `wall:` (see [Cut operations](#cut-operations)): every `drill` and
+`pocket` must, and a `notch` or `slot` may. There is no rule to write and
+none to forget:
 
 ```
 kind socket : joint {
   ...
-  cut socket: crossing(into, piece) { drill(diameter: piece.diameter, depth: depth) }
-
   /// Wood left round the hole: to every face of the board and to its other
   /// cuts, such as a dado or another socket.
   param wall = 6mm
-  require socket_wall : wall(socket) >= wall "the socket comes too close to a face of the board or another cut"
+  cut socket: crossing(into, piece) { drill(diameter: piece.diameter, depth: depth, wall: wall) }
 }
 ```
 
-- **What it names.** The argument is the name of one of the kind's cuts
-  (see [Named cuts](#named-cuts)), written alone: `wall(socket)`. A name
-  that isn't one of the kind's cuts is `error[unknown-name]` (`unknown
-  name 'sokcet'`), with the kind's cut names in the help. `wall(...)` is
-  read only in a joint or hardware kind's `require` (anywhere else it is
-  `error[syntax]`: `wall(...) is read only in a joint or hardware kind's
-  require`), and the rule is one comparison with `wall(cut)` alone on one
-  side (`wall(hole) >= 3mm`, `3mm <= wall(hole)`); anything else is
-  `error[syntax]`: `wall(...) is compared on its own in a rule`.
 - **What it measures.** For each pair of a joint (or each piece of
   hardware), every copy of the cut on every part it is made on: the least
   of them. A cut always opens onto the face it is cut from, and a `through`
@@ -3874,8 +3877,10 @@ kind socket : joint {
   reaches a face (a groove runs out of the ends of its board), so only the
   faces it stays clear of count. Another cut counts unless one of the two
   lies wholly inside the other (a stub tenon's mortise in the panel groove
-  it sits in takes no wood of its own). Copies of the same cut count, so a
-  dowel's holes are walls to each other.
+  it sits in takes no wood of its own), or it is another cut of the same
+  pair or piece of hardware, made with this one (a pocket screw's pocket
+  and its shank hole, a cam's bore and the bolt hole that runs into it).
+  Copies of the same cut count, so a dowel's holes are walls to each other.
 - **Round parts.** On round stock and turned parts the faces across the
   length are the lathe profile, at its narrowest along the hole: a hole
   into the side of a leg is measured from its bottom to the round surface
@@ -3895,27 +3900,26 @@ kind socket : joint {
   other until the distance stops shrinking; both are rounded down to the
   nanometre.
 - **When it is measured.** Once every cut of the design is made, after
-  the kind's other rules: a rule that reads `wall()` is checked in layer 4,
-  with the fit checks, and reported like any failed rule of its kind, at
-  the joint's or hardware's call, with what it measured and where:
+  the kinds' rules, in layer 4 with the fit checks: `error[wall]` at the
+  joint's or hardware's call, with what it measured and where:
 
 ```
-error[require]: 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+error[wall]: rod_sockets: its socket in side_l leaves 0mm of wood at the dado that shelf_dados cuts in side_l; it needs 6mm
   --> carcass.stave:103:22
    = note: for rod and side_l in rod_sockets
-   = note: the rule measures 0mm and needs at least 6mm
    = note: the same for rod and side_r in rod_sockets
-   = help: the socket in side_l leaves 0mm of wood at the dado that shelf_dados cuts in side_l; move the parts so the socket has more wood round it, or change the joint's settings
+   = help: move the parts so the socket has 6mm of wood round it, or change the joint's settings
 ```
 
-  The help says `runs 2mm past <place>` when the cut goes past the face or
-  into the other cut. A rule that fails where something already overlaps
-  (a pin running into another joint's tenon) is left to the overlap, which
-  names what collides.
+  It says `runs 2mm past <place>` when the cut goes past the face or into
+  the other cut. A wall too thin where something already overlaps (a pin
+  running into another joint's tenon) is left to the overlap, which names
+  what collides.
 - **Not measured yet.** Dovetails, outlines and slots turned at an angle,
   as the cut measured or as another cut, and the cuts between the boards
-  of a part made of boards: a rule about such a cut is left out, with
-  `warning[not-supported]` (`measuring wall(tail) is not supported yet`).
+  of a part made of boards: such a cut's `wall:` is not checked, with
+  `warning[not-supported]` (`measuring the wall round tail is not supported
+  yet`).
   The range layer doesn't measure walls yet: they are checked at the
   current values.
 
@@ -3954,16 +3958,15 @@ part's `lengths:`:
   in base runs into the bore of post_b_bore` (help: `the bore runs 2mm
   into the bore in base; move one of the joints so there is wood between
   the two cuts, or make one of them smaller`). A pin or screw that runs
-  into another joint's empty hole is caught here, or by its kind's
-  `wall()` rule: its own hole runs into the other. How near a hole may come
-  to a groove or dado is a kind's judgement, not a backstop: write it with
-  `wall()`.
+  into another joint's empty hole is caught here, or by its own `wall:`:
+  its hole runs into the other. How near a hole may come to a groove or
+  dado is its `wall:`, since every cut counts there.
 - **A splice needs its wood whole** (`error[wall]`). On a spliced part
   (see [Splices](#splices)) every cut of another joint or piece of
   hardware is made on one piece, and none may reach into a splice, where
   both pieces' wood belongs to the splice: `shelf_dados: its dado in
   side_l crosses the splice between side_l.piece[1] and side_l.piece[2]`.
-  How near a cut may come to a splice is the splice kind's `wall()` rule.
+  How near a cut may come to a splice is the splice kind's cuts' `wall:`.
 - **A part stays one piece** (`error[wall]`). Once every cut is made, a
   board's wood must be one connected piece: pieces that touch only along
   an edge are two. Each of two housings cut from opposite faces may keep
@@ -4002,12 +4005,12 @@ hardware whose rule failed gets no `error[overhang]`): when one fails
 the design isn't checked further, so std's `tenon_thin` speaks for a tenon
 too thick and `groove`'s `not_too_deep` for a groove too deep, in the
 joint's words, before any backstop. A pair or piece of hardware whose
-`wall()` rule failed gets no backstop for the same cuts; a cut too big or
+cut's `wall:` was not met gets no backstop for the same cuts; a cut too big or
 too deep gets no wall error, and its part is left out of the overlap
 check, which would only report the same mistake as parts that no longer
 fit. Two closed cuts that run into each other are one error, for the
 first. Nothing here is reported for a part or member that already
-overlaps something, and a part whose cuts already failed a `wall()` rule
+overlaps something, and a part whose cuts already failed their `wall:`
 or a size gets no error for being in pieces.
 
 ### Held
@@ -4244,7 +4247,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `overhang` | `<hardware>: its <member> hangs off the <end> of <part>`, with the note `<part> holds <5mm> of the <40mm> <member>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `wall` | `<joint>: its <hole> in <part> leaves <2mm> of wood at <place>; it needs <6mm>` (or `runs <1mm> past <place>; it needs <6mm> of wood there`) for a cut's own `wall:` (see [Walls](#walls)), `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |

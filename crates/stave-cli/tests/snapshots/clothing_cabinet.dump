@@ -390,7 +390,7 @@ drawer[bottom]               Drawer (6 parts): travels 500 toward the front
 drawer[top]                  Drawer (6 parts): travels 500 toward the front
 door_r                       FramePanelDoor (5 parts, mirror of door_l): turns up to 110deg on its mechanism across the up axis from (876.5, 647.5, 0), across left, depth front; pivot arm and inner_link at (13.5, 10.9), pivot cup and inner_link at (-8.8, 7.33), pivot arm and outer_link at (13.28, 3.56), pivot cup and outer_link at (-9.54, 1.39)
 
-REQUIRES (85)
+REQUIRES (77)
 hanger_room                                  holds
 overall_height                               holds
 door_l.stile_holds_cup                       holds
@@ -405,17 +405,9 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 base_dowels.pin_fits_piece                   holds
-base_dowels.seat_wide                        holds
-base_dowels.seat_long                        holds
 base_dowels.pin_fits_piece                   holds
-base_dowels.seat_wide                        holds
-base_dowels.seat_long                        holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.seat_wide                         holds
-top_dowels.seat_long                         holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.seat_wide                         holds
-top_dowels.seat_long                         holds
 rod_sockets.not_too_deep                     holds
 rod_sockets.not_too_deep                     holds
 foot_tenons.tenon_fits                       holds

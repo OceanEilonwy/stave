@@ -106,7 +106,6 @@ fn is_literal(expr: &RExpr) -> bool {
         | RExprKind::KindValue { .. }
         | RExprKind::Binary { .. }
         | RExprKind::List(_)
-        | RExprKind::Wall(_)
         | RExprKind::Error => false,
     }
 }
@@ -330,7 +329,6 @@ fn betweens(solver: &mut Solver<'_>, expr: &RExpr, env: &Env<'_>, values: &mut V
         | RExprKind::Member { .. }
         | RExprKind::Index { .. }
         | RExprKind::KindValue { .. }
-        | RExprKind::Wall(_)
         | RExprKind::Error => {}
     }
 }

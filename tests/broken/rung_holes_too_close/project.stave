@@ -1,11 +1,10 @@
-// expect: error[require] 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+// expect: error[wall] rung_sockets: its socket in leg[front_left] leaves 2.01mm of wood at the socket that rung_sockets cuts in leg[front_left]; it needs 6mm
 stave 1
 
 // The stool with its side rungs lowered to 172mm, 22mm above the front
 // and back rungs: the two 22mm rung holes in each leg sit edge to edge
-// along the leg. Before wall() the stool needed a hand-written
-// rungs_miss rule; now socket's own wall rule measures the wood between
-// the holes: about 2mm, on the slant between their bottom corners
+// along the leg. Once the stool needed a hand-written rungs_miss rule;
+// now the socket's own wall: measures the wood between the holes: about 2mm, on the slant between their bottom corners
 // (docs/reviews/2026-11-17-checks-gaps.md, gap 4).
 
 // A small stool: a solid seat on four turned legs, braced by four rungs cut

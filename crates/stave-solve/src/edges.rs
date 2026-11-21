@@ -179,6 +179,7 @@ impl Solver<'_> {
                     face,
                     place: CutPlace::Edge { other },
                     kind: kind.clone(),
+                    wall: None,
                 });
             }
         }

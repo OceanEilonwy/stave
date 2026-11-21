@@ -586,7 +586,7 @@ kind inset_cup_hinge : hinge {
     with:  piece
     shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
   }
-  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm, wall: 0mm) }
 }
 component Flap {
   param hinge_side : Part
@@ -656,7 +656,7 @@ kind inset_cup_hinge : hinge {
       depth:  from(face(on, toward: piece))
     }
   }
-  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm, wall: 0mm) }
   member arm {
     with:          on
     shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
@@ -1326,7 +1326,7 @@ joint screws : screw(base, into: cleat, length: 50mm)",
     assert_eq!(
         diagnostics(&flat),
         [
-            "require: 'pilot_wall' fails: the screw comes too close to a face of the part or another cut"
+            "wall: screws: its pilot hole in cleat leaves 0mm of wood at the bottom face of cleat; it needs 3mm"
         ]
     );
 }

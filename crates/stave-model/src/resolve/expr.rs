@@ -8,13 +8,17 @@ use stave_lang::units::{number_to_rational, quantity_to_angle, quantity_to_lengt
 use stave_lang::{Diagnostic, Label};
 use stave_schema::fields::ValueType;
 use stave_schema::functions::{Builtin, MODEL_NODE, PatchSize};
+
+/// `wall(cut)`, retired: a cut says the least wall it needs with `wall:`
+/// (grammar, "Walls"). Written, it is an error that says so.
+const RETIRED_WALL: &str = "wall";
 use stave_schema::kinds::base;
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm, WordSet};
 
-use super::{ArrayShape, Body, Cx, Resolver};
+use super::{ArrayShape, Cx, Resolver};
 use crate::defs::{
-    BuiltinCall, CutName, DefId, Index, Member, OpeningFaces, RExpr, RExprKind, Setting, SplitBy,
+    BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind, Setting, SplitBy,
     StockField, Symbol, Text, TextPart, Word,
 };
 use crate::types::{KindTy, Ty};
@@ -1096,8 +1100,16 @@ impl Resolver<'_> {
                     );
                     return RExpr::error(span);
                 }
-                if ident.as_str() == Builtin::Wall.word() {
-                    return self.wall(cx, args, span);
+                if ident.as_str() == RETIRED_WALL {
+                    // `wall(cut)` was retired: a cut says its own wall.
+                    self.error_help(
+                        Code::UnknownName,
+                        "'wall(...)' was retired: a cut says the least wall it needs",
+                        cx.file,
+                        span,
+                        "give the cut wall:, as in drill(diameter: 8mm, depth: 20mm, wall: 3mm), and take out the rule",
+                    );
+                    return RExpr::error(span);
                 }
                 if let Some(builtin) = Builtin::from_word(ident.as_str()) {
                     return self.builtin(cx, builtin, args, span, expect, false);
@@ -1132,107 +1144,6 @@ impl Resolver<'_> {
                 );
                 RExpr::error(span)
             }
-        }
-    }
-
-    /// `wall(cut)` (grammar, "Walls"): one of the enclosing kind's named
-    /// cuts, read only in the kind's `require`.
-    fn wall(&mut self, cx: &Cx, args: &[ast::Arg], span: Span) -> RExpr {
-        let kind = match cx.body {
-            Body::Kind(kind) if self.in_kind_require => kind,
-            Body::Kind(_) | Body::Module | Body::Component(_) => {
-                self.error_help(
-                    Code::Syntax,
-                    "wall(...) is read only in a joint or hardware kind's require",
-                    cx.file,
-                    span,
-                    "wall measures one of a kind's own cuts, so it is written in a rule of the kind that makes the cut, as in require hole_wall : wall(hole) >= 3mm",
-                );
-                return RExpr::error(span);
-            }
-        };
-        let names = self.kind_cut_names.get(&kind).cloned().unwrap_or_default();
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
-        )]
-        let name = match args {
-            [
-                ast::Arg {
-                    name: None, value, ..
-                },
-            ] => match &value.kind {
-                ExprKind::Name(ident) => Some((ident.as_str().to_owned(), ident.span())),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some((name, name_span)) = name else {
-            self.error_help(
-                Code::TypeMismatch,
-                "'wall' needs the name of one of the kind's cuts",
-                cx.file,
-                span,
-                "write the cut's name alone, as in wall(hole)",
-            );
-            return RExpr::error(span);
-        };
-        let fallback = if names.is_empty() {
-            "this kind has no named cuts; name the cut wall reads, as in cut hole: crossing(into, piece) { ... }".to_owned()
-        } else {
-            format!("wall names one of this kind's cuts: {}", names.join(", "))
-        };
-        if !names.contains(&name) {
-            self.unknown(
-                Code::UnknownName,
-                format!("unknown name '{name}'"),
-                cx.file,
-                name_span,
-                &name,
-                names.iter(),
-                fallback,
-            );
-            return RExpr::error(span);
-        }
-        match CutName::new(&name) {
-            Some(cut) => RExpr {
-                kind: RExprKind::Wall(cut),
-                ty: Ty::Length,
-                span,
-            },
-            None => RExpr::error(span),
-        }
-    }
-
-    /// `wall(cut)` is measured once the cuts are made, after the kind's
-    /// other rules, so a rule that reads it is one comparison with
-    /// `wall(cut)` alone on one side (grammar, "Walls").
-    pub(crate) fn check_wall_comparison(&mut self, cx: &Cx, condition: &RExpr) {
-        if !reads_wall(condition) {
-            return;
-        }
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
-        )]
-        let alone = match &condition.kind {
-            RExprKind::Binary { op, lhs, rhs } if op.is_comparison() => {
-                match (&lhs.kind, &rhs.kind) {
-                    (RExprKind::Wall(_), _) => !reads_wall(rhs),
-                    (_, RExprKind::Wall(_)) => !reads_wall(lhs),
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        if !alone {
-            self.error_help(
-                Code::Syntax,
-                "wall(...) is compared on its own in a rule",
-                cx.file,
-                condition.span,
-                "write the rule as one comparison with wall(...) alone on one side, as in require hole_wall : wall(hole) >= 3mm",
-            );
         }
     }
 
@@ -1628,8 +1539,7 @@ impl Resolver<'_> {
                 | Builtin::Model
                 | Builtin::Ends
                 | Builtin::Pitch
-                | Builtin::Gap
-                | Builtin::Wall,
+                | Builtin::Gap,
                 _,
             ) => (true, ""),
         };
@@ -1782,33 +1692,7 @@ fn builtin_call(builtin: Builtin, settings: Vec<Setting>, span: Span) -> Option<
             a: required("a"),
             b: required("b"),
         },
-        Builtin::Wall => return None,
     })
-}
-
-/// `true` when an expression reads `wall(cut)` anywhere.
-pub(crate) fn reads_wall(expr: &RExpr) -> bool {
-    match &expr.kind {
-        RExprKind::Wall(_) => true,
-        RExprKind::Member { base, .. } | RExprKind::Index { base, .. } => reads_wall(base),
-        RExprKind::Builtin(call) => call.arguments().any(reads_wall),
-        RExprKind::KindValue { kind, settings } => {
-            reads_wall(kind) || settings.iter().any(|a| reads_wall(&a.value))
-        }
-        RExprKind::Unary { operand, .. } => reads_wall(operand),
-        RExprKind::Binary { lhs, rhs, .. } => reads_wall(lhs) || reads_wall(rhs),
-        RExprKind::List(items) => items.iter().any(reads_wall),
-        RExprKind::Length(_)
-        | RExprKind::Angle(_)
-        | RExprKind::Number(_)
-        | RExprKind::Bool(_)
-        | RExprKind::Text(_)
-        | RExprKind::Fit
-        | RExprKind::Word(_)
-        | RExprKind::Symbol(_)
-        | RExprKind::SelfElement(_)
-        | RExprKind::Error => false,
-    }
 }
 
 fn plural(ty: &Ty) -> String {

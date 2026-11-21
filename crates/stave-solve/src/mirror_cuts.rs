@@ -303,6 +303,7 @@ impl Solver<'_> {
             face: reframe.face(cut.face),
             place,
             kind,
+            wall: cut.wall,
         })
     }
 }

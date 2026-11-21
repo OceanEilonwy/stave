@@ -13,7 +13,7 @@ project "A hole that breaks out" {
 /// A big peg hole, and nothing else: no rules.
 kind big_peg : joint {
   insert: [push(piece, along: length)]
-  cut peg_hole: crossing(into, piece) { drill(diameter: 30mm, depth: 10mm) }
+  cut peg_hole: crossing(into, piece) { drill(diameter: 30mm, depth: 10mm, wall: 0mm) }
 }
 
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }

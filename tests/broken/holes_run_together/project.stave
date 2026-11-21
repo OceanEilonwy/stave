@@ -14,7 +14,7 @@ project "Holes that run together" {
 /// An empty hole, and nothing else: no rules.
 kind bored : joint {
   insert: [push(piece, along: length)]
-  cut bore: crossing(into, piece) { drill(diameter: 20mm, depth: 12mm) }
+  cut bore: crossing(into, piece) { drill(diameter: 20mm, depth: 12mm, wall: 0mm) }
 }
 
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }

@@ -1,4 +1,4 @@
-// expect: error[require] 'mortise_wall' fails: the mortise comes too close to a face of the part or another cut
+// expect: error[wall] apron_tenons: its mortise in leg_l leaves 0mm of wood at the top end of leg_l; it needs 6mm
 stave 1
 
 // The side table's apron tenons with shoulder: 0mm: the tenon is as wide

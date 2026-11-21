@@ -293,8 +293,8 @@ expression: "render_project(& examples().join(\"clothing_cabinet\"))"
      = with:field  piece:role+ref
   30 |     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
      = shape:field  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain
-  33 |   cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
-     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screw:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word
+  33 |   cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through, wall: 3mm) }
+     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screw:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word  wall:field  3:number  mm:unit
   37 | kind bar_pull_160 : pull {
      = kind:keyword  bar_pull_160:type+decl  pull:plain
   38 |   roles {
@@ -327,8 +327,8 @@ expression: "render_project(& examples().join(\"clothing_cabinet\"))"
      = shape:keyword  left:plain  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain  at:field  point:function  along:field  80:number  mm:unit
   59 |     shape right: cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: 80mm))
      = shape:keyword  right:plain  cylinder:function  diameter:field  4:number  mm:unit  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain  at:field  point:function  along:field  80:number  mm:unit
-  62 |   cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through) }
-     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screws:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word
+  62 |   cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through, wall: 3mm) }
+     = cut:keyword  screw_hole:plain  crossing:function  piece:role+ref  screws:member+ref  drill:function  diameter:field  4:number  mm:unit  depth:field  through:word  wall:field  3:number  mm:unit
 == hardware/library.stave ==
    1 | stave 1
      = stave:keyword  1:number

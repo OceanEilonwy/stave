@@ -169,8 +169,8 @@ fn peg_kind(layout: &str) -> String {
 {layout}
     shape: cylinder(diameter: 10mm, depth: -12mm..12mm)
   }}
-  cut peg_hole: crossing(piece, peg) {{ drill(diameter: 10mm, depth: 12mm) }}
-  cut socket: crossing(into, peg) {{ drill(diameter: 10mm, depth: 12mm) }}
+  cut peg_hole: crossing(piece, peg) {{ drill(diameter: 10mm, depth: 12mm, wall: 0mm) }}
+  cut socket: crossing(into, peg) {{ drill(diameter: 10mm, depth: 12mm, wall: 0mm) }}
 }}
 {SIDE_ON_BASE}joint pegs : peg_joint(side, into: base)"
     )

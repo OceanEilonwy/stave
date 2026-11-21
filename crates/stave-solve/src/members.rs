@@ -58,6 +58,8 @@ pub(crate) struct WorldMemberCut {
     /// The shape's slant, when it is a slanted cylinder.
     pub slant: Option<crate::hardware::WorldSlant>,
     pub kind: stave_model::solved::CutKind,
+    /// The least wall its operation asks for (`wall:`).
+    pub wall: Option<stave_lang::units::Length>,
 }
 
 /// Where each of `count` copies `size` long starts along a span `length`

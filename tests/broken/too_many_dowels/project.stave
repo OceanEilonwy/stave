@@ -1,4 +1,4 @@
-// expect: error[require] 'seat_long' fails: too many dowels for this joint
+// expect: error[wall] kick_dowels: its hole in side_l runs 0.2mm past the bottom end of side_l; it needs 4mm of wood there
 stave 1
 
 // The bookshelf's kick with nine dowels at each end: nine 8mm holes along

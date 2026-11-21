@@ -588,13 +588,11 @@ impl Solver<'_> {
         let mut works = Vec::new();
         let mut extra: BTreeMap<PartId, [ExactLength; 2]> = BTreeMap::new();
         for splice in 0..positions.len() {
-            let joint = JointId::from_usize(first_joint + splice);
             let (Some(a), Some(b)) = (pieces.get(splice), pieces.get(splice + 1)) else {
                 return Err(Fault::Internal("the pieces either side of a splice").into());
             };
             let parts = vec![a.stand_in, b.stand_in];
-            let work =
-                self.splice_pass_a(joint, &name, splice, &method, parts, place, &mut extra)?;
+            let work = self.splice_pass_a(&name, splice, &method, parts, place, &mut extra)?;
             works.push(work);
         }
         for piece in &mut pieces {
@@ -949,7 +947,6 @@ impl Solver<'_> {
     #[allow(clippy::too_many_arguments)]
     fn splice_pass_a(
         &mut self,
-        joint: JointId,
         name: &str,
         splice: usize,
         method: &Method,
@@ -971,16 +968,9 @@ impl Solver<'_> {
             array: None,
         };
         let joint_name = format!("{name}.splice[{}]", splice + 1);
-        let source = CutSource::Joint {
-            joint,
-            pair: PairIndex::FIRST,
-        };
         let mut requires = Vec::new();
         let mut failure: Option<Failure> = None;
-        for (index, require) in kind.indexed_requires() {
-            if self.defer_wall_rule(source, kind_id, index, require, &kind_env)? {
-                continue;
-            }
+        for (_, require) in kind.indexed_requires() {
             let holds = self.eval_bool(&require.condition, &kind_env)?;
             let message = self.format_text(&require.message, &kind_env)?;
             if !holds && place.report {
@@ -1364,7 +1354,7 @@ impl Solver<'_> {
                 file,
                 span,
             };
-            for (target, face, place, cut_kind) in
+            for (target, face, place, cut_kind, wall) in
                 self.pair_cuts(cut_def, pair, tables.geoms, &env, at)?
             {
                 piece_cuts.entry(target).or_default().push(Cut {
@@ -1373,6 +1363,7 @@ impl Solver<'_> {
                     face,
                     place,
                     kind: cut_kind,
+                    wall,
                 });
             }
         }

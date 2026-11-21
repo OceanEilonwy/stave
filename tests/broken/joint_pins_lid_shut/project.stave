@@ -108,4 +108,4 @@ scene lid_open "Lid open" {
 }
 
 // The lid is dowelled to both ends: it can't open on its hinges.
-joint stuck : dowel(lid.panel, into: [end_l, end_r], count: 2, diameter: 5mm, wall: 3mm, depth: 10mm)
+joint stuck : dowel(lid.panel, into: [end_l, end_r], count: 2, diameter: 5mm, wall: 2mm, depth: 10mm)

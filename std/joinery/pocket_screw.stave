@@ -29,9 +29,10 @@ kind pocket_screw : joint {
 
   // The screws slant toward the part's thickness: the pocket opens on one
   // face of the part, the screw comes out of the middle of its end, and
-  // the pilot hole keeps 3mm of wood to every face of the other part.
+  // each hole keeps wood to every face of its part (its `wall:`): 3mm
+  // round the pilot hole, 2mm round the pocket and shank, whose slant the
+  // jig sets (19mm stock leaves a little over 2mm).
   require thick_enough : piece.thickness >= 12mm "the part is too thin for pocket screws"
-  require pilot_wall   : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
   require seat_long    : contact(piece, into).length >= count * (pocket + gap) + gap "too many pocket screws for this joint"
 
   /// The screws: driven at a slant through the pocket, out through the end
@@ -42,9 +43,9 @@ kind pocket_screw : joint {
     count: count
     shape: cylinder(diameter: pilot, depth: -(length - bite)..bite, tilt: tilt, toward: across)
   }
-  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite) }
-  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite) }
-  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite) }
+  cut pocket: crossing(piece, screw) { drill(diameter: pocket, depth: through, from_depth: length - bite, wall: 2mm) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: length - bite, wall: 2mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: bite, wall: 3mm) }
 
   note: "Drill the pockets in {piece} with a pocket-hole jig, clamp the parts flush and drive the screws"
 }

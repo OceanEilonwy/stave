@@ -1,4 +1,4 @@
-// expect: error[require] 'cup_stops' fails: the door is too thin for the hinge cup
+// expect: error[wall] door.hinges[bottom]: its cup bore in door.panel leaves 0mm of wood at the front face of door.panel; it needs 2mm
 stave 1
 
 // The clothing cabinet's doors made from 12mm maple: a cup hinge's bore is

@@ -2,15 +2,10 @@
 source: crates/stave-app/tests/splices.rs
 expression: "rendered(\"tests/broken/dado_beside_a_lap\")"
 ---
-error[require]: 'lap_clear' fails: another cut comes too close to the lap
+error[wall]: side_l.splice[1]: its lap in side_l.piece[1] leaves 6mm of wood at the dado that shelf_dados cuts in side_l.piece[1]; it needs 9.5mm
   --> tests/broken/dado_beside_a_lap/project.stave:18:12
    |
 18 |   lengths: spliced(by: lap_splice(lap: 300mm), at: 1500mm, from: bottom)
    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/lap_splice.stave:20:3
-   |
-20 |   require lap_clear    : wall(lap) >= wall "another cut comes too close to the lap"
-   |   --------------------------------------------------------------------------------- the kind's rule
    = note: for side_l.piece[1] and side_l.piece[2] in side_l.splice[1]
-   = note: the rule measures 6mm and needs at least 9.5mm
-   = help: the lap in side_l.piece[1] leaves 6mm of wood at the dado that shelf_dados cuts in side_l.piece[1]; move the parts so the lap has more wood round it, or change the joint's settings
+   = help: move the parts so the lap has 9.5mm of wood round it, or change the joint's settings

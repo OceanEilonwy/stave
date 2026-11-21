@@ -1,4 +1,4 @@
-//! Executable spec: `wall(cut)` ("Walls"), the backstops every kind is
+//! Executable spec: a cut's `wall:` ("Walls"), the backstops every kind is
 //! held to ("Cuts stay in their part") and the held check ("Held"), with
 //! the rendered diagnostics of every broken design they catch
 //! (docs/reviews/2026-11-17-checks-gaps.md, stage 3).
@@ -24,16 +24,15 @@ fn rendered(folder: &str) -> String {
 }
 
 /// A kind that bores one 8mm hole, 10mm deep, into `into` where `piece`
-/// meets it, with `rule` as its only rule; and a side standing on the left
-/// end of the base, joined to it by the kind. The hole is centred under
-/// the side's 19mm end, so its side is 5.5mm from the base's left end; its
+/// meets it, leaving at least `wall`; and a side standing on the left end
+/// of the base, joined to it by the kind. The hole is centred under the
+/// side's 19mm end, so its side is 5.5mm from the base's left end; its
 /// bottom is 9mm above the base's bottom face.
-fn bored(rule: &str) -> String {
+fn bored(wall: &str) -> String {
     format!(
         "kind bored : joint {{
   insert: [push(piece, along: length)]
-  {rule}
-  cut hole: crossing(into, piece) {{ drill(diameter: 8mm, depth: 10mm) }}
+  cut hole: crossing(into, piece) {{ drill(diameter: 8mm, depth: 10mm, wall: {wall}) }}
 }}
 part side : pine_19 {{
   length: 400mm
@@ -51,112 +50,50 @@ require holds : 1mm == 1mm \"a rule of the project\""
 }
 
 // ---------------------------------------------------------------------------
-// wall(cut)
+// A cut's wall:
 // ---------------------------------------------------------------------------
 
 #[test]
 fn a_wall_to_a_face_is_exact() {
-    holds(&bored(
-        "require edge : wall(hole) == 5.5mm \"the hole's side is 5.5mm from the end\"",
-    ));
+    holds(&bored("5.5mm"));
 }
 
 #[test]
-fn a_wall_may_be_on_either_side_of_the_comparison() {
-    holds(&bored(
-        "require edge : 5.5mm <= wall(hole) \"the wall on the right\"",
-    ));
-}
-
-#[test]
-fn a_failed_wall_rule_says_what_it_measured_and_where() {
-    let opened = open(&bored(
-        "require edge : wall(hole) > 5.5mm \"the hole is too near the end\"",
-    ));
+fn a_wall_too_thin_says_what_it_measured_and_where() {
+    let opened = open(&bored("5.6mm"));
     let found: Vec<_> = opened
         .diagnostics
         .iter()
-        .filter(|d| d.code == stave_lang::Code::Require)
+        .filter(|d| d.code == stave_lang::Code::Wall)
         .collect();
     assert_eq!(found.len(), 1, "{:?}", diagnostics(&opened));
     let diagnostic = found[0];
     assert_eq!(
         diagnostic.message,
-        "'edge' fails: the hole is too near the end"
+        "side_hole: its hole in base leaves 5.5mm of wood at the left end of base; it needs 5.6mm"
     );
-    assert_eq!(
-        diagnostic.notes,
-        [
-            "for side and base in side_hole",
-            "the rule measures 5.5mm and needs more than 5.5mm"
-        ]
-    );
+    assert_eq!(diagnostic.notes, ["for side and base in side_hole"]);
     assert_eq!(
         diagnostic.help.as_deref(),
         Some(
-            "the hole in base leaves 5.5mm of wood at the left end of base; move the parts so the hole has more wood round it, or change the joint's settings"
+            "move the parts so the hole has 5.6mm of wood round it, or change the joint's settings"
         )
     );
 }
 
 #[test]
-fn wall_is_read_only_in_a_kinds_require() {
+fn the_retired_wall_function_is_an_error_that_says_what_replaces_it() {
     let opened = open(&format!(
         "{}\nrequire outside : wall(hole) >= 1mm \"not in a kind\"",
-        bored("")
+        bored("0mm")
     ));
     assert!(
         diagnostics(&opened).contains(
-            &"syntax: wall(...) is read only in a joint or hardware kind's require".to_owned()
+            &"unknown-name: 'wall(...)' was retired: a cut says the least wall it needs".to_owned()
         ),
         "{:?}",
         diagnostics(&opened)
     );
-    let opened = open(
-        "kind bored : joint {
-  param deep = wall(hole)
-  cut hole: crossing(into, piece) { drill(diameter: 8mm, depth: 10mm) }
-}",
-    );
-    assert!(
-        diagnostics(&opened).contains(
-            &"syntax: wall(...) is read only in a joint or hardware kind's require".to_owned()
-        ),
-        "{:?}",
-        diagnostics(&opened)
-    );
-}
-
-#[test]
-fn wall_names_one_of_the_kinds_cuts() {
-    let opened = open(&bored("require edge : wall(hoel) >= 3mm \"misspelt\""));
-    let found = opened
-        .diagnostics
-        .iter()
-        .find(|d| d.code == stave_lang::Code::UnknownName)
-        .expect("an unknown name");
-    assert_eq!(found.message, "unknown name 'hoel'");
-    assert!(
-        found.help.as_deref().is_some_and(|h| h.contains("hole")),
-        "{:?}",
-        found.help
-    );
-}
-
-#[test]
-fn wall_is_compared_on_its_own() {
-    for rule in [
-        "require edge : wall(hole) + 1mm >= 3mm \"arithmetic\"",
-        "require edge : wall(hole) >= 3mm && 1mm == 1mm \"two comparisons\"",
-    ] {
-        let opened = open(&bored(rule));
-        assert!(
-            diagnostics(&opened)
-                .contains(&"syntax: wall(...) is compared on its own in a rule".to_owned()),
-            "{rule}: {:?}",
-            diagnostics(&opened)
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------

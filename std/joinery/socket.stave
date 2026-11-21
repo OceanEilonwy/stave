@@ -12,7 +12,7 @@ kind socket : joint {
   adds:      extend(piece, by: depth)        // the rod is cut longer by the depth at each end
 
   cut socket: crossing(into, piece) {
-    drill(diameter: piece.diameter, depth: depth)
+    drill(diameter: piece.diameter, depth: depth, wall: wall)
   }
 
   /// Wood left round the hole: to every face of the board and to its other
@@ -20,7 +20,6 @@ kind socket : joint {
   /// sockets in a leg, or between a socket and the edge of a board, splits
   /// when the rod or rung is driven home.
   param wall = 6mm
-  require socket_wall : wall(socket) >= wall "the socket comes too close to a face of the board or another cut"
 
   note: "A rod between two sockets goes in while the case is glued up, not afterwards"
 }

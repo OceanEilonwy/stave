@@ -44,7 +44,7 @@ kind my_tenon : joint {
     tenon(length: length, width: piece.width - 20mm, thickness: piece.thickness / 3)
   }
   cut mortise: crossing(into, piece) {
-    pocket(width: piece.width - 20mm, thickness: piece.thickness / 3, depth: length + relief)
+    pocket(width: piece.width - 20mm, thickness: piece.thickness / 3, depth: length + relief, wall: 0mm)
   }
 }
 

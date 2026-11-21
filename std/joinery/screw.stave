@@ -26,13 +26,12 @@ kind screw : joint {
   param pilot = diameter * 3 / 4
 
   // The screws are centred across the patch where the parts touch and
-  // spread along it as `spacing` says. pilot_wall: the pilot hole keeps
-  // 3mm of wood to every face of the other part (its far side too) and to
-  // its other cuts, so the screw doesn't come out or run into another hole.
-  require pilot_wall : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
-  require bites      : length >= piece.thickness + 8mm "the screw is too short to hold"
-  require seat_wide  : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
-  require seat_long  : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
+  // spread along it as `spacing` says. Each hole keeps 3mm of wood to
+  // every face of its part (its far side too) and to its other cuts, so
+  // the screw doesn't come out or run into another hole: its `wall:`.
+  require bites     : length >= piece.thickness + 8mm "the screw is too short to hold"
+  require seat_wide : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
+  require seat_long : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
 
   insert: [push(piece, along: thickness)]
 
@@ -45,8 +44,8 @@ kind screw : joint {
     spaced: spacing
     shape:  cylinder(diameter: pilot, depth: -piece.thickness..length - piece.thickness)
   }
-  cut clearance_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through) }
-  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
+  cut clearance_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through, wall: 3mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness, wall: 3mm) }
 
   note: "Clamp the parts together and drill the pilot holes through the clearance holes"
 }

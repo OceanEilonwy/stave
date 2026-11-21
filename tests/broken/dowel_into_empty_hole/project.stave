@@ -1,11 +1,11 @@
-// expect: error[require] 'hole_wall' fails: the dowel hole comes too close to a face of the board or another cut
+// expect: error[wall] side_dowels: its hole in base runs 8mm past the bore that foot_bore cuts in base; it needs 4mm of wood there
 stave 1
 
 // A side stands on the base on a dowel, and a joint bores an empty 16mm
 // hole into the base from below, right under the side's pin. The
 // hole has nothing in it, so the pin running into it is air, not an
-// overlap; the dowel's own wall rule now measures the wood between its
-// hole and the empty one (docs/reviews/2026-11-17-checks-gaps.md, stage 2's
+// overlap; the dowel hole's own wall: measures the wood between it and
+// the empty one (docs/reviews/2026-11-17-checks-gaps.md, stage 2's
 // open case).
 
 project "A dowel into an empty hole" {
@@ -15,7 +15,7 @@ project "A dowel into an empty hole" {
 /// An empty hole, and nothing else.
 kind bored : joint {
   insert: [push(piece, along: length)]
-  cut bore: crossing(into, piece) { drill(diameter: 16mm, depth: 12mm) }
+  cut bore: crossing(into, piece) { drill(diameter: 16mm, depth: 12mm, wall: 0mm) }
 }
 
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }

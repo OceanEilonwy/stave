@@ -121,8 +121,7 @@ impl Meeting {
             | Builtin::Ends
             | Builtin::Pitch
             | Builtin::Gap
-            | Builtin::Contact
-            | Builtin::Wall => None,
+            | Builtin::Contact => None,
         }
     }
 
@@ -281,7 +280,6 @@ fn meeting_question(
         | RExprKind::Word(_)
         | RExprKind::Symbol(_)
         | RExprKind::SelfElement(_)
-        | RExprKind::Wall(_)
         | RExprKind::Error => None,
     }
 }

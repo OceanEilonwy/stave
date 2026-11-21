@@ -19,7 +19,7 @@ kind stub_tenon : joint {
     tenon(length: 10mm, width: piece.width - 20mm, thickness: 25mm)
   }
   cut stub_mortise: crossing(into, piece) {
-    pocket(width: piece.width - 20mm, thickness: 25mm, depth: 12mm)
+    pocket(width: piece.width - 20mm, thickness: 25mm, depth: 12mm, wall: 0mm)
   }
 }
 

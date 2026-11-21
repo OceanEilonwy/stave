@@ -713,7 +713,8 @@ fn a_cup_sits_in_its_bore_and_nowhere_else() {
         "{:?}",
         common::diagnostics(&bored)
     );
-    let cut = "  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }\n";
+    let cut =
+        "  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm, wall: 0mm) }\n";
     assert!(design.contains(cut));
     let unbored = common::open_files(&[("project.stave", &design.replace(cut, ""))]);
     let messages = messages_and_notes(&unbored);

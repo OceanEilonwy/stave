@@ -76,14 +76,14 @@ expression: "render_project(& examples().join(\"joint_samples\"))"
      = notch:function  depth:field  size:param+ref  2:number
   46 |   cut first_lock_hole: crossing(first, lock, normal: thickness) {
      = cut:keyword  first_lock_hole:plain  crossing:function  first:role+ref  lock:role+ref  normal:field  thickness:word
-  47 |     drill(diameter: round_diameter, depth: through)
-     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word
+  47 |     drill(diameter: round_diameter, depth: through, wall: 3mm)
+     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word  wall:field  3:number  mm:unit
   48 |     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
      = slot:function  width:field  flats:param+ref  depth:field  through:word  angle:field  45:number  deg:unit  from_centre:field  true:keyword
   50 |   cut second_lock_hole: crossing(second, lock, normal: thickness) {
      = cut:keyword  second_lock_hole:plain  crossing:function  second:role+ref  lock:role+ref  normal:field  thickness:word
-  51 |     drill(diameter: round_diameter, depth: through)
-     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word
+  51 |     drill(diameter: round_diameter, depth: through, wall: 3mm)
+     = drill:function  diameter:field  round_diameter:param+ref  depth:field  through:word  wall:field  3:number  mm:unit
   52 |     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
      = slot:function  width:field  flats:param+ref  depth:field  through:word  angle:field  45:number  deg:unit  from_centre:field  true:keyword
   57 |   cut rounding: crossing(lock, first) {

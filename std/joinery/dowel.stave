@@ -16,14 +16,12 @@ kind dowel : joint {
   param wall = 4mm
 
   // The pins are centred across the patch where the parts touch and
-  // spread evenly along it, so the patch must be a hole and a wall each
-  // side wide, and long enough for every hole with a wall between and
-  // beyond them. hole_wall: the hole in the other part keeps a wall to
-  // every face of that part (its far side too) and to its other cuts.
+  // spread evenly along it. Each hole keeps `wall` of wood to every face
+  // of its part (its far side too) and to every other cut there, its other
+  // copies included: its `wall:`. Every side of the patch is a face of one
+  // of the parts, so that also keeps the patch a hole and a wall each side
+  // wide, and long enough for every hole with a wall between and beyond.
   require pin_fits_piece : diameter <= piece.thickness / 2 "the dowel is too thick for this board"
-  require hole_wall      : wall(hole) >= wall "the dowel hole comes too close to a face of the board or another cut"
-  require seat_wide      : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
-  require seat_long      : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
 
   insert: [push(piece, along: length)]
 
@@ -34,8 +32,8 @@ kind dowel : joint {
     spaced: evenly
     shape:  cylinder(diameter: diameter, depth: -depth..depth)
   }
-  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
-  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth) }
+  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth, wall: wall) }
+  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth, wall: wall) }
 
   note: "Drill both sets of holes from the same reference edge so they line up"
 }

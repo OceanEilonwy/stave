@@ -70,7 +70,7 @@ kind side_pin : support {
   }
   // right runs into side_l, not along its face.
   cut side_hole: row(crossing(piece, shank), pitch: 32mm, right: 2) {
-    drill(diameter: 5mm, depth: 8mm)
+    drill(diameter: 5mm, depth: 8mm, wall: 0mm)
   }
 }
 

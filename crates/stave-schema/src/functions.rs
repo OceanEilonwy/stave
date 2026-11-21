@@ -66,10 +66,6 @@ pub enum Builtin {
     /// first question asked of how two parts meet; see
     /// [`Builtin::asks_how_parts_meet`].
     EdgeToEdge,
-    /// `wall(cut)`: the least wood left between one of a kind's named cuts
-    /// and any face or other cut of the same part, a length; read only in
-    /// a joint or hardware kind's `require`.
-    Wall,
 }
 
 /// A parameter of a built-in function.
@@ -111,7 +107,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 22] = [
+    pub const ALL: [Builtin; 21] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -133,7 +129,6 @@ impl Builtin {
         Builtin::Gap,
         Builtin::Contact,
         Builtin::EdgeToEdge,
-        Builtin::Wall,
     ];
 
     /// The function's name.
@@ -160,7 +155,6 @@ impl Builtin {
             Builtin::Gap => "gap",
             Builtin::Contact => "contact",
             Builtin::EdgeToEdge => "edge_to_edge",
-            Builtin::Wall => "wall",
         }
     }
 
@@ -220,8 +214,7 @@ impl Builtin {
             | Builtin::Ends
             | Builtin::Pitch
             | Builtin::Gap
-            | Builtin::Contact
-            | Builtin::Wall => false,
+            | Builtin::Contact => false,
         }
     }
 
@@ -229,7 +222,7 @@ impl Builtin {
     /// array `region` declaration can hold.
     pub fn returns(self) -> TypeName {
         match self {
-            Builtin::Between | Builtin::Extent | Builtin::Wall => TypeName::Length,
+            Builtin::Between | Builtin::Extent => TypeName::Length,
             Builtin::Mid => TypeName::Anchor,
             Builtin::Opening | Builtin::Split | Builtin::Cover | Builtin::RegionBox => {
                 TypeName::Region
@@ -386,11 +379,6 @@ impl Builtin {
             }
             Builtin::Contact | Builtin::EdgeToEdge => {
                 const LIST: &[Parameter] = &[positional("a", ITEM), positional("b", ITEM)];
-                LIST
-            }
-            // The name of one of the kind's cuts: checked by the resolver.
-            Builtin::Wall => {
-                const LIST: &[Parameter] = &[positional("cut", ITEM)];
                 LIST
             }
         }
