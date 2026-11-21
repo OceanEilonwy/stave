@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Stave's own icons, built into the binary (build.rs) and added to the
+     icon theme at startup (ui::logo::install_icons), so the application
+     icon resolves by name whether or not Stave is installed. The paths
+     under the prefix follow the hicolor theme's layout, as
+     gtk_icon_theme_add_resource_path asks. -->
+<gresources>
+  <gresource prefix="/io/github/OceanEilonwy/Stave/icons">
+    <file>scalable/apps/io.github.OceanEilonwy.Stave.svg</file>
+    <file>symbolic/apps/io.github.OceanEilonwy.Stave-symbolic.svg</file>
+  </gresource>
+</gresources>

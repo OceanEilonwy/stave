@@ -32,6 +32,7 @@ use gtk::{gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 
 use super::app::{self, APP_ID, ShellInput};
+use super::logo::Logo;
 use super::new_project::{NewProjectDialog, NewProjectOutput};
 use super::shown_path;
 
@@ -185,6 +186,7 @@ impl Component for StartPageComponent {
             #[wrap(Some)]
             set_content = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
+                    pack_start = &Logo::for_title_bar() {},
                     pack_end = &gtk::MenuButton {
                         set_icon_name: "open-menu-symbolic",
                         set_menu_model: Some(&main_menu()),
