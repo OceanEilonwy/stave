@@ -543,3 +543,28 @@ fn an_aspect_is_width_over_height() {
     assert_eq!(aspect(200, 100), 2.0);
     assert_eq!(aspect(0, 0), 1.0);
 }
+
+/// The stage's sRGB colour is the linear colour a frame is cleared to,
+/// encoded: the 3D view fills uncovered room with it during a resize.
+#[test]
+fn the_backdrop_srgb_matches_its_clear_colour() {
+    let encode = |linear: f64| {
+        let encoded = if linear <= 0.003_130_8 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        };
+        encoded * 255.0
+    };
+    for backdrop in [Backdrop::Light, Backdrop::Dark] {
+        let linear = backdrop.colour();
+        let srgb = backdrop.srgb();
+        for (channel, value) in [linear.r, linear.g, linear.b].into_iter().zip(srgb) {
+            assert!(
+                (encode(channel) - f64::from(value)).abs() < 1.0,
+                "{backdrop:?}: {channel} encodes to {}, not {value}",
+                encode(channel)
+            );
+        }
+    }
+}

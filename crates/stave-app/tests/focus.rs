@@ -283,6 +283,44 @@ fn focus_on_a_socket_plays_the_rung_in() {
 }
 
 #[test]
+fn a_joint_with_no_steps_says_why_instead_of_playing() {
+    // A mitre has no `insert:` steps: its parts are brought together in
+    // place, so the step player has nothing to scrub.
+    let (opened, graph) = graph("examples/picture_frame");
+    let found = open_focus(&opened, &graph, "frame_corners", None);
+    assert!(found.assembles());
+    assert_eq!(found.step_count(), 0);
+    assert_eq!(found.still_joint(), Some(&focus::StillJoint::NoSteps));
+    assert!(found.key_poses.is_empty(), "{:?}", found.key_poses);
+    let rest = graph.scenes.first().unwrap();
+    let frame = found.frame(&graph, rest, 0.6, &Options::default());
+    assert_eq!(frame.step, None);
+    assert_eq!(
+        frame.status,
+        "These parts are brought together in place: nothing slides in to play."
+    );
+
+    // A joint that plays its steps has no reason to be still.
+    let (opened, graph) = self::graph("examples/stool");
+    let socket = open_focus(&opened, &graph, "rung_sockets", None);
+    assert_eq!(socket.still_joint(), None);
+    assert_eq!(socket.key_poses.len(), 3);
+}
+
+#[test]
+fn a_blocked_step_names_the_part_in_the_way() {
+    let still = focus::StillJoint::Blocked {
+        step: 2,
+        moving: "rung[front]".to_owned(),
+        by: "leg[front_left]".to_owned(),
+    };
+    assert_eq!(
+        still.text(),
+        "Step 2 can't be played: leg[front_left] is in the way of rung[front]."
+    );
+}
+
+#[test]
 fn focus_finds_joints_pairs_and_hardware_by_name() {
     let (opened, graph) = graph("examples/clothing_cabinet");
     let design = opened.design.as_ref().unwrap();

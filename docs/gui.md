@@ -887,7 +887,13 @@ right (V2C_Joint, V2C_Hinge), and the scene menu, the Move chips, X-ray and Pull
 - **A joint** (JointFocus.dc.html, V2C_Joint): the step player floats at the bottom
   of the view (`StepCard`): play (pauses while playing), "**Step 1 of 1** ·
   `push(rung[front], along: length)`", "rung[front] is 6 mm from home",
-  and the apart … together scrub. The side panel: JOINT, the kind's name
+  and the apart … together scrub. A joint with nothing to play
+  (`Focus::still_joint`) shows only why in their place, with no play
+  button, slider or small views: a kind with no `insert:` steps (a
+  mitre, a glued cleat) "These parts are brought together in place:
+  nothing slides in to play."; a step that is blocked "Step 2 can't be
+  played: leg[front_left] is in the way of rung[front]."; play does
+  nothing. The side panel: JOINT, the kind's name
   and the first sentence of its doc comment; Goes in / Receives it / the
   cut / Fit (green when it fits); SHOW with X-ray ("see into
   leg[front_left]"), Tint cut faces and Fade other parts; HOW IT GOES

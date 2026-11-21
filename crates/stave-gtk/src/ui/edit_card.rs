@@ -1944,7 +1944,8 @@ button.stave-edit-fix, button.stave-edit-put-back { padding: 2px 12px; min-heigh
 .stave-edit-foot { border-top: 1px solid alpha(currentColor, 0.1); }
 .stave-edit-buttons { padding: 8px 12px 10px 12px; }
 .stave-edit-option { font-family: var(--monospace-font-family, monospace); font-size: 0.886rem; }
-button.stave-edit-face { margin-top: 4px; }
+button.stave-edit-face { margin: 2px 8px 8px 8px; min-height: 24px; padding: 0 10px; border-radius: 4px;
+  font-size: 0.818rem; font-weight: 600; }
 button.stave-edit-unavailable .stave-edit-option,
 button.stave-edit-unavailable .stave-edit-option-mark,
 button.stave-edit-unavailable .stave-edit-choice-mark { opacity: 0.55; }

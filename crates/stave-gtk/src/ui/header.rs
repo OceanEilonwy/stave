@@ -1,5 +1,6 @@
 //! The title bar, one slim row (34 px): at the left Stave's logo (the
-//! dovetail cube, the application icon) and a menu bar (Project,
+//! dovetail cube, unless the desktop's title-bar buttons already put the
+//! window icon there: see `logo`) and a menu bar (Project,
 //! Edit, View, Help, made from the main menu); in the middle the
 //! project's name over its folder (an `adw::WindowTitle`, as libadwaita
 //! centres a window's title), or the Design / Cut list switcher once
@@ -148,15 +149,6 @@ pub struct HeaderParts {
     pill_label: gtk::Label,
     build: gtk::Button,
     build_stack: gtk::Stack,
-}
-
-/// Stave's logo for the bar's start: the dovetail cube, 20 px, drawn
-/// from its paths (see [`Logo`]).
-fn logo() -> Logo {
-    let logo = Logo::new(20);
-    logo.set_margin_start(4);
-    logo.set_margin_end(2);
-    logo
 }
 
 /// Frees the children of `group`'s `toggles` when the group is destroyed.
@@ -346,7 +338,7 @@ impl HeaderParts {
 
         HeaderParts {
             recent,
-            logo: logo(),
+            logo: Logo::for_title_bar(),
             menu_bar,
             menu_button,
             title,
@@ -1042,12 +1034,12 @@ mod tests {
     }
 
     #[test]
-    fn the_logo_is_the_built_in_application_icon() {
+    fn the_bar_starts_with_the_logo() {
         on_gtk_thread(logo_shows);
     }
 
-    /// The bar starts with the logo, drawn from its own paths (no image
-    /// to load, no icon theme to look it up in), before the menus.
+    /// The bar holds the title-bar logo (which shows or hides with the
+    /// desktop's button layout: see `logo`).
     fn logo_shows() {
         let header = header();
         settle();

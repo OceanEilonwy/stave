@@ -1096,25 +1096,6 @@ fn window_node(
     snapshot.to_node()
 }
 
-/// Gives `scrolled` a scrollbar that shows whenever its content runs past
-/// it, not one hidden until the pointer moves, in a gutter it always
-/// keeps: the panel holding it is then as wide as the content and the
-/// scrollbar together, so a scrollbar that appears never squeezes the
-/// content narrower than it can be drawn. While there is nothing to
-/// scroll the scrollbar is insensitive, which libadwaita draws as an
-/// empty gutter.
-fn steady_scrollbar(scrolled: &gtk::ScrolledWindow) {
-    scrolled.set_overlay_scrolling(false);
-    scrolled.set_vscrollbar_policy(gtk::PolicyType::Always);
-    let scrollbar = scrolled.vscrollbar().downgrade();
-    scrolled.vadjustment().connect_changed(move |adjustment| {
-        if let Some(scrollbar) = scrollbar.upgrade() {
-            scrollbar.set_sensitive(adjustment.upper() > adjustment.page_size());
-        }
-    });
-    scrolled.vscrollbar().set_sensitive(false);
-}
-
 /// Whether the keyboard is in `widget`: it, or a widget inside it, is its
 /// window's focus widget. A component asks this of its own widgets, never
 /// of the window it is in. The `FOCUS_WITHIN` state answers at once in
@@ -1315,13 +1296,15 @@ pub(in crate::ui) fn build_widgets(
     );
     let details_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     details_box.append(&inspector.root);
+    // An overlay scrollbar, drawn over the content while it scrolls: a
+    // scrollbar that keeps a gutter of its own left an empty strip down
+    // the panel's right side whenever there was nothing to scroll.
     let details = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
         .child(&details_box)
         .css_classes(["stave-details"])
         .build();
-    steady_scrollbar(&details);
     // The Edit panel's content comes with the editing (`edit_view`).
     let edit_holder = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
