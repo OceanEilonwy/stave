@@ -35,6 +35,9 @@ kind side_mount_slide : slide {
   member drawer_member {
     with:  piece
     shape: box(along: 0mm..length, across: 45mm, depth: -6.35mm..0mm)
+    mount {
+      depth: from(face(piece, nearer: in))
+    }
   }
 
   // The drawer member runs in the cabinet member, out toward the front:

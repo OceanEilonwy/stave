@@ -1,10 +1,11 @@
-// expect: error[require] 'leaf_fits' fails: a hinge leaf wider than the edge it is housed in hangs off the wood
+// expect: error[overhang] lid.hinges[left]: its fixed_leaf hangs past the face of back
 stave 1
 
 // A 75mm butt hinge has leaves 22.5mm wide, but the back of the box is
 // only 12mm thick: the leaf housed in its top edge would hang 10.5mm into
 // the box, its mortise open to the inside and its screw holes over air.
-// std's butt_hinge says so with its leaf_fits rule.
+// The leaf is housed in its mortise, so it must lie wholly on back
+// (grammar, "Cuts stay in their part"); no rule in butt_hinge says so.
 
 project "Hinge leaf off the edge" {
   units: mm

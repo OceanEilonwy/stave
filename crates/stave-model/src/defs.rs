@@ -1641,6 +1641,14 @@ pub enum MountSelector {
         /// The part or region whose middle decides.
         other: RoleIndex,
     },
+    /// `face(p, nearer: r)`: of `p`'s two faces across the entry's axis,
+    /// the one nearer the same-named face of region `r`.
+    FaceNearer {
+        /// The part whose face it is.
+        part: RoleIndex,
+        /// The region whose faces decide.
+        region: RoleIndex,
+    },
     /// `crossing(p, q)`: the face of `p` that `q` touches or enters.
     Crossing {
         /// The part whose face it is.

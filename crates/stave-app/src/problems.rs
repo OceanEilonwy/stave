@@ -64,7 +64,9 @@ pub enum Category {
     /// round it (`wall`), one bigger than its part (`cut-size`), or wood
     /// joined or held against its grain (`grain`).
     Cut,
-    /// A hardware model doesn't match its envelope (`model-mismatch`).
+    /// A member of a piece of hardware hangs off the wood it is fixed to
+    /// (`overhang`), or a hardware model doesn't match its envelope
+    /// (`model-mismatch`).
     Hardware,
     /// Something Stave can't do yet (`not-supported`), or a failure inside
     /// Stave itself (`internal`).
@@ -110,7 +112,7 @@ impl Category {
             Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize | Code::Grain => {
                 Category::Cut
             }
-            Code::ModelMismatch => Category::Hardware,
+            Code::Overhang | Code::ModelMismatch => Category::Hardware,
             Code::NotSupported | Code::Internal => Category::NotSupported,
         }
     }

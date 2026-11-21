@@ -512,15 +512,29 @@ impl Resolver<'_> {
                 MountSelector::EndToward { part, toward }
             }
             "face" if place == Place::Member => {
-                let parsed = self.split_args(cx, "face", args, &["toward"], 1);
-                let (Some(part), Some(other)) = (parsed.positional.first(), parsed.get("toward"))
-                else {
-                    self.missing_argument(cx, "face", "a role and toward:", expr.span);
-                    return None;
-                };
-                MountSelector::FaceToward {
-                    part: self.role_of(cx, roles, part, "face")?,
-                    other: self.role_of(cx, roles, other, "toward")?,
+                let parsed = self.split_args(cx, "face", args, &["toward", "nearer"], 1);
+                match (
+                    parsed.positional.first(),
+                    parsed.get("toward"),
+                    parsed.get("nearer"),
+                ) {
+                    (Some(part), Some(other), None) => MountSelector::FaceToward {
+                        part: self.role_of(cx, roles, part, "face")?,
+                        other: self.role_of(cx, roles, other, "toward")?,
+                    },
+                    (Some(part), None, Some(region)) => MountSelector::FaceNearer {
+                        part: self.role_of(cx, roles, part, "face")?,
+                        region: self.role_of(cx, roles, region, "nearer")?,
+                    },
+                    _ => {
+                        self.missing_argument(
+                            cx,
+                            "face",
+                            "a role and one of toward: or nearer:",
+                            expr.span,
+                        );
+                        return None;
+                    }
                 }
             }
             "crossing" if place == Place::Member => {

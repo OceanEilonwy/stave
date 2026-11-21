@@ -1261,7 +1261,7 @@ face; a face is chosen across the axis the entry is for:
 | `end(p, nearer: q)` | of the two ends of `p`'s length, the one nearer the middle of `q` (the lower one when they are equally near): a cam lock's cam is set in from the end of the panel that meets the other panel, whichever end that is. An end places along `p`'s length only: on another axis it is `error[type-mismatch]` (`an end of shelf measures along its length, which runs 'across', not 'deep'`, help `measure along from an end, and across from an edge`). `end(p)` with neither `toward:` nor `nearer:`, or with both, is `error[type-mismatch]` |
 | `face(p, toward: q)` | of `p`'s two faces across this entry's axis, the one nearer the middle of `q` |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters (as in [Faces to cut](#faces-to-cut)) |
-| `face(p, nearer: r)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the same-named face of region `r` (the lower one when they are equally near) |
+| `face(p, nearer: r)` | of `p`'s two faces across this entry's axis (for `face:`, across `p`'s thickness), the one nearer the same-named face of region `r` (the lower one when they are equally near): a slide's drawer member lies on the face of the drawer side nearer the side of its opening |
 | `face(p, toward: q)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the middle of `q`, a `Part` role (the lower one when the middles are level): a shelf pin goes into the face of the side the shelf is on. `q` a `Region` role is `error[type-mismatch]` (`'toward' of a mount's face needs a role that is one part`); for a region write `nearer:` |
 
 The frame's directions on the mount face: `along` runs along the piece's
@@ -1328,7 +1328,13 @@ parts it should join (`error[no-contact]`, `hinge: lid meets none of the
 parts it should join`), as for a joint. A butt hinge's `fixed_leaf` lies
 just off its mount face, in `on`: if the mount face of the piece does not
 lie against `on`, the leaf meets nothing. Likewise a `cut` whose member
-neither touches nor enters the part it names is `error[no-contact]`.
+neither touches nor enters the part it names is `error[no-contact]`
+(`handle: the left shape of screws meets none of the parts it should
+join`, naming the shape when the member has more than one). Meeting is
+not enough for a member fixed to the wood: a member housed in a cut or
+placed against its part by its own `mount` must lie on its part
+wholly (`error[overhang]`, see [Cuts stay in their
+part](#cuts-stay-in-their-part)).
 
 ### Mirroring
 
@@ -2739,11 +2745,10 @@ kind brass_knob_26 : pull {
 }
 ```
 
-A butt hinge sinks a leaf into each part and cuts a mortise for each (its
-rule `leaf_fits` keeps each leaf on the wood: no wider than
-`contact(piece, on).width`, the patch where the two parts close, which on
-a box side's edge is the side's thickness); a cup hinge bores its cup; a
-pull drills a hole for each screw. Each is a `cut` of the kind (see
+A butt hinge sinks a leaf into each part and cuts a mortise for each (each
+leaf is seated in its mortise, so a leaf wider than the box side is thick,
+or one past the end of the side, is `error[overhang]`); a cup hinge bores
+its cup; a pull drills a hole for each screw. Each is a `cut` of the kind (see
 [Faces to cut](#faces-to-cut)). `fastener` kinds are
 only ever used through a `uses:` or as what a joint member is (`member pin :
 dowel_pin(...)`), and `tool` kinds are listed in a
@@ -3916,7 +3921,7 @@ error[require]: 'socket_wall' fails: the socket comes too close to a face of the
 
 ### Cuts stay in their part
 
-Five backstops hold for every kind, whatever its rules, because no kind
+Six backstops hold for every kind, whatever its rules, because no kind
 should be able to get them wrong. All but the splice backstop are
 reported at the joint's or hardware's call, in layer 4; that one at the
 part's `lengths:`:
@@ -3973,8 +3978,27 @@ part's `lengths:`:
   across side and cuts it in two`. A cut of another joint is named `the
   <housing> of <joint>`. A part made of boards is tested as one board
   with its own cuts; round and turned parts are not tested yet.
+- **Seated members lie on the wood** (`error[overhang]`). A member of a
+  piece of hardware is **seated** when one of the kind's cuts houses it
+  (`crossing(role, member)`: a hinge leaf, a cup, a screw), or when its
+  own `mount` places it against its part (a cup hinge's mounting plate, a
+  slide's drawer member). Each shape of a seated member lies wholly on
+  its part across the face it is seated on: the face its cut is made
+  from, or the face it lies against. Only its depth may run past (a screw
+  hole `through`), and a housed member must enter its part, not only
+  touch it. A member that is not seated may reach past its part's edges,
+  as a cup hinge's arm reaches past the front of the cabinet side to the
+  door, or a knob stands wider than the rail its screw is in; it must
+  still meet the part, and the overlap checks still see it (see [Hardware
+  placement](#hardware-placement), **Contact**). The error is at the
+  hardware's call: `hinges[left]: its fixed_leaf hangs off the end of
+  wall`, with the note `wall holds 5mm of the 40mm fixed_leaf` and the
+  help `place hinges[left] so its fixed_leaf lies wholly on wall`. A cut
+  for a member that hangs off would be cut short, and a plate or slide
+  with no cut would be screwed to air; no kind writes a rule for it.
 
-One mistake, one error. A kind's own rule says it first: when one fails
+One mistake, one error. A kind's own rule says it first (a piece of
+hardware whose rule failed gets no `error[overhang]`): when one fails
 the design isn't checked further, so std's `tenon_thin` speaks for a tenon
 too thick and `groove`'s `not_too_deep` for a groove too deep, in the
 joint's words, before any backstop. A pair or piece of hardware whose
@@ -4217,6 +4241,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
 | 3 | `internal` | `Stave could not work out <what>; this is a bug in Stave`: a failure inside Stave that no check explains; it is reported rather than leaving the design unbuilt without a word |
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, `<joint>: once cut, <a> and <b> touch only along an edge`, or for `contact(a, b)` `<a> and <b> don't touch` |
+| 4 | `overhang` | `<hardware>: its <member> hangs off the <end> of <part>`, with the note `<part> holds <5mm> of the <40mm> <member>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
