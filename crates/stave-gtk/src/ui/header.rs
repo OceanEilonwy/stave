@@ -20,13 +20,14 @@
 //! bar adds its own setters to each ([`HeaderInput::Narrow`]).
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gio, glib};
 use relm4::{Component, ComponentController, ComponentParts, ComponentSender, Controller};
 use stave_app::i18n::{fill_in, tr, tr_noop};
 use stave_app::session::{Activity, Build, Pill, Tone, View};
 use std::path::PathBuf;
 
 use super::icons::{self, PathIcon};
+use super::logo::Logo;
 use super::{app, workbench};
 
 /// `true` for a view that is made: one the switcher and its shortcut may
@@ -128,7 +129,7 @@ pub struct HeaderParts {
     /// The Open Recent submenu of the bar's own menus.
     recent: gio::Menu,
     /// Stave's logo, at the bar's start.
-    logo: gtk::Image,
+    logo: Logo,
     menu_bar: gtk::PopoverMenuBar,
     menu_button: gtk::MenuButton,
     title: adw::WindowTitle,
@@ -149,30 +150,13 @@ pub struct HeaderParts {
     build_stack: gtk::Stack,
 }
 
-/// The application icon (the dovetail cube), rendered at 64 px (20 px at
-/// up to 3× scale) and built into the binary, so the bar shows it whether
-/// or not Stave is installed. A PNG because GTK decodes PNG itself, while
-/// SVG needs a gdk-pixbuf loader that not every system has. Made from
-/// `data/icons/hicolor/scalable/apps/io.github.OceanEilonwy.Stave.svg`
-/// with `rsvg-convert -w 64 -h 64`; remake it when the icon changes.
-const LOGO_PNG: &[u8] = include_bytes!("logo.png");
-
-/// Stave's logo for the bar's start: the application icon, 20 px. It is
-/// decoration (the window's title names the project), so assistive
-/// technology skips it. Should the image fail to load, the icon theme's
-/// application icon stands in.
-fn logo() -> gtk::Image {
-    let image = match gdk::Texture::from_bytes(&glib::Bytes::from_static(LOGO_PNG)) {
-        Ok(texture) => gtk::Image::from_paintable(Some(&texture)),
-        Err(_) => gtk::Image::from_icon_name(app::APP_ID),
-    };
-    image.set_pixel_size(20);
-    image.set_valign(gtk::Align::Center);
-    image.set_margin_start(4);
-    image.set_margin_end(2);
-    image.add_css_class("stave-logo");
-    image.set_accessible_role(gtk::AccessibleRole::Presentation);
-    image
+/// Stave's logo for the bar's start: the dovetail cube, 20 px, drawn
+/// from its paths (see [`Logo`]).
+fn logo() -> Logo {
+    let logo = Logo::new(20);
+    logo.set_margin_start(4);
+    logo.set_margin_end(2);
+    logo
 }
 
 /// Frees the children of `group`'s `toggles` when the group is destroyed.
@@ -1062,16 +1046,16 @@ mod tests {
         on_gtk_thread(logo_shows);
     }
 
-    /// The bar starts with the logo, drawn from the PNG built into the
-    /// binary (not looked up in an icon theme, which an uninstalled Stave
-    /// has none of).
+    /// The bar starts with the logo, drawn from its own paths (no image
+    /// to load, no icon theme to look it up in), before the menus.
     fn logo_shows() {
-        let texture = gdk::Texture::from_bytes(&glib::Bytes::from_static(LOGO_PNG))
-            .expect("the built-in logo decodes");
-        assert_eq!((texture.width(), texture.height()), (64, 64));
         let header = header();
-        assert_eq!(header.parts.logo.storage_type(), gtk::ImageType::Paintable);
-        assert_eq!(header.parts.logo.pixel_size(), 20);
+        settle();
+        assert_eq!(header.parts.logo.size(), 20);
+        assert!(
+            header.parts.logo.is_ancestor(&header.bar),
+            "the logo is in the bar"
+        );
     }
 
     #[test]

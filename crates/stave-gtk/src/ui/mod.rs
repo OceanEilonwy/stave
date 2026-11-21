@@ -42,6 +42,7 @@ mod header;
 mod icons;
 mod inspector;
 mod launch;
+mod logo;
 mod new_project;
 mod option_search;
 mod output;
