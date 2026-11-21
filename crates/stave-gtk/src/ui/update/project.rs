@@ -652,7 +652,12 @@ impl Window {
                 state.uploaded = Some(shown.clone());
                 // A new result renumbers everything: focus and the posed
                 // problem are opened again from the session.
-                state.focus = None;
+                state.focus_kept = state.focus.take().map(|focus| KeptFocus {
+                    progress: focus.progress,
+                    options: focus.options,
+                    plan: focus.plan,
+                    playing: focus.playing,
+                });
                 state.problem = None;
                 state.opening = None;
             }
@@ -676,6 +681,8 @@ impl Window {
         self.selection_changed();
         self.state.linking = false;
         self.focus_changed();
+        // Kept for the focus the session carried over, if any.
+        self.state.focus_kept = None;
         self.request_render();
         // The 3D view draws (and saves a screenshot) only when it shows.
         if !self.shows_3d() {
@@ -1068,6 +1075,7 @@ impl Window {
             state.posed = None;
             state.orbit = None;
             state.focus = None;
+            state.focus_kept = None;
             state.problem = None;
             state.opening = None;
         }

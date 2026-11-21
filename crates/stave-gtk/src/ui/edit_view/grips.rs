@@ -602,11 +602,13 @@ impl Window {
                 .or(slider)
                 .map(|(_, high)| amount_words(high))
                 .unwrap_or_default(),
-            changes: if moved && !state.checking {
-                // The session lists what else changes; a plain number's
-                // own change is said first.
+            changes: if moved {
+                // The session lists what else changes (not while it is
+                // checking: the list is the last value's then); a plain
+                // number's own change is said first, and always.
                 let mut lines = model
                     .as_ref()
+                    .filter(|_| !state.checking)
                     .map(|model| model.changes.clone())
                     .unwrap_or_default();
                 if matches!(listed.grip.action, GripAction::Moves(_)) {
