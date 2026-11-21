@@ -961,6 +961,7 @@ impl Window {
             return;
         }
         let backdrop = self.backdrop();
+        self.widgets.viewport.set_stage(backdrop.srgb());
         let ghost = self.render_ghost(backdrop);
         let rendered = if let Some(rendered) = ghost {
             rendered
