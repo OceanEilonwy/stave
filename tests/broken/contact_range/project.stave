@@ -1,12 +1,12 @@
-// expect: error[require-range] 'seat_wide' does not hold for every allowed value: the parts overlap too little for these dowels
+// expect: error[require-range] 'seat_wide' does not hold for every allowed value: the parts overlap too little for screws this thick
 // pending: checking a require over a param's whole range needs z3 (layer 6), not built yet
 stave 1
 
 // At 1800mm the top covers the whole of each side's end, but 'within'
 // allows it down to 1773mm, where it covers only 5.5mm: too little for the
-// dowels. A kind's rule that reads contact() must hold over the range too.
+// screws. A kind's rule that reads contact() must hold over the range too.
 
-project "Dowels over a range" {
+project "Screws over a range" {
   units: mm
 }
 
@@ -45,5 +45,5 @@ part top : oak_19 {
   }
 }
 
-joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
-joint top_dowels  : dowel([side_l, side_r], into: top, count: 4)
+joint base_screws : screw([side_l, side_r], into: base, count: 4)
+joint top_screws  : screw([side_l, side_r], into: top, count: 4)

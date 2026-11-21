@@ -1,4 +1,4 @@
-// expect: error[require] 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+// expect: error[wall] rod_sockets: its socket in side_l leaves 0mm of wood at the dado that shelf_dados cuts in side_l; it needs 6mm
 stave 1
 
 // The clothing cabinet's rod hung right under the shelf (gap: 0mm): the

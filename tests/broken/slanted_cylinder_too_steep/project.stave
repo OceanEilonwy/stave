@@ -13,9 +13,9 @@ kind slanted : joint {
     count: 2
     shape: cylinder(diameter: 3mm, depth: -20mm..12mm, tilt: 90deg, toward: across)
   }
-  cut pocket: crossing(piece, screw) { drill(diameter: 9.5mm, depth: through, from_depth: 20mm) }
-  cut shank_hole: crossing(piece, screw) { drill(diameter: 4.5mm, depth: 20mm) }
-  cut pilot_hole: crossing(into, screw) { drill(diameter: 3mm, depth: 12mm) }
+  cut pocket: crossing(piece, screw) { drill(diameter: 9.5mm, depth: through, from_depth: 20mm, wall: 0mm) }
+  cut shank_hole: crossing(piece, screw) { drill(diameter: 4.5mm, depth: 20mm, wall: 0mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: 3mm, depth: 12mm, wall: 0mm) }
 }
 
 stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 50mm, max_length: 2400mm }

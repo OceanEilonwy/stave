@@ -1165,7 +1165,6 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | RExprKind::Index { .. }
             | RExprKind::KindValue { .. }
             | RExprKind::List(_)
-            | RExprKind::Wall(_)
             | RExprKind::Error => Ok(Affine::other("a value that is not a number")),
         }
     }
@@ -1339,7 +1338,6 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | RExprKind::Unary { .. }
             | RExprKind::Binary { .. }
             | RExprKind::List(_)
-            | RExprKind::Wall(_)
             | RExprKind::Error => Ok(Affine::other("a face")),
         }
     }
@@ -1713,7 +1711,6 @@ impl<'s, 'm> Tracer<'s, 'm> {
             | RExprKind::Unary { .. }
             | RExprKind::Binary { .. }
             | RExprKind::List(_)
-            | RExprKind::Wall(_)
             | RExprKind::Error => Affine::other("a spacing"),
         };
         Ok((value, distance))

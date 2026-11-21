@@ -692,11 +692,6 @@ impl Solver<'_> {
             None => format!("{part_name}.boards"),
         };
         for require in &kind.requires {
-            // The wall round a cut between boards isn't measured yet
-            // (grammar, "Walls"): such a rule is left out here.
-            if crate::walls::wall_comparison(&require.condition).is_some() {
-                continue;
-            }
             let holds = self.eval_bool(&require.condition, &kind_env)?;
             let message = self.format_text(&require.message, &kind_env)?;
             if !holds && report {
@@ -910,7 +905,9 @@ impl Solver<'_> {
                 file,
                 span,
             };
-            for (target, face, place, cut_kind) in self.pair_cuts(cut_def, pair, geoms, &env, at)? {
+            for (target, face, place, cut_kind, wall) in
+                self.pair_cuts(cut_def, pair, geoms, &env, at)?
+            {
                 let place = match place {
                     CutPlace::End { toward } => CutPlace::End {
                         toward: owner(toward),
@@ -938,6 +935,7 @@ impl Solver<'_> {
                     face,
                     place,
                     kind: cut_kind,
+                    wall,
                 };
                 if is_board(target) {
                     if !made_on_boards(&cut.kind) {

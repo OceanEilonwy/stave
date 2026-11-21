@@ -81,25 +81,13 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (20)
+REQUIRES (8)
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 leg_dowels.pin_fits_piece                    holds
-leg_dowels.seat_wide                         holds
-leg_dowels.seat_long                         holds
 seat.splice[1].same_section                  holds
 seat.splice[1].room                          holds
 

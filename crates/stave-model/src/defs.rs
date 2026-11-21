@@ -309,10 +309,6 @@ pub enum RExprKind {
     },
     /// `[a, b]`; lists inside lists are flattened when evaluated.
     List(Vec<RExpr>),
-    /// `wall(cut)`: the least wood round one of the enclosing kind's named
-    /// cuts. Only one whole side of a comparison that is a kind's
-    /// `require` condition; measured once the cuts are made.
-    Wall(CutName),
     /// Something that could not be resolved; already reported.
     Error,
 }

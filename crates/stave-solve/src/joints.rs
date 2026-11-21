@@ -12,7 +12,7 @@ use stave_model::defs::{
     CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExpr,
     RExprKind, RoleIndex, SelectorDef, Size, StepMotionDef, StockField, Symbol, Word,
 };
-use stave_model::ids::{JointId, KindId, PairIndex, PartId, RecipeId, RequireIndex, StockId};
+use stave_model::ids::{JointId, KindId, PartId, RecipeId, RequireIndex, StockId};
 use stave_model::solved::{
     AssemblyStep, Contact, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, LocalPoint, Mark,
     Orientation, Slope, StepMotion,
@@ -200,6 +200,17 @@ fn flip(end: End) -> End {
         End::End => End::Start,
     }
 }
+
+/// One cut a joint's `cut selector { }` makes for one pair: the part, the
+/// face it is cut from, where on it, what it removes, and the least wall it
+/// asks for (`wall:`).
+pub(crate) type PairCut = (
+    PartId,
+    LocalFace,
+    CutPlace,
+    CutKind,
+    Option<stave_lang::units::Length>,
+);
 
 impl Solver<'_> {
     /// The kind, roles and settings of a joint or hardware call.
@@ -612,10 +623,6 @@ impl Solver<'_> {
             };
             // Requires, at the current values, for this pair.
             let mut results = Vec::new();
-            let source = stave_model::solved::CutSource::Joint {
-                joint,
-                pair: PairIndex::from_usize(pairs.len()),
-            };
             // A rule that asks how the parts meet comes first; when one
             // fails, the joint is not for this pair and nothing else of
             // it is checked or made here.
@@ -625,10 +632,7 @@ impl Solver<'_> {
                 !crate::meeting::asks_how_parts_meet(&require.condition)
             });
             let mut making = Making::Made;
-            for (index, require) in order {
-                if self.defer_wall_rule(source, binding.kind, index, require, &kind_env)? {
-                    continue;
-                }
+            for (_, require) in order {
                 let holds = self.eval_bool(&require.condition, &kind_env)?;
                 let message = self.format_text(&require.message, &kind_env)?;
                 let meeting_rule = crate::meeting::asks_how_parts_meet(&require.condition);
@@ -1261,6 +1265,48 @@ impl Solver<'_> {
     }
 
     /// Evaluates a cut operation's arguments.
+    /// The least wall an operation asks for (`wall:`, grammar "Walls"),
+    /// when it gives one: a length of `0mm` or more.
+    pub(crate) fn cut_wall(
+        &mut self,
+        operation: &OperationDef,
+        env: &Env<'_>,
+    ) -> Solved<Option<stave_lang::units::Length>> {
+        let Some(arg) = operation
+            .args
+            .iter()
+            .find(|arg| arg.name.as_str() == "wall")
+        else {
+            return Ok(None);
+        };
+        let value = self.eval(&arg.value, env)?;
+        let Value::Length(length) = value else {
+            return Err(self
+                .error(
+                    Code::UnitMismatch,
+                    format!("'wall' needs a length, found {}", value.description()),
+                    env.file,
+                    arg.value.span,
+                    "write a length",
+                )
+                .into());
+        };
+        let wall = round_length(length)?;
+        if wall < stave_lang::units::Length::ZERO {
+            let shown = self.describe(&Value::Length(length));
+            return Err(self
+                .error(
+                    Code::OutOfRange,
+                    format!("'wall' must be 0mm or more, found {shown}"),
+                    env.file,
+                    arg.value.span,
+                    "say how much wood the cut must leave round it, e.g. wall: 3mm",
+                )
+                .into());
+        }
+        Ok(Some(wall))
+    }
+
     pub(crate) fn cut_kind(&mut self, operation: &OperationDef, env: &Env<'_>) -> Solved<CutKind> {
         let spec = stave_schema::operations::cut_operation(operation.operation);
         let mut values: Vec<(&str, Value, Span)> = Vec::new();
@@ -1642,7 +1688,7 @@ impl Solver<'_> {
         geoms: &GeomTable,
         env: &Env<'_>,
         at: CutAt<'_>,
-    ) -> Solved<Vec<(PartId, LocalFace, CutPlace, CutKind)>> {
+    ) -> Solved<Vec<PairCut>> {
         // A cut on a kind's only `Parts` role is made on each of its parts
         // that meets the other part of the selector.
         let targets: Vec<Option<PartId>> = if pair.across
@@ -1669,9 +1715,10 @@ impl Solver<'_> {
                 self.selector_place(&cut.selector, pair, geoms, env.file, target)?;
             for operation in &cut.operations {
                 let kind = self.cut_kind(operation, env)?;
+                let wall = self.cut_wall(operation, env)?;
                 self.check_cut_size(at, cut.name.as_ref(), operation, &kind, part)?;
                 self.check_tongue(operation, &place, face, env)?;
-                out.push((part, face, place.clone(), kind));
+                out.push((part, face, place.clone(), kind, wall));
             }
         }
         Ok(out)

@@ -488,7 +488,6 @@ fn design_of_all(parts: Vec<Part>) -> SolvedDesign {
         scenes: Vec::new(),
         requires: Vec::new(),
         overruns: Vec::new(),
-        wall_rules: Vec::new(),
     };
     match SolvedDesign::new(draft) {
         Ok(design) => design,
@@ -510,6 +509,7 @@ fn hardware_cut(face: LocalFace, place: CutPlace, kind: CutKind) -> Cut {
             hardware: HardwareId::from_usize(0),
         },
         name: None,
+        wall: None,
         face,
         place,
         kind,
@@ -737,6 +737,7 @@ fn an_angled_slot_is_cut() {
             hardware: HardwareId::from_usize(0),
         },
         name: None,
+        wall: None,
         face: face(PartAxis::Thickness, End::End),
         place: CutPlace::Crossing {
             other: stick.id,
@@ -799,6 +800,7 @@ fn a_round_section_keeps_its_flats() {
             hardware: HardwareId::from_usize(0),
         },
         name: None,
+        wall: None,
         face: face(PartAxis::Width, End::Start),
         place: CutPlace::Crossing {
             other: other.id,
@@ -889,6 +891,7 @@ fn dovetail_pair_sloped(
     beam_a.cuts = vec![Cut {
         source,
         name: None,
+        wall: None,
         face: face(PartAxis::Length, End::End),
         place: CutPlace::End { toward: beam_b.id },
         kind: CutKind::DovetailSocket {
@@ -900,6 +903,7 @@ fn dovetail_pair_sloped(
     beam_b.cuts = vec![Cut {
         source,
         name: None,
+        wall: None,
         face: face(PartAxis::Length, End::Start),
         place: CutPlace::End { toward: beam_a.id },
         kind: CutKind::DovetailTail {

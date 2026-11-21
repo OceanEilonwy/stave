@@ -210,7 +210,7 @@ fn the_cases_joinery_options_are_checked_each_with_the_checkers_reason() {
         assert!(fit_of(&joinery, edge).is_refused(), "{edge}");
     }
     assert_eq!(refused_code(&joinery, "half_lap"), Code::TypeMismatch);
-    assert_eq!(refused_code(&joinery, "mortise_tenon"), Code::Require);
+    assert_eq!(refused_code(&joinery, "mortise_tenon"), Code::Wall);
 
     // The ones that fit first, in their own order, then the refused: those
     // refused by the design as it is, then the kinds refused by their

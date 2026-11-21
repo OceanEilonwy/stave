@@ -42,6 +42,6 @@ kind shelf_pin : support {
   }
 
   cut pin_hole: row(crossing(piece, shank), pitch: hole_spacing, up: holes_above, down: holes_below) {
-    drill(diameter: diameter, depth: hole_depth)
+    drill(diameter: diameter, depth: hole_depth, wall: 3mm)
   }
 }

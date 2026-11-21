@@ -60,6 +60,6 @@ kind pegged : joint {
     shape: cylinder(diameter: 6mm, depth: -10mm..10mm)
   }
   cut peg_hole: row(crossing(into, peg), pitch: 32mm, up: 2) {
-    drill(diameter: 6mm, depth: 10mm)
+    drill(diameter: 6mm, depth: 10mm, wall: 0mm)
   }
 }

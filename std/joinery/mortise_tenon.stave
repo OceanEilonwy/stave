@@ -21,11 +21,10 @@ kind mortise_tenon : joint {
   // tenon leaves cheeks too thin to hold its shoulders square.
   // mortise_fits: the tenon, and so its mortise, must lie on the patch
   // where the parts touch, or the mortise runs out past the other part.
-  // mortise_wall: wood all round the mortise, measured once it is cut.
+  // The mortise keeps `wall` of wood all round it: its `wall:`.
   require has_width    : piece.width > 2 * shoulder "the shoulders leave no tenon"
   require tenon_thin   : thickness <= piece.thickness / 2 "a tenon thicker than half the rail leaves its cheeks too thin"
   require mortise_fits : piece.width - 2 * shoulder <= contact(piece, into).length "the mortise would run out past the edge of the other part"
-  require mortise_wall : wall(mortise) >= wall "the mortise comes too close to a face of the part or another cut"
 
   insert:    [push(piece, along: length)]
   cut_first: into                            // cut the mortise first, then fit the tenon to it
@@ -35,7 +34,7 @@ kind mortise_tenon : joint {
     tenon(length: length, width: piece.width - 2 * shoulder, thickness: thickness)
   }
   cut mortise: crossing(into, piece) {
-    pocket(width: piece.width - 2 * shoulder, thickness: thickness, depth: length + relief)
+    pocket(width: piece.width - 2 * shoulder, thickness: thickness, depth: length + relief, wall: wall)
   }
 
   note: "Pare the tenon cheeks until it pushes in by hand; never force a tenon"

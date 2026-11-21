@@ -739,7 +739,6 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             overruns.dedup();
             overruns
         },
-        wall_rules: std::mem::take(&mut solver.wall_rules),
     };
     solver.rebind_pieces(&mut draft, splits);
     let design = SolvedDesign::new(draft)
@@ -789,6 +788,7 @@ fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Sol
             shape: &cut.shape,
             slant: cut.slant,
             kind: cut.kind.clone(),
+            wall: cut.wall,
         },
     )
 }
@@ -806,6 +806,8 @@ struct MemberCut<'a> {
     /// The shape's slant, when it is a slanted cylinder.
     slant: Option<crate::hardware::WorldSlant>,
     kind: solved::CutKind,
+    /// The least wall its operation asks for.
+    wall: Option<stave_lang::units::Length>,
 }
 
 /// A cut a member makes: its shape where it meets the part (the
@@ -874,6 +876,7 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
             shape: local_box(cut.shape)?,
         },
         kind,
+        wall: cut.wall,
     })
 }
 
@@ -1024,7 +1027,9 @@ impl Solver<'_> {
                     file,
                     span,
                 };
-                for (part, face, place, cut_kind) in self.pair_cuts(cut, pair, geoms, &env, at)? {
+                for (part, face, place, cut_kind, wall) in
+                    self.pair_cuts(cut, pair, geoms, &env, at)?
+                {
                     if let Some(list) = cuts.get_mut(part.index()) {
                         list.push(Cut {
                             source: CutSource::Joint {
@@ -1035,6 +1040,7 @@ impl Solver<'_> {
                             face,
                             place,
                             kind: cut_kind,
+                            wall,
                         });
                     }
                 }
@@ -1054,8 +1060,10 @@ impl Solver<'_> {
                     return Err(Fault::Internal("a part").into());
                 };
                 let mut kinds = Vec::new();
+                let mut walls = Vec::new();
                 for operation in &cut.operations {
                     let kind = self.cut_kind(operation, &env)?;
+                    walls.push(self.cut_wall(operation, &env)?);
                     let at = CutAt {
                         owner: &inst.name,
                         file: place.0,
@@ -1101,7 +1109,7 @@ impl Solver<'_> {
                             file: place.0,
                             span: place.1,
                         })?;
-                        for cut_kind in &kinds {
+                        for (cut_kind, wall) in kinds.iter().zip(&walls) {
                             work.member_cuts.push(WorldMemberCut {
                                 pair: pair_index,
                                 part,
@@ -1111,6 +1119,7 @@ impl Solver<'_> {
                                 shape: shape.world,
                                 slant,
                                 kind: cut_kind.clone(),
+                                wall: *wall,
                             });
                             let made = member_cut(
                                 &geom,
@@ -1126,6 +1135,7 @@ impl Solver<'_> {
                                     shape: &shape.world,
                                     slant,
                                     kind: cut_kind.clone(),
+                                    wall: *wall,
                                 },
                             )?;
                             if let Some(list) = cuts.get_mut(part.index()) {
@@ -1575,6 +1585,7 @@ impl Solver<'_> {
                         shape: &shape,
                         slant: cut.slant.map(|slant| slant.reflected(axis)),
                         kind: cut.kind.clone(),
+                        wall: cut.wall,
                     },
                 );
                 let made = made.and_then(|made| match cuts.get_mut(part.index()) {

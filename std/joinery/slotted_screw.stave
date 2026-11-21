@@ -35,10 +35,9 @@ kind slotted_screw : joint {
   // runs along it: a cleat or an apron under a top whose grain runs the
   // same way. Stave checks that a slot runs across the grain of the board
   // that moves, and says to turn it when it doesn't.
-  require pilot_wall : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
-  require bites      : length >= piece.thickness + 8mm "the screw is too short to hold"
-  require seat_wide  : contact(piece, into).width >= diameter + 2 * slide + 2 * wall "the parts overlap too little for slots this long"
-  require seat_long  : contact(piece, into).length >= count * (diameter + 2 * slide_along + gap) + gap "too many screws for this joint"
+  require bites     : length >= piece.thickness + 8mm "the screw is too short to hold"
+  require seat_wide : contact(piece, into).width >= diameter + 2 * slide + 2 * wall "the parts overlap too little for slots this long"
+  require seat_long : contact(piece, into).length >= count * (diameter + 2 * slide_along + gap) + gap "too many screws for this joint"
 
   insert: [push(piece, along: thickness)]
 
@@ -54,8 +53,8 @@ kind slotted_screw : joint {
   // On a member, a pocket's width runs along the piece's length and its
   // thickness across it: slide lengthens the slot across the piece,
   // slide_along along it.
-  cut screw_slot: crossing(piece, screw) { pocket(width: diameter + 0.5mm + 2 * slide_along, thickness: diameter + 0.5mm + 2 * slide, depth: through) }
-  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
+  cut screw_slot: crossing(piece, screw) { pocket(width: diameter + 0.5mm + 2 * slide_along, thickness: diameter + 0.5mm + 2 * slide, depth: through, wall: 3mm) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness, wall: 3mm) }
 
   note: "Drill the pilot holes in the middle of the slots, and drive the screws snug but not tight, without glue, so the top can slide"
 }

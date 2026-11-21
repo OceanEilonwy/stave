@@ -7,10 +7,10 @@ error[require]: 'seat_wide' fails: the parts overlap too little for screws this 
    |
 32 | joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 2, diameter: 30mm, glue: false)
    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/screw.stave:34:3
+  ::: std/joinery/screw.stave:33:3
    |
-34 |   require seat_wide  : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
-   |   --------------------------------------------------------------------------------------------------------------------------- the kind's rule
+33 |   require seat_wide : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
+   |   -------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for shelf and arm[left] in shelf_screws
    = note: the rule measures 19mm and needs at least 42mm
    = note: the same for shelf and arm[right] in shelf_screws

@@ -313,6 +313,8 @@ pub(crate) struct HardwareCut {
     /// The shape's slant, when it is a slanted cylinder.
     pub slant: Option<WorldSlant>,
     pub kind: CutKind,
+    /// The least wall its operation asks for (`wall:`).
+    pub wall: Option<Length>,
 }
 
 /// How a slanted cylinder leans in the world: turned from `axis` toward
@@ -1665,10 +1667,12 @@ impl Solver<'_> {
             let Some(placed) = bodies.iter().find(|placed| placed.body == cut.body) else {
                 return Err(Fault::Internal("a member a cut is made by").into());
             };
-            let kinds = self.in_kind(binding, kind, |solver, kind_env| {
+            let (kinds, walls) = self.in_kind(binding, kind, |solver, kind_env| {
                 let mut kinds = Vec::new();
+                let mut walls = Vec::new();
                 for operation in &cut.operations {
                     let made = solver.cut_kind(operation, kind_env)?;
+                    walls.push(solver.cut_wall(operation, kind_env)?);
                     let at = CutAt {
                         owner: name,
                         file,
@@ -1677,7 +1681,7 @@ impl Solver<'_> {
                     solver.check_cut_size(at, cut.name.as_ref(), operation, &made, part)?;
                     kinds.push(made);
                 }
-                Ok(kinds)
+                Ok((kinds, walls))
             })?;
             let part_box = self.drawn_box(part)?;
             let first = out.len();
@@ -1724,7 +1728,7 @@ impl Solver<'_> {
                     file,
                     span,
                 })?;
-                for kind_of_cut in &kinds {
+                for (kind_of_cut, wall) in kinds.iter().zip(&walls) {
                     out.push(HardwareCut {
                         part,
                         body: cut.body,
@@ -1733,6 +1737,7 @@ impl Solver<'_> {
                         shape: shape.world,
                         slant,
                         kind: kind_of_cut.clone(),
+                        wall: *wall,
                     });
                 }
             }

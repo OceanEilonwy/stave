@@ -1,18 +1,18 @@
 //! The wood a cut leaves behind (grammar, "Walls" and "Cuts stay in their
-//! part"): the kinds' rules that read `wall(cut)`, and the backstops no
-//! kind should be able to get wrong.
+//! part"): each cut's own `wall:`, and the backstops no kind should be
+//! able to get wrong.
 //!
 //! 1. **Cuts only remove wood** (`error[cut-size]`): a `tenon` or `spigot`
 //!    bigger than the part it is cut on.
 //! 2. **Stopped cuts leave wood behind** (`error[cut-size]`): a depth given
 //!    as a length must be less than the part there; only `through` goes
 //!    through. Checked before the overlap check, which would only report
-//!    the same mistake again as the parts that no longer fit; a cut that a
-//!    rule of its own kind measures with `wall()` waits for that rule,
-//!    which says it in the kind's words.
-//! 3. **The kinds' wall rules** (`error[require]`), measured now that every
-//!    cut is made, and reported at the joint's or hardware's line like any
-//!    failed rule of its kind.
+//!    the same mistake again as the parts that no longer fit; a cut that
+//!    says its own `wall:` waits for that to be measured, which says more.
+//! 3. **Each cut's `wall:`** (`error[wall]`), measured now that every cut
+//!    is made: the least wood between the cut and every face it isn't open
+//!    to and every other cut of its part, reported at the joint's or
+//!    hardware's line, once for a line.
 //! 4. **Closed cuts keep a wall** (`error[wall]`): every `drill` and
 //!    `pocket` leaves wood between it and every face it isn't aimed at and
 //!    every closed cut of another joint pair or piece of hardware. A hole that runs
@@ -22,16 +22,17 @@
 //!    cuts that meet across a part, or one that goes right across it,
 //!    leave it in pieces.
 //!
-//! One mistake, one error: a pair or piece of hardware whose kind's rule
-//! failed, or whose cuts are too big or too deep, gets no backstop error
+//! One mistake, one error: a pair or piece of hardware whose cut's `wall:`
+//! wasn't met, or whose cuts are too big or too deep, gets no backstop error
 //! for the same cuts, and nothing here is reported for a part or member
 //! that already overlaps something (the overlap names what collides).
 
 use stave_geom::wall::{Toward, Wall, Walls};
 use stave_lang::placement::PartAxis;
+use stave_lang::units::Length;
 use stave_lang::{Code, Diagnostic, Label, Severity};
 use stave_model::defs::CutName;
-use stave_model::solved::{BodyOwner, Cut, CutSource, End, LocalFace, Part, PartId, WallRule};
+use stave_model::solved::{BodyOwner, Cut, CutSource, End, LocalFace, Part, PartId};
 
 use crate::names::{and_list, length_text};
 use crate::{Checker, Contact, Item};
@@ -82,7 +83,8 @@ fn body_owner(source: CutSource) -> Option<BodyOwner> {
 pub(crate) struct SizeProblem {
     part: PartId,
     source: CutSource,
-    cut: Option<CutName>,
+    /// The cut says its own `wall:`, which is measured first.
+    walled: bool,
     message: String,
     help: String,
 }
@@ -171,9 +173,9 @@ impl Checker<'_> {
     // 1 and 2. Cuts only remove wood; stopped cuts leave wood behind
     // -----------------------------------------------------------------------
 
-    /// Cuts too big or too deep. A cut that a rule of its own kind
-    /// measures with `wall()` is held back until that rule has had its say
-    /// ([`Checker::held_back_cut_sizes`]): the kind's words come first.
+    /// Cuts too big or too deep. A cut that says its own `wall:` is held
+    /// back until that is measured ([`Checker::held_back_cut_sizes`]),
+    /// which says more.
     pub(crate) fn cut_sizes(&mut self) {
         let mut found: Vec<SizeProblem> = Vec::new();
         for (part, solid) in self.design.parts().iter().zip(&self.solids) {
@@ -210,7 +212,7 @@ impl Checker<'_> {
                     found.push(SizeProblem {
                         part: part.id,
                         source: cut.source,
-                        cut: cut.name.clone(),
+                        walled: cut.wall.is_some(),
                         message,
                         help,
                     });
@@ -230,7 +232,7 @@ impl Checker<'_> {
                     found.push(SizeProblem {
                         part: part.id,
                         source: cut.source,
-                        cut: cut.name.clone(),
+                        walled: cut.wall.is_some(),
                         message: format!(
                             "{owner}: its {noun} in {} is {depth} deep, but {} is only {there} {word} there",
                             part.name, part.name
@@ -243,10 +245,7 @@ impl Checker<'_> {
             }
         }
         for problem in found {
-            let measured = self.design.wall_rules.iter().any(|rule| {
-                rule.source == problem.source && problem.cut.as_ref() == Some(&rule.cut)
-            });
-            if measured {
+            if problem.walled {
                 self.held_back.push(problem);
             } else {
                 self.report_size(problem);
@@ -254,9 +253,8 @@ impl Checker<'_> {
         }
     }
 
-    /// The cuts too big or too deep that a wall rule of their own kind
-    /// measures, once those rules have run: reported only when the rule
-    /// didn't already say so.
+    /// The cuts too big or too deep that say their own `wall:`, once those
+    /// are measured: reported only when the wall didn't already say so.
     pub(crate) fn held_back_cut_sizes(&mut self) {
         for problem in std::mem::take(&mut self.held_back) {
             if self.wall_failed.contains(&problem.source)
@@ -293,7 +291,7 @@ impl Checker<'_> {
     }
 
     // -----------------------------------------------------------------------
-    // 3 and 4. Wall rules, and closed cuts keep a wall
+    // 3 and 4. Each cut's wall, and closed cuts keep a wall
     // -----------------------------------------------------------------------
 
     pub(crate) fn walls(&mut self) {
@@ -307,9 +305,7 @@ impl Checker<'_> {
                 .zip(&solids)
                 .map(|(part, solid)| Walls::of(part, design, solid))
                 .collect();
-            for rule in &design.wall_rules {
-                self.wall_rule(rule, &walls);
-            }
+            self.cut_walls(&walls);
             self.held_back_cut_sizes();
             self.closed_cuts(&walls);
         }
@@ -317,116 +313,123 @@ impl Checker<'_> {
         self.whole_parts();
     }
 
-    /// One kind's rule that reads `wall(cut)`, for one pair or piece of
-    /// hardware: the least wall round every copy of the cut.
-    fn wall_rule(&mut self, rule: &WallRule, walls: &[Walls<'_>]) {
-        let mut least: Option<(PartId, Wall, usize)> = None;
-        let mut copies = 0usize;
+    /// Every cut that says its own `wall:` leaves at least that much wood
+    /// round it (grammar, "Walls"): to every face it isn't open to and to
+    /// every other cut of its part. Reported once for a pair or piece of
+    /// hardware, at its line, the other pairs of the same line as notes.
+    fn cut_walls(&mut self, walls: &[Walls<'_>]) {
+        struct Thin {
+            part: PartId,
+            index: usize,
+            wall: Wall,
+            needs: Length,
+        }
+        let mut thin: Vec<(CutSource, Thin)> = Vec::new();
+        let mut unmeasured: Vec<(CutSource, String)> = Vec::new();
         for (part, part_walls) in self.design.parts().iter().zip(walls) {
             for (index, cut) in part.cuts.iter().enumerate() {
-                if cut.source != rule.source || cut.name.as_ref() != Some(&rule.cut) {
+                let Some(needs) = cut.wall else {
                     continue;
-                }
-                copies += 1;
-                if self.already_failed(part.id, rule.source) {
-                    return;
+                };
+                if self.already_failed(part.id, cut.source)
+                    || thin.iter().any(|(source, _)| *source == cut.source)
+                {
+                    continue;
                 }
                 // A cut whose joint or hardware already overlaps something
-                // is left to that overlap, which names what collides.
+                // is left to that overlap, which names what collides. The
+                // other cuts of the same pair or piece of hardware are made
+                // with it (a counterbore and its shank hole) and are no
+                // walls to it; its own copies are (a row of dowel holes).
                 let skip = |other: usize| {
-                    part.cuts
-                        .get(other)
-                        .is_some_and(|other| self.owner_overlaps(other.source))
+                    part.cuts.get(other).is_some_and(|other| {
+                        self.owner_overlaps(other.source)
+                            || (other.source == cut.source
+                                && (other.name != cut.name
+                                    || other.kind.operation() != cut.kind.operation()))
+                    })
                 };
                 let Some(wall) = part_walls.wall(index, skip) else {
+                    if !unmeasured.iter().any(|(source, _)| *source == cut.source) {
+                        unmeasured.push((cut.source, cut_noun(cut)));
+                    }
                     continue;
                 };
-                if least.is_none_or(|(_, best, _)| wall.least < best.least) {
-                    least = Some((part.id, wall, index));
+                if wall.least >= needs {
+                    continue;
                 }
+                thin.push((
+                    cut.source,
+                    Thin {
+                        part: part.id,
+                        index,
+                        wall,
+                        needs,
+                    },
+                ));
             }
         }
-        let rule_place = self
-            .model
-            .defs
-            .kind(rule.kind)
-            .and_then(|kind| kind.require(rule.require))
-            .map(|require| (require.decl.file, require.decl.span));
-        let Some((part_id, wall, index)) = least else {
-            if copies > 0
-                && let Some((file, span)) = rule_place
-            {
-                let mut diagnostic = Diagnostic::error(
-                    Code::NotSupported,
-                    format!(
-                        "measuring wall({}) is not supported yet",
-                        rule.cut.as_str()
-                    ),
-                    Label::new(file, span),
-                )
-                .with_help("Stave doesn't measure the wall round dovetails, outlines, angled slots or the cuts between boards yet; this rule is left out");
-                diagnostic.severity = Severity::Warning;
-                self.diagnostics.push((diagnostic, None));
+        for (source, noun) in unmeasured {
+            let Some((file, span)) = self.source_place(source) else {
+                continue;
+            };
+            let mut diagnostic = Diagnostic::warning(
+                Code::NotSupported,
+                format!("measuring the wall round {noun} is not supported yet"),
+                Label::new(file, span),
+            )
+            .with_help("Stave doesn't measure the wall round dovetails, outlines, angled slots or the cuts between boards yet; this cut's wall: is not checked");
+            diagnostic.severity = Severity::Warning;
+            self.diagnostics.push((diagnostic, None));
+        }
+        for (source, found) in thin {
+            if !self.wall_failed.contains(&source) {
+                self.wall_failed.push(source);
             }
-            return;
-        };
-        if rule.compare.holds(wall.least, rule.needs) {
-            return;
-        }
-        if !self.wall_failed.contains(&rule.source) {
-            self.wall_failed.push(rule.source);
-        }
-        let Some(part) = self.design.part(part_id) else {
-            return;
-        };
-        let Some((file, span)) = self.source_place(rule.source) else {
-            return;
-        };
-        let message = format!("'{}' fails: {}", rule.name, rule.message);
-        let pair = self.source_pair(rule.source);
-        // One mistake, one error: another pair of the same joint breaking
-        // the same rule is a note on the first.
-        if let Some((earlier, _)) = self.diagnostics.iter_mut().find(|(d, _)| {
-            d.code == Code::Require
-                && d.message == message
-                && d.primary()
-                    .is_some_and(|label| label.file == file && label.span == span)
-        }) {
-            let note = format!("the same for {pair}");
-            if !earlier.notes.contains(&note) {
-                earlier.notes.push(note);
+            let Some(part) = self.design.part(found.part) else {
+                continue;
+            };
+            let Some((file, span)) = self.source_place(source) else {
+                continue;
+            };
+            let pair = self.source_pair(source);
+            // One mistake, one error: another pair of the same line with a
+            // wall too thin is a note on the first.
+            if let Some((earlier, _)) = self.diagnostics.iter_mut().find(|(d, _)| {
+                d.code == Code::Wall
+                    && d.primary()
+                        .is_some_and(|label| label.file == file && label.span == span)
+            }) {
+                let note = format!("the same for {pair}");
+                if !earlier.notes.contains(&note) {
+                    earlier.notes.push(note);
+                }
+                continue;
             }
-            return;
+            let owner = self.source_name(source);
+            let noun = part.cuts.get(found.index).map(cut_noun).unwrap_or_default();
+            let place = self.wall_place(part, &found.wall);
+            let needs = length_text(found.needs);
+            let message = match found.wall.past {
+                Some(past) => format!(
+                    "{owner}: its {noun} in {} runs {} past {place}; it needs {needs} of wood there",
+                    part.name,
+                    length_text(past)
+                ),
+                None => format!(
+                    "{owner}: its {noun} in {} leaves {} of wood at {place}; it needs {needs}",
+                    part.name,
+                    length_text(found.wall.least)
+                ),
+            };
+            let diagnostic = Diagnostic::error(Code::Wall, message, Label::new(file, span))
+                .with_note(format!("for {pair}"))
+                .with_help(format!(
+                    "move the parts so the {noun} has {needs} of wood round it, or change the joint's settings"
+                ));
+            let contact = Contact::of(self.design, &[Item::Part(found.part)], &[]);
+            self.diagnostics.push((diagnostic, Some(contact)));
         }
-        let noun = part.cuts.get(index).map(cut_noun).unwrap_or_default();
-        let place = self.wall_place(part, &wall);
-        let help = match wall.past {
-            Some(past) => format!(
-                "the {noun} in {} runs {} past {place}; move the parts so the {noun} has wood all round it, or change the joint's settings",
-                part.name,
-                length_text(past)
-            ),
-            None => format!(
-                "the {noun} in {} leaves {} of wood at {place}; move the parts so the {noun} has more wood round it, or change the joint's settings",
-                part.name,
-                length_text(wall.least)
-            ),
-        };
-        let mut diagnostic = Diagnostic::error(Code::Require, message, Label::new(file, span))
-            .with_note(format!("for {pair}"))
-            .with_note(format!(
-                "the rule measures {} and needs {} {}",
-                length_text(wall.least),
-                rule.compare.phrase(),
-                length_text(rule.needs)
-            ))
-            .with_help(help);
-        if let Some((rule_file, rule_span)) = rule_place {
-            diagnostic =
-                diagnostic.with_label(Label::with_message(rule_file, rule_span, "the kind's rule"));
-        }
-        let contact = Contact::of(self.design, &[Item::Part(part_id)], &[]);
-        self.diagnostics.push((diagnostic, Some(contact)));
     }
 
     /// Every `drill` and `pocket` keeps wood between it and every face it

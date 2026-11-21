@@ -44,11 +44,11 @@ kind chidori : joint {
   // Each is bored down through where the lock passes, and slotted from the
   // hole out to the corner, on the diagonal of the lock's section.
   cut first_lock_hole: crossing(first, lock, normal: thickness) {
-    drill(diameter: round_diameter, depth: through)
+    drill(diameter: round_diameter, depth: through, wall: 3mm)
     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
   cut second_lock_hole: crossing(second, lock, normal: thickness) {
-    drill(diameter: round_diameter, depth: through)
+    drill(diameter: round_diameter, depth: through, wall: 3mm)
     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
 

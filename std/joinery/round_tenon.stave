@@ -16,7 +16,6 @@ kind round_tenon : joint {
 
   // tenon_fits: the patch where the parts touch is as wide as the end of
   // the piece; for a turned piece, its profile's diameter at that end.
-  require hole_wall  : wall(hole) >= wall "the hole for the tenon comes too close to a face of the board or another cut"
   require tenon_fits : diameter <= contact(piece, into).width - 2 * shoulder "the tenon is too thick for the end of the part"
 
   insert:    [push(piece, along: length)]
@@ -27,7 +26,7 @@ kind round_tenon : joint {
     spigot(diameter: diameter, length: length)
   }
   cut hole: crossing(into, piece) {
-    drill(diameter: diameter, depth: length)
+    drill(diameter: diameter, depth: length, wall: wall)
   }
 
   note: "The tenon should push in by hand; cut a glue groove along it so trapped glue can escape"

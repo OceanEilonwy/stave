@@ -2,7 +2,7 @@ stave 1
 
 kind housing : joint {
   cut housing: crossing(into, piece) {
-    drill(diameter: 8mm, depth: $0)
+    drill(diameter: 8mm, depth: $0, wall: 0mm)
   }
 }
 // expect: through

@@ -17,8 +17,6 @@ kind lap_splice : joint {
 
   require same_section : piece.width == into.width && piece.thickness == into.thickness "both boards need the same width and thickness"
   require room         : lap <= piece.length / 3 && lap <= into.length / 3 "the lap is too long for these boards"
-  require lap_clear    : wall(lap) >= wall "another cut comes too close to the lap"
-  require mating_clear : wall(mating_lap) >= wall "another cut comes too close to the lap"
 
   // The boards are drawn meeting end to end; each reaches half the lap past
   // that point, so they overlap by the whole lap.
@@ -27,10 +25,10 @@ kind lap_splice : joint {
   cut_first: [into, piece]
 
   cut lap: crossing(piece, into, normal: thickness) {
-    notch(depth: piece.thickness / 2)
+    notch(depth: piece.thickness / 2, wall: wall)
   }
   cut mating_lap: crossing(into, piece, normal: thickness, opposite: true) {
-    notch(depth: into.thickness / 2)
+    notch(depth: into.thickness / 2, wall: wall)
   }
 
   note: "Saw both shoulders square and pare the cheeks flat; glue and clamp the lap with a straight batten along the faces so the part stays straight"

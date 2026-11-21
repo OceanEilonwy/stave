@@ -194,6 +194,7 @@ fn outline(part: PartId, name: &str, across: PartAxis, marks: Vec<Mark>) -> Cut 
             depth: Depth::Through,
             from_depth: Length::ZERO,
         },
+        wall: None,
     }
 }
 
