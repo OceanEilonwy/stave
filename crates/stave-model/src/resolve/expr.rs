@@ -765,6 +765,7 @@ impl Resolver<'_> {
             | Ty::Envelope
             | Ty::Model
             | Ty::Spacing
+            | Ty::Member
             | Ty::Word(_)
             | Ty::Tool
             | Ty::Recipe
@@ -904,6 +905,7 @@ impl Resolver<'_> {
             | Ty::Envelope
             | Ty::Model
             | Ty::Spacing
+            | Ty::Member
             | Ty::Word(_)
             | Ty::Kind(_)
             | Ty::Tool
@@ -1609,6 +1611,12 @@ impl Resolver<'_> {
                 "a part or a contact patch",
             ),
             (Builtin::Extent, _) => (value.ty.fits(&Ty::Parts), "parts"),
+            // `contact(member, b)` in a hardware kind's `require` (grammar,
+            // "Built-in functions").
+            (Builtin::Contact, "a") => (
+                value.ty == Ty::Member || value.ty.fits(&Ty::Parts),
+                "a part or one of the kind's members",
+            ),
             // One part each; a role of type `Parts` is one part per pair.
             (Builtin::Contact | Builtin::EdgeToEdge, _) => (value.ty.fits(&Ty::Parts), "a part"),
             (
@@ -1832,6 +1840,7 @@ fn describe_symbol(symbol: Symbol) -> &'static str {
         Symbol::KindParam(..) => "param",
         Symbol::MadePart(..) => "made part",
         Symbol::Mount(..) => "mount face",
+        Symbol::Member(..) => "member",
     }
 }
 
@@ -1842,7 +1851,7 @@ fn member_help(ty: &Ty) -> String {
         Ty::Stock => "a stock has species, form, thickness, diameter, width, max_width and max_length".into(),
         Ty::Profile => "a profile has length".into(),
         Ty::Patch => "a contact patch has length (its longer side) and width (its shorter side)".into(),
-        Ty::Length | Ty::Angle | Ty::Ratio | Ty::Count | Ty::Bool | Ty::Text | Ty::Parts | Ty::Regions | Ty::Anchor | Ty::Mount | Ty::Shape | Ty::Boards | Ty::Splices | Ty::Envelope | Ty::Model | Ty::Spacing | Ty::Word(_) | Ty::Kind(_) | Ty::Tool | Ty::Recipe | Ty::Assembly(_) | Ty::Joint | Ty::Hardware | Ty::Array(_) | Ty::List(_) | Ty::Fit | Ty::Unknown => format!("{ty} has no readable fields here"),
+        Ty::Length | Ty::Angle | Ty::Ratio | Ty::Count | Ty::Bool | Ty::Text | Ty::Parts | Ty::Regions | Ty::Anchor | Ty::Mount | Ty::Shape | Ty::Boards | Ty::Splices | Ty::Envelope | Ty::Model | Ty::Spacing | Ty::Member | Ty::Word(_) | Ty::Kind(_) | Ty::Tool | Ty::Recipe | Ty::Assembly(_) | Ty::Joint | Ty::Hardware | Ty::Array(_) | Ty::List(_) | Ty::Fit | Ty::Unknown => format!("{ty} has no readable fields here"),
     }
 }
 

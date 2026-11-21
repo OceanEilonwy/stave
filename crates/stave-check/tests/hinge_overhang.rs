@@ -1,17 +1,20 @@
-//! Issue #78: a piece of hardware whose member hangs almost entirely off the
-//! part that carries it is accepted, and `no-contact` fires only once the
-//! member leaves the part completely.
+//! Issue #78: a butt hinge whose leaf hangs off the end of the part it is
+//! housed in. The hardware contact rule asks only that a member meet its
+//! part somewhere; `butt_hinge`'s `fixed_leaf_on_wood` rule, written with
+//! `contact(member, b)` (grammar, "Built-in functions"), keeps the leaf
+//! wholly on the wood.
 //!
 //! The design: a 900mm wall, a lid lying on its top edge flush with its
 //! right end, and two butt hinges spaced 25mm in from the lid's ends. A lid
-//! longer than 925mm carries its left hinge past the wall's left end.
+//! longer than 925mm carries its left hinge past the wall's left end: the
+//! left leaf runs from `925mm - lid` to `965mm - lid` past it.
 
 mod common;
 
 use common::{Checked, check, mm};
-use stave_lang::Code;
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
+use stave_lang::{Code, Diagnostic};
 use stave_model::solved::{MemberShape, SolvedDesign};
 
 fn design(lid_length_mm: i64) -> String {
@@ -79,100 +82,111 @@ fn fixed_leaf_on_wall(design: &SolvedDesign, which: &str) -> (Length, Length) {
     (on_wall, leaf_box.size(axis))
 }
 
-fn codes(checked: &Checked) -> Vec<String> {
+/// The errors of a design.
+fn errors(checked: &Checked) -> Vec<&Diagnostic> {
     checked
         .diagnostics
         .iter()
-        .map(|d| format!("{}[{}] {}", d.severity, d.code, d.message))
+        .filter(|d| d.is_error())
         .collect()
 }
 
-/// The control: a lid no longer than the wall less the inset keeps both
-/// leaves wholly on the wall, and the design is clean.
+/// The one error of a design, which must have exactly one.
+fn only_error(lid: i64) -> Diagnostic {
+    let checked = check(&design(lid));
+    let errors = errors(&checked);
+    let [error] = errors.as_slice() else {
+        panic!("lid {lid}: {errors:#?}");
+    };
+    (*error).clone()
+}
+
+/// Both leaves wholly on the wall: clean, up to the last millimetre.
 #[test]
 fn both_leaves_wholly_on_the_wall_is_clean() {
-    let checked = check(&design(900));
-    let design = checked.clean();
-    for which in ["left", "right"] {
-        let (on_wall, length) = fixed_leaf_on_wall(design, which);
-        assert_eq!(on_wall, length, "hinges[{which}]");
-        assert_eq!(length, mm(40));
-    }
-}
-
-/// Probe: at 960mm the left leaf's shape is the full 40mm but only 5mm of
-/// it lies over the wall. The member itself is not moved or clipped; only
-/// its mortise is (the footprint is "the region the shape's box and the
-/// part's cut box share", grammar, "Faces to cut").
-#[test]
-fn probe_the_left_leaf_is_5mm_on_the_wall_at_960mm() {
-    let checked = check(&design(960));
-    let design = checked.design.as_ref().expect("solved");
-    assert_eq!(fixed_leaf_on_wall(design, "left"), (mm(5), mm(40)));
-    assert_eq!(fixed_leaf_on_wall(design, "right"), (mm(40), mm(40)));
-}
-
-/// Probe: where the check flips. `no-contact` comes only when nothing of
-/// the leaf is left on the wall: the solver's `check_contact` asks that a
-/// member "touches or enters" its part (`meets`: the boxes share an area),
-/// which a 1mm sliver does.
-#[test]
-fn probe_no_contact_fires_only_once_the_leaf_is_wholly_off() {
-    let no_contact = |lid: i64| {
-        check(&design(lid))
-            .diagnostics
-            .iter()
-            .any(|d| d.code == Code::NoContact)
-    };
-    // The lid's right end is flush with the wall's, so the left leaf runs
-    // from 925mm - lid to 965mm - lid past the wall's left end: 1mm on the
-    // wall at 964mm, none at 965mm.
-    let mut rows = Vec::new();
-    for lid in [924, 925, 940, 960, 964, 965, 966, 970, 979, 980, 981] {
+    for lid in [900, 925] {
         let checked = check(&design(lid));
-        let on_wall = checked
-            .design
-            .as_ref()
-            .map(|design| fixed_leaf_on_wall(design, "left").0.to_mm_f64());
-        rows.push(format!(
-            "lid {lid}: left leaf on wall {on_wall:?}mm, no-contact {}",
-            no_contact(lid)
-        ));
+        let design = checked.clean();
+        for which in ["left", "right"] {
+            assert_eq!(
+                fixed_leaf_on_wall(design, which),
+                (mm(40), mm(40)),
+                "lid {lid}, hinges[{which}]"
+            );
+        }
     }
-    eprintln!("{}", rows.join("\n"));
-    let checked = check(&design(964));
-    let design = checked.design.as_ref().expect("solved");
-    assert_eq!(fixed_leaf_on_wall(design, "left"), (mm(1), mm(40)));
-    assert!(!no_contact(964), "1mm on the wall passes the contact rule");
 }
 
-/// At 965mm the left leaf is wholly off the wall: its end face only lies
-/// on the wall's end face. `meets` counts that as touching (the boxes
-/// share an area on two axes), so `no-contact` stays quiet, and
-/// `crossing_face` picks the wall's end, where the mortise becomes a notch
-/// in the end grain 0mm long. It fails today: nothing is reported.
+/// A leaf part way off the wall breaks the kind's rule, at the hardware
+/// call, measuring how much of the leaf the wall holds along its length.
 #[test]
-#[ignore = "issue #78: fails until hardware checks a member is supported by its part"]
-fn a_leaf_touching_only_the_walls_end_is_reported() {
-    let checked = check(&design(965));
-    let design = checked.design.as_ref().expect("solved");
-    assert_eq!(fixed_leaf_on_wall(design, "left"), (mm(0), mm(40)));
-    assert!(
-        !codes(&checked).is_empty(),
-        "hinges[left]'s fixed_leaf lies wholly off the wall, and nothing is reported"
-    );
-}
-
-/// The behaviour issue #78 asks for: a hardware member that hangs off the
-/// part carrying it (here 35mm of a 40mm leaf over air) is reported. It
-/// fails today: the design checks with no diagnostics at all.
-#[test]
-#[ignore = "issue #78: fails until hardware checks a member is supported by its part"]
 fn a_leaf_hanging_off_its_wall_is_reported() {
-    let checked = check(&design(960));
-    let messages = codes(&checked);
+    for (lid, held) in [(926, "39mm"), (960, "5mm"), (964, "1mm")] {
+        let error = only_error(lid);
+        assert_eq!(error.code, Code::Require, "lid {lid}");
+        assert_eq!(
+            error.message,
+            "'fixed_leaf_on_wood' fails: the hinge's leaf hangs off the end of the part it is housed in"
+        );
+        assert!(
+            error.notes.contains(&"for hinges[left]".to_owned()),
+            "{:?}",
+            error.notes
+        );
+        assert!(
+            error
+                .notes
+                .contains(&format!("the rule measures {held} and needs at least 40mm")),
+            "lid {lid}: {:?}",
+            error.notes
+        );
+        let help = format!(
+            "wall holds only {held} of the 40mm fixed_leaf; place the hardware so its fixed_leaf lies wholly on wall"
+        );
+        assert_eq!(error.help.as_deref(), Some(help.as_str()), "lid {lid}");
+    }
+}
+
+/// At 965mm the leaf lies wholly off the wall, its end only touching the
+/// wall's end. The hardware contact rule still counts that as meeting;
+/// `contact(fixed_leaf, on)` is the 12mm x 1.5mm end the two touch on, so
+/// the rule fails at the hardware call and says only the end touches
+/// (before the rule, a 0mm notch was cut in the wall's end grain).
+#[test]
+fn a_leaf_touching_only_the_walls_end_is_reported() {
+    let error = only_error(965);
+    assert_eq!(error.code, Code::Require);
+    assert_eq!(
+        error.message,
+        "'fixed_leaf_on_wood' fails: the hinge's leaf hangs off the end of the part it is housed in"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "only the end of the fixed_leaf touches wall; place the hardware so its fixed_leaf lies wholly on wall"
+        )
+    );
     assert!(
-        !messages.is_empty(),
-        "hinges[left]'s fixed_leaf has 35mm of its 40mm over air, and nothing is reported"
+        error.notes.contains(&"for hinges[left]".to_owned()),
+        "{:?}",
+        error.notes
+    );
+    let [call, rule] = error.labels.as_slice() else {
+        panic!(
+            "the hardware call, then the kind's rule: {:?}",
+            error.labels
+        );
+    };
+    assert_ne!(call.file, rule.file);
+}
+
+/// Wholly off the wall, the hardware contact rule reports it as before.
+#[test]
+fn a_leaf_wholly_off_its_wall_meets_nothing() {
+    let error = only_error(1200);
+    assert_eq!(error.code, Code::NoContact);
+    assert_eq!(
+        error.message,
+        "hinges[left]: lid meets none of the parts it should join"
     );
 }

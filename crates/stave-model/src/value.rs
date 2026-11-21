@@ -494,6 +494,25 @@ impl Patch {
         })
     }
 
+    /// The patch covering `area`, square to `normal`, its length along
+    /// `length_axis` whichever side is longer (`contact(member, b)`
+    /// measures along the member's own length); `None` when it has no
+    /// area or `length_axis` is the normal.
+    pub fn along(area: ExactBox, normal: Axis, length_axis: Axis) -> Option<Patch> {
+        let width_axis = normal.third(length_axis)?;
+        let (length_size, width_size) = (area.size(length_axis)?, area.size(width_axis)?);
+        if length_size <= ExactLength::ZERO || width_size <= ExactLength::ZERO {
+            return None;
+        }
+        Some(Patch {
+            area,
+            normal,
+            length_axis,
+            width_axis,
+            toward_positive: true,
+        })
+    }
+
     /// The same patch, with the second part on the `positive` side of the
     /// first along the normal (the default) or on the negative side.
     pub fn facing(self, positive: bool) -> Patch {

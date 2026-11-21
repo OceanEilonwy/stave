@@ -80,6 +80,10 @@ pub enum Symbol {
     /// `mount` in a slide, hinge or pull kind: the face of its piece the
     /// hardware is mounted on, as an anchor; bound per piece of hardware.
     Mount(KindId),
+    /// One of a slide, hinge or pull kind's members with a body, read only
+    /// as the first argument of `contact` in a `require`; placed per piece
+    /// of hardware.
+    Member(KindId, BodyId),
 }
 
 /// Where a declaration lives.

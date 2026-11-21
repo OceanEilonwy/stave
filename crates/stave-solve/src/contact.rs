@@ -11,7 +11,7 @@ use stave_lang::Code;
 use stave_lang::ast::{BinaryOp, Span};
 use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::Rational;
-use stave_model::defs::{BuiltinCall, Member, RExpr, RExprKind, Symbol};
+use stave_model::defs::{BodyId, BuiltinCall, Member, RExpr, RExprKind, Symbol};
 use stave_model::ids::PartId;
 use stave_model::value::{ExactBox, Patch, Value};
 use stave_schema::functions::{Builtin, PatchSize};
@@ -90,6 +90,24 @@ fn patch_size_read(expr: &RExpr) -> Option<(&RExpr, &RExpr, PatchSize)> {
     }
 }
 
+/// The patch of `contact(member, b)`: where the member's box lies in or on
+/// `part`, its length along the member's longer side in the patch's plane.
+/// Where the two only touch, the patch is the face they touch on; where
+/// they share wood (a leaf in its mortise), it is seen square to the mount
+/// face, on the axis `mount`.
+fn member_patch(member: &ExactBox, part: &ExactBox, mount: Axis) -> Option<Patch> {
+    let area = member.intersection(part);
+    let normal = member.touching_axis(part).unwrap_or(mount);
+    let mut along = Axis::ALL.into_iter().filter(|axis| *axis != normal);
+    let (first, second) = (along.next()?, along.next()?);
+    let length_axis = if member.size(second)? > member.size(first)? {
+        second
+    } else {
+        first
+    };
+    Patch::along(area, normal, length_axis)
+}
+
 /// The kind params an expression reads, by index, in the order they are
 /// first written.
 fn params_read(expr: &RExpr, out: &mut Vec<usize>) {
@@ -121,7 +139,11 @@ fn params_read(expr: &RExpr, out: &mut Vec<usize>) {
             }
         }
         RExprKind::Symbol(
-            Symbol::Def(_) | Symbol::Role(..) | Symbol::MadePart(..) | Symbol::Mount(_),
+            Symbol::Def(_)
+            | Symbol::Role(..)
+            | Symbol::MadePart(..)
+            | Symbol::Mount(_)
+            | Symbol::Member(..),
         )
         | RExprKind::Length(_)
         | RExprKind::Angle(_)
@@ -190,6 +212,59 @@ impl Solver<'_> {
         };
         Err(self
             .error(Code::NoContact, message, env.file, span, help)
+            .into())
+    }
+
+    /// `contact(member, b)` in a hardware kind's `require`: where the box
+    /// around the member's shapes at rest lies in or on `b`'s drawn box,
+    /// seen square to the mount face, or `error[no-contact]` (grammar,
+    /// "Built-in functions").
+    pub(crate) fn member_contact(
+        &mut self,
+        body: BodyId,
+        member_span: Span,
+        part: PartId,
+        env: &Env<'_>,
+        span: Span,
+    ) -> Solved<Patch> {
+        let placed = env
+            .kind
+            .and_then(|kind_env| Some((kind_env.kind, kind_env.members?, kind_env.mount?)));
+        let Some((kind, members, mount)) = placed else {
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    "a member is read only as the first argument of contact in a require",
+                    env.file,
+                    member_span,
+                    "a member has a place only where a piece of hardware is placed: use contact(member, part) in the kind's require entries",
+                )
+                .into());
+        };
+        let Some((_, member_box)) = members.iter().find(|(id, _)| *id == body) else {
+            return Err(Fault::Internal("a member's place at rest").into());
+        };
+        let part_box = self.drawn_box(part)?;
+        if let Some(patch) = member_patch(member_box, &part_box, mount.axis) {
+            return Ok(patch);
+        }
+        let member_name = self
+            .sound(self.model.defs.sound_kind(kind), "a kind's declaration")?
+            .bodies
+            .get(body.index())
+            .map(|def| def.name.as_str().to_owned())
+            .ok_or(Fault::Internal("a member of a kind"))?;
+        let part_name = self.part_name(part);
+        Err(self
+            .error(
+                Code::NoContact,
+                format!("{member_name} and {part_name} don't touch"),
+                env.file,
+                span,
+                format!(
+                    "contact measures where the member lies on the part; place the hardware so its {member_name} lies on {part_name}"
+                ),
+            )
             .into())
     }
 
@@ -345,6 +420,9 @@ impl Solver<'_> {
     pub(crate) fn contact_help(&mut self, condition: &RExpr, env: &Env<'_>) -> Option<String> {
         let comparison = self.failing_comparison(condition, env)?;
         let (a, b, size) = patch_size_read(comparison)?;
+        if let RExprKind::Symbol(Symbol::Member(_, body)) = &a.kind {
+            return self.member_contact_help(*body, b, size, env);
+        }
         let a = self.eval(a, env).ok()?.parts()?;
         let b = self.eval(b, env).ok()?.parts()?;
         let (&[a], &[b]) = (a.as_slice(), b.as_slice()) else {
@@ -372,6 +450,61 @@ impl Solver<'_> {
             "{other_name} covers only {} of {short_name}'s {} {surface}; move or resize {other_name} so it covers the whole {surface}",
             self.describe(&Value::Length(covered)),
             self.describe(&Value::Length(short_size)),
+        ))
+    }
+
+    /// For a failed rule that reads `contact(member, b).length` or
+    /// `.width` where the member runs off `b`: how much of the member `b`
+    /// holds along that side, and what to change.
+    fn member_contact_help(
+        &mut self,
+        body: BodyId,
+        part: &RExpr,
+        size: PatchSize,
+        env: &Env<'_>,
+    ) -> Option<String> {
+        let kind_env = env.kind?;
+        let (members, mount) = (kind_env.members?, kind_env.mount?);
+        let (_, member_box) = members.iter().find(|(id, _)| *id == body)?;
+        let part = self.eval(part, env).ok()?.parts()?;
+        let &[part] = part.as_slice() else {
+            return None;
+        };
+        let part_box = self.drawn_box(part).ok()?;
+        let patch = member_patch(member_box, &part_box, mount.axis)?;
+        let axis = patch.size_axis(size);
+        let (covered, whole) = (patch.size(size), member_box.size(axis)?);
+        // Touching on the face square to the member's longest side: only
+        // its end meets the part (a leaf just past the end of a side).
+        let normal = patch.normal();
+        let longest = Axis::ALL
+            .into_iter()
+            .filter(|other| *other != normal)
+            .all(|other| member_box.size(other) <= member_box.size(normal));
+        let end_only = normal != mount.axis && longest;
+        if covered >= whole && !end_only {
+            return None;
+        }
+        let member_name = self
+            .model
+            .defs
+            .sound_kind(kind_env.kind)
+            .ok()?
+            .bodies
+            .get(body.index())?
+            .name
+            .as_str()
+            .to_owned();
+        let part_name = self.part_name(part);
+        if end_only {
+            return Some(format!(
+                "only the end of the {member_name} touches {part_name}; place the hardware so its {member_name} lies wholly on {part_name}"
+            ));
+        }
+        Some(format!(
+            "{part_name} holds only {} of the {} {member_name}; place the hardware so its {member_name} lies wholly on {part_name}",
+            self.describe(&Value::Length(covered)),
+            self.describe(&Value::Length(whole)),
         ))
     }
 

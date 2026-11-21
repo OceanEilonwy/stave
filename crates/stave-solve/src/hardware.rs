@@ -633,6 +633,18 @@ impl Solver<'_> {
             None => (None, None),
         };
         let members = self.placed_members(kind, &roles, &bodies, &frame)?;
+        // Each member's box at rest, for `contact(member, b)`.
+        let mut member_boxes = Vec::with_capacity(bodies.len());
+        for placed in &bodies {
+            let mut shapes = placed.shapes.iter().map(|shape| shape.world);
+            let Some(first) = shapes.next() else {
+                continue;
+            };
+            member_boxes.push((
+                placed.body,
+                shapes.fold(first, |all, one| around(&all, &one)),
+            ));
+        }
         // The kind's rules where it is placed: its adjustments and requires.
         let (settings, rules) = self.hardware_rules(
             Call {
@@ -645,7 +657,10 @@ impl Solver<'_> {
             kind,
             &hardware_kind.adjusts,
             &offsets,
-            mount_anchor,
+            crate::rules::AtRest {
+                mount: mount_anchor,
+                members: &member_boxes,
+            },
         )?;
         Ok(Placed {
             kind: binding.kind,
@@ -2089,6 +2104,12 @@ pub(crate) fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldSha
 }
 
 /// `true` when two boxes touch over an area or overlap.
+/// The smallest box holding both.
+fn around(a: &ExactBox, b: &ExactBox) -> ExactBox {
+    let span = |axis: Axis| (a.min(axis).min(b.min(axis)), a.max(axis).max(b.max(axis)));
+    ExactBox::new(span(Axis::Across), span(Axis::Up), span(Axis::Deep))
+}
+
 fn meets(a: &ExactBox, b: &ExactBox) -> bool {
     let mut strict = 0;
     for axis in Axis::ALL {

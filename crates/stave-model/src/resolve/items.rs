@@ -1756,6 +1756,7 @@ fn is_scene_items(ty: &Ty) -> bool {
         | Ty::Splices
         | Ty::Envelope
         | Ty::Model
+        | Ty::Member
         | Ty::Spacing
         | Ty::Patch
         | Ty::Word(_)

@@ -1,0 +1,53 @@
+stave 1
+
+project "Slide overhang" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
+stock ply_12 { species: birch, form: plywood, thickness: 12mm, max_length: 2440mm }
+
+/// The cabinet side.
+part cab_l : ply_18 {
+  length: 400mm
+  width:  600mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part cab_r : ply_18 {
+  length: 400mm
+  width:  600mm
+  loose:  true
+  place {
+    orient(length: up, width: back)
+    against(cab_l.right, gap: 400mm)
+    flush(cab_l.bottom)
+    flush(cab_l.front)
+  }
+}
+
+region bay = opening(
+  left:   cab_l.right,
+  right:  cab_r.left,
+  bottom: cab_l.bottom,
+  top:    cab_l.top,
+  front:  cab_l.front,
+  back:   cab_l.back,
+)
+
+/// The drawer box's left side, 12.7mm clear of the cabinet side.
+part drawer_side : ply_12 {
+  length: 500mm
+  width:  100mm
+  place {
+    orient(length: back, width: up)
+    against(cab_l.right, gap: 12.7mm)
+    flush(cab_l.bottom, inset: 100mm)
+    flush(cab_l.front, inset: 20mm)
+  }
+}
+
+hardware slide : side_mount_slide(drawer_side, in: bay, length: 500mm)

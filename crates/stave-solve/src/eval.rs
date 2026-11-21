@@ -8,7 +8,7 @@ use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    ArrayDef, BaseEntry, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind,
+    ArrayDef, BaseEntry, BodyId, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind,
     SplitBy, StockField, StockSectionDef, Symbol, Text, TextPart, Word,
 };
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
@@ -91,6 +91,10 @@ pub(crate) struct KindEnv<'e> {
     /// For a piece of hardware once it is placed: its mount face, as an
     /// anchor (`mount` in its kind's rules).
     pub mount: Option<AnchorValue>,
+    /// For a piece of hardware once it is placed: each member with a body
+    /// and the world box around its shapes at rest (`contact(member, b)`
+    /// in its kind's rules).
+    pub members: Option<&'e [(BodyId, ExactBox)]>,
 }
 
 impl<'e> KindEnv<'e> {
@@ -107,6 +111,7 @@ impl<'e> KindEnv<'e> {
             params: Params::Own(ParamCache::default()),
             made: Cow::Borrowed(&[]),
             mount: None,
+            members: None,
         }
     }
 
@@ -121,6 +126,7 @@ impl<'e> KindEnv<'e> {
             params: Params::Shared(&binding.params),
             made: Cow::Borrowed(&[]),
             mount: None,
+            members: None,
         }
     }
 
@@ -567,6 +573,9 @@ impl<'m> Solver<'m> {
                 .and_then(|k| k.mount)
                 .map(Value::Anchor)
                 .ok_or_else(|| self.eval_error(env, span, "the mount face is known only where the hardware is placed", "use mount in the kind's require entries").into()),
+            // `contact(member, b)` reads the member itself; anywhere else a
+            // member has no value (grammar, "Built-in functions").
+            Symbol::Member(..) => Err(self.eval_error(env, span, "a member is read only as the first argument of contact in a require", "measure where the member lies on a part: contact(member, part).length").into()),
         }
     }
 
@@ -1750,6 +1759,12 @@ impl<'m> Solver<'m> {
                 }]))
             }
             BuiltinCall::Contact { a, b } => {
+                if let RExprKind::Symbol(Symbol::Member(_, body)) = &a.kind {
+                    let b = self.one_part(Builtin::Contact, b, env)?;
+                    return self
+                        .member_contact(*body, a.span, b, env, span)
+                        .map(Value::Patch);
+                }
                 let a = self.one_part(Builtin::Contact, a, env)?;
                 let b = self.one_part(Builtin::Contact, b, env)?;
                 self.contact(a, b, env, span).map(Value::Patch)

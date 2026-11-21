@@ -175,6 +175,7 @@ impl Solver<'_> {
                 let mut trial = KindEnv::new(given.kind, &*given.roles, Cow::Owned(settings));
                 trial.made = Cow::Borrowed(&given.made);
                 trial.mount = given.mount;
+                trial.members = given.members;
                 if self.quietly(|solver| fits(solver, &trial)) {
                     found.push(Fitting {
                         param: param.to_owned(),

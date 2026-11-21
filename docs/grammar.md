@@ -1328,7 +1328,10 @@ parts it should join (`error[no-contact]`, `hinge: lid meets none of the
 parts it should join`), as for a joint. A butt hinge's `fixed_leaf` lies
 just off its mount face, in `on`: if the mount face of the piece does not
 lie against `on`, the leaf meets nothing. Likewise a `cut` whose member
-neither touches nor enters the part it names is `error[no-contact]`.
+neither touches nor enters the part it names is `error[no-contact]`. Contact asks only
+that a member meet its part somewhere; a kind that needs a member to lie
+wholly on the wood says so with `contact(member, part)` in a `require`
+(see [Built-in functions](#built-in-functions)).
 
 ### Mirroring
 
@@ -2742,7 +2745,10 @@ kind brass_knob_26 : pull {
 A butt hinge sinks a leaf into each part and cuts a mortise for each (its
 rule `leaf_fits` keeps each leaf on the wood: no wider than
 `contact(piece, on).width`, the patch where the two parts close, which on
-a box side's edge is the side's thickness); a cup hinge bores its cup; a
+a box side's edge is the side's thickness, and its rule
+`fixed_leaf_on_wood` keeps the leaf in the box from hanging off the end of
+the side: `contact(fixed_leaf, on).length` at least the hinge's
+`length`); a cup hinge bores its cup; a
 pull drills a hole for each screw. Each is a `cut` of the kind (see
 [Faces to cut](#faces-to-cut)). `fastener` kinds are
 only ever used through a `uses:` or as what a joint member is (`member pin :
@@ -3561,7 +3567,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `cylinder(diameter:, length:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)) |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
-| `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
+| `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); in a hardware kind's `require`, `a` may be one of the kind's members: the patch of that member on part `b`; see below |
 | `edge_to_edge(a, b)` | `Bool` | `true` when two parts lie side by side in one plane and meet along an edge of each; see below |
 | `wall(cut)` | `Length` | the least wood between one of the kind's named cuts and any face or other cut of the same part, read only in a kind's `require`; see [Walls](#walls) |
 
@@ -3584,6 +3590,43 @@ sits on:
 require seat_wide : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
 require seat_long : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
 ```
+
+**`contact(member, b)`.** In a `require` of a slide, hinge, pull, support
+or fitting kind, the first argument may name one of the kind's own
+members; `b` is one part. The patch is where the box around that member's
+shapes, placed at rest for this piece of hardware, lies in or on `b`'s
+drawn box. Where the two only touch (a mounting plate on the face of a
+cabinet side, a slide on the side of a drawer), it is the face they touch
+on; where they share wood (a leaf in its mortise), it is their overlap
+seen square to the face the hardware is mounted on. Its `.length` runs
+along the member's longer side in the patch's plane and its `.width`
+across it, whichever is longer: a member that hangs part way off the end
+of `b` has a patch only as long as the part of it `b` still holds. A kind
+keeps a member wholly on the wood by comparing the patch with the
+member's own size:
+
+```
+require fixed_leaf_on_wood : contact(fixed_leaf, on).length >= length "the hinge's leaf hangs off the end of the part it is housed in"
+```
+
+When such a rule fails, the help says how much of the member `b` holds
+(`wall holds only 5mm of the 40mm fixed_leaf; place the hardware so its
+fixed_leaf lies wholly on wall`), or that only the member's end touches
+`b`. A member that doesn't touch `b` over an area is `error[no-contact]`
+(`fixed_leaf and wall don't touch`), labelled at the hardware's call as
+well as the kind's rule. A member has a place only where a piece of
+hardware is placed, so it is named only as the first argument of
+`contact` in a hardware kind's `require`: anywhere else a member name is
+`error[type-mismatch]` (`a member is read only as the first argument of
+contact in a require`). A joint kind's members are laid out on a patch
+and cannot be named.
+
+The standard kinds keep these members on the wood: `butt_hinge`'s
+`fixed_leaf` and `leaf` (`fixed_leaf_on_wood`, `leaf_on_wood`), the
+`plate` of `euro_hinge` and `wide_hinge_165` (`plate_on_wood`), and
+`side_mount_slide`'s `drawer_member` (`on_drawer_side`). A member housed
+in a drilled hole needs no such rule: a hole that breaks out of its part
+is already `error[wall]` (see [Walls](#walls)).
 
 **`edge_to_edge(a, b)`** is `true` when two parts lie side by side in one
 plane and meet along an edge of each, as the boards of a glued-up top do.
