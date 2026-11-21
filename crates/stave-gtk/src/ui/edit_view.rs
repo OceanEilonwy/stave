@@ -170,11 +170,16 @@ impl EditView {
             .launch(card_slots.clone())
             .forward(input, card_heard);
         card.widget().set_visible(false);
+        // As compact as the Details panel round it: a small button the
+        // width of the rows, whose words end in "…" rather than widen
+        // the panel.
         let face_button = gtk::Button::builder()
-            .css_classes(["stave-edit-face", "pill"])
-            .margin_start(16)
-            .margin_end(16)
-            .margin_bottom(16)
+            .child(
+                &gtk::Label::builder()
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            )
+            .css_classes(["stave-edit-face"])
             .visible(false)
             .build();
         let changes = changes::Changes::new(input);
@@ -777,10 +782,14 @@ impl Window {
         };
         let button = &self.editing.face_button;
         if let Some(face) = shown {
-            button.set_label(&fill_in(
+            let words = fill_in(
                 &tr("Add something onto its {face} face…"),
                 &[("face", &face.face.word())],
-            ));
+            );
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_label(&words);
+            }
+            button.update_property(&[gtk::accessible::Property::Label(&words)]);
             button.set_tooltip_text(Some(&tr("List what can go on the face you clicked")));
         }
         button.set_visible(shown.is_some());
