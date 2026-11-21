@@ -9,9 +9,14 @@
 //! has the keyboard.
 //!
 //! While the 3D view is being resized (a window dragged larger, a panel
-//! slid open) it shows the last frame stretched, and reports the new size
-//! once it has held still for [`SETTLE`], so the scene isn't drawn again at
-//! every pixel of the drag.
+//! slid open) the last frame stays where it was in the window, at its own
+//! size: a panel sliding over the view covers part of it, and room the
+//! view gains shows the empty stage, as if the panels moved over a still
+//! picture. The new size is reported once it has held still for
+//! [`SETTLE`], so the scene isn't drawn again at every pixel of the drag,
+//! and the frame drawn at that size takes the old one's place. Small
+//! pictures stretch their last frame instead, as they are drawn again at
+//! once.
 //!
 //! It is a GObject subclass (it draws in `snapshot` and sizes itself in
 //! `measure`), so it stays a widget rather than a relm4 component; its
@@ -30,7 +35,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 /// How long the 3D view's size must hold still before it is reported.
-const SETTLE: Duration = Duration::from_millis(100);
+const SETTLE: Duration = Duration::from_millis(40);
 
 /// The signal telling the size in device pixels.
 const RESIZED: &str = "resized";
@@ -48,6 +53,14 @@ mod imp {
         pub reported: Cell<(u32, u32)>,
         /// A report waiting for the size to hold still.
         pub settling: Cell<Option<glib::SourceId>>,
+        /// Where the view's top left corner was in its window, in logical
+        /// pixels, when the size was last reported.
+        pub reported_origin: Cell<(f32, f32)>,
+        /// Where the frame shown belongs in the window: the corner it was
+        /// drawn for, so it stays put while the view's edges move.
+        pub frame_origin: Cell<(f32, f32)>,
+        /// The empty stage's colour, filling room the frame doesn't cover.
+        pub stage: Cell<Option<gtk::gdk::RGBA>>,
     }
 
     #[glib::object_subclass]
@@ -99,10 +112,35 @@ mod imp {
         pub(super) fn report_size(&self) {
             let (width, height) = self.obj().device_size();
             self.reported.set((width, height));
+            self.reported_origin.set(self.origin());
             // Nothing is borrowed: a handler may come back here through a
             // synchronous allocation.
             self.obj()
                 .emit_by_name::<()>(super::RESIZED, &[&width, &height]);
+        }
+
+        /// Where the view's top left corner is in its window, in logical
+        /// pixels; the corner itself before it is in one.
+        pub(super) fn origin(&self) -> (f32, f32) {
+            let widget = self.obj();
+            widget
+                .root()
+                .and_then(|root| widget.compute_point(&root, &gtk::graphene::Point::zero()))
+                .map_or((0.0, 0.0), |point| (point.x(), point.y()))
+        }
+
+        /// The frame shown takes the place of the view where the size
+        /// was last reported, if it was drawn at that size; an older
+        /// frame, drawn before, keeps the place it had.
+        pub(super) fn place_frame(&self, frame: &gtk::gdk::Texture) {
+            let (width, height) = self.reported.get();
+            let drawn = (
+                u32::try_from(frame.width()).unwrap_or(0),
+                u32::try_from(frame.height()).unwrap_or(0),
+            );
+            if drawn == (width, height) {
+                self.frame_origin.set(self.reported_origin.get());
+            }
         }
 
         /// Drops a report waiting for the size to hold still.
@@ -118,8 +156,13 @@ mod imp {
         fn size_changed(&self) {
             let size = self.obj().device_size();
             if size == self.reported.get() {
-                // Back where it was: nothing to draw again.
+                // Back to the size drawn (or only moved): nothing to draw
+                // again, and the frame is where the view is now.
                 self.stop_settling();
+                let origin = self.origin();
+                self.reported_origin.set(origin);
+                self.frame_origin.set(origin);
+                self.obj().queue_draw();
                 return;
             }
             let showing = self.frame().is_some() && self.reported.get().0 > 1;
@@ -186,9 +229,53 @@ mod imp {
                 crate::convert::f32_of_int(widget.width()),
                 crate::convert::f32_of_int(widget.height()),
             );
-            if let Some(frame) = self.frame() {
-                snapshot.append_texture(&frame, &bounds);
+            let Some(frame) = self.frame() else {
+                return;
+            };
+            match self.sizing.get() {
+                super::Sizing::View => self.snapshot_still(snapshot, &frame, &bounds),
+                super::Sizing::Picture { .. } => snapshot.append_texture(&frame, &bounds),
             }
+        }
+    }
+
+    impl Viewport {
+        /// Draws `frame` at its own size where it belongs in the window,
+        /// clipped to the view's `bounds`, over the empty stage where it
+        /// doesn't reach.
+        fn snapshot_still(
+            &self,
+            snapshot: &gtk::Snapshot,
+            frame: &gtk::gdk::Texture,
+            bounds: &gtk::graphene::Rect,
+        ) {
+            let scale = self.obj().scale();
+            let logical = |pixels: i32| crate::convert::f32_of(f64::from(pixels) / scale);
+            let (frame_x, frame_y) = self.frame_origin.get();
+            let (view_x, view_y) = self.origin();
+            let placed = gtk::graphene::Rect::new(
+                frame_x - view_x,
+                frame_y - view_y,
+                logical(frame.width()),
+                logical(frame.height()),
+            );
+            // Within a quarter of a device pixel it fills the view: the
+            // usual case, drawn as before.
+            let quarter = crate::convert::f32_of(0.25 / scale);
+            let fills = (placed.x().abs() <= quarter)
+                && (placed.y().abs() <= quarter)
+                && ((placed.width() - bounds.width()).abs() <= quarter)
+                && ((placed.height() - bounds.height()).abs() <= quarter);
+            if fills {
+                snapshot.append_texture(frame, bounds);
+                return;
+            }
+            if let Some(stage) = self.stage.get() {
+                snapshot.append_color(&stage, bounds);
+            }
+            snapshot.push_clip(bounds);
+            snapshot.append_texture(frame, &placed);
+            snapshot.pop();
         }
     }
 }
@@ -268,6 +355,7 @@ impl Viewport {
 
     /// Shows a frame.
     pub fn show_frame(&self, frame: gtk::gdk::Texture) {
+        self.imp().place_frame(&frame);
         self.imp().frame.set(Some(frame));
         self.queue_draw();
     }
@@ -313,6 +401,17 @@ impl Viewport {
         );
         self.show_frame(texture.upcast());
         Shown::Yes
+    }
+
+    /// Sets the empty stage's colour (8-bit sRGB), shown where a resize
+    /// has given the view room its last frame doesn't cover.
+    pub fn set_stage(&self, [red, green, blue]: [u8; 3]) {
+        let channel = |value: u8| f32::from(value) / 255.0;
+        let stage = gtk::gdk::RGBA::new(channel(red), channel(green), channel(blue), 1.0);
+        if self.imp().stage.get() != Some(stage) {
+            self.imp().stage.set(Some(stage));
+            self.queue_draw();
+        }
     }
 
     /// Says what it shows to screen readers: `name` ("3D view of Wall
@@ -381,6 +480,54 @@ mod tests {
             "each report reached the handler"
         );
         assert!(viewport.imp().frame().is_some(), "the frame is shown");
+    }
+
+    #[test]
+    fn a_frame_takes_the_place_of_the_size_it_was_drawn_at() {
+        on_gtk_thread(frame_is_placed);
+    }
+
+    /// A frame drawn at the size last reported goes where the view was
+    /// then; one drawn at an older size stays where the last frame was, so
+    /// a panel moving over the view covers it rather than moving it.
+    fn frame_is_placed() {
+        let texture = |width: i32, height: i32| -> gtk::gdk::Texture {
+            let stride = usize::try_from(width * 4).unwrap_or(0);
+            let bytes =
+                glib::Bytes::from_owned(vec![0_u8; stride * usize::try_from(height).unwrap_or(0)]);
+            gtk::gdk::MemoryTexture::new(
+                width,
+                height,
+                gtk::gdk::MemoryFormat::R8g8b8a8,
+                &bytes,
+                stride,
+            )
+            .upcast()
+        };
+        let viewport = Viewport::default();
+        let imp = viewport.imp();
+        imp.reported.set((40, 30));
+        imp.reported_origin.set((12.0, 8.0));
+        viewport.show_frame(texture(40, 30));
+        assert_eq!(
+            imp.frame_origin.get(),
+            (12.0, 8.0),
+            "drawn at the size reported"
+        );
+        imp.reported.set((30, 30));
+        imp.reported_origin.set((22.0, 8.0));
+        viewport.show_frame(texture(40, 30));
+        assert_eq!(
+            imp.frame_origin.get(),
+            (12.0, 8.0),
+            "an older frame keeps its place"
+        );
+        viewport.show_frame(texture(30, 30));
+        assert_eq!(
+            imp.frame_origin.get(),
+            (22.0, 8.0),
+            "the new size's frame moves in"
+        );
     }
 
     #[test]

@@ -147,6 +147,16 @@ pub enum Backdrop {
 }
 
 impl Backdrop {
+    /// Its colour as 8-bit sRGB, for drawing the stage outside the
+    /// renderer: the colour a frame is cleared to, as it lands on screen.
+    #[must_use]
+    pub fn srgb(self) -> [u8; 3] {
+        match self {
+            Backdrop::Light => [0xe8, 0xe5, 0xdf],
+            Backdrop::Dark => [0x24, 0x24, 0x28],
+        }
+    }
+
     /// The ground shadow on it: a warm dark brown on the light stage,
     /// black (and a little stronger) on the dark one, so it darkens both.
     fn shadow(self) -> [f32; 4] {
