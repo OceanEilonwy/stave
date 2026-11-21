@@ -552,8 +552,21 @@ impl Window {
         };
         let start = self.state.focus_start.take();
         let (start_plan, start_step) = start.unwrap_or((None, None));
-        let progress = start_step.unwrap_or(if found.assembles() { 0.0 } else { 0.4 });
-        let plan = found.plan().is_some() && start_plan.unwrap_or(found.prefers_plan());
+        // The same focus after a new result (a size changed, say) opens
+        // as it was left, camera and all.
+        let kept = self.state.focus_kept.take();
+        let progress = kept
+            .map(|kept| kept.progress)
+            .or(start_step)
+            .unwrap_or(if found.assembles() { 0.0 } else { 0.4 });
+        let plan = found.plan().is_some()
+            && kept
+                .map(|kept| kept.plan)
+                .or(start_plan)
+                .unwrap_or(found.prefers_plan());
+        let options = kept.map(|kept| kept.options).unwrap_or_default();
+        // A joint with nothing to play has no player to run.
+        let playing = kept.is_some_and(|kept| kept.playing) && found.still_joint().is_none();
         {
             let state = &mut self.state;
             state.problem = None;
@@ -562,9 +575,9 @@ impl Window {
             state.focus = Some(FocusState {
                 focus: found,
                 progress,
-                options: focus::Options::default(),
+                options,
                 plan,
-                playing: false,
+                playing,
                 looks: Vec::new(),
                 overlay: Overlay::default(),
             });
@@ -574,7 +587,9 @@ impl Window {
         self.layout_for_focus(moving_name.as_deref());
         self.hide_pins();
         let texts = self.repose();
-        self.frame_focus();
+        if kept.is_none() {
+            self.frame_focus();
+        }
         {
             let state = &self.state;
             self.widgets
@@ -598,6 +613,9 @@ impl Window {
         self.show_progress();
         self.render_pictures();
         self.request_render();
+        if playing {
+            self.run_focus_clock();
+        }
     }
 
     /// Frames the joint or the hardware (from the direction focus asks
@@ -797,9 +815,13 @@ impl Window {
             focus.playing
         };
         self.show_progress();
-        if !playing {
-            return;
+        if playing {
+            self.run_focus_clock();
         }
+    }
+
+    /// Starts the frames that move focus mode on while it plays.
+    fn run_focus_clock(&mut self) {
         self.state.focus_clock.last = None;
         if !self.state.focus_clock.ticking {
             self.state.focus_clock.ticking = true;
