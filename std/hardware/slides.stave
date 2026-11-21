@@ -15,9 +15,6 @@ kind side_mount_slide : slide {
   // The cabinet member and the bearings fill exactly the clearance between
   // the drawer side and the side of its opening.
   require gap : between(mount, in) == 12.7mm "the slide needs exactly this much beside the drawer"
-  // The drawer member is screwed along the drawer side: a slide longer
-  // than the side, or taller than it, hangs off it with its screws in air.
-  require on_drawer_side : contact(drawer_member, piece).length >= length && contact(drawer_member, piece).width >= 45mm "the slide hangs off the drawer side; choose a shorter slide or a longer, taller drawer side"
 
   // On the side of the drawer box nearer the cabinet, its front end level
   // with the side's, centred up and down.

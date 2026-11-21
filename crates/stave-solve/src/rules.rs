@@ -11,7 +11,7 @@ use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef};
 use stave_model::ids::HardwareId;
 use stave_model::solved::{CutSource, Rules};
-use stave_model::value::{AnchorValue, ExactBox, ParamSettings, Value};
+use stave_model::value::{AnchorValue, ParamSettings, Value};
 
 use crate::eval::{Env, KindEnv};
 use crate::joints::Binding;
@@ -98,17 +98,6 @@ fn axis_phrase(axis: FrameAxis) -> &'static str {
     }
 }
 
-/// Where a piece of hardware sits at rest, as its kind's `require`s read
-/// it: its mount face (`mount`) and the box around each member with a body
-/// (`contact(member, b)`).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct AtRest<'a> {
-    /// The face of its piece it is mounted on, as an anchor.
-    pub mount: AnchorValue,
-    /// Each member with a body and the world box around its shapes.
-    pub members: &'a [(BodyId, ExactBox)],
-}
-
 /// A piece of hardware's call, where its rules are reported.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Call<'a> {
@@ -134,7 +123,7 @@ impl Solver<'_> {
         kind: &KindDef,
         adjusts: &[AdjustDef],
         offsets: &[Offset],
-        at_rest: AtRest<'_>,
+        mount: AnchorValue,
     ) -> Solved<(Vec<AdjustSetting>, Rules)> {
         let adjusted = adjusted(adjusts, offsets)?;
         let mut rules = Rules::Hold;
@@ -142,7 +131,7 @@ impl Solver<'_> {
             rules = Rules::Broken;
             self.report_adjustment(call, binding, kind, adjusts, &adjusted)?;
         }
-        if !self.requires_hold(call, binding, kind, at_rest)? {
+        if !self.requires_hold(call, binding, kind, mount)? {
             rules = Rules::Broken;
         }
         Ok((adjusted.settings, rules))
@@ -296,14 +285,14 @@ impl Solver<'_> {
     }
 
     /// Checks the kind's `require`s for one piece of hardware, with `mount`
-    /// bound to its mount face and its members placed where they are at
-    /// rest; reports each that fails. `true` when all hold.
+    /// bound to its mount face; reports each that fails. `true` when all
+    /// hold.
     fn requires_hold(
         &mut self,
         call: Call<'_>,
         binding: &Binding,
         kind: &KindDef,
-        at_rest: AtRest<'_>,
+        mount: AnchorValue,
     ) -> Solved<bool> {
         if kind.requires.is_empty() {
             return Ok(true);
@@ -314,8 +303,7 @@ impl Solver<'_> {
             &binding.roles,
             Cow::Borrowed(&binding.settings),
         );
-        kind_env.mount = Some(at_rest.mount);
-        kind_env.members = Some(at_rest.members);
+        kind_env.mount = Some(mount);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
@@ -330,28 +318,9 @@ impl Solver<'_> {
             hardware: call.hardware,
         };
         for (index, require) in kind.indexed_requires() {
-            // A rule that can't be measured here (`contact(member, b)` for
-            // a member off `b`) is reported in the kind; it names this
-            // piece of hardware too, so the design shows where.
-            let reported = self.diagnostics.len();
-            let holds = match self.defer_wall_rule(source, binding.kind, index, require, &env) {
-                Ok(true) => Ok(true),
-                Ok(false) => self.eval_bool(&require.condition, &env),
-                Err(failure) => Err(failure),
-            };
-            let holds = match holds {
-                Ok(holds) => holds,
-                Err(failure) => {
-                    for diagnostic in self.diagnostics.iter_mut().skip(reported) {
-                        diagnostic
-                            .labels
-                            .insert(0, Label::new(call.file, call.span));
-                        diagnostic.notes.push(format!("for {}", call.name));
-                    }
-                    return Err(failure);
-                }
-            };
-            if holds {
+            if self.defer_wall_rule(source, binding.kind, index, require, &env)?
+                || self.eval_bool(&require.condition, &env)?
+            {
                 continue;
             }
             all = false;

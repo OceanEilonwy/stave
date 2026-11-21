@@ -34,9 +34,9 @@ use stave_schema::functions::Builtin;
 use stave_schema::kinds::RoleType;
 
 use crate::defs::{
-    AssemblyDef, BodyId, ComponentDef, DefId, Defs, HardwareDef, JointDef, KindDef, LetDef,
-    ModuleDefs, ParamDef, PartDef, ProfileDef, RExpr, RecipeDef, RegionDef, RequireDef, RoleIndex,
-    SceneDef, Scope, StockDef, Symbol,
+    AssemblyDef, ComponentDef, DefId, Defs, HardwareDef, JointDef, KindDef, LetDef, ModuleDefs,
+    ParamDef, PartDef, ProfileDef, RExpr, RecipeDef, RegionDef, RequireDef, RoleIndex, SceneDef,
+    Scope, StockDef, Symbol,
 };
 use crate::ids::{
     AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, MadeIndex, ParamDefId,
@@ -986,7 +986,6 @@ impl<'a> Resolver<'a> {
             Symbol::KindParam(kind, index) => self.kind_param_ty(kind, index),
             Symbol::MadePart(..) => Ty::Part,
             Symbol::Mount(..) => Ty::Anchor,
-            Symbol::Member(..) => Ty::Member,
         }
     }
 
@@ -1217,30 +1216,6 @@ impl<'a> Resolver<'a> {
             names
                 .entry("mount".to_owned())
                 .or_insert(Symbol::Mount(kind));
-            // Its members with a body, numbered as `lower_bodies` numbers
-            // them: the first of each name, in order (grammar, "Built-in
-            // functions", `contact(member, b)`).
-            let mut seen: Vec<&str> = Vec::new();
-            let mut index = 0;
-            for entry in &syntax.body.entries {
-                let ast::KindEntry::Member(member) = entry else {
-                    continue;
-                };
-                let word = member.node.name.as_str();
-                if seen.contains(&word) {
-                    continue;
-                }
-                seen.push(word);
-                if member.node.body.is_none() {
-                    continue;
-                }
-                if let Some(id) = BodyId::new(index) {
-                    names
-                        .entry(word.to_owned())
-                        .or_insert(Symbol::Member(kind, id));
-                }
-                index += 1;
-            }
         }
         self.kind_names.insert(kind, names);
     }

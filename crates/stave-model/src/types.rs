@@ -67,8 +67,6 @@ pub enum Ty {
     Model,
     /// A spacing for `spaced`.
     Spacing,
-    /// One of a hardware kind's own members, named in its `require`s.
-    Member,
     /// `contact(a, b)`: where two parts touch.
     Patch,
     /// A bare word from a closed list (axes and directions included).
@@ -233,7 +231,6 @@ impl Ty {
             Ty::Model => "a model".into(),
             Ty::Spacing => "a spacing".into(),
             Ty::Patch => "a contact patch".into(),
-            Ty::Member => "a member".into(),
             Ty::Word(set) => set.description().into(),
             Ty::Kind(kind) => match kind.base {
                 Some(BaseKind::Joint) => "a joint kind".into(),

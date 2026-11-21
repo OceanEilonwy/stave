@@ -29,9 +29,6 @@ kind euro_hinge : hinge {
   // stay in front of it, or the cup shows through the face of the door;
   // the maker's tables start at 15mm doors, which leave 2.2mm.
   require cup_stops : piece.thickness >= 12.8mm + 2mm "the door is too thin for the hinge cup"
-  // The mounting plate is screwed to the cabinet side: all 50mm of it
-  // lies on the side, or its screws go into air past the side's end.
-  require plate_on_wood : contact(plate, on).length >= 50mm "the hinge's mounting plate hangs off the end of the cabinet side"
 
   // On the back of the stile, the cup's centre cup_inset and half the cup
   // in from the edge nearer the side. The design says where along it.
@@ -158,9 +155,6 @@ kind wide_hinge_165 : hinge {
   // stay in front of it, or the cup shows through the face of the door;
   // the maker's tables start at 15mm doors, which leave 2.2mm.
   require cup_stops : piece.thickness >= 12.8mm + 2mm "the door is too thin for the hinge cup"
-  // The mounting plate is screwed to the cabinet side: all 50mm of it
-  // lies on the side, or its screws go into air past the side's end.
-  require plate_on_wood : contact(plate, on).length >= 50mm "the hinge's mounting plate hangs off the end of the cabinet side"
 
   // On the back of the stile, the cup's centre cup_inset and half the cup
   // in from the edge nearer the side. The design says where along it.
@@ -279,12 +273,6 @@ kind butt_hinge : hinge {
   // as wide as the side is thick. A wider leaf runs off the wood, its
   // mortise open to the inside and its screw holes over air.
   require leaf_fits : leaf_width <= contact(piece, on).width "a hinge leaf wider than the edge it is housed in hangs off the wood"
-  // The leaf in the box or cabinet lies wholly on its edge along the pin:
-  // a hinge placed past the end of the side would hang its leaf in the
-  // air over a mortise cut short.
-  require fixed_leaf_on_wood : contact(fixed_leaf, on).length >= length "the hinge's leaf hangs off the end of the part it is housed in"
-  // Likewise the leaf in the lid or door lies wholly on it.
-  require leaf_on_wood : contact(leaf, piece).length >= length "the hinge's leaf hangs off the end of the lid or door it is housed in"
 
   // On the face of the lid or door that closes against the box, the pin
   // on the edge where the two parts are flush. The design says where
