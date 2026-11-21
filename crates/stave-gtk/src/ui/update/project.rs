@@ -655,6 +655,7 @@ impl Window {
                 state.focus = None;
                 state.problem = None;
                 state.opening = None;
+                state.moved.clear();
             }
             state.posed.is_none()
         };
@@ -1070,6 +1071,7 @@ impl Window {
             state.focus = None;
             state.problem = None;
             state.opening = None;
+            state.moved.clear();
         }
         self.watch();
         self.versions_opened();

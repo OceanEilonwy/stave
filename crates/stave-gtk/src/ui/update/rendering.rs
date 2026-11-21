@@ -40,6 +40,9 @@ pub(in crate::ui) enum RenderingInput {
     ExplodeSlid(f64),
     /// The front view button.
     LookFront,
+    /// The reset button: every door and drawer moved with the motion bar
+    /// goes back.
+    ResetMoved,
     /// The turn around button.
     TurnAround,
     /// The style changed.
@@ -177,6 +180,7 @@ pub(in crate::ui) fn camera_said(output: view_tools::CameraOutput) -> WindowInpu
     match output {
         view_tools::CameraOutput::Front => RenderingInput::LookFront,
         view_tools::CameraOutput::Turn => RenderingInput::TurnAround,
+        view_tools::CameraOutput::Reset => RenderingInput::ResetMoved,
     }
     .into()
 }
@@ -410,6 +414,7 @@ impl Window {
                 self.dispatch(Command::SetExplode(Explode::clamped(narrow(value))));
             }
             RenderingInput::LookFront => self.look_from(0.0, FRONT_PITCH),
+            RenderingInput::ResetMoved => self.reset_moved(),
             RenderingInput::TurnAround => {
                 let (yaw, pitch) = self
                     .state
@@ -865,6 +870,7 @@ impl Window {
             posed,
             problem,
             opening,
+            moved,
             focus,
             ..
         } = &mut *state;
@@ -885,8 +891,13 @@ impl Window {
             .as_ref()
             .and_then(|problem| view::pose_at_contact(graph, &problem.contact, problem.amount));
         *posed = Some(at_contact.unwrap_or_else(|| {
-            let overrides: Vec<(AssemblyId, f32)> =
-                opening.iter().map(|o| (o.assembly, o.amount)).collect();
+            // The selection's door or drawer first (it wins), then every
+            // other one people moved and left where it is.
+            let overrides: Vec<(AssemblyId, f32)> = opening
+                .iter()
+                .map(|o| (o.assembly, o.amount))
+                .chain(moved.iter().map(|(id, amount)| (*id, *amount)))
+                .collect();
             graph.pose_with(entry, &overrides, explode)
         }));
         None

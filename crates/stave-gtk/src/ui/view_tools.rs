@@ -1,5 +1,6 @@
 //! The 3D view's floating controls (Main.dc.html, Exploded.dc.html): the
 //! column of buttons at the top right (fit, front view, turn to the back,
+//! reset the moved doors and drawers,
 //! then X-ray and Pull apart, whose play button and "together … apart"
 //! slider pop out to its left while it is on), the "Shared wood at first
 //! contact" key shown while a problem is posed, and focus mode's "From
@@ -494,6 +495,8 @@ pub struct CameraInit {
     pub front: gtk::Button,
     /// Turns the view half way round.
     pub turn: gtk::Button,
+    /// Puts every door and drawer moved with the motion bar back.
+    pub reset: gtk::Button,
     /// X-ray and Pull apart, the view's tools' own root: placed at the
     /// foot, and otherwise left as the tools have it.
     pub section: gtk::Widget,
@@ -512,6 +515,8 @@ pub enum CameraInput {
     FrontPressed,
     /// People pressed Turn to the back.
     TurnPressed,
+    /// People pressed Reset.
+    ResetPressed,
 }
 
 /// What the camera column tells its owner.
@@ -521,6 +526,8 @@ pub enum CameraOutput {
     Front,
     /// People asked to turn the view half way round.
     Turn,
+    /// People asked to put every moved door and drawer back.
+    Reset,
 }
 
 #[relm4::component(pub)]
@@ -560,6 +567,12 @@ impl Component for CameraComponent {
                 },
             },
             #[local_ref]
+            reset -> gtk::Button {
+                connect_clicked[sender] => move |_| {
+                    sender.input_sender().emit(CameraInput::ResetPressed);
+                },
+            },
+            #[local_ref]
             section -> gtk::Widget {},
         },
     }
@@ -573,6 +586,7 @@ impl Component for CameraComponent {
             fit,
             front,
             turn,
+            reset,
             section,
         } = init;
         // The slider starts hidden (Pull apart starts off).
@@ -580,7 +594,7 @@ impl Component for CameraComponent {
             orientation: gtk::Orientation::Vertical,
             joined: false,
         };
-        let (fit, front, turn, section) = (&fit, &front, &turn, &section);
+        let (fit, front, turn, reset, section) = (&fit, &front, &turn, &reset, &section);
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
@@ -595,12 +609,15 @@ impl Component for CameraComponent {
             CameraInput::TurnPressed => {
                 let _ = sender.output(CameraOutput::Turn);
             }
+            CameraInput::ResetPressed => {
+                let _ = sender.output(CameraOutput::Reset);
+            }
         }
     }
 }
 
-/// The column of buttons at the top right of the view: fit, front view
-/// and turn to the back, then X-ray and Pull apart. It owns the
+/// The column of buttons at the top right of the view: fit, front view,
+/// turn to the back and reset, then X-ray and Pull apart. It owns the
 /// component. Setters are queued; the window hears people's presses as
 /// [`CameraOutput`]s.
 pub struct CameraToolbar {
@@ -612,6 +629,9 @@ pub struct CameraToolbar {
     /// Turns the view half way round.
     #[cfg(test)]
     turn: gtk::Button,
+    /// Puts the moved doors and drawers back.
+    #[cfg(test)]
+    reset: gtk::Button,
     controller: Controller<CameraComponent>,
 }
 
@@ -641,11 +661,17 @@ impl CameraToolbar {
             &tr("Turn to the back"),
             &["stave-camera-button", "flat"],
         );
+        let reset = icon_button(
+            icons::RESET,
+            &tr("Reset: close every door and drawer you moved"),
+            &["stave-camera-button", "flat"],
+        );
         let controller = CameraComponent::builder()
             .launch(CameraInit {
                 fit: fit.clone(),
                 front: front.clone(),
                 turn: turn.clone(),
+                reset: reset.clone(),
                 section: tools.section.clone().upcast(),
             })
             .forward(owner, message);
@@ -655,6 +681,8 @@ impl CameraToolbar {
             front,
             #[cfg(test)]
             turn,
+            #[cfg(test)]
+            reset,
             controller,
         }
     }
@@ -1317,11 +1345,12 @@ mod tests {
         let camera = CameraToolbar::new(&tools, &owner, std::convert::identity);
         camera.front.emit_clicked();
         camera.turn.emit_clicked();
+        camera.reset.emit_clicked();
         assert!(heard.borrow().is_empty(), "queued");
         settle();
         assert_eq!(
             *heard.borrow(),
-            vec![CameraOutput::Front, CameraOutput::Turn]
+            vec![CameraOutput::Front, CameraOutput::Turn, CameraOutput::Reset]
         );
         let root = camera.root.downgrade();
         let input = camera.controller.sender().clone();

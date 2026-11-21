@@ -64,6 +64,7 @@ mod view_tools;
 mod viewport;
 mod workbench;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -496,6 +497,10 @@ struct State {
     drag_applied: (f64, f64),
     problem: Option<ShownProblem>,
     opening: Option<Opening>,
+    /// Every door or drawer people moved with the motion bar, and how far
+    /// (radians or millimetres): each stays where it was left when the
+    /// selection moves on, until the reset button puts them all back.
+    moved: BTreeMap<AssemblyId, f32>,
     /// The motion bar shows (it was last told to show something).
     motion_shown: bool,
     focus: Option<FocusState>,
@@ -821,6 +826,7 @@ impl Component for Window {
                 drag_applied: (0.0, 0.0),
                 problem: None,
                 opening: None,
+                moved: BTreeMap::new(),
                 motion_shown: false,
                 focus: None,
                 pull_apart: false,
