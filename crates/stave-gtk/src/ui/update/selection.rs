@@ -641,6 +641,11 @@ impl Window {
             widgets.stage.remove_css_class("page");
         }
         widgets.step_card.root.set_visible(joint);
+        widgets.step_card.show_still(
+            focus
+                .and_then(|f| f.focus.still_joint())
+                .map(stave_app::focus::StillJoint::text),
+        );
         let swing = hardware.and_then(|f| f.focus.motion());
         widgets.swing_card.root.set_visible(swing.is_some());
         if let Some((_, range)) = swing {
@@ -781,6 +786,10 @@ impl Window {
             let Some(focus) = state.focus.as_mut() else {
                 return;
             };
+            // A joint with nothing to play has no player to run.
+            if focus.focus.still_joint().is_some() {
+                return;
+            }
             focus.playing = !focus.playing;
             if focus.playing && focus.progress >= 1.0 {
                 focus.progress = 0.0;

@@ -84,6 +84,9 @@ pub struct StepCardComponent {
     status: String,
     /// It plays: its button shows pause.
     playing: bool,
+    /// Why the joint has no steps to play: shown in place of the step,
+    /// the play button and the slider.
+    still: Option<String>,
     /// Apart (0) to together (1).
     scrub: Slider,
 }
@@ -103,6 +106,9 @@ pub enum StepCardInput {
     SetProgress(f64),
     /// Show play, or pause while it plays.
     ShowPlaying(bool),
+    /// Show why the joint has nothing to play instead of the player, or
+    /// the player again (`None`).
+    ShowStill(Option<String>),
     /// People moved the slider.
     Scrubbed(f64),
     /// People pressed play.
@@ -138,6 +144,8 @@ impl Component for StepCardComponent {
             #[local_ref]
             play -> gtk::Button {
                 #[watch]
+                set_visible: model.still.is_none(),
+                #[watch]
                 set_tooltip_text: Some(&play_text(model.playing, &tr("Play the assembly"))),
                 #[watch]
                 update_property: &[gtk::accessible::Property::Label(
@@ -152,9 +160,19 @@ impl Component for StepCardComponent {
                 set_spacing: 6,
                 set_hexpand: true,
 
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_wrap: true,
+                    #[watch]
+                    set_visible: model.still.is_some(),
+                    #[watch]
+                    set_label: model.still.as_deref().unwrap_or_default(),
+                },
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 12,
+                    #[watch]
+                    set_visible: model.still.is_none(),
 
                     gtk::Label {
                         set_use_markup: true,
@@ -174,9 +192,14 @@ impl Component for StepCardComponent {
                     },
                 },
                 #[local_ref]
-                scrub_area -> gtk::DrawingArea {},
+                scrub_area -> gtk::DrawingArea {
+                    #[watch]
+                    set_visible: model.still.is_none(),
+                },
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_visible: model.still.is_none(),
 
                     gtk::Label {
                         set_label: "apart",
@@ -220,6 +243,7 @@ impl Component for StepCardComponent {
             tooltip: None,
             status: String::new(),
             playing: false,
+            still: None,
             scrub,
         };
         let widgets = view_output!();
@@ -235,6 +259,7 @@ impl Component for StepCardComponent {
             }
             StepCardInput::SetProgress(value) => self.scrub.set_value(value),
             StepCardInput::ShowPlaying(playing) => self.playing = playing,
+            StepCardInput::ShowStill(still) => self.still = still,
             StepCardInput::Scrubbed(value) => {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(StepCardOutput::Scrubbed(value));
@@ -278,6 +303,12 @@ impl StepCard {
     /// Moves the slider (apart 0 to together 1), without calling back.
     pub fn set_progress(&self, progress: f64) {
         self.send(StepCardInput::SetProgress(progress));
+    }
+
+    /// Shows why the joint has nothing to play in place of the player,
+    /// or the player again (`None`).
+    pub fn show_still(&self, still: Option<String>) {
+        self.send(StepCardInput::ShowStill(still));
     }
 
     /// Shows play, or pause while the joint plays.

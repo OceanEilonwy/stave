@@ -252,6 +252,43 @@ pub struct KeyPose {
     pub caption: String,
 }
 
+/// Why focus on a joint has no steps to play, so its step player has
+/// nothing to scrub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StillJoint {
+    /// The kind has no `insert:` steps: its parts are brought together
+    /// in place (a mitre, a glued cleat), nothing slides in.
+    NoSteps,
+    /// A step can't be played: the part it moves hits another on the way.
+    Blocked {
+        /// The step, counted from 1.
+        step: usize,
+        /// The part the step moves: `rung[front]`.
+        moving: String,
+        /// The part in its way: `leg[front_left]`.
+        by: String,
+    },
+    /// The steps name a part the pair doesn't join, so they can't be
+    /// traced.
+    CantTrace,
+}
+
+impl StillJoint {
+    /// In words, for the step player in place of its slider.
+    pub fn text(&self) -> String {
+        match self {
+            StillJoint::NoSteps => {
+                tr("These parts are brought together in place: nothing slides in to play.")
+            }
+            StillJoint::Blocked { step, moving, by } => fill_in(
+                &tr("Step {step} can't be played: {by} is in the way of {moving}."),
+                &[("step", step), ("by", by), ("moving", moving)],
+            ),
+            StillJoint::CantTrace => tr("Its steps can't be played."),
+        }
+    }
+}
+
 /// A joint pair or a piece of hardware in focus.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Focus {
@@ -290,6 +327,9 @@ pub struct Focus {
     xray_nodes: Vec<NodeId>,
     /// How it moves.
     play: Play,
+    /// Why a joint has no steps to play; `None` when it plays them, and
+    /// for hardware.
+    still: Option<StillJoint>,
     /// A flat view from above, for a hinge.
     plan: Option<Plan>,
     /// What to frame in the 3D view.
@@ -546,7 +586,8 @@ fn joint_focus(
     let members = pair_members(pair);
     let parts: Vec<&Part> = members.iter().filter_map(|id| design.part(*id)).collect();
     let solids: Vec<Solid> = parts.iter().map(|part| Solid::of(part, design)).collect();
-    let play = match pair_steps(design, pair, &members, None) {
+    let (play, still) = match pair_steps(design, pair, &members, None) {
+        _ if pair.insert.is_empty() => (Play::Still, Some(StillJoint::NoSteps)),
         Some(steps) if !steps.is_empty() && parts.len() == members.len() => {
             let sequence: Vec<Member<'_>> = parts
                 .iter()
@@ -568,15 +609,32 @@ fn joint_focus(
                 .collect();
             match trace_carrying(&sequence, &carried, &steps).or_else(|_| trace(&sequence, &steps))
             {
-                Ok(traced) => Play::Steps(StepPlay {
-                    members: members.clone(),
-                    traced,
-                    texts: pair.insert.iter().map(|s| step_text(design, s)).collect(),
-                }),
-                Err(_) => Play::Still,
+                Ok(traced) => (
+                    Play::Steps(StepPlay {
+                        members: members.clone(),
+                        traced,
+                        texts: pair.insert.iter().map(|s| step_text(design, s)).collect(),
+                    }),
+                    None,
+                ),
+                Err(blocked) => {
+                    let name = |part: Option<PartId>| part.map(|part| part_name(design, part));
+                    let still = match (
+                        name(pair.insert.get(blocked.step).map(|s| s.part)),
+                        name(members.get(blocked.by).copied()),
+                    ) {
+                        (Some(moving), Some(by)) => StillJoint::Blocked {
+                            step: blocked.step.saturating_add(1),
+                            moving,
+                            by,
+                        },
+                        (None, _) | (_, None) => StillJoint::CantTrace,
+                    };
+                    (Play::Still, Some(still))
+                }
             }
         }
-        Some(_) | None => Play::Still,
+        Some(_) | None => (Play::Still, Some(StillJoint::CantTrace)),
     };
     // The parts that never move receive the others: drawn see-through.
     let moving: Vec<PartId> = pair.insert.iter().map(|s| s.part).collect();
@@ -731,20 +789,25 @@ fn joint_focus(
         insert,
         receives: receiving.first().map(|id| part_name(design, *id)),
         members: Vec::new(),
-        key_poses: vec![
-            KeyPose {
-                progress: 0.0,
-                caption: tr("apart"),
-            },
-            KeyPose {
-                progress: 0.5,
-                caption: tr("half way"),
-            },
-            KeyPose {
-                progress: 1.0,
-                caption: tr("together"),
-            },
-        ],
+        // A joint with nothing to play looks the same at every pose.
+        key_poses: if still.is_some() {
+            Vec::new()
+        } else {
+            vec![
+                KeyPose {
+                    progress: 0.0,
+                    caption: tr("apart"),
+                },
+                KeyPose {
+                    progress: 0.5,
+                    caption: tr("half way"),
+                },
+                KeyPose {
+                    progress: 1.0,
+                    caption: tr("together"),
+                },
+            ]
+        },
         closest: None,
         // The pair's members (its pins) are drawn as they are and move
         // with the part that carries them.
@@ -756,6 +819,7 @@ fn joint_focus(
         zone,
         view: None,
         play,
+        still,
         plan,
         prefers_plan: plan.is_some(),
     })
@@ -1098,6 +1162,7 @@ fn hardware_focus(
         zone: zone.or_else(|| around(graph, &hardware_nodes)),
         view,
         play,
+        still: None,
         plan,
         prefers_plan: false,
     })
@@ -1220,6 +1285,12 @@ impl Focus {
         self.plan.as_ref()
     }
 
+    /// Why a joint has no steps to play: `None` when it plays them, and
+    /// for hardware.
+    pub fn still_joint(&self) -> Option<&StillJoint> {
+        self.still.as_ref()
+    }
+
     /// The number of steps a joint plays (0 for hardware).
     pub fn step_count(&self) -> usize {
         match &self.play {
@@ -1263,7 +1334,7 @@ impl Focus {
             looks,
             overlay: played.overlay,
             step: played.step,
-            status: played.status,
+            status: self.still.as_ref().map_or(played.status, StillJoint::text),
         }
     }
 }
