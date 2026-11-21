@@ -397,7 +397,7 @@ fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
         "{}",
         row("half_lap")
     );
-    assert!(row("mortise_tenon").contains("refused: error[require]:"));
+    assert!(row("mortise_tenon").contains("refused: error[wall]:"));
     // The seven that fit first, then the thirteen refused: glued_edge is an
     // edge joint, and a case's corner is not edge to edge.
     assert!(

@@ -22,10 +22,9 @@ kind tabletop_fastener : fitting {
   /// How far each screw goes into the wood, past the plate.
   param screw_length = 13mm
 
-  // The recess must stay inside the apron's top edge, a millimetre in from
-  // its inside face, and the other end must clear that face.
-  require recess_fits : piece.thickness >= end_diameter + 2mm "the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron"
-  require end_clears  : centres >= end_diameter + 1mm "the end screwed into the top must reach past the apron's inside face; space the plate's ends further apart"
+  // The recess stays inside the apron's top edge, a millimetre in from
+  // either face (its `wall:`), and the other end must clear the inside face.
+  require end_clears : centres >= end_diameter + 1mm "the end screwed into the top must reach past the apron's inside face; space the plate's ends further apart"
 
   // On the apron's top edge, the recess a millimetre in from the inside
   // face; the design says where along the apron.
@@ -57,9 +56,9 @@ kind tabletop_fastener : fitting {
     shape: cylinder(diameter: screw_diameter, depth: -screw_length..0mm, at: point(across: -centres))
   }
 
-  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness) }
-  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length) }
-  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length) }
+  cut recess: crossing(piece, lower_end) { drill(diameter: end_diameter, depth: plate_thickness, wall: 1mm) }
+  cut apron_pilot_hole: crossing(piece, lower_screw) { drill(diameter: screw_diameter, depth: plate_thickness + screw_length, wall: 3mm) }
+  cut top_pilot_hole: crossing(tabletop, upper_screw) { drill(diameter: screw_diameter, depth: screw_length, wall: 3mm) }
 }
 
 /// A cam lock (a cam and dowel, or minifix): a knock-down fitting that pulls
@@ -89,10 +88,9 @@ kind cam_lock : fitting {
   param thread_length = 11mm
 
   // The bolt runs along the middle of the panel's thickness; its head
-  // must sit inside the cam, and the cam's bore must not come out the
-  // other face.
+  // must sit inside the cam; the cam's bore keeps 3mm of wood to the
+  // other face and to the panel's edges (its `wall:`).
   require bolt_reaches_cam : bore_depth >= piece.thickness / 2 + bolt_diameter / 2 "the bolt's head would sit below the cam's bore; bore the cam deeper"
-  require bore_stays_in    : bore_depth <= piece.thickness - 3mm "the bore for the cam would come too near the other face of the panel; bore it shallower or use a thicker panel"
 
   // In the top face of the panel, the cam's middle setback in from the end
   // that meets the other panel; the design says where across the panel,
@@ -120,7 +118,7 @@ kind cam_lock : fitting {
     shape: cylinder(diameter: thread_diameter, axis: along, along: -setback - thread_length..-setback, at: point(depth: piece.thickness / 2))
   }
 
-  cut cam_bore: crossing(piece, cam) { drill(diameter: cam_diameter, depth: bore_depth) }
-  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_hole_diameter, depth: setback) }
-  cut thread_hole: crossing(into, thread) { drill(diameter: thread_diameter, depth: thread_length) }
+  cut cam_bore: crossing(piece, cam) { drill(diameter: cam_diameter, depth: bore_depth, wall: 3mm) }
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_hole_diameter, depth: setback, wall: 3mm) }
+  cut thread_hole: crossing(into, thread) { drill(diameter: thread_diameter, depth: thread_length, wall: 3mm) }
 }

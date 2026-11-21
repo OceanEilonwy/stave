@@ -53,7 +53,7 @@ kind housing : joint {
     slot(width: piece.thickness, depth: depth)
   }
   cut housing: end(piece, facing: into) {
-    drill(diameter: 4mm, depth: 10mm)
+    drill(diameter: 4mm, depth: 10mm, wall: 0mm)
   }
 }
 

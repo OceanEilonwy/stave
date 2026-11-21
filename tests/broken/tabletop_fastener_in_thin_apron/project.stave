@@ -1,4 +1,4 @@
-// expect: error[require] 'recess_fits' fails: the recess for a tabletop fastener is wider than the apron is thick; use a smaller fastener or a thicker apron
+// expect: error[overhang] tie_front: its lower_end hangs past the face of apron_front
 stave 1
 
 // A tabletop fastener's recess is wider than a 12mm apron is thick: the

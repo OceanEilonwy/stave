@@ -423,6 +423,17 @@ struct FocusState {
     overlay: Overlay,
 }
 
+/// How focus mode stood when a new result closed it, so the same focus
+/// opens again as it was left (X-ray and the other options, the step or
+/// the swing where it was, playing, the plan view).
+#[derive(Debug, Clone, Copy)]
+struct KeptFocus {
+    progress: f32,
+    options: focus::Options,
+    plan: bool,
+    playing: bool,
+}
+
 /// What the floating motion bar opens.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Opening {
@@ -508,6 +519,9 @@ struct State {
     pull_apart: bool,
     /// Pulling apart is playing.
     exploding: bool,
+    /// How focus mode stood when a new result closed it; the focus the
+    /// session carries over opens as it was.
+    focus_kept: Option<KeptFocus>,
     /// How focus mode should open, from the command line, once.
     focus_start: Option<(Option<bool>, Option<f32>)>,
     /// Don't run checks (a screenshot of the checking state).
@@ -831,6 +845,7 @@ impl Component for Window {
                 focus: None,
                 pull_apart: false,
                 exploding: false,
+                focus_kept: None,
                 focus_start: None,
                 hold_checks: false,
                 closing: false,

@@ -52,7 +52,7 @@ kind brass_knob : pull {
     with:  piece
     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
   }
-  cut hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  cut hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through, wall: 0mm) }
   model: model("./knob.glb")
 }
 

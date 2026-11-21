@@ -8,6 +8,11 @@ use crate::ui::viewport::Shown;
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 
+/// Whether problems are pinned on the model as "!" bubbles (and an
+/// off-screen chip at the view's edge). Off: problems show in the header
+/// pill and the Problems list, not over the picture.
+const SHOW_PINS: bool = false;
+
 /// What the rendering group is told.
 #[derive(Debug)]
 pub(in crate::ui) enum RenderingInput {
@@ -1177,7 +1182,8 @@ impl Window {
             let state = &self.state;
             // An edit's menu, card and ghost take the view.
             let editing = session.edit().is_some() || session.change().is_some();
-            let hidden = state.focus.is_some()
+            let hidden = !SHOW_PINS
+                || state.focus.is_some()
                 || editing
                 || session.showing_older()
                 || session.view() != View::Design;

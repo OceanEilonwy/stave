@@ -54,7 +54,6 @@ mod shapes;
 mod signature;
 pub mod trace;
 pub mod values;
-mod walls;
 
 use std::collections::HashMap;
 
@@ -164,9 +163,6 @@ pub(crate) struct Solver<'m> {
     pub(crate) skipped: bool,
     /// Spaced elements that run past their `to` anchor.
     pub(crate) overruns: Vec<stave_model::solved::Overrun>,
-    /// The kinds' rules that read `wall(cut)`, worked out but for the
-    /// wall, which the fit check measures once every cut is made.
-    pub(crate) wall_rules: Vec<stave_model::solved::WallRule>,
     /// Hardware kinds whose mechanism has been reported (a kind's mechanism
     /// is checked for each piece of hardware, and reported once).
     pub(crate) reported_mechanisms: std::collections::BTreeSet<stave_model::ids::KindId>,
@@ -201,7 +197,6 @@ impl<'m> Solver<'m> {
             reported_cycles: Vec::new(),
             skipped: false,
             overruns: Vec::new(),
-            wall_rules: Vec::new(),
             reported_mechanisms: std::collections::BTreeSet::new(),
             deferred: Vec::new(),
             boards: std::collections::BTreeMap::new(),

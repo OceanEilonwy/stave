@@ -274,7 +274,6 @@ impl Resolver<'_> {
                         &Expect::ty(Ty::Bool).named(require.node.name.as_str()),
                     );
                     self.in_kind_require = false;
-                    self.check_wall_comparison(&cx, &condition);
                     let message = self.text(&cx, &require.node.message);
                     requires.push(RequireDef {
                         decl: crate::defs::Decl {

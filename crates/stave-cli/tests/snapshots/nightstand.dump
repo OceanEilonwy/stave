@@ -131,7 +131,7 @@ drawer.face                  21..429              433..579             0..19
 ASSEMBLIES (1)
 drawer                       Drawer (6 parts): travels 350 toward the front
 
-REQUIRES (31)
+REQUIRES (27)
 drawer_room                                  holds
 shelf_room                                   holds
 drawer.slide_fits                            holds
@@ -143,11 +143,7 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.seat_wide                         holds
-top_dowels.seat_long                         holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.seat_wide                         holds
-top_dowels.seat_long                         holds
 drawer.box_dados.not_too_deep                holds
 drawer.box_dados.not_too_deep                holds
 drawer.box_dados.not_too_deep                holds

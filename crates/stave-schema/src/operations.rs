@@ -397,7 +397,10 @@ const TURNING: OperationSpec = OperationSpec {
 pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
     const NOTCH: OperationSpec = OperationSpec {
         operation: Operation::Cut(CutOperation::Notch),
-        arguments: &[argument("depth", DEPTH, D::Required)],
+        arguments: &[
+            argument("depth", DEPTH, D::Required),
+            argument("wall", LENGTH, D::Absent),
+        ],
         selectors: &[Crossing],
         features: &[F::Walls, F::Floor, F::Waste, F::OpenEdges],
         measurements: &[M::Depth],
@@ -410,6 +413,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("depth", DEPTH, D::Required),
             argument("angle", ANGLE, D::Angle(0)),
             argument("from_centre", BOOL, D::Bool(false)),
+            argument("wall", LENGTH, D::Absent),
         ],
         selectors: &[Crossing],
         features: &[F::Walls, F::Floor, F::Waste, F::OpenEdges],
@@ -422,6 +426,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("width", LENGTH, D::Required),
             argument("thickness", LENGTH, D::Required),
             argument("depth", DEPTH, D::Required),
+            argument("wall", LENGTH, D::Required),
         ],
         selectors: &[Crossing, End, Side],
         features: &[F::Walls, F::Floor, F::Waste, F::Outline],
@@ -469,6 +474,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("diameter", LENGTH, D::Required),
             argument("depth", DEPTH, D::Required),
             argument("from_depth", LENGTH, D::Length(0)),
+            argument("wall", LENGTH, D::Required),
         ],
         selectors: &[Crossing, End, Side],
         features: &[F::Centre],

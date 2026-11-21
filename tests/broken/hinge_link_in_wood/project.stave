@@ -187,7 +187,7 @@ kind bent_hinge : hinge {
   }
 
   // The 35mm hole the cup is pressed into, cup_depth deep.
-  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm, wall: 0mm) }
 
   // The arm's side screw sets it 2mm either way on the plate, moving the
   // door in or out over the side.

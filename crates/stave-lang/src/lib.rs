@@ -305,7 +305,6 @@ pub const BUILTIN_FUNCTIONS: &[&str] = &[
     "gap",
     "contact",
     "edge_to_edge",
-    "wall",
 ];
 
 /// Current version written in the `stave <version>` header.

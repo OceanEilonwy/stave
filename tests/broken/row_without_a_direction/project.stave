@@ -69,6 +69,6 @@ kind side_pin : support {
     shape: cylinder(diameter: 5mm, depth: -8mm..0mm)
   }
   cut side_hole: row(crossing(piece, shank), pitch: 32mm) {
-    drill(diameter: 5mm, depth: 8mm)
+    drill(diameter: 5mm, depth: 8mm, wall: 0mm)
   }
 }

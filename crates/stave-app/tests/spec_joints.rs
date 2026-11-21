@@ -899,14 +899,14 @@ fn a_cut_selector_is_end_side_or_crossing() {
 fn side_names_the_face_across_the_width_or_thickness() {
     the_diagnostic(
         &open(
-            "kind k : joint {\n  cut recess: side(piece, normal: length, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
+            "kind k : joint {\n  cut recess: side(piece, normal: length, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm, wall: 0mm)\n  }\n}",
         ),
         "type-mismatch",
         "'normal' needs width or thickness, found length",
     );
     the_diagnostic(
         &open(
-            "kind k : joint {\n  cut recess: side(piece, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
+            "kind k : joint {\n  cut recess: side(piece, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm, wall: 0mm)\n  }\n}",
         ),
         "missing-field",
         "'side' is missing 'normal'",
@@ -989,10 +989,10 @@ fn operations_record_their_measurements() {
         "kind k : joint {
   cut housing: crossing(into, piece) {
     slot(width: 5mm, depth: 6mm, angle: 10deg, from_centre: true)
-    drill(diameter: 5mm, depth: 8mm)
+    drill(diameter: 5mm, depth: 8mm, wall: 0mm)
   }
   cut recess: side(piece, normal: thickness, from: into, opposite: true, flip: true) {
-    pocket(width: 10mm, thickness: 5mm, depth: 5mm)
+    pocket(width: 10mm, thickness: 5mm, depth: 5mm, wall: 0mm)
   }
   cut tenon: end(piece, facing: into) {
     tenon(length: 10mm, width: 100mm, thickness: 6mm)
@@ -1090,7 +1090,7 @@ fn a_dovetail_takes_an_angle_or_a_slope() {
 #[test]
 fn a_drill_has_no_count_and_points_to_joint_members() {
     let opened = open(
-        "kind k : joint {\n  cut hole: crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2)\n  }\n}",
+        "kind k : joint {\n  cut hole: crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2, wall: 0mm)\n  }\n}",
     );
     only_error(&opened, "unknown-field", "'drill' has no field 'count'");
     assert_eq!(
@@ -1218,12 +1218,12 @@ fn hardware_kinds_have_no_joint_fields_and_cut_where_a_member_is() {
     }
     for (entry, code, message) in [
         (
-            "cut hole: end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "cut hole: end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm, wall: 0mm)\n  }",
             "type-mismatch",
             "a hardware kind cuts on crossing, found 'end'",
         ),
         (
-            "cut hole: crossing(piece, knob) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "cut hole: crossing(piece, knob) {\n    drill(diameter: 3mm, depth: 3mm, wall: 0mm)\n  }",
             "unknown-name",
             "'crossing' needs a member of the kind, found 'knob'",
         ),
@@ -1331,7 +1331,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
 #[test]
 fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
     let opened = open(
-        "/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }\n  }\n  member cup {\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }\n  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
+        "/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }\n  }\n  member cup {\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }\n  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm, wall: 0mm) }\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
     );
     let design = design(&opened);
     let door = part(design, "door");
@@ -1708,7 +1708,7 @@ fn two_kinds_may_share_a_cut_name() {
 #[test]
 fn a_kind_nobody_uses_is_still_warned() {
     let opened = open(
-        "kind trench : joint {\n  cut crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n  cut end(piece, facing: into) {\n    tenon(length: 3mm, width: 10mm, thickness: 3mm)\n  }\n  cut crossing(piece, into) {\n    drill(diameter: 3mm, depth: 3mm)\n    slot(width: 3mm, depth: 3mm)\n  }\n}",
+        "kind trench : joint {\n  cut crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n  cut end(piece, facing: into) {\n    tenon(length: 3mm, width: 10mm, thickness: 3mm)\n  }\n  cut crossing(piece, into) {\n    drill(diameter: 3mm, depth: 3mm, wall: 0mm)\n    slot(width: 3mm, depth: 3mm)\n  }\n}",
     );
     assert_eq!(
         diagnostics(&opened),
@@ -1729,7 +1729,7 @@ fn a_kind_nobody_uses_is_still_warned() {
         Some("name it after what it is, as in cut trench: end(...) { ... }")
     );
     let hardware = open(&format!(
-        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut crossing(piece, knob) {{ drill(diameter: 4mm, depth: through) }}\n}}"
+        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut crossing(piece, knob) {{ drill(diameter: 4mm, depth: through, wall: 0mm) }}\n}}"
     ));
     assert_eq!(
         diagnostics(&hardware),
@@ -1737,7 +1737,7 @@ fn a_kind_nobody_uses_is_still_warned() {
     );
     // Named, the same kinds are quiet.
     let named = open(&format!(
-        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut screw_hole: crossing(piece, knob) {{ drill(diameter: 4mm, depth: through) }}\n}}"
+        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut screw_hole: crossing(piece, knob) {{ drill(diameter: 4mm, depth: through, wall: 0mm) }}\n}}"
     ));
     assert_eq!(diagnostics(&named), Vec::<String>::new());
 }

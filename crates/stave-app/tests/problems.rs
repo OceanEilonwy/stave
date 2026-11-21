@@ -214,44 +214,42 @@ fn the_list_is_the_same_every_time() {
 
 #[test]
 fn a_report_holds_everything_stave_check_prints() {
-    let checked = broken("dowels_overlap_too_little");
+    let checked = broken("screw_too_thick");
     let report = problems::report(&checked, ProblemIndex(0)).expect("a report");
     assert_eq!(report.heading(), "error[require]");
     assert_eq!(
         report.message,
-        "'seat_wide' fails: the parts overlap too little for these dowels"
+        "'seat_wide' fails: the parts overlap too little for screws this thick"
     );
     let [primary, rule] = report.places.as_slice() else {
         panic!("two places: {:?}", report.places);
     };
     assert_eq!(primary.role, Role::Primary);
-    assert_eq!(primary.shown, "project.stave:48:20");
-    assert_eq!(primary.location.line.get(), 48);
+    assert_eq!(primary.shown, "project.stave:32:22");
+    assert_eq!(primary.location.line.get(), 32);
     assert!(primary.location.path.ends_with("project.stave"));
-    assert_eq!(primary.before, "joint top_dowels : ");
+    assert_eq!(primary.before, "joint shelf_screws : ");
     assert_eq!(
         primary.marked,
-        "dowel([side_l, side_r], into: top, count: 4)"
+        "screw(shelf, into: arm[*], length: 40mm, count: 2, diameter: 30mm, glue: false)"
     );
     assert_eq!(primary.after, "");
     assert_eq!(rule.role, Role::Secondary);
-    assert_eq!(rule.shown, "std/joinery/dowel.stave:25:3");
-    assert_eq!(rule.location.path, "std/joinery/dowel.stave");
+    assert_eq!(rule.shown, "std/joinery/screw.stave:33:3");
+    assert_eq!(rule.location.path, "std/joinery/screw.stave");
     assert_eq!(rule.message, "the kind's rule");
     assert!(rule.marked.starts_with("require seat_wide"));
     assert_eq!(
         report.notes,
         [
-            "for side_l and top in top_dowels",
-            "the rule measures 5.5mm and needs at least 16mm",
-            "the same for side_r and top in top_dowels",
+            "for shelf and arm[left] in shelf_screws",
+            "the rule measures 19mm and needs at least 42mm",
+            "the same for shelf and arm[right] in shelf_screws",
         ]
     );
     assert_eq!(
         report.help.as_deref(),
-        Some(
-            "top covers only 5.5mm of side_l's 19mm end; move or resize top so it covers the whole end"
-        )
+        Some("change the joint's diameter or wall, or the parts' sizes, so the rule holds")
     );
     // One report per problem, in `stave check` order.
     assert_eq!(problems::reports(&checked), vec![report]);

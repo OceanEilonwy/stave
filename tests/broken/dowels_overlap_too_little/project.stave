@@ -1,4 +1,4 @@
-// expect: error[require] 'seat_wide' fails: the parts overlap too little for these dowels
+// expect: error[wall] top_dowels: its end hole in side_l runs 1.25mm past the right face of side_l; it needs 4mm of wood there
 stave 1
 
 // The reported clothing cabinet edit: the base is made twice the cabinet's

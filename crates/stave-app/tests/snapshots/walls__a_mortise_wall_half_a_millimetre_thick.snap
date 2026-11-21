@@ -2,16 +2,11 @@
 source: crates/stave-app/tests/walls.rs
 expression: "rendered(\"tests/broken/mortise_wall_too_thin\")"
 ---
-error[require]: 'mortise_wall' fails: the mortise comes too close to a face of the part or another cut
+error[wall]: apron_tenons: its mortise in leg_l leaves 0.5mm of wood at the top end of leg_l; it needs 6mm
   --> tests/broken/mortise_wall_too_thin/project.stave:47:22
    |
 47 | joint apron_tenons : mortise_tenon(apron, into: [leg_l, leg_r], length: 20mm, shoulder: 0.5mm)
    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/mortise_tenon.stave:28:3
-   |
-28 |   require mortise_wall : wall(mortise) >= wall "the mortise comes too close to a face of the part or another cut"
-   |   --------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for apron and leg_l in apron_tenons
-   = note: the rule measures 0.5mm and needs at least 6mm
    = note: the same for apron and leg_r in apron_tenons
-   = help: the mortise in leg_l leaves 0.5mm of wood at the top end of leg_l; move the parts so the mortise has more wood round it, or change the joint's settings
+   = help: move the parts so the mortise has 6mm of wood round it, or change the joint's settings

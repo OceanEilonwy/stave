@@ -2,16 +2,11 @@
 source: crates/stave-app/tests/contact.rs
 expression: "rendered(\"tests/broken/dowels_overlap_too_little\")"
 ---
-error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
+error[wall]: top_dowels: its end hole in side_l runs 1.25mm past the right face of side_l; it needs 4mm of wood there
   --> tests/broken/dowels_overlap_too_little/project.stave:48:20
    |
 48 | joint top_dowels : dowel([side_l, side_r], into: top, count: 4)
    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/dowel.stave:25:3
-   |
-25 |   require seat_wide      : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
-   |   -------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for side_l and top in top_dowels
-   = note: the rule measures 5.5mm and needs at least 16mm
    = note: the same for side_r and top in top_dowels
-   = help: top covers only 5.5mm of side_l's 19mm end; move or resize top so it covers the whole end
+   = help: move the parts so the end hole has 4mm of wood round it, or change the joint's settings

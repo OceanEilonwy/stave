@@ -68,7 +68,7 @@ const TRANSCRIPT: &str = r#"> grips assembly apron_front
 > stops 2
   2. apron_front.setback
        down to 0mm (-0.5mm breaks it: error[overlap]: legs and apron_front.apron overlap)
-       up to 7.5mm (8mm breaks it: error[require]: 'mortise_wall' fails: the mortise comes too close to a face of the part or another cut)
+       up to 7.5mm (8mm breaks it: error[wall]: apron_front.tenons: its mortise in legs.leg[front_left] leaves 5.821mm of wood at the mortise that apron_left.tenons cuts in legs.leg[front_left]; it needs 6mm)
 > drag 2 8mm
 Set apron_front.setback to 7.5mm: fits
 > drag 2 6.2mm

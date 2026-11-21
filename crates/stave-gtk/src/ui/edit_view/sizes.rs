@@ -110,6 +110,8 @@ struct SizeEditor {
     high: gtk::Label,
     back: gtk::Button,
     changes: gtk::Box,
+    /// The lines the box shows now.
+    shown_changes: Vec<String>,
     choices: gtk::Box,
     shown_choices: Vec<PanelChoice>,
     verdict: gtk::Box,
@@ -444,8 +446,11 @@ impl SizeEditor {
             .tooltip_text(tr("Type a value and press Enter"))
             .build();
         entry.update_property(&[gtk::accessible::Property::Label(&tr("Value"))]);
+        // A fixed width: "+6mm" and "+1234mm" must not push the field.
         let delta = gtk::Label::builder()
             .valign(gtk::Align::Center)
+            .xalign(0.0)
+            .width_chars(10)
             .css_classes(["stave-size-delta"])
             .build();
         value_line.append(&entry);
@@ -591,6 +596,7 @@ impl SizeEditor {
             high,
             back,
             changes,
+            shown_changes: Vec::new(),
             choices,
             shown_choices: Vec::new(),
             verdict,
@@ -662,18 +668,26 @@ impl SizeEditor {
         self.back
             .set_label(&fill_in(&tr("back to {value}"), &[("value", &view.was)]));
         self.back.set_sensitive(!view.delta.is_empty());
-        clear(&self.changes);
-        if !view.changes.is_empty() {
-            self.changes.append(&sections::words(
-                &tr("What changes"),
-                &["stave-size-heading"],
-            ));
-            for line in &view.changes {
-                self.changes
-                    .append(&sections::words(line, &["stave-grip-change"]));
+        // While a check runs the lines stay as they were, and are only
+        // rebuilt when they change: the card keeps its height through
+        // a drag instead of shrinking and growing with each check.
+        let settling =
+            view.tone == Tone::Checking && !view.delta.is_empty() && !self.shown_changes.is_empty();
+        if !settling && self.shown_changes != view.changes {
+            clear(&self.changes);
+            if !view.changes.is_empty() {
+                self.changes.append(&sections::words(
+                    &tr("What changes"),
+                    &["stave-size-heading"],
+                ));
+                for line in &view.changes {
+                    self.changes
+                        .append(&sections::words(line, &["stave-grip-change"]));
+                }
             }
+            self.changes.set_visible(!view.changes.is_empty());
+            self.shown_changes.clone_from(&view.changes);
         }
-        self.changes.set_visible(!view.changes.is_empty());
         if self.shown_choices != view.choices {
             self.show_choices(&view.choices, input);
             self.shown_choices.clone_from(&view.choices);
@@ -820,7 +834,7 @@ entry.stave-size-entry.refused, entry.stave-size-entry.error { border-color: @er
 button.stave-size-step { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; padding: 2px 9px;
   min-height: 24px; }
 .stave-size-heading { font-size: 0.784rem; font-weight: 700; opacity: 0.7; }
-.stave-size-verdict { padding: 8px 10px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+.stave-size-verdict { padding: 8px 10px; min-height: 24px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
   background: alpha(currentColor, 0.06); }
 .stave-size-verdict.checking { color: #99c1f1; background: alpha(#99c1f1, 0.1); }
 .stave-size-verdict.fits { color: @success_color; background: alpha(@success_color, 0.14); }

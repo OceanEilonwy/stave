@@ -5,5 +5,5 @@ kind housing : joint {
     slot(width: 6mm, $0)
   }
 }
-// label: slot(width:, depth:, angle = 0deg, from_centre = false)
+// label: slot(width:, depth:, angle = 0deg, from_centre = false, wall:)
 // active: -

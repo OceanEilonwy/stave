@@ -10,7 +10,7 @@ use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef};
 use stave_model::ids::HardwareId;
-use stave_model::solved::{CutSource, Rules};
+use stave_model::solved::Rules;
 use stave_model::value::{AnchorValue, ParamSettings, Value};
 
 use crate::eval::{Env, KindEnv};
@@ -314,13 +314,8 @@ impl Solver<'_> {
             array: None,
         };
         let mut all = true;
-        let source = CutSource::Hardware {
-            hardware: call.hardware,
-        };
-        for (index, require) in kind.indexed_requires() {
-            if self.defer_wall_rule(source, binding.kind, index, require, &env)?
-                || self.eval_bool(&require.condition, &env)?
-            {
+        for (_, require) in kind.indexed_requires() {
+            if self.eval_bool(&require.condition, &env)? {
                 continue;
             }
             all = false;

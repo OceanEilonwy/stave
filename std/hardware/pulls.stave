@@ -30,7 +30,7 @@ kind knob : pull {
     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
   }
 
-  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through, wall: 3mm) }
 }
 
 /// A bar pull held by two screws from behind.
@@ -64,5 +64,5 @@ kind bar_pull : pull {
     shape right: cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: centres / 2))
   }
 
-  cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through) }
+  cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through, wall: 3mm) }
 }

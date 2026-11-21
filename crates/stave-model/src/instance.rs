@@ -532,7 +532,6 @@ impl Builder {
             | RExprKind::KindValue { .. }
             | RExprKind::Unary { .. }
             | RExprKind::List(_)
-            | RExprKind::Wall(_)
             | RExprKind::Error => None,
         }
     }
