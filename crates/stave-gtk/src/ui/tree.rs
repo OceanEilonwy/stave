@@ -1531,7 +1531,10 @@ fn partner_link(partner: &Partner, shown: &Shown<'_>) -> gtk::Widget {
     let label = gtk::Label::builder()
         .label(&partner.label)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .width_chars(i32::try_from(keeps).unwrap_or(0))
+        // A cap on how much of the name shows, never a floor: a floor
+        // (`width_chars`) is the label's smallest width, and a selected
+        // part's row would push the dock wider than people made it.
+        .max_width_chars(i32::try_from(keeps).unwrap_or(0))
         .build();
     let Some(selection) = partner.selection.clone() else {
         label.add_css_class("stave-partner-text");
@@ -1786,6 +1789,38 @@ mod tests {
                 window.destroy();
             }
         });
+    }
+
+    #[test]
+    fn a_selected_parts_rows_ask_for_little_width() {
+        on_gtk_thread(joined_rows_ask_for_little_width);
+    }
+
+    /// A dock keeps the width people gave it unless its content's smallest
+    /// width is more, and the rows listed under a selected part must not
+    /// raise it: their names are cut short to fit, never kept whole.
+    fn joined_rows_ask_for_little_width() {
+        let design = cabinet();
+        let sidebar = quiet_sidebar();
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        let stile = part(&design, "door_l.stile[hinge]");
+        sidebar.show_selection(Some(&Selection::of_item(stile)));
+        settle();
+        let joined: Vec<gtk::Widget> = descendants(sidebar.root.upcast_ref())
+            .into_iter()
+            .filter(|widget| widget.has_css_class("stave-parts-joined"))
+            .collect();
+        assert!(!joined.is_empty(), "the selected part lists its joints");
+        for row in joined {
+            let smallest = row.measure(gtk::Orientation::Horizontal, -1).0;
+            assert!(
+                smallest <= 100,
+                "a joined-to row asks for {smallest} px at least"
+            );
+        }
     }
 
     #[test]
