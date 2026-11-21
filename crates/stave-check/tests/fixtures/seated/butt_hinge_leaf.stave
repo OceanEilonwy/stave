@@ -1,0 +1,31 @@
+stave 1
+
+project "Butt leaf on lid" {
+  units: mm
+}
+
+stock cedar { species: cedar, form: solid, thickness: 19mm, max_width: 190mm, max_length: 2400mm }
+
+part wall : cedar {
+  length: 900mm
+  width:  100mm
+  place { ground }
+}
+
+// The lid is shorter than the wall, flush with its right end; the hinges
+// are laid out from the wall's ends, not the lid's.
+part lid : cedar {
+  length: 875mm
+  width:  100mm
+  place {
+    against(wall.top)
+    flush(wall.right)
+    flush(wall.front)
+  }
+}
+
+hardware hinges[left, right] : butt_hinge(lid, on: wall, length: 40mm, face: bottom) {
+  place {
+    spaced(ends(inset: 25mm), from: wall.left, to: wall.right)
+  }
+}

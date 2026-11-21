@@ -299,6 +299,8 @@ codes! {
     Internal = "internal", layer 3;
     /// `<joint>: <part> meets none of the parts it should join`
     NoContact = "no-contact", layer 4;
+    /// `<hardware>: its <member> hangs off the <end> of <part>`
+    Overhang = "overhang", layer 4;
     /// `<a> and <b> overlap`
     Overlap = "overlap", layer 4;
     /// `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`

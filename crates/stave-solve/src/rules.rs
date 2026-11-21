@@ -350,7 +350,7 @@ impl Solver<'_> {
     /// same call (another element of its array) already has an error with
     /// this code, it gets a note `the same for <name>` and `true` comes
     /// back, so nothing more is reported for this one.
-    fn noted_with_earlier(&mut self, code: Code, call: Call<'_>) -> bool {
+    pub(crate) fn noted_with_earlier(&mut self, code: Code, call: Call<'_>) -> bool {
         self.noted_with_earlier_message(code, call, None)
     }
 

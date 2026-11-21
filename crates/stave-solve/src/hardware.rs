@@ -647,6 +647,20 @@ impl Solver<'_> {
             &offsets,
             mount_anchor,
         )?;
+        // One mistake, one error: a kind's own rule speaks first.
+        let call = Call {
+            hardware,
+            name,
+            file: env.file,
+            span,
+        };
+        let rules = if rules == Rules::Hold
+            && !self.seated(call, kind, &hardware_kind.cuts, &roles, &bodies, &frame)?
+        {
+            Rules::Broken
+        } else {
+            rules
+        };
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name,
@@ -1317,6 +1331,21 @@ impl Solver<'_> {
                 let target = middle(&self.role_box(binding, other)?)?;
                 Ok(side(&part_box, nearer_high(&part_box, target)?))
             }
+            MountSelector::FaceNearer { part, region } => {
+                // The face nearer the same-named face of the region, as a
+                // kind's `face: face(p, nearer: r)`, across this axis.
+                let part_box = self.role_box(binding, part)?;
+                let region_box = self.role_box(binding, region)?;
+                let low = part_box
+                    .min(axis)
+                    .checked_sub(region_box.min(axis))
+                    .ok_or(Fault::Overflow)?;
+                let high = region_box
+                    .max(axis)
+                    .checked_sub(part_box.max(axis))
+                    .ok_or(Fault::Overflow)?;
+                Ok(side(&part_box, abs(high)? < abs(low)?))
+            }
             MountSelector::Crossing { part, other } => {
                 let part_box = self.role_box(binding, part)?;
                 let other_box = self.role_box(binding, other)?;
@@ -1511,6 +1540,108 @@ impl Solver<'_> {
         Ok(())
     }
 
+    /// Every seated member lies wholly on its part across the face it is
+    /// seated on (grammar, "Cuts stay in their part", `error[overhang]`):
+    /// a member a cut houses, across the face the cut is made from; one
+    /// its own `mount` places against its part, across the face it lies
+    /// against. Only its depth may run past, and a housed member
+    /// must enter its part, not only touch it. `false` when one doesn't,
+    /// reported like a failed rule: once for a call, the rest of an array
+    /// as notes.
+    fn seated(
+        &mut self,
+        call: Call<'_>,
+        kind: &KindDef,
+        cuts: &[stave_model::defs::MemberCutDef],
+        roles: &[(String, RoleBound)],
+        bodies: &[PlacedBody],
+        frame: &Frame,
+    ) -> Solved<bool> {
+        let name = call.name;
+        let part_of = |role: RoleIndex| match roles.get(role.index()) {
+            Some((_, RoleBound::Part(part))) => Some(*part),
+            Some((_, RoleBound::Region(_))) | None => None,
+        };
+        for placed in bodies {
+            let Some(def) = kind.bodies.get(placed.body.index()) else {
+                continue;
+            };
+            let mut seats: Vec<(PartId, Seat)> = cuts
+                .iter()
+                .filter(|cut| cut.body == placed.body)
+                .filter_map(|cut| part_of(cut.part).map(|part| (part, Seat::Cut)))
+                .collect();
+            if let Carrier::Role(role) = def.with
+                && let Some(part) = part_of(role)
+                && !def.mount.is_empty()
+            {
+                seats.push((part, Seat::Against));
+            }
+            for (part, seat) in seats {
+                let part_box = self.drawn_box(part)?;
+                for (index, shape) in placed.shapes.iter().enumerate() {
+                    let over = if seat == Seat::Cut
+                        && let Some(axis) = shape.world.touching_axis(&part_box)
+                    {
+                        // Housed, but only touching its part: it lies wholly
+                        // past it, and its cut would have no length.
+                        Some(Overhang {
+                            axis,
+                            held: ExactLength::ZERO,
+                            whole: size_on(&shape.world, axis),
+                        })
+                    } else {
+                        let normal = match seat {
+                            Seat::Cut => {
+                                crossing_face(&shape.world, &part_box, frame).map(Face::axis)
+                            }
+                            Seat::Against => shape.world.touching_axis(&part_box).or_else(|| {
+                                crossing_face(&shape.world, &part_box, frame).map(Face::axis)
+                            }),
+                        };
+                        normal.and_then(|normal| overhang(&shape.world, &part_box, normal))
+                    };
+                    let Some(over) = over else {
+                        continue;
+                    };
+                    let member = def.name.as_str();
+                    let member_text = match def.shapes.get(index).and_then(|s| s.name.as_deref()) {
+                        Some(shape_name) if def.shapes.len() > 1 => {
+                            format!("the {shape_name} shape of its {member}")
+                        }
+                        Some(_) | None => format!("its {member}"),
+                    };
+                    let part_name = self.part_name(part);
+                    let surface = match self.part_orientation(part)?.part_axis(over.axis) {
+                        PartAxis::Length => "hangs off the end",
+                        PartAxis::Width => "hangs off the edge",
+                        PartAxis::Thickness => "hangs past the face",
+                    };
+                    let note = format!(
+                        "{part_name} holds {} of the {} {member}",
+                        self.describe(&Value::Length(over.held)),
+                        self.describe(&Value::Length(over.whole)),
+                    );
+                    if self.noted_with_earlier(Code::Overhang, call) {
+                        return Ok(false);
+                    }
+                    let diagnostic = Diagnostic::error(
+                        Code::Overhang,
+                        format!("{name}: {member_text} {surface} of {part_name}"),
+                        Label::new(call.file, call.span),
+                    )
+                    .with_note(note)
+                    .with_help(format!(
+                        "place {name} so its {member} lies wholly on {part_name}"
+                    ));
+                    self.deferred.push(diagnostic);
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// The cuts a kind makes for one piece of hardware: one per shape of
     /// the member each cut names.
     #[allow(clippy::too_many_arguments)]
@@ -1550,17 +1681,26 @@ impl Solver<'_> {
             })?;
             let part_box = self.drawn_box(part)?;
             let first = out.len();
-            for shape in &placed.shapes {
+            for (index, shape) in placed.shapes.iter().enumerate() {
                 let Some(face) = crossing_face(&shape.world, &part_box, frame) else {
                     let part_name = self.part_name(part);
-                    let member = kind
-                        .bodies
-                        .get(cut.body.index())
+                    let body = kind.bodies.get(cut.body.index());
+                    let member = body
                         .map(|body| body.name.as_str().to_owned())
                         .unwrap_or_default();
+                    // A member of several shapes: name the one that misses,
+                    // since another may meet the part.
+                    let missing = match body.filter(|body| body.shapes.len() > 1).and_then(|body| {
+                        body.shapes
+                            .get(index)
+                            .and_then(|named| named.name.as_deref())
+                    }) {
+                        Some(shape_name) => format!("the {shape_name} shape of {member}"),
+                        None => member.clone(),
+                    };
                     return Err(self.error(
                         Code::NoContact,
-                        format!("{name}: {member} meets none of the parts it should join"),
+                        format!("{name}: {missing} meets none of the parts it should join"),
                         file,
                         span,
                         format!(
@@ -2089,6 +2229,56 @@ pub(crate) fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldSha
 }
 
 /// `true` when two boxes touch over an area or overlap.
+/// How a member is seated on its part (grammar, "Cuts stay in their
+/// part"): what decides the face it must lie wholly on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seat {
+    /// A cut of the kind houses it: the face the cut is made from.
+    Cut,
+    /// Its own `mount` places it against its part: the face it lies
+    /// against.
+    Against,
+}
+
+/// Where a seated shape runs past its part across the face it is seated
+/// on: the first world axis it does, how much of it the part holds there
+/// and its whole size.
+struct Overhang {
+    axis: Axis,
+    held: ExactLength,
+    whole: ExactLength,
+}
+
+/// The first axis other than `normal` along which `shape` runs past
+/// `part`, if any.
+fn overhang(shape: &ExactBox, part: &ExactBox, normal: Axis) -> Option<Overhang> {
+    Axis::ALL
+        .into_iter()
+        .filter(|axis| *axis != normal)
+        .find(|axis| shape.min(*axis) < part.min(*axis) || shape.max(*axis) > part.max(*axis))
+        .map(|axis| {
+            let low = shape.min(axis).max(part.min(axis));
+            let high = shape.max(axis).min(part.max(axis));
+            let held = high
+                .checked_sub(low)
+                .unwrap_or(ExactLength::ZERO)
+                .max(ExactLength::ZERO);
+            Overhang {
+                axis,
+                held,
+                whole: size_on(shape, axis),
+            }
+        })
+}
+
+/// A box's size along a world axis.
+fn size_on(shape: &ExactBox, axis: Axis) -> ExactLength {
+    shape
+        .max(axis)
+        .checked_sub(shape.min(axis))
+        .unwrap_or(ExactLength::ZERO)
+}
+
 fn meets(a: &ExactBox, b: &ExactBox) -> bool {
     let mut strict = 0;
     for axis in Axis::ALL {

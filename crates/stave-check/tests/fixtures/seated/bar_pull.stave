@@ -1,0 +1,24 @@
+stave 1
+
+project "Pull overhang" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
+
+/// A door (or drawer front) standing on its own.
+part door : ply_18 {
+  length: 400mm
+  width:  150mm
+  place {
+    ground
+    orient(length: right, width: up)
+  }
+}
+
+hardware handle : bar_pull(door) {
+  place {
+    center(door, up)
+    center(door, across)
+  }
+}
