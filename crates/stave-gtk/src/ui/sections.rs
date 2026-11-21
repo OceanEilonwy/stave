@@ -67,8 +67,18 @@ impl<Message: 'static> LinkHandlers<Message> {
 
     /// A link button for `link`.
     pub(super) fn link(&self, link: &NameLink) -> gtk::Button {
+        // A name is never cut short while it could be read whole: it
+        // asks for its whole width (names are monospace, so that many
+        // characters), and only a name longer than LINK_WHOLE_CHARS may
+        // end in "…" in a narrow panel. Asking for less let the row hand
+        // a short name a few pixels too few, and "foot_mid" showed as
+        // "foot_mi…" with the panel half empty.
+        let whole = i32::try_from(link.name.chars().count())
+            .unwrap_or(LINK_WHOLE_CHARS)
+            .min(LINK_WHOLE_CHARS);
         let label = gtk::Label::builder()
             .label(&link.name)
+            .width_chars(whole)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build();
         let button = gtk::Button::builder()
@@ -116,6 +126,10 @@ impl<Message: 'static> LinkHandlers<Message> {
         wrap
     }
 }
+
+/// The most characters of a name link always shown whole; a longer name
+/// may end in "…" when the panel is too narrow for it.
+const LINK_WHOLE_CHARS: i32 = 24;
 
 /// A collapsible section: its title (and a grey note on the right) on a
 /// faint band, and the box its rows go in. Open unless `open` is false.
