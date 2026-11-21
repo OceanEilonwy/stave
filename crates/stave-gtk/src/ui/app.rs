@@ -520,6 +520,9 @@ impl Shell {
     /// application's actions and every action's keys.
     fn startup(&mut self) {
         if let Some(display) = gdk::Display::default() {
+            // Before anything names the application icon: the window
+            // icon, the About dialog, the start page.
+            super::logo::install_icons(&display);
             style::install(&display);
             super::edit_view::changes::install_style(&display);
             super::edit_view::grip_panel::install_style(&display);
