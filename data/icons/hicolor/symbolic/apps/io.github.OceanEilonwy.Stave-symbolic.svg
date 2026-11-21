@@ -1,4 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <path fill="#222222" d="M1 2 H15 V7 H12 L12.75 10 H9.25 L10 7 H6 L6.75 10 H3.25 L4 7 H1 Z"/>
-  <path fill="#222222" d="M1 8 H3 L2.3 10.75 H7.7 L7 8 H9 L8.3 10.75 H13.7 L13 8 H15 V14 H1 Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 120 120">
+  <!-- The dovetail cube in one colour: the walnut half solid, the maple
+       half's sides lighter and its top lightest, so the joint still reads. -->
+  <path fill="#222222" d="M44.80 81.12 L51.56 64.22 L23.41 47.98 L30.17 72.67 L14.97 63.90 L14.97 86.00 L60.00 112.00 L60.00 89.90 Z"/>
+  <path fill="#222222" d="M60.00 112.00 L105.03 86.00 L105.03 56.10 L89.83 64.88 L96.59 81.78 L68.44 98.03 L75.20 73.33 L60.00 82.10 Z"/>
+  <path fill="#222222" opacity="0.55" d="M14.97 63.90 L30.17 72.67 L23.41 47.98 L51.56 64.22 L44.80 81.12 L60.00 89.90 L60.00 60.00 L14.97 34.00 Z"/>
+  <path fill="#222222" opacity="0.55" d="M60.00 60.00 L60.00 82.10 L75.20 73.33 L68.44 98.03 L96.59 81.78 L89.83 64.88 L105.03 56.10 L105.03 34.00 Z"/>
+  <path fill="#222222" opacity="0.3" d="M14.97 34.00 L60.00 60.00 L105.03 34.00 L60.00 8.00 Z"/>
 </svg>
