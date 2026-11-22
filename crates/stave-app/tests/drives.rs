@@ -413,10 +413,33 @@ fn two_turns_of_one_member_are_a_mechanism_error() {
         "drive height: travel(bolt, from: 0mm, to: -drop)",
         "drive swing: turn(bolt, from: 0deg, to: 90deg)",
     );
+    // A member moving in a plane turns about one line: the one physical
+    // rule kept now that drives may act on any members.
     let opened = open(&text);
     assert!(
         opened.diagnostics.iter().any(|d| d.code == Code::Mechanism
-            && d.message == "`tilt` and `swing` both turn `bolt`: a member turns one way"),
+            && d.message
+                == "`tilt` and `swing` both turn `bolt`: a member moving in a plane turns about one line"),
+        "{}",
+        rendered(&opened)
+    );
+    insta::assert_snapshot!(rendered(&opened));
+}
+
+#[test]
+fn two_travels_of_one_member_are_a_mechanism_error() {
+    // A member travels along its one rail or slot, so a second travel of
+    // it would move it along the same line.
+    let text = changed(
+        &without_scenes(),
+        "drive tilt:   turn(bolt, from: 0deg, to: turn)",
+        "drive lift:   travel(bolt, from: 0mm, to: -100mm)",
+    );
+    let opened = open(&text);
+    assert!(
+        opened.diagnostics.iter().any(|d| d.code == Code::Mechanism
+            && d.message
+                == "`lift` and `height` both move `bolt`: a member travels along one line, its rail or slot"),
         "{}",
         rendered(&opened)
     );

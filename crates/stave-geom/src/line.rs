@@ -4,7 +4,10 @@
 //! Everything here is exact integer arithmetic on nanometres. The line's
 //! point is kept doubled, so the middle of a box is exact; where a line
 //! crosses a round or slanted outline, the ends are irrational and are
-//! taken to the nanometre, far inside the 0.05mm contact tolerance.
+//! taken to the nanometre, far inside the 0.05mm contact tolerance. A
+//! line seen by a body a pose has turned about a line along its axis
+//! ([`Line::seen_by`]) is worked out in floats and taken to the
+//! nanometre the same way.
 //!
 //! A solid's wood is its boxes, rods and prisms; its drilled holes and
 //! angled cuts are not taken out (a hole is never a gap, and an angled
@@ -13,9 +16,10 @@
 
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
-use stave_model::solved::WorldBox;
+use stave_model::solved::{Point, WorldBox};
 
-use crate::collide::{WorldPrism, WorldRod, WorldSolid};
+use crate::collide::{Placement, WorldPrism, WorldRod, WorldSolid, point_vector};
+use crate::render;
 
 /// A line along a world axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +216,99 @@ impl Line {
             Length::from_nm(i64::try_from(high / 2).ok()?),
         ))
     }
+
+    /// The line as a body moved by `placement` sees it where it is at
+    /// rest, and how a coordinate along it there maps back onto this line
+    /// (grammar, "Clamps", at a pose): `Some` when the move leaves the line
+    /// along the same world axis (a slide; a turn about a line along the
+    /// axis, which takes a line on it to itself), exact for a slide and to
+    /// the nanometre for a turn; `None` when the move slants it.
+    pub fn seen_by(&self, placement: &Placement) -> Option<(Line, AlongMap)> {
+        let [first, second] = self.axis.others();
+        match placement {
+            Placement::Exact(offset) => {
+                let back = |on: Axis, doubled: i128| {
+                    doubled.checked_sub(2 * i128::from(offset.get(on).nm()))
+                };
+                Some((
+                    Line {
+                        axis: self.axis,
+                        doubled: [
+                            back(first, self.doubled[0])?,
+                            back(second, self.doubled[1])?,
+                        ],
+                    },
+                    AlongMap {
+                        reversed: false,
+                        shift: offset.get(self.axis),
+                    },
+                ))
+            }
+            Placement::Turned(matrix) => {
+                let inverse = matrix.inverse();
+                let unit = point_vector(Point::default().with(self.axis, Length::from_nm(1)));
+                let unit_on =
+                    |axis: Axis| point_vector(Point::default().with(axis, Length::from_nm(1)));
+                // Half a doubled coordinate, in nanometres.
+                let half = |doubled: i128| -> Option<f64> {
+                    let whole = i64::try_from(doubled.div_euclid(2)).ok()?;
+                    let rest = if doubled.rem_euclid(2) == 0 { 0.0 } else { 0.5 };
+                    Some(render::nm(Length::from_nm(whole)) + rest)
+                };
+                let on_line = unit_on(first) * half(self.doubled[0])?
+                    + unit_on(second) * half(self.doubled[1])?;
+                let direction = inverse.transform_vector3(unit);
+                if direction.cross(unit).length() > 1e-9 {
+                    return None;
+                }
+                let reversed = direction.dot(unit) < 0.0;
+                let seen = inverse.transform_point3(on_line);
+                let coordinate = |axis: Axis| seen.dot(unit_on(axis));
+                let doubled = |axis: Axis| -> Option<i128> {
+                    let value = (2.0 * coordinate(axis)).round();
+                    render::length_from_nm(value).map(|length| i128::from(length.nm()))
+                };
+                // A coordinate `u'` along the seen line is `±u' + shift`
+                // along this one.
+                let along = coordinate(self.axis);
+                let shift = if reversed { along } else { -along };
+                Some((
+                    Line {
+                        axis: self.axis,
+                        doubled: [doubled(first)?, doubled(second)?],
+                    },
+                    AlongMap {
+                        reversed,
+                        shift: render::length_from_nm(shift.round())?,
+                    },
+                ))
+            }
+        }
+    }
+}
+
+/// How a coordinate along a line, as a moved body sees it at rest, maps
+/// back onto the line where the body is ([`Line::seen_by`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlongMap {
+    reversed: bool,
+    shift: Length,
+}
+
+impl AlongMap {
+    /// A stretch the body sees, where it is on the line; `None` past
+    /// `i64` nanometres (never a design's).
+    pub fn stretch(&self, seen: Stretch) -> Option<Stretch> {
+        let map = |at: Length| -> Option<Length> {
+            let own = if self.reversed {
+                at.nm().checked_neg()?
+            } else {
+                at.nm()
+            };
+            own.checked_add(self.shift.nm()).map(Length::from_nm)
+        };
+        Some(Stretch::new(map(seen.low)?, map(seen.high)?))
+    }
 }
 
 #[cfg(test)]
@@ -314,5 +411,47 @@ mod tests {
         assert_eq!(outside.in_prism(&prism), None);
         let across = Line::through_middle(Axis::Up, &WorldBox::new(point(2, 0, 4), point(2, 0, 4)));
         assert_eq!(across.in_prism(&prism), Some(stretch(0, 6)));
+    }
+
+    /// A clamp at a pose (grammar, "Clamps"): a body moved straight sees
+    /// the line moved back; one turned about a line along the axis
+    /// through the clamp's line sees the line itself; one turned about
+    /// another axis sees it slanted.
+    #[test]
+    fn a_line_seen_by_a_moved_body() {
+        let region = WorldBox::new(point(0, 0, 0), point(45, 70, 1500));
+        let at = |up: i64| {
+            Line::through_middle(
+                Axis::Across,
+                &WorldBox::new(point(0, up, 750), point(0, up, 750)),
+            )
+        };
+        let line = at(35);
+        // Moved 100mm up and 10mm across: it sees a line 135mm up where it
+        // was at rest 35mm up, and what it fills is 10mm further across.
+        let up = Placement::Exact(point(10, 100, 0));
+        let (seen, back) = at(135).seen_by(&up).unwrap();
+        assert_eq!(seen, line);
+        assert_eq!(
+            seen.in_box(&region).and_then(|s| back.stretch(s)),
+            Some(stretch(10, 55))
+        );
+        // The line it was on at rest now runs below it.
+        let (below, _) = line.seen_by(&up).unwrap();
+        assert_eq!(below.in_box(&region), None);
+        // Turned a quarter about the line itself: the same stretch.
+        let through = glam::DVec3::new(0.0, 35e6, 750e6);
+        let turn = glam::DMat4::from_translation(through)
+            * glam::DMat4::from_rotation_x(std::f64::consts::FRAC_PI_2)
+            * glam::DMat4::from_translation(-through);
+        let (seen, back) = line.seen_by(&Placement::Turned(turn)).unwrap();
+        assert_eq!(seen, line);
+        assert_eq!(
+            seen.in_box(&region).and_then(|s| back.stretch(s)),
+            Some(stretch(0, 45))
+        );
+        // Turned about `up`: slanted across the line.
+        let slant = glam::DMat4::from_rotation_y(0.3);
+        assert_eq!(line.seen_by(&Placement::Turned(slant)), None);
     }
 }

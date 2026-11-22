@@ -216,6 +216,31 @@ fn a_loose_member_is_checked_at_every_set_position() {
 }
 
 #[test]
+fn a_bolt_not_loose_slid_out_of_its_hole_into_the_wood_is_a_motion_error() {
+    // Grammar, "Sweeps see cuts": the bolt starts in its hole, the room
+    // the drill made for it, so it overlaps the upright's block only
+    // inside the hole. Not loose, it is swept with the frame, and half a
+    // millimetre (and the contact tolerance) down it is out of the hole
+    // and in the wood between the holes.
+    let text = changed(
+        &fixture(),
+        "    with:  into\n    loose: true\n",
+        "    with:  into\n",
+    );
+    let opened = open(&text);
+    assert_eq!(codes(&opened), [Code::Motion], "{}", rendered(&opened));
+    assert_eq!(
+        opened.diagnostics[0].message,
+        "frame.pivot_l's bolt hits upright_l when frame.height is pulled out past 0.55mm"
+    );
+    insta::assert_snapshot!(rendered(&opened));
+    // Loose, it is pulled out to move the frame: clean (see
+    // `a_frame_set_in_a_row_of_holes_checks_clean`). A bolt sliding in a
+    // routed slot never leaves its room: the rising cheval is clean (see
+    // `drives::a_frame_that_rises_and_tilts_checks_clean`).
+}
+
+#[test]
 fn a_loose_member_still_counts_in_its_clamp() {
     // The stile set 5mm off the upright, with a 3mm washer: the knob
     // drawn tight pulls across a 2mm gap. The bolt, washer and knob are

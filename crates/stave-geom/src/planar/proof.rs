@@ -412,14 +412,18 @@ pub(super) fn prove(
         offset: (0..count).map(held).collect(),
         travel: vec![None; count],
     };
-    let driven = mechanism.drive_body();
     // The held drives don't change over the interval; the swept one
     // changes one unit for each unit of drive.
-    for (index, drive) in mechanism.drives().iter().enumerate() {
+    for (index, (drive, driven)) in mechanism
+        .drives()
+        .iter()
+        .zip(mechanism.drive_bodies())
+        .enumerate()
+    {
         let rate = if index == mechanism.swept() { 1.0 } else { 0.0 };
         match drive {
-            Drive::Turn { .. } => put(&mut rates.turn, driven, rate)?,
-            Drive::Travel { .. } => put(&mut rates.travel, driven, rate)?,
+            Drive::Turn { .. } => put(&mut rates.turn, *driven, rate)?,
+            Drive::Travel { .. } => put(&mut rates.travel, *driven, rate)?,
         }
     }
     let mut least: Option<f64> = None;

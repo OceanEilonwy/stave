@@ -1,0 +1,191 @@
+// A drafting table whose board is raised and tilted (grammar,
+// "Mechanisms", drives may act on any members): on each leg a steel
+// sleeve runs up a slot routed in the leg, on a rail along it (the
+// `height` drive moves the sleeve), and the board's bolt turns in the
+// sleeve (the `tilt` drive turns the bolt). Two members, each moved by
+// its own drive: the board moves with the bolt, which the solver places
+// on the sleeve from both drives. A rail joins the legs at the top.
+stave 1
+
+project "Rise and Tilt Drafting Table" {
+  goal: "A drawing board that is raised and tilted between two legs"
+}
+
+region envelope = box(across: 700mm, up: 1200mm, deep: 500mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part leg_l : beech_45 {
+  length: 1120mm
+  width:  70mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part leg_r = mirror(leg_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(leg_l.bottom)
+    center(envelope, across)
+    center(leg_l, deep)
+  }
+}
+
+// The rail across the top of the legs, flat: the board passes under it.
+part head_rail : beech_25 {
+  length: fit
+  width:  50mm
+  place {
+    orient(length: right, width: back)
+    flush(leg_l.top)
+    center(envelope, across)
+    center(leg_l, deep)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [leg_l, leg_r], length: 30mm)
+joint head_tenons      : mortise_tenon(head_rail, into: [leg_l, leg_r], length: 30mm)
+
+kind rise_and_tilt : fitting {
+  roles {
+    piece: Part     // the leg the sleeve runs up
+    into:  Part     // the board's stile
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// Diameter of the steel sleeve the bolt turns in.
+  param sleeve_diameter = 14mm
+  /// How far the bolt goes into the stile, into a threaded insert.
+  param thread_length = 25mm
+  /// The steel washer the board turns on, between the leg and the stile.
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
+  /// Wood left round the holes.
+  param wall = 6mm
+  /// How far the board tilts.
+  param tilt_range = 60deg
+  /// How high up the leg the sleeve sits, at its lowest.
+  param height = 850mm
+  /// How far the sleeve rises up its slot.
+  param rise = 200mm
+
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The sleeve: a steel tube that runs up the slot in the leg. Nothing
+  /// holds it but the mechanism.
+  member sleeve {
+    shape: cylinder(diameter: sleeve_diameter, depth: 0mm..piece.thickness)
+  }
+  /// The bolt: through the sleeve, into a threaded insert in the stile.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  /// The washer: the stile turns on it, steel on wood, clear of the leg.
+  member washer {
+    with:  bolt
+    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
+  }
+  /// The knob: tighten to hold the board, loosen to raise or tilt it.
+  member knob {
+    with:  bolt
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+
+  // The slot the sleeve runs in, routed through the leg: as long again
+  // below the sleeve as above it, centred on it.
+  cut sleeve_slot: crossing(piece, sleeve) { pocket(width: 2 * rise + sleeve_diameter + 4mm, thickness: sleeve_diameter + 4mm, depth: through, wall: 3mm) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    rail sleeve, piece along along
+    pivot bolt, sleeve at point(along: 0mm, across: 0mm)
+    drive height: travel(sleeve, from: 0mm, to: rise)
+    drive tilt:   turn(bolt, from: 0deg, to: tilt_range)
+  }
+}
+
+component Board {
+  param stand_l : Part
+  param stand_r : Part
+  param washer  = 3mm
+
+  part stile_l : beech_45 {
+    length: 400mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(stand_l.bottom, inset: 825mm)
+      against(stand_l.right, gap: washer)
+      center(stand_l, deep)
+    }
+  }
+
+  part stile_r : beech_45 {
+    length: 400mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(stand_r.bottom, inset: 825mm)
+      against(stand_r.left, gap: washer)
+      center(stand_r, deep)
+    }
+  }
+
+  part front_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(stile_l.front)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, up)
+    }
+  }
+
+  part back_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(stile_l.back)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, up)
+    }
+  }
+
+  joint rail_tenons : mortise_tenon([front_rail, back_rail], into: [stile_l, stile_r], length: 20mm)
+
+  // One on the outside face of each leg: their pins lie on one line, so
+  // they raise and tilt the board as one.
+  hardware lift_l : rise_and_tilt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+  hardware lift_r : rise_and_tilt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+}
+
+assembly board : Board {
+  stand_l: leg_l
+  stand_r: leg_r
+}
+
+scene working "Raised a little and tilted" {
+  pose board.height = 100mm
+  pose board.tilt = 20deg
+}

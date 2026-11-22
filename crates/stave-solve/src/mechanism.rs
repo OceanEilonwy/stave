@@ -311,8 +311,8 @@ pub(crate) struct HardwareMechanism {
     /// The names of its kind's roles, in order: an entry may name one.
     pub roles: Vec<String>,
     pub entries: Vec<Entry>,
-    /// Empty for a mechanism that follows its assembly's; every one moves
-    /// one member.
+    /// Empty for a mechanism that follows its assembly's; each acts on a
+    /// member the mechanism places.
     pub drives: Vec<KindDrive>,
     pub stop: Option<(StopValue, String)>,
 }
@@ -340,6 +340,8 @@ struct Declared {
     entries: Vec<MechanismEntry>,
     /// Empty for a mechanism that follows.
     drives: Vec<NamedDrive>,
+    /// The member the assembly moves with, for a mechanism with drives.
+    moving: Option<MemberIndex>,
     stop: Option<MechanismStop>,
     bodies: BTreeMap<BodyId, MemberIndex>,
 }
@@ -348,8 +350,11 @@ struct Declared {
 enum DeclareError {
     /// A number too large, or a body that isn't a member (never a design's).
     Internal,
-    /// The drive moves a member that isn't `with:` a part that moves.
-    DriveNotCarried(String),
+    /// A drive moves a member `with:` a part that stays put.
+    DriveHeld(String),
+    /// No member is `with:` a part that moves, so nothing carries the
+    /// assembly.
+    NothingMoves,
     /// A member rides on itself.
     InCircle(String),
 }
@@ -384,18 +389,39 @@ fn declare(
         bodies.insert(member.body, at);
         Ok(at)
     };
-    // The driven member first: what the assembly moves with (every drive
-    // moves it).
-    let own_drive = mechanism.drives.first().map(|named| named.drive.body());
-    let driven = match own_drive {
+    // A drive acts on any member the mechanism places, never on one with:
+    // a part that stays put.
+    for named in &mechanism.drives {
+        let member = mechanism
+            .member(named.drive.body())
+            .ok_or(DeclareError::Internal)?;
+        if let MemberWith::Role(role) = member.with
+            && !moving(role)
+        {
+            return Err(DeclareError::DriveHeld(member.name.clone()));
+        }
+    }
+    // The member the assembly moves with first: the one with: the part
+    // that moves (of several, the first a drive acts on, else the first
+    // written); every other member with: a part that moves rides on it.
+    let carries =
+        |member: &&KindMember| matches!(member.with, MemberWith::Role(role) if moving(role));
+    let own_moving = if mechanism.drives.is_empty() {
+        None
+    } else {
+        let driven = mechanism.drives.iter().find_map(|named| {
+            mechanism
+                .member(named.drive.body())
+                .filter(|member| carries(member))
+        });
+        let first = driven
+            .or_else(|| mechanism.members.iter().find(|member| carries(member)))
+            .ok_or(DeclareError::NothingMoves)?;
+        Some(first.body)
+    };
+    let driven = match own_moving {
         Some(body) => {
             let member = mechanism.member(body).ok_or(DeclareError::Internal)?;
-            match member.with {
-                MemberWith::Role(role) if moving(role) => {}
-                MemberWith::Role(_) | MemberWith::Member(_) | MemberWith::Placed => {
-                    return Err(DeclareError::DriveNotCarried(member.name.clone()));
-                }
-            }
             Some(push(&mut members, &mut bodies, member, Holding::Free)?)
         }
         None => driven,
@@ -404,7 +430,7 @@ fn declare(
     let mut left: Vec<&KindMember> = mechanism
         .members
         .iter()
-        .filter(|member| Some(member.body) != own_drive)
+        .filter(|member| Some(member.body) != own_moving)
         .collect();
     while !left.is_empty() {
         let before = left.len();
@@ -603,6 +629,7 @@ fn declare(
         members,
         entries,
         drives,
+        moving: own_moving.and(driven),
         stop,
         bodies,
     })
@@ -841,11 +868,15 @@ impl Solver<'_> {
             .plane
             .frame()
             .ok_or(Fault::Internal("a mechanism's plane"))?;
+        let Some(moving) = declared.moving else {
+            return Err(Fault::Internal("the member a mechanism moves with").into());
+        };
         match Mechanism::with_drives(
             frame,
             declared.members,
             declared.entries,
             declared.drives,
+            moving,
             declared.stop,
             vec![hardware],
         ) {
@@ -857,13 +888,19 @@ impl Solver<'_> {
     fn declare_error(&mut self, kind: KindId, kind_name: &str, error: DeclareError) -> Failure {
         match error {
             DeclareError::Internal => Fault::Internal("a mechanism's members").into(),
-            DeclareError::DriveNotCarried(member) => self.mechanism_error(
+            DeclareError::DriveHeld(member) => self.mechanism_error(
                 kind,
                 format!(
-                    "{kind_name}'s drive moves '{member}', which isn't with: a part that moves"
+                    "{kind_name}'s drive moves '{member}', which is with: a part that stays put"
                 ),
                 None,
-                "drive the member that is with: the piece (the door, the lid, the drawer side)",
+                "drive a member the mechanism places: one with no with:, or the one with: the part that moves",
+            ),
+            DeclareError::NothingMoves => self.mechanism_error(
+                kind,
+                format!("{kind_name}'s mechanism has no member with: the part that moves"),
+                None,
+                "give one member with: the piece that moves (the door, the lid, the drawer side): the assembly moves with it",
             ),
             DeclareError::InCircle(member) => self.mechanism_error(
                 kind,
@@ -886,11 +923,14 @@ impl Solver<'_> {
             MechanismError::DriveFreedom { .. } => {
                 "add or remove pins until one freedom is left for each drive"
             }
-            MechanismError::DrivesApart => {
-                "drive one member, the one with: the part that moves, once turning and once travelling"
+            MechanismError::TwoTurns { .. } => {
+                "turn the member with one drive, or turn another member with the second"
             }
-            MechanismError::DriveNotFree { .. } => {
-                "drive the member that is with: the piece (the door, the lid, the drawer side)"
+            MechanismError::TwoTravels { .. } => {
+                "move the member with one drive, or move another member with the second"
+            }
+            MechanismError::DriveNotFree { .. } | MechanismError::MovingNotFree { .. } => {
+                "drive a member the mechanism places: one with no with:, or the one with: the part that moves"
             }
             MechanismError::EmptyRange => "give the drive a from: and a to: that differ",
             // Checked when the kind is resolved.
@@ -999,8 +1039,8 @@ impl Solver<'_> {
             return Err(Fault::Earlier.into());
         };
         let mut drives = std::mem::take(&mut declared.drives);
-        let Some(driven) = drives.first().map(|named| named.drive.member()) else {
-            return Err(Fault::Internal("the drive of a mechanism").into());
+        let Some(driven) = declared.moving else {
+            return Err(Fault::Internal("the member a mechanism moves with").into());
         };
         let mut stop = declared.stop.take();
         let mut bodies: BTreeMap<(HardwareId, BodyId), MemberIndex> = declared
@@ -1155,6 +1195,7 @@ impl Solver<'_> {
             declared.members,
             declared.entries,
             drives,
+            driven,
             stop,
             hardware,
         ) {

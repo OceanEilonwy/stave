@@ -3118,10 +3118,30 @@ note on the first error, `the same for <hardware>`, as for
 `error[adjust]`. Hardware whose `require` or `adjust` failed is not
 checked: it is not where it can be.
 
-A clamp is checked where the hardware is set: at rest, as the design
-places it. It is not checked while a mechanism moves (a clamp is loose
-while it turns), and in this version it is not checked at a scene's
-poses either.
+A clamp is checked wherever the hardware is set: at rest, as the design
+places it; at every scene's poses; and at each set value of each drive,
+every other drive closed and everything else at rest (where a loose
+member is checked, see [Shapes](#shapes), and where the other drives'
+sweeps start). It is never checked while a mechanism moves (a clamp is
+loose while it turns). The first place the stack has a gap is reported,
+the error the same as at rest with a note saying where: `as scene
+'lowered' poses it`, or `when frame.height is set at 100mm` (a washer
+`with:` the upright stays behind when the bolt is set lower, and the
+bolt then draws the stile across the gap). A gap at rest is reported
+only at rest.
+
+At a pose the stack is walked where the drawn member `b` is: the line
+through the middle of `b`, as at rest, and every other body seen from
+`b`'s place. A body the pose moved straight (a slide, a set height) is
+read exactly, and so is one turned about a line along the clamp's own
+axis, since a turn about that line takes the line to itself: a pivot
+bolt clamped along its own pin, its frame tilted, has the same stack at
+every angle. The room cut for the clamp itself goes where the clamp goes:
+a bolt set lower in the slot or row of holes cut for it still has its
+room around it. A body a pose turned about any other line is seen slanted
+across the line: it fills nothing, so the walk can only find more gap
+than there is, never less, and `a`'s end is read from the box around
+it.
 
 A kind without a `clamp` is checked exactly as before. Nothing in the
 check names a kind or a member: it reads only `clamp`, the members,
@@ -3186,6 +3206,25 @@ whatever stays inside it all the way round: what is taken out is the
 round hole every turn keeps covered, narrower by how far off it is. A slide's travel and a turn about one
 fixed line are swept exactly; a linkage, and every member its mechanism
 moves, by conservative advancement to the contact tolerance.
+
+**A round shape leaves its room.** A round shape that starts inside a
+round hole of another body (a bolt in the hole drilled for it) overlaps
+the block the hole is drilled in only inside the room that cut made, and
+that is allowed only while it stays there. As a motion carries it out of
+the hole, into wood, it hits: `error[motion]` with the first travel or
+angle at which its circle reaches the hole's side, where the block goes
+on past the hole (`frame.pivot_l's bolt hits upright_l when frame.height
+is pulled out past 0.55mm`, a bolt 8mm across in a 9mm hole that is not
+`loose`, slid down a row of holes through the wood between them). A hole
+that it slides straight on into, close enough to hold it on the way, carries it
+on. This holds the same way for every motion: worked out exactly for a
+slide (the circle against the hole, along or across its axis, with the
+body the hole is in placed by a slide; either one may be the one that
+moves), and in closed form for a turn about one fixed line; in a linkage
+the piece is clear while its circle is inside the hole, and conservative
+advancement steps by how far it is from the hole's side. A bolt in a
+slot routed for it (a pocket) never overlaps the wood, so it slides
+clear; a `loose` bolt is pulled out to move and is not swept at all.
 
 **Models are for looks; the text is checked against them.** The `.stave`
 numbers are the truth: a model is drawn, never measured, and no check
@@ -3281,7 +3320,7 @@ set value of each drive with every other drive closed (see [Set
 positions](#mechanisms) and [Scenes](#scenes)), and it takes no part in
 any sweep, neither moving nor in the way, because it is out while things
 move. It has one meaning, whatever the drives are. It still counts in a
-[clamp](#clamps)'s stack, which is checked at rest. A joint's member has
+[clamp](#clamps)'s stack, wherever that is checked. A joint's member has
 no `loose:` (`error[unknown-field]`).
 
 ```
@@ -3391,13 +3430,31 @@ each drive through the assembly (`pose frame.tilt = 15deg`, see
   name`, help `write drive <name>: ...`). Two drives with one name are
   `error[duplicate-name]` at the second. A mechanism with one drive may
   name it; a pose may then name it or not.
-- **Every drive moves one member**, the driven member, `with:` the part
-  that moves. A member turns one way and travels one way, so two drives
-  of one mechanism are a turn and a travel. A drive that moves another
-  member, or a second turn or travel, is `error[mechanism]` at it
-  (`` `height` moves `carriage`, but `tilt` moves `bolt`: every drive moves
-  one member ``, `` `swing` and `tilt` both turn `bolt`: a member turns one
-  way ``).
+- **Drives may act on any members** the mechanism places: one with no
+  `with:`, or the one `with:` the part that moves. A drafting table's
+  column rises on a rail along its base and carries the board, which
+  tilts on a pin in the column: `drive height: travel(column, ...)` and
+  `drive tilt: turn(board_member, ...)`. The freedoms must come to one
+  for each drive (see "One freedom for each drive" below), and the
+  assembly moves with the member `with:` its moving part, which the
+  solver places from all the drive values together, in the same closed
+  steps as one drive (see [How a mechanism is
+  solved](#how-a-mechanism-is-solved)). A drive of a member `with:` a
+  part that stays put is `error[mechanism]` at the kind (`` pivot's drive
+  moves 'base', which is with: a part that stays put ``).
+- **One physical rule.** A member moving in a plane turns about one
+  line, so two `turn` drives of one member are `error[mechanism]` at the
+  second (`` `swing` and `tilt` both turn `bolt`: a member moving in a
+  plane turns about one line ``). A member travels along its one rail or
+  slot (it can have no more: two would leave it no freedom), so two
+  `travel` drives of one member would move it along the same line, and
+  are `error[mechanism]` too (`` `lift` and `height` both move `column`:
+  a member travels along one line, its rail or slot ``). A turn and a
+  travel of one member (a pivot bolt that slides in its slot and turns
+  in it) are fine, and so are travels of two members along different
+  directions (a cross slide: a carriage on a rail, and a table on a rail
+  along the carriage). Anything else the freedom count and the solver
+  decide.
 - **A travel along a slot.** A travelling drive moves its member along its
   rail, or, when the member is the pin of a `slot`, along the slot: its
   travel is how far the pin has run along the slot from the slot's
@@ -3497,16 +3554,21 @@ adds nothing to the freedom count. A role whose type is `Region` is
 region`). The first name of an entry is always a member: it is the side
 the mechanism places.
 
-**One freedom for each drive.** Three for each member the mechanism moves (the driven
-member and each member with no `with:`), less two for each `pivot` or
+**One freedom for each drive.** Three for each member the mechanism moves (the member
+`with:` the moving part and each member with no `with:`), less two for each `pivot` or
 `rail` and one for each `slot` or `couple`: a mechanism with drives
 must come to exactly as many as it has drives, one for each, and one without a drive
 to none once its assembly's motion is given (`error[mechanism]` at the
 kind otherwise, giving the count; a pin in a slot that also turns is
-three less one, two freedoms, so two drives; counted on its own as soon as a piece of
-hardware is placed, and reported once per kind). The driven member is
-`with:` the part that moves (the door, the lid, the drawer side): the
-assembly moves with it (`error[mechanism]` otherwise). A member with no
+three less one, two freedoms, so two drives; a column on a rail carrying
+a board on a pin is six less four, two freedoms, two drives; counted on its own as soon as a piece of
+hardware is placed, and reported once per kind). The assembly moves with
+the member `with:` the part that moves (the door, the lid, the drawer
+side, the board): of several, the first a drive acts on, else the first
+written, and every other member `with:` a part that moves rides on it. A
+mechanism with drives has one (`error[mechanism]` at the kind
+otherwise: `` <kind>'s mechanism has no member with: the part that
+moves ``). A member with no
 `with:` that no entry reaches from what is placed is `error[mechanism]`
 ("nothing places ..."). How the members are then placed is in [How a
 mechanism is solved](#how-a-mechanism-is-solved).
@@ -3535,9 +3597,11 @@ drive of the hardware inside it (not inside an assembly within it). Its
 items with drives must all move it alike, drive for drive: seen in the
 first one's plane (the first in the design's order), the same members,
 held the same way, the same entries at the same points (to the
-nanometre), and the same drives in the same order, each with the same
-name, the same kind (turn or travel), the same member and the same
-range. Seen in the first one's plane, a point's place along the
+nanometre), the same member the assembly moves with, and the same
+drives in the same order, each with the same name, the same kind (turn
+or travel), acting on the same member, and the same range (a drafting
+table's two lifts each raise their own sleeve and tilt their own bolt,
+alike). Seen in the first one's plane, a point's place along the
 pins carries no meaning, and an item whose plane is the mirror image of
 the first one's has its turn read the other way. So two drivers mirrored
 across the assembly move alike when their pins lie on one line and their
@@ -3548,7 +3612,7 @@ hinge and a butt hinge on one door don't (`error[motion]` at the second,
 "`door`'s hardware doesn't move alike", naming both). Every pin of every
 item is parallel to one axis (`error[motion]` otherwise). Items without a
 drive **follow** (a lid stay): their members `with:` a part that moves
-ride on the first driver's driven member, those `with:` a part that
+ride on the member the first driver moves the assembly with, those `with:` a part that
 stays are held, and the rest are placed by the same steps. The assembly
 opens as far as the nearest end among its drivers' ranges and its
 followers' stops, and the nearest `stop` gives its message. An assembly
@@ -3564,11 +3628,14 @@ is solved once; a piece of hardware no assembly moves is solved on its
 own, so a mechanism that can't move is reported wherever it is used.
 
 **The words.** A member is **held** (`with:` a role whose part stays put),
-**free** (the mechanism places it; the driven member is free even when it
-is `with:` the moving part) or **carried** (`with:` another member, one
-rigid piece with it). A role named in an entry is held or carried as a
-member `with:` it would be. The declared pose is every drive at its `from`; at a
-value `v` of a drive the driven member has turned, or travelled, by `v - from`. A
+**free** (the mechanism places it: a member with no `with:`, and the
+member the assembly moves with, even though it is `with:` the moving
+part) or **carried** (`with:` another member, one rigid piece with it; a
+member `with:` a part that moves rides on the member the assembly moves
+with). A role named in an entry is held or carried as a
+member `with:` it would be. A drive acts on a free member, or on a
+carried one's rigid piece. The declared pose is every drive at its `from`; at a
+value `v` of a drive the member it acts on has turned, or travelled, by `v - from`. A
 positive turn goes round the pins in the order `along`, `across`,
 `depth`: with the pins along `along`, it carries `across` toward
 `depth`; along `across`, `depth` toward `along`; along `depth`, `along`
@@ -3592,10 +3659,11 @@ all of them), the solver
 repeats, until every member is placed, the first of these that applies:
 
 1. **Couple**: a couple with one side's travel known gives the other's.
-2. **Hang**: a member whose angle is known (the driven member of a turn),
+2. **Hang**: a member whose angle is known (the member a turn acts on),
    pinned at a known point, is placed: by a pivot on a placed member (a
-   butt hinge), or by a slot in a placed member when its travel along the
-   slot is known (a pivot bolt raised in its slot and turned).
+   butt hinge; a drafting table's board on its column, once the column's
+   rail has placed it), or by a slot in a placed member when its travel
+   along the slot is known (a pivot bolt raised in its slot and turned).
 3. **Rail**: a member whose travel is known, on a rail along a placed
    member that does not turn, is placed (a slide).
 4. **Hung on two**: a member whose angle is known, held by two of: a link
@@ -3648,22 +3716,29 @@ that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
 in `stay` at <value>").
 
 **Fast paths.** Two shapes of motion are swept exactly, chosen by the
-mechanism's shape and never by its kind: a driven member pinned to a held
-one turns the assembly about that pin's line (a butt hinge), and a driven
-member on a rail along a held one moves it in one direction (a slide).
-With two drives, one is swept while the other is held still (see
-[Scenes](#scenes)), so the same two shapes cover them: a pin in a slot in
-a held member turns the assembly about the pin's line where the held
-travel has put it, and travels it along the slot (straight along a frame
-direction) while the held turn is at its `from`.
-Every other motion, and every member the mechanism places, is posed by the
-solver.
+mechanism's shape and never by its kind: a turn about one fixed line (a
+butt hinge) and a travel along one world direction (a slide). With
+several drives, one is swept while the others are held still (see
+[Scenes](#scenes)), and the same two shapes cover every sweep in which
+the assembly still makes one of them. With the held turns at their
+`from`, every member a chain of rails, slots and pins places from the
+held members has only moved straight, so it is exactly where the held
+drives put it. Then a turn that turns the member the assembly moves
+with, pinned (by a pivot, or a slot whose travel is held) to a member so
+placed, turns the assembly about that pin's line where the held drives
+have put it (a pivot bolt raised in its slot; a board tilted on a
+column that has risen); and a travel that carries the member the
+assembly moves with straight along one world direction moves it that
+way (a slide; the column rising and carrying the board pinned to it; a
+cross slide's carriage carrying the table on its own rail, or the table
+running along the carriage where the carriage is held). A sweep with a
+held turn away from its `from`, or of any other shape (a cup hinge's
+linkage), and every member the mechanism places, is posed by the
+solver and swept by conservative advancement.
 
-**Version 1 limits.** Planar, the steps above, and at most two drives,
-which turn and travel one member. A travelling
-drive acts on a rail, or a slot, in a member that does not turn, and a couple on rails that do not turn. An assembly inside a
-moving assembly is not swept: its motion is posed on top of its parent's
-in scenes, but only the outer one is swept.
+**Version 1 limits.** Planar, and the steps above. A travelling drive
+acts on a rail, or a slot, in a member that does not turn, and a couple
+on rails that do not turn.
 
 ---
 
@@ -4039,8 +4114,9 @@ scene drawer_bench "Top drawer on the bench" {
   position and from every scene's poses; the first contact is found to
   within the 0.05mm contact tolerance, never stepped over.
 - **Motions are made one at a time.** Each drive is swept through its
-  whole range while every other drive of the same assembly is held still
-  at each of: its closed value (from rest, everything else at rest),
+  whole range while every other drive of the same assembly, and every
+  drive of a moving assembly it is inside or carries (see the next
+  point), is held still at each of: its closed value (from rest, everything else at rest),
   each value a scene poses it at (from that scene, everything else where
   the scene puts it), and each of its set values (from rest, every other
   drive closed). The swept drive itself is swept
@@ -4061,6 +4137,22 @@ scene drawer_bench "Top drawer on the bench" {
   hinges follows its linkage (it turns and moves at once); a door on butt
   hinges turns about its pin (see [How a mechanism is
   solved](#how-a-mechanism-is-solved), fast paths).
+- **Nested assemblies are swept the same way.** A motion inside a moving
+  assembly (a tray that tilts on its hinge in a drawer that slides) is
+  swept with its parent held at each of: closed, each value a scene
+  poses it at, and each of its set values, as the other drives of one
+  assembly are, and in the parent's place: its hinge's line is fixed in
+  the world while the parent is held, so a turn about it and a travel
+  along one direction stay exact (where the parent is held turned, the
+  bodies around it are seen from there, the box around each turned box,
+  more wood than there is, never less). The parent is swept carrying the
+  child, held at the child's own closed value, each value a scene poses
+  it at and each of its set values: a drawer pulled out with its tray
+  tilted up, as a scene poses it, is swept with the tray up (the tray
+  then turned, by conservative advancement). Each sweep is still one
+  motion. A hit names the motion swept and, in a note, where the others
+  are held (`while drawer.tray is open 90deg`). In a scene, nested
+  motions are posed on top of each other, the parent's outermost.
 - `explode: true` draws the scene with every part moved out from its rest
   position along the direction its joint is assembled (the reverse of the
   joint's last `insert` step), so the joinery shows. Assemblies move out

@@ -1015,8 +1015,8 @@ impl Resolver<'_> {
             // Written, but one didn't lower (reported).
             return None;
         }
-        // With more than one drive, each is named, they move one member,
-        // one turning and one travelling, and nothing stops them.
+        // With more than one drive, each is named, no member is turned by
+        // two of them or moved by two, and nothing stops them.
         if drives.len() > 1 {
             let count = drives.len();
             for at in &unnamed_drives {
@@ -1029,60 +1029,46 @@ impl Resolver<'_> {
                 );
                 ok = false;
             }
-            if let Some((first, rest)) = drives.split_first() {
-                let label = |drive: &NamedDriveDef| match &drive.name {
-                    Some(name) => format!("`{name}`"),
-                    None => "the drive".to_owned(),
+            let label = |drive: &NamedDriveDef| match &drive.name {
+                Some(name) => format!("`{name}`"),
+                None => "the drive".to_owned(),
+            };
+            let member = |body: BodyId| {
+                bodies
+                    .get(body.index())
+                    .map(|b| b.name.as_str().to_owned())
+                    .unwrap_or_default()
+            };
+            for (index, other) in drives.iter().enumerate() {
+                let earlier = drives.get(..index).unwrap_or_default().iter().find(|d| {
+                    d.drive.turns() == other.drive.turns() && d.drive.body() == other.drive.body()
+                });
+                let Some(earlier) = earlier else {
+                    continue;
                 };
-                let member = |body: BodyId| {
-                    bodies
-                        .get(body.index())
-                        .map(|b| b.name.as_str().to_owned())
-                        .unwrap_or_default()
+                let (message, help) = if other.drive.turns() {
+                    (
+                        format!(
+                            "{} and {} both turn `{}`: a member moving in a plane turns about one line",
+                            label(earlier),
+                            label(other),
+                            member(other.drive.body())
+                        ),
+                        "turn another member with one of them, such as one pinned to this one",
+                    )
+                } else {
+                    (
+                        format!(
+                            "{} and {} both move `{}`: a member travels along one line, its rail or slot",
+                            label(earlier),
+                            label(other),
+                            member(other.drive.body())
+                        ),
+                        "move another member with one of them, such as one on a rail along this one",
+                    )
                 };
-                for (index, other) in rest.iter().enumerate() {
-                    let earlier = drives
-                        .get(..=index)
-                        .unwrap_or_default()
-                        .iter()
-                        .find(|d| d.drive.turns() == other.drive.turns());
-                    if other.drive.body() != first.drive.body() {
-                        self.error_help(
-                            Code::Mechanism,
-                            format!(
-                                "{} moves `{}`, but {} moves `{}`: every drive moves one member",
-                                label(other),
-                                member(other.drive.body()),
-                                label(first),
-                                member(first.drive.body())
-                            ),
-                            cx.file,
-                            other.drive.span(),
-                            "drive the member that is with: the part that moves, once turning and once travelling",
-                        );
-                        ok = false;
-                    } else if let Some(earlier) = earlier {
-                        let verb = if other.drive.turns() { "turn" } else { "move" };
-                        let way = if other.drive.turns() {
-                            "turns"
-                        } else {
-                            "travels"
-                        };
-                        self.error_help(
-                            Code::Mechanism,
-                            format!(
-                                "{} and {} both {verb} `{}`: a member {way} one way",
-                                label(earlier),
-                                label(other),
-                                member(other.drive.body())
-                            ),
-                            cx.file,
-                            other.drive.span(),
-                            "make one drive a turn(...) and the other a travel(...)",
-                        );
-                        ok = false;
-                    }
-                }
+                self.error_help(Code::Mechanism, message, cx.file, other.drive.span(), help);
+                ok = false;
             }
             if let Some((_, _, span)) = stop.take() {
                 self.error_help(

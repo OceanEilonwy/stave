@@ -1135,15 +1135,28 @@ impl<'a> Checker<'a> {
         let Some(scene) = self.design.scenes.get(scene_index) else {
             return (Vec::new(), Vec::new());
         };
-        // Every drive of an assembly as the scene poses it, when it moves
-        // it at all.
-        let poses_of = |assembly: AssemblyId| {
+        // Every drive of an assembly as the scene poses it.
+        self.moves_with(&|assembly: AssemblyId| {
             let drives = self.path(assembly)?.mechanism().drives().len();
             let (values, _) = scene.poses_of(assembly, drives);
-            values
-                .iter()
-                .any(|value| !matches!(value, PoseValue::Closed))
-                .then_some(values)
+            Some(values)
+        })
+    }
+
+    /// Per body: the poses that move it (outermost first), with the link
+    /// it is when its own assembly's linkage turns it, and its placement,
+    /// with every assembly that moves at the poses `poses_of` gives it
+    /// (`None`, or every drive closed, for one that stays shut).
+    fn moves_with(
+        &self,
+        poses_of: &dyn Fn(AssemblyId) -> Option<Vec<PoseValue>>,
+    ) -> (Vec<Moves>, Vec<Placement>) {
+        let poses_of = |assembly: AssemblyId| {
+            poses_of(assembly).filter(|values| {
+                values
+                    .iter()
+                    .any(|value| !matches!(value, PoseValue::Closed))
+            })
         };
         let moves: Vec<Moves> = self
             .bodies

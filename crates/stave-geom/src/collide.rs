@@ -1525,6 +1525,31 @@ impl Placement {
             Placement::Turned(matrix) => *matrix,
         }
     }
+
+    /// This placement after `inner`: a body placed by `inner` first, then
+    /// moved as this placement moves it (a tray tilted in a drawer, then
+    /// the drawer pulled out). Exact when both are.
+    pub fn after(&self, inner: &Placement) -> Placement {
+        match (self, inner) {
+            (Placement::Exact(outer), Placement::Exact(inner)) => {
+                Placement::Exact(outer.plus(*inner))
+            }
+            (Placement::Exact(_) | Placement::Turned(_), _) => {
+                Placement::Turned(self.matrix() * inner.matrix())
+            }
+        }
+    }
+
+    /// This placement as seen from a frame that `base` has moved: what is
+    /// left of it once `base` is taken back. Exact when both are.
+    pub fn seen_from(&self, base: &Placement) -> Placement {
+        match (base, self) {
+            (Placement::Exact(base), Placement::Exact(own)) => Placement::Exact(own.minus(*base)),
+            (Placement::Exact(_) | Placement::Turned(_), _) => {
+                Placement::Turned(base.matrix().inverse() * self.matrix())
+            }
+        }
+    }
 }
 
 /// A placement being built along a chain of mechanisms: an exact offset
@@ -1847,7 +1872,12 @@ fn overlaps_in_plane(
     let plane = crate::plane::Plane::across(axis);
     let [first, second] = axis.others();
     let mut found = Vec::new();
-    for (p, q) in crate::plane::piece_pairs(&plane, a, ma, b, mb, crate::plane::Bores::Still) {
+    for crate::plane::Pair {
+        first: p,
+        second: q,
+        ..
+    } in crate::plane::piece_pairs(&plane, a, ma, b, mb, crate::plane::Bores::Still)
+    {
         let Some((depth, normal)) = crate::plane::piece_depth(&p, &q) else {
             continue;
         };

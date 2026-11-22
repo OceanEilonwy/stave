@@ -25,9 +25,11 @@
 //!   [`PlanarDirection`]; `couple a to b: <ratio>` is
 //!   [`Constraint::Couple`] with a [`Ratio`].
 //! - **The drives** ([`Drive`]): `turn(m, from:, to:)` or
-//!   `travel(m, from:, to:)`, one for most mechanisms, a turn and a travel
-//!   of one member for a pin that turns in a slot
-//!   ([`Mechanism::with_drives`]). The declared (closed) pose is every
+//!   `travel(m, from:, to:)`, one for most mechanisms, and any number
+//!   acting on any free members, one freedom for each
+//!   ([`Mechanism::with_drives`]): a turn and a travel of one member for a
+//!   pin that turns in a slot, or a travel of a column and a turn of what
+//!   is pinned to it. The declared (closed) pose is every
 //!   drive at its `from`; at a value `v` the driven member has turned (or
 //!   travelled) by `v - from`. A member's **travel** is how far it has
 //!   moved along its rail from its closed place, measured against the
@@ -514,10 +516,20 @@ pub enum MechanismError {
         /// How many drives it has.
         drives: usize,
     },
-    /// Two drives move different members, or one member twice the same
-    /// way.
-    #[error("every drive moves one member, once turning and once travelling")]
-    DrivesApart,
+    /// Two turning drives of one member: a member moving in a plane turns
+    /// about one line.
+    #[error("two drives turn `{member}`, but a member moving in a plane turns about one line")]
+    TwoTurns {
+        /// The member.
+        member: MemberName,
+    },
+    /// Two travelling drives of one member: it travels along its one rail
+    /// or slot.
+    #[error("two drives move `{member}`, but a member travels along one line")]
+    TwoTravels {
+        /// The member.
+        member: MemberName,
+    },
     /// A drive asked for that the mechanism doesn't have, or held values
     /// that don't match its drives.
     #[error("the mechanism has no such drive")]
@@ -616,7 +628,8 @@ impl MechanismError {
             | MechanismError::EmptyRange { .. }
             | MechanismError::TravelWithoutRail { .. }
             | MechanismError::DriveFreedom { .. }
-            | MechanismError::DrivesApart
+            | MechanismError::TwoTurns { .. }
+            | MechanismError::TwoTravels { .. }
             | MechanismError::NoSuchDrive
             | MechanismError::NoOrder { .. }
             | MechanismError::Overconstrained { .. }

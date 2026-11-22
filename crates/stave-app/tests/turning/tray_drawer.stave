@@ -1,0 +1,262 @@
+// A drawer that carries a tilting tray (grammar, "Scenes", motions are
+// made one at a time; nested assemblies are swept): the drawer, a frame
+// between two cabinet sides, slides out on a stud running along each
+// side; inside it a tray turns up on a pivot bolt through each of the
+// drawer's sides. The tray is an assembly inside the drawer's: its tilt
+// is swept with the drawer held, and the drawer is swept carrying the
+// tray where it is held.
+stave 1
+
+project "Tray Drawer" {
+  goal: "A drawer with a tray inside it that tilts up"
+}
+
+region envelope = box(across: 700mm, up: 1500mm, deep: 800mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 800mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part side_l : beech_45 {
+  length: 1500mm
+  width:  800mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(side_l.bottom)
+    center(envelope, across)
+    center(side_l, deep)
+  }
+}
+
+// A rail across the front, above the drawer and the tray.
+part front_rail : beech_25 {
+  length: fit
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    flush(side_l.bottom, inset: 950mm)
+    center(envelope, across)
+    flush(side_l.front, inset: 150mm)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [side_l, side_r], length: 30mm)
+joint front_tenons     : mortise_tenon(front_rail, into: [side_l, side_r], length: 30mm)
+
+// The drawer's runner: a stud in the drawer's side that runs in a groove
+// along the cabinet's side.
+kind runner : fitting {
+  roles {
+    piece: Part     // the cabinet's side
+    into:  Part     // the drawer's side
+  }
+  param gap           = 3mm
+  param stud_diameter = 8mm
+  param thread_length = 25mm
+  param wall          = 6mm
+  param height        = 825mm
+  /// How far the drawer comes out.
+  param travel = 300mm
+
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The stud: into a threaded insert in the drawer's side.
+  member stud {
+    with:  into
+    shape: cylinder(diameter: stud_diameter, depth: piece.thickness + gap..piece.thickness + gap + thread_length)
+  }
+
+  cut insert_hole: crossing(into, stud) { drill(diameter: stud_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    rail stud, piece along across
+    drive: travel(stud, from: 0mm, to: -travel)
+  }
+}
+
+// The tray's pivot bolt: through the drawer's side, into the tray's side.
+kind tray_pivot : fitting {
+  roles {
+    piece: Part     // the drawer's side
+    into:  Part     // the tray's side
+  }
+  param bolt_diameter    = 8mm
+  param thread_length    = 25mm
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
+  param wall             = 6mm
+  /// How far along the drawer's side the bolt goes through it.
+  param setback = 250mm
+
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: front), inset: setback)
+  }
+
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  member washer {
+    with:  bolt
+    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
+  }
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 2mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    pivot bolt, piece at point(along: 0mm, across: 0mm)
+    drive: turn(bolt, from: 0deg, to: 90deg)
+  }
+}
+
+component Tray {
+  param frame_l : Part
+  param frame_r : Part
+
+  part tray_side_l : beech_45 {
+    length: 160mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(frame_l.bottom)
+      against(frame_l.right, gap: 3mm)
+      flush(frame_l.front, inset: 170mm)
+    }
+  }
+
+  part tray_side_r : beech_45 {
+    length: 160mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(frame_r.bottom)
+      against(frame_r.left, gap: 3mm)
+      flush(frame_r.front, inset: 170mm)
+    }
+  }
+
+  part tray_front : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(tray_side_l.front)
+      center(from: tray_side_l.right, to: tray_side_r.left)
+      center(tray_side_l, up)
+    }
+  }
+
+  part tray_back : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(tray_side_l.back)
+      center(from: tray_side_l.right, to: tray_side_r.left)
+      center(tray_side_l, up)
+    }
+  }
+
+  joint tray_tenons : mortise_tenon([tray_front, tray_back], into: [tray_side_l, tray_side_r], length: 20mm)
+
+  hardware pivot_l : tray_pivot(frame_l, into: tray_side_l, face: left)
+  hardware pivot_r : tray_pivot(frame_r, into: tray_side_r, face: right)
+}
+
+component Drawer {
+  param stand_l : Part
+  param stand_r : Part
+
+  part frame_l : beech_45 {
+    length: 400mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(stand_l.bottom, inset: 800mm)
+      against(stand_l.right, gap: 3mm)
+      flush(stand_l.front, inset: 200mm)
+    }
+  }
+
+  part frame_r : beech_45 {
+    length: 400mm
+    width:  50mm
+    place {
+      orient(length: back, width: up)
+      flush(stand_r.bottom, inset: 800mm)
+      against(stand_r.left, gap: 3mm)
+      flush(stand_r.front, inset: 200mm)
+    }
+  }
+
+  part frame_front : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(frame_l.front)
+      center(from: frame_l.right, to: frame_r.left)
+      center(frame_l, up)
+    }
+  }
+
+  part frame_back : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: back)
+      flush(frame_l.back)
+      center(from: frame_l.right, to: frame_r.left)
+      center(frame_l, up)
+    }
+  }
+
+  joint frame_tenons : mortise_tenon([frame_front, frame_back], into: [frame_l, frame_r], length: 20mm)
+
+  hardware runner_l : runner(stand_l, into: frame_l, face: left)
+  hardware runner_r : runner(stand_r, into: frame_r, face: right)
+
+  assembly tray : Tray {
+    frame_l: frame_l
+    frame_r: frame_r
+  }
+}
+
+assembly drawer : Drawer {
+  stand_l: side_l
+  stand_r: side_r
+}
+
+scene out "Drawer out" {
+  pose drawer = 200mm
+}
+
+scene tilted "Tray up" {
+  pose drawer.tray = 90deg
+}
+
+scene both "Out, with the tray half up" {
+  pose drawer = 200mm
+  pose drawer.tray = 45deg
+}

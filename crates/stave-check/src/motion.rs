@@ -4,22 +4,27 @@
 //! where it hits.
 //!
 //! Motions are made one at a time (grammar, "Scenes"): the swept drive
-//! starts closed, every other drive of its assembly is held still where
-//! the start puts it (closed from rest, where a scene poses it from that
+//! starts closed, every other drive of its assembly, and every drive of
+//! the moving assemblies it is inside or carries, is held still where the
+//! start puts it (closed from rest, where a scene poses it from that
 //! scene, at each of its set values from rest; [`Checker::sweep_starts`]
 //! lists them), and everything else stands where the scene puts it. A
+//! motion inside a moving assembly is swept with its parent held, in the
+//! parent's place; the parent is swept carrying it where it is held. A
 //! loose member is never swept; it is checked where it is set
 //! ([`Checker::set_positions`]). Every body the motion moves (its parts,
 //! the hardware on them, and the links its hardware's mechanism turns) is
 //! swept against every body that moves differently, the same way for
 //! every kind (grammar, "One collision model"). Each drive of an assembly
 //! is reported once: the first start (rest, then the scenes in order) at
-//! which it hits something, with its first contact. An assembly inside
-//! another that moves, or with an item already reported at rest or at a
-//! scene's poses, is left out.
+//! which it hits something, with its first contact. An assembly with an
+//! item already reported at rest or at a scene's poses is left out.
 
-use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
+use stave_geom::collide::{
+    Placement, WorldSolid, boxes_overlap, overlaps_placed, placed_bounds, union,
+};
 use stave_model::mechanism::MotionShape;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use stave_geom::planar::{MechanismError, MechanismErrorKind};
@@ -45,14 +50,42 @@ fn reach_key(reach: &Reach, a: Item, b: Item) -> (i64, bool, bool, Item, Item) {
     (amount, hardware(a), hardware(b), a, b)
 }
 
-/// Where one drive is swept from: a scene (0 for rest), and every drive's
-/// exact value there (the swept one's is its `from`).
+/// Where one drive is swept from: a scene (0 for rest), every drive's
+/// exact value there (the swept one's is its `from`), and where the
+/// moving assemblies it is inside or carries are held.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SweepStart {
     /// The scene whose placements the rest of the design takes.
     pub scene_index: usize,
     /// Every drive of the assembly, held.
     pub held: Vec<DriveValue>,
+    /// Each moving assembly it is inside or carries, outermost first, with
+    /// every one of its drives' poses, held.
+    pub others: Vec<(AssemblyId, Vec<PoseValue>)>,
+}
+
+/// A body a sweep moves: its index, its solid where the assemblies inside
+/// the swept one hold it (moved, when they only moved it), and their
+/// placement when they turned it.
+struct Moving<'s> {
+    index: usize,
+    solid: Cow<'s, WorldSolid>,
+    held: Option<Placement>,
+}
+
+/// Every drive's pose for exact drive values: how far each is from its
+/// `from` (closed at its `from`).
+fn pose_values(mechanism: &Mechanism, values: &[DriveValue]) -> Vec<PoseValue> {
+    mechanism
+        .drives()
+        .iter()
+        .zip(values)
+        .map(|(named, value)| match named.drive.amount_of(*value) {
+            Some(DriveValue::Turn(angle)) if angle != Angle::ZERO => PoseValue::Angle(angle),
+            Some(DriveValue::Travel(length)) if length != Length::ZERO => PoseValue::Travel(length),
+            Some(DriveValue::Turn(_) | DriveValue::Travel(_)) | None => PoseValue::Closed,
+        })
+        .collect()
 }
 
 /// An angle rounded down to a tenth of a degree: `87.3deg`.
@@ -263,13 +296,58 @@ impl Checker<'_> {
         }
     }
 
+    /// The moving assemblies an assembly is inside or carries (grammar,
+    /// "Scenes", motions are made one at a time): its moving ancestors,
+    /// outermost first, then the moving assemblies inside it, in the
+    /// design's order.
+    fn related(&self, assembly: AssemblyId) -> Vec<AssemblyId> {
+        let mut outer = Vec::new();
+        let mut parent = self.design.assembly(assembly).and_then(|a| a.parent);
+        while let Some(id) = parent {
+            if outer.contains(&id) {
+                break;
+            }
+            outer.push(id);
+            parent = self.design.assembly(id).and_then(|a| a.parent);
+        }
+        outer.reverse();
+        let inside = |id: AssemblyId| {
+            let mut parent = self.design.assembly(id).and_then(|a| a.parent);
+            let mut seen = 0;
+            while let Some(at) = parent {
+                if at == assembly {
+                    return true;
+                }
+                seen += 1;
+                if seen > self.design.assemblies().len() {
+                    return false;
+                }
+                parent = self.design.assembly(at).and_then(|a| a.parent);
+            }
+            false
+        };
+        outer
+            .into_iter()
+            .chain(
+                self.design
+                    .assemblies()
+                    .iter()
+                    .map(|a| a.id)
+                    .filter(|id| inside(*id)),
+            )
+            .filter(|id| self.path(*id).is_some())
+            .collect()
+    }
+
     /// The starts one drive of an assembly is swept from (grammar,
     /// "Scenes", motions are made one at a time): rest, with every other
-    /// drive at its `from`, then each scene in order, with every other
-    /// drive held where the scene poses it (closed where it doesn't),
-    /// then each set value of each other drive, from rest with every
-    /// drive but that one closed ([`Checker::set_holds`]). A start the
-    /// same as an earlier one's held values from rest is left out.
+    /// drive at its `from` and the moving assemblies it is inside or
+    /// carries closed, then each scene in order, with every other drive,
+    /// and those assemblies, held where the scene poses them (closed where
+    /// it doesn't), then each set value of each other drive, and of each
+    /// of those assemblies' drives, from rest with every drive but that
+    /// one closed ([`Checker::set_holds`]). A start the same as an earlier
+    /// one from rest is left out.
     pub(crate) fn sweep_starts(
         &self,
         assembly: AssemblyId,
@@ -277,9 +355,19 @@ impl Checker<'_> {
         drive: DriveIndex,
     ) -> Vec<SweepStart> {
         let closed = mechanism.closed();
+        let related: Vec<(AssemblyId, &Mechanism)> = self
+            .related(assembly)
+            .into_iter()
+            .filter_map(|id| Some((id, self.design.assembly(id)?.mechanism.as_ref()?)))
+            .collect();
+        let shut =
+            |id: AssemblyId, other: &Mechanism| (id, vec![PoseValue::Closed; other.drives().len()]);
+        let all_shut: Vec<(AssemblyId, Vec<PoseValue>)> =
+            related.iter().map(|(id, other)| shut(*id, other)).collect();
         let mut starts = vec![SweepStart {
             scene_index: 0,
             held: closed.clone(),
+            others: all_shut.clone(),
         }];
         for (scene_index, scene) in self.design.scenes.iter().enumerate().skip(1) {
             let (poses, _) = scene.poses_of(assembly, mechanism.drives().len());
@@ -289,20 +377,74 @@ impl Checker<'_> {
             {
                 *own = *from;
             }
-            starts.push(SweepStart { scene_index, held });
-        }
-        for held in Self::set_holds(mechanism, Some(drive)) {
-            if !starts
+            let others = related
                 .iter()
-                .any(|start| start.scene_index == 0 && start.held == held)
-            {
-                starts.push(SweepStart {
+                .map(|(id, other)| (*id, scene.poses_of(*id, other.drives().len()).0))
+                .collect();
+            starts.push(SweepStart {
+                scene_index,
+                held,
+                others,
+            });
+        }
+        let mut from_rest: Vec<SweepStart> = Self::set_holds(mechanism, Some(drive))
+            .into_iter()
+            .map(|held| SweepStart {
+                scene_index: 0,
+                held,
+                others: all_shut.clone(),
+            })
+            .collect();
+        for (index, (id, other)) in related.iter().enumerate() {
+            for values in Self::set_holds(other, None) {
+                let mut others = all_shut.clone();
+                if let Some(slot) = others.get_mut(index) {
+                    *slot = (*id, pose_values(other, &values));
+                }
+                from_rest.push(SweepStart {
                     scene_index: 0,
-                    held,
+                    held: closed.clone(),
+                    others,
                 });
             }
         }
+        for start in from_rest {
+            if !starts
+                .iter()
+                .any(|earlier| earlier.scene_index == 0 && *earlier == start)
+            {
+                starts.push(start);
+            }
+        }
         starts
+    }
+
+    /// Every body's placement, and what moves it, with the swept assembly
+    /// held at `start` (its swept drive at its `from`), the assemblies it
+    /// is inside or carries where `start` holds them, and everything else
+    /// where the start's scene puts it.
+    fn start_moves(
+        &self,
+        assembly: AssemblyId,
+        mechanism: &Mechanism,
+        start: &SweepStart,
+    ) -> (Vec<crate::Moves>, Vec<Placement>) {
+        let own = pose_values(mechanism, &start.held);
+        let scene = self
+            .design
+            .scenes
+            .get(start.scene_index)
+            .filter(|_| start.scene_index > 0);
+        self.moves_with(&|id: AssemblyId| {
+            if id == assembly {
+                return Some(own.clone());
+            }
+            if let Some((_, values)) = start.others.iter().find(|(other, _)| *other == id) {
+                return Some(values.clone());
+            }
+            let drives = self.path(id)?.mechanism().drives().len();
+            scene.map(|scene| scene.poses_of(id, drives).0)
+        })
     }
 
     /// Every drive's values with one drive at one of its set values
@@ -498,20 +640,6 @@ impl Checker<'_> {
             let Some(mechanism) = assembly.mechanism.as_ref() else {
                 continue;
             };
-            // Inside another assembly that moves: its path isn't a sweep
-            // in one fixed plane.
-            let mut parent = assembly.parent;
-            let mut nested = false;
-            while let Some(id) = parent {
-                let Some(outer) = self.design.assembly(id) else {
-                    break;
-                };
-                nested |= self.path(id).is_some();
-                parent = outer.parent;
-            }
-            if nested {
-                continue;
-            }
             // A loose member is never swept: it is out while things move.
             let moving: Vec<usize> = (0..self.bodies.len())
                 .filter(|&i| {
@@ -533,10 +661,13 @@ impl Checker<'_> {
                     if stopped() {
                         return;
                     }
-                    let (moves, placements) = self.scene_moves(start.scene_index);
-                    if start.scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
-                        continue;
+                    if start.scene_index > 0 {
+                        let (moves, _) = self.scene_moves(start.scene_index);
+                        if moves.iter().all(crate::Moves::is_empty) {
+                            continue;
+                        }
                     }
+                    let (moves, placements) = self.start_moves(assembly.id, mechanism, &start);
                     // The first drive from rest is the assembly's own path;
                     // any other start is run on its own.
                     let own = drive == DriveIndex::FIRST && start.held == mechanism.closed();
@@ -548,16 +679,112 @@ impl Checker<'_> {
                             Err(_) => continue,
                         }
                     };
-                    if let Some(hit) = self.first_hit(assembly.id, &swept, &moving, &placements) {
-                        found.push((assembly.id, start.scene_index, swept, hit));
+                    // The moving assemblies it is inside, held: the sweep
+                    // runs in their place, everything else seen from there.
+                    let base = self.held_outside(assembly.id, &moves);
+                    let seen: Vec<Placement> = placements
+                        .iter()
+                        .map(|placement| placement.seen_from(&base))
+                        .collect();
+                    // What the assemblies inside it hold where: moved with
+                    // it from there.
+                    let carried: Vec<Moving<'_>> = moving
+                        .iter()
+                        .filter_map(|&index| {
+                            let body = self.bodies.get(index)?;
+                            let held = moves
+                                .get(index)
+                                .map(|moved| self.held_inside(assembly.id, index, moved))
+                                .unwrap_or(Placement::REST);
+                            Some(match held {
+                                Placement::Exact(by)
+                                    if by == stave_model::solved::Point::default() =>
+                                {
+                                    Moving {
+                                        index,
+                                        solid: Cow::Borrowed(&body.solid),
+                                        held: None,
+                                    }
+                                }
+                                Placement::Exact(by) => Moving {
+                                    index,
+                                    solid: Cow::Owned(body.solid.translated(by)),
+                                    held: None,
+                                },
+                                Placement::Turned(_) => Moving {
+                                    index,
+                                    solid: Cow::Borrowed(&body.solid),
+                                    held: Some(held),
+                                },
+                            })
+                        })
+                        .collect();
+                    if let Some(hit) = self.first_hit(assembly.id, &swept, &carried, &seen) {
+                        found.push((assembly.id, start, swept, hit));
                         break;
                     }
                 }
             }
         }
-        for (assembly, scene_index, path, (reach, a, b)) in found {
-            self.report_sweep(assembly, scene_index, &path, reach, a, b);
+        for (assembly, start, path, (reach, a, b)) in found {
+            self.report_sweep(assembly, &start, &path, reach, a, b);
         }
+    }
+
+    /// Where the moving assemblies an assembly is inside hold it, for one
+    /// start: their placement, outermost first, at the poses `moves` gives
+    /// them (those of a body of the assembly).
+    fn held_outside(&self, assembly: AssemblyId, moves: &[crate::Moves]) -> Placement {
+        let Some((body, moved)) = self
+            .bodies
+            .iter()
+            .zip(moves)
+            .find(|(body, _)| body.chain.contains(&assembly))
+        else {
+            return Placement::REST;
+        };
+        let outside = body
+            .chain
+            .iter()
+            .take_while(|id| **id != assembly)
+            .copied()
+            .collect::<Vec<_>>();
+        let chain: Vec<_> = moved
+            .steps
+            .iter()
+            .filter(|(id, _)| outside.contains(id))
+            .filter_map(|(id, values)| Some((self.path(*id)?.mechanism(), values.as_slice())))
+            .collect();
+        Placement::of_poses(&chain, None)
+    }
+
+    /// Where the moving assemblies inside an assembly hold one of its
+    /// bodies, for one start: their placement, from the assembly's rest,
+    /// at the poses `moved` gives them, with the link it is when the
+    /// innermost of them turns it on its linkage.
+    fn held_inside(&self, assembly: AssemblyId, index: usize, moved: &crate::Moves) -> Placement {
+        let Some(body) = self.bodies.get(index) else {
+            return Placement::REST;
+        };
+        let inside: Vec<AssemblyId> = body
+            .chain
+            .iter()
+            .skip_while(|id| **id != assembly)
+            .skip(1)
+            .copied()
+            .collect();
+        let inner: Vec<_> = moved
+            .steps
+            .iter()
+            .filter(|(id, _)| inside.contains(id))
+            .filter_map(|(id, values)| Some((self.path(*id)?.mechanism(), values.as_slice())))
+            .collect();
+        if inner.is_empty() {
+            return Placement::REST;
+        }
+        // `moved.link` is set only when the innermost posed assembly is
+        // the one whose linkage places the body; that is one inside here.
+        Placement::of_poses(&inner, moved.link)
     }
 
     /// How a body moves when `assembly` moves: a member its own
@@ -569,22 +796,34 @@ impl Checker<'_> {
         }
     }
 
+    /// How a moving body moves when `assembly` moves, from where the
+    /// assemblies inside it hold it.
+    fn moving_mover<'p>(
+        &self,
+        body: &Moving<'_>,
+        assembly: AssemblyId,
+        path: &'p Path,
+    ) -> Mover<'p> {
+        match (self.mover(body.index, assembly, path), body.held) {
+            (Mover::Rigid(_), Some(held)) => Mover::Carried(path, held),
+            (mover, _) => mover,
+        }
+    }
+
     /// The first contact of an assembly's motion with everything else at
-    /// `placements`, and between the bodies it moves differently (a link
-    /// and its door): how far, and the moving and the other item.
+    /// `placements` (seen from where the moving assemblies it is inside
+    /// hold it), and between the bodies it moves differently (a link and
+    /// its door): how far, and the moving and the other item.
     fn first_hit(
         &self,
         assembly: AssemblyId,
         path: &Path,
-        moving: &[usize],
+        moving: &[Moving<'_>],
         placements: &[Placement],
     ) -> Option<(Reach, Item, Item)> {
         let reach = moving
             .iter()
-            .filter_map(|&i| {
-                let body = self.bodies.get(i)?;
-                path.reach(&body.solid, &self.mover(i, assembly, path))
-            })
+            .filter_map(|body| path.reach(&body.solid, &self.moving_mover(body, assembly, path)))
             .reduce(|a, b| union(&a, &b))?;
         let mut best: Option<(Reach, Item, Item)> = None;
         let mut consider = |hit: Option<Reach>, a: Item, b: Item| {
@@ -608,16 +847,16 @@ impl Checker<'_> {
             if !boxes_overlap(&placed_bounds(&fixed.bounds, &placement), &reach) {
                 continue;
             }
-            for &i in moving {
-                let Some(body) = self.bodies.get(i) else {
+            for moved in moving {
+                let Some(body) = self.bodies.get(moved.index) else {
                     continue;
                 };
                 if self.exempt(body.item, fixed.item) {
                     continue;
                 }
                 let hit = first_contact(
-                    &body.solid,
-                    self.mover(i, assembly, path),
+                    &moved.solid,
+                    self.moving_mover(moved, assembly, path),
                     &fixed.solid,
                     Mover::Fixed(placement),
                 );
@@ -626,21 +865,26 @@ impl Checker<'_> {
         }
         // Bodies the motion moves differently: the member a mechanism
         // turns comes first.
-        for (position, &i) in moving.iter().enumerate() {
-            for &j in moving.iter().skip(position + 1) {
-                let (mi, mj) = (self.mover(i, assembly, path), self.mover(j, assembly, path));
-                let (Some(x), Some(y)) = (self.bodies.get(i), self.bodies.get(j)) else {
+        for (position, first) in moving.iter().enumerate() {
+            for second in moving.iter().skip(position + 1) {
+                let (mi, mj) = (
+                    self.moving_mover(first, assembly, path),
+                    self.moving_mover(second, assembly, path),
+                );
+                let (Some(x), Some(y)) =
+                    (self.bodies.get(first.index), self.bodies.get(second.index))
+                else {
                     continue;
                 };
                 if mi == mj || self.exempt(x.item, y.item) {
                     continue;
                 }
-                let ((a, ma), (b, mb)) = if matches!(mj, Mover::Member(..)) {
-                    ((y, mj), (x, mi))
+                let ((a, sa, ma), (b, sb, mb)) = if matches!(mj, Mover::Member(..)) {
+                    ((y, &second.solid, mj), (x, &first.solid, mi))
                 } else {
-                    ((x, mi), (y, mj))
+                    ((x, &first.solid, mi), (y, &second.solid, mj))
                 };
-                consider(first_contact(&a.solid, ma, &b.solid, mb), a.item, b.item);
+                consider(first_contact(sa, ma, sb, mb), a.item, b.item);
             }
         }
         best
@@ -952,12 +1196,13 @@ impl Checker<'_> {
     fn report_sweep(
         &mut self,
         assembly: AssemblyId,
-        scene_index: usize,
+        start: &SweepStart,
         path: &Path,
         reach: Reach,
         a: Item,
         b: Item,
     ) {
+        let scene_index = start.scene_index;
         let name = self.motion_name(assembly, path);
         let (a_name, b_name) = (self.item_name(a), self.item_name(b));
         let extent = path.mechanism().extent();
@@ -1014,6 +1259,17 @@ impl Checker<'_> {
         };
         if let Some(held) = self.held_note(assembly, path) {
             notes.push(held);
+        }
+        // The moving assemblies it is inside or carries, where they are
+        // held away from closed.
+        let elsewhere: Vec<String> = start
+            .others
+            .iter()
+            .filter(|(_, values)| values.iter().any(|v| !matches!(v, PoseValue::Closed)))
+            .flat_map(|(other, values)| self.pose_conditions(*other, values))
+            .collect();
+        if !elsewhere.is_empty() {
+            notes.push(format!("while {}", crate::names::and_list(&elsewhere)));
         }
         if scene_index > 0
             && let Some(scene) = self.design.scenes.get(scene_index)

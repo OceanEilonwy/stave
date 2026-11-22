@@ -400,11 +400,15 @@ fn evaluate_at(mechanism: &Mechanism, relatives: &[f64]) -> Result<Evaluation, F
         angles: vec![None; count],
         travels: vec![None; count],
     };
-    let driven = mechanism.drive_body().0;
-    for (drive, relative) in mechanism.drives().iter().zip(relatives) {
+    for ((drive, driven), relative) in mechanism
+        .drives()
+        .iter()
+        .zip(mechanism.drive_bodies())
+        .zip(relatives)
+    {
         let known = match drive {
-            Drive::Turn { .. } => state.angles.get_mut(driven),
-            Drive::Travel { .. } => state.travels.get_mut(driven),
+            Drive::Turn { .. } => state.angles.get_mut(driven.0),
+            Drive::Travel { .. } => state.travels.get_mut(driven.0),
         };
         *known.ok_or(Failure::Internal)? = Some(*relative);
     }

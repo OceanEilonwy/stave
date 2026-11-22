@@ -1157,7 +1157,7 @@ fn each_drive_runs_through_its_range_with_the_other_held() {
     assert!((pin - at_mm(0.0, -150.0)).length() < 1.0, "{pin}");
 }
 
-/// Two drives need two freedoms; one member is driven once each way; a
+/// Two drives need two freedoms; no member is turned by two drives; a
 /// travel runs on a rail or a slot along a direction of the plane.
 #[test]
 fn a_mechanism_with_two_drives_is_counted_for_both() {
@@ -1215,7 +1215,9 @@ fn a_mechanism_with_two_drives_is_counted_for_both() {
     ];
     assert_eq!(
         Mechanism::with_drives(twice, turns),
-        Err(MechanismError::DrivesApart)
+        Err(MechanismError::TwoTurns {
+            member: name("bolt")
+        })
     );
     // A slot on a slant has no frame direction to travel along.
     let mut slanted = Declaration::new();
@@ -1231,4 +1233,57 @@ fn a_mechanism_with_two_drives_is_counted_for_both() {
         Mechanism::with_drives(slanted, drives(bolt)),
         Err(MechanismError::TravelWithoutRail { .. })
     ));
+}
+
+/// Drives may act on any members: a column on a rail along a held base,
+/// raised by a travel, and a board pinned to the column, tilted by a turn
+/// (a drafting table). Two free members, a rail and a pivot: two
+/// freedoms, one for each drive. The rail places the column, then Hang
+/// places the board on it.
+#[test]
+fn drives_on_two_members_place_each_in_turn() {
+    let mut declaration = Declaration::new();
+    let board = declaration.member(name("board"), Holding::Free).unwrap();
+    let base = declaration.member(name("base"), Holding::Held).unwrap();
+    let column = declaration.member(name("column"), Holding::Free).unwrap();
+    declaration.constrain(Constraint::Rail {
+        runner: column,
+        guide: base,
+        direction: PlanarDirection::DEPTH,
+    });
+    declaration.constrain(Constraint::Pivot {
+        first: board,
+        second: column,
+        at: point_mm(0, 0),
+    });
+    let drives = vec![
+        Drive::Travel {
+            member: column,
+            from: Length::ZERO,
+            to: Length::from_mm(200),
+        },
+        Drive::Turn {
+            member: board,
+            from: Angle::ZERO,
+            to: Angle::from_deg(90),
+        },
+    ];
+    let path = Path::new(Mechanism::with_drives(declaration, drives).unwrap()).unwrap();
+    let pose = path
+        .pose_all(&[
+            DriveAmount::nanometres(150e6),
+            DriveAmount::radians(std::f64::consts::FRAC_PI_2),
+        ])
+        .unwrap();
+    // The column has risen 150mm; the board's pin with it, and the board
+    // turned a quarter about it.
+    let column_at = pose.member(column).unwrap().apply(DVec2::ZERO);
+    assert!(
+        (column_at - at_mm(0.0, 150.0)).length() < 1.0,
+        "{column_at}"
+    );
+    let board_pose = pose.member(board).unwrap();
+    assert!((board_pose.apply(DVec2::ZERO) - at_mm(0.0, 150.0)).length() < 1.0);
+    let corner = board_pose.apply(at_mm(400.0, 0.0));
+    assert!((corner - at_mm(0.0, 550.0)).length() < 1.0, "{corner}");
 }

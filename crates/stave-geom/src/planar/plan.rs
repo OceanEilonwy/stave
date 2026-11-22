@@ -260,9 +260,10 @@ pub struct Mechanism {
     member_bodies: Vec<Body>,
     body_names: Vec<MemberName>,
     held: Vec<bool>,
-    /// Never empty; every one moves the same body.
+    /// Never empty; each acts on a free body.
     drives: Vec<Drive>,
-    drive_body: Body,
+    /// The body each drive acts on, by drive.
+    drive_bodies: Vec<Body>,
     /// The drive run through its range, and its place in `drives`.
     drive: Drive,
     swept: usize,
@@ -279,8 +280,8 @@ impl Mechanism {
     }
 
     /// Checks a declaration with any number of drives and orders its steps:
-    /// one freedom for each drive, every drive moving the same member,
-    /// once turning and once travelling. The first drive is the one run
+    /// one freedom for each drive, each drive acting on a free member, no
+    /// member turned by two drives or moved by two. The first drive is the one run
     /// through its range, with the others at their `from`, until
     /// [`Mechanism::sweeping`] chooses another.
     pub fn with_drives(
@@ -422,23 +423,30 @@ impl Mechanism {
                 }
             });
         }
-        let turning = drives
-            .iter()
-            .filter(|d| matches!(d, Drive::Turn { .. }))
-            .count();
-        if drives.iter().any(|d| d.member() != drive.member())
-            || turning > 1
-            || drives.len() - turning > 1
-        {
-            return Err(MechanismError::DrivesApart);
-        }
-
-        // The drive.
-        let drive_body = body(drive.member())?;
-        if is(&held, drive_body) {
-            return Err(MechanismError::DriveHeld {
-                member: name(drive.member())?,
+        // The drives: each on a free body, no body turned twice or moved
+        // twice.
+        let mut drive_bodies = Vec::with_capacity(drives.len());
+        for (index, each) in drives.iter().enumerate() {
+            let driven = body(each.member())?;
+            if is(&held, driven) {
+                return Err(MechanismError::DriveHeld {
+                    member: name(each.member())?,
+                });
+            }
+            let turns = matches!(each, Drive::Turn { .. });
+            let twice = drives.iter().take(index).any(|earlier| {
+                matches!(earlier, Drive::Turn { .. }) == turns
+                    && body(earlier.member()).ok() == Some(driven)
             });
+            if twice {
+                let member = name(each.member())?;
+                return Err(if turns {
+                    MechanismError::TwoTurns { member }
+                } else {
+                    MechanismError::TwoTravels { member }
+                });
+            }
+            drive_bodies.push(driven);
         }
         if let Some(empty) = drives.iter().find(|d| d.from() == d.to()) {
             return Err(MechanismError::EmptyRange { at: empty.from() });
@@ -457,11 +465,15 @@ impl Mechanism {
                     if *pin == b && (from.across == to.across || from.depth == to.depth))
             })
         };
-        let travels = drives.iter().any(|d| matches!(d, Drive::Travel { .. }));
-        if travels && !runs_on_rail(drive_body) && !runs_in_slot(drive_body) {
-            return Err(MechanismError::TravelWithoutRail {
-                member: name(drive.member())?,
-            });
+        for (each, driven) in drives.iter().zip(&drive_bodies) {
+            if matches!(each, Drive::Travel { .. })
+                && !runs_on_rail(*driven)
+                && !runs_in_slot(*driven)
+            {
+                return Err(MechanismError::TravelWithoutRail {
+                    member: name(each.member())?,
+                });
+            }
         }
         for entry in &entries {
             if let Entry::Couple {
@@ -481,7 +493,7 @@ impl Mechanism {
             }
         }
 
-        let mut planner = Planner::new(&entries, &held, &body_names, &drives, drive, drive_body);
+        let mut planner = Planner::new(&entries, &held, &body_names, &drives, drive, &drive_bodies);
         let steps = planner.plan()?;
         let held_values = vec![0.0; drives.len()];
         Ok(Mechanism {
@@ -491,7 +503,7 @@ impl Mechanism {
             held,
             drives,
             drive,
-            drive_body,
+            drive_bodies,
             swept: 0,
             held_values,
             steps,
@@ -576,8 +588,9 @@ impl Mechanism {
         is(&self.held, body)
     }
 
-    pub(super) fn drive_body(&self) -> Body {
-        self.drive_body
+    /// The body each drive acts on, by drive.
+    pub(super) fn drive_bodies(&self) -> &[Body] {
+        &self.drive_bodies
     }
 
     /// The index of the drive run through its range.
@@ -653,7 +666,7 @@ struct Planner<'a> {
     names: &'a [MemberName],
     drives: &'a [Drive],
     drive: Drive,
-    drive_body: Body,
+    drive_bodies: &'a [Body],
     used: Vec<bool>,
     placed: Vec<bool>,
     angle_known: Vec<bool>,
@@ -668,7 +681,7 @@ impl<'a> Planner<'a> {
         names: &'a [MemberName],
         drives: &'a [Drive],
         drive: Drive,
-        drive_body: Body,
+        drive_bodies: &'a [Body],
     ) -> Planner<'a> {
         let count = held.len();
         Planner {
@@ -676,7 +689,7 @@ impl<'a> Planner<'a> {
             names,
             drives,
             drive,
-            drive_body,
+            drive_bodies,
             used: vec![false; entries.len()],
             placed: held.to_vec(),
             angle_known: vec![false; count],
@@ -693,10 +706,10 @@ impl<'a> Planner<'a> {
     }
 
     fn plan(&mut self) -> Result<Vec<Step>, MechanismError> {
-        for drive in self.drives {
+        for (drive, driven) in self.drives.iter().zip(self.drive_bodies) {
             match drive {
-                Drive::Turn { .. } => set(&mut self.angle_known, self.drive_body),
-                Drive::Travel { .. } => set(&mut self.travel_known, self.drive_body),
+                Drive::Turn { .. } => set(&mut self.angle_known, *driven),
+                Drive::Travel { .. } => set(&mut self.travel_known, *driven),
             }
         }
         let mut steps = Vec::new();

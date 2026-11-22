@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[motion]: frame.pivot_l's bolt hits upright_l when frame.height is pulled out past 0.55mm
+   --> /project/project.stave:170:10
+    |
+170 | assembly frame : Frame {
+    |          ^^^^^
+    = note: the slides travel 300mm
+    = help: move upright_l out of the way of frame.height

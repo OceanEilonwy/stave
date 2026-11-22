@@ -1,0 +1,13 @@
+---
+source: crates/stave-app/tests/member_drives.rs
+expression: rendered(&opened)
+---
+error[motion]: board.stile_l hits head_rail when board.tilt is opened past 31.9deg
+   --> /project/project.stave:183:10
+    |
+183 | assembly board : Board {
+    |          ^^^^^
+    = note: the hinges open to 60deg
+    = note: with board.height held at 200mm
+    = note: with everything else as scene 'full' poses it
+    = help: open board.tilt no further than 31.9deg (give its hardware's kind a smaller range), or move head_rail out of its way

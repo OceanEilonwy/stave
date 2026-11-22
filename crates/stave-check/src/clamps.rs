@@ -10,15 +10,24 @@
 //! the same piece of hardware it meets ([`stave_geom::line`]): a part's
 //! wood is its boxes less its square cuts, with the cuts the same piece of
 //! hardware makes filled back in. Each body must touch the next within
-//! the contact tolerance. Everything is exact: a clamp is checked at rest,
-//! where every part is axis-aligned.
+//! the contact tolerance.
+//!
+//! A clamp is checked wherever the hardware is set: at rest, at every
+//! scene's poses, and at each set value of each drive (every other drive
+//! closed), never while a drive moves. At a pose the walk runs where the
+//! drawn member is, every other body seen from there
+//! ([`stave_geom::line::Line::seen_by`]): exact for a body the pose moved
+//! straight, or turned about a line along the clamp's axis (a pivot bolt
+//! clamped along its own pin), and a body the pose turned so that the line
+//! crosses it slanted fills nothing, so a gap is never missed.
 
-use stave_geom::collide::CONTACT_TOLERANCE;
+use stave_geom::collide::{CONTACT_TOLERANCE, Placement, placed_bounds};
 use stave_geom::line::{Line, Stretch};
 use stave_lang::units::Length;
 use stave_lang::{Code, Severity};
+use stave_model::mechanism::DriveValue;
 use stave_model::solved::{
-    BodyCarrier, BodyOwner, CutPlace, CutSource, Hardware, PartId, Size3, WorldBox,
+    BodyCarrier, BodyOwner, CutPlace, CutSource, Hardware, PartId, PoseValue, Size3, WorldBox,
 };
 
 use crate::names::length_text;
@@ -51,25 +60,122 @@ struct Gap {
     width: Length,
 }
 
+/// Where a clamp is checked besides rest: a scene's poses, or a set value
+/// of a drive.
+#[derive(Debug, Clone, PartialEq)]
+enum Pose {
+    /// A scene, by its index (never 0, the rest).
+    Scene(usize),
+    /// A drive of an assembly at one of its set values, every other drive
+    /// closed: the words for it (`frame.height is set at 100mm`).
+    Set(String),
+}
+
 impl Checker<'_> {
     /// Every piece of hardware whose kind has a `clamp`: its stack must be
-    /// solid, at rest.
+    /// solid wherever it is set, at rest, at every scene's poses and at
+    /// each set value of each drive; the first place it isn't is reported.
     pub(crate) fn clamps(&mut self) {
         let design = self.design;
+        if !design
+            .hardware()
+            .iter()
+            .any(|hardware| hardware.clamp.is_some())
+        {
+            return;
+        }
+        let poses = self.clamp_poses();
         for hardware in design.hardware() {
-            if self.misfit.contains(&hardware.id) {
+            if self.misfit.contains(&hardware.id) || hardware.clamp.is_none() {
                 continue;
             }
-            let Some(gap) = self.clamp_gap(hardware) else {
+            if let Some(gap) = self.clamp_gap(hardware, None) {
+                self.report_gap(hardware, gap, None);
                 continue;
-            };
-            self.report_gap(hardware, gap);
+            }
+            let posed = poses.iter().find_map(|(pose, placements)| {
+                Some((pose, self.clamp_gap(hardware, Some(placements))?))
+            });
+            if let Some((pose, gap)) = posed {
+                let pose = pose.clone();
+                self.report_gap(hardware, gap, Some(&pose));
+            }
         }
     }
 
+    /// Every place a clamp is set besides rest, with every body's
+    /// placement there: each scene that moves something, then each set
+    /// value of each drive of each assembly, every other drive closed and
+    /// everything else at rest.
+    fn clamp_poses(&self) -> Vec<(Pose, Vec<Placement>)> {
+        let mut poses = Vec::new();
+        for scene_index in 1..self.design.scenes.len() {
+            let (moves, placements) = self.scene_moves(scene_index);
+            if moves.iter().any(|moved| !moved.is_empty()) {
+                poses.push((Pose::Scene(scene_index), placements));
+            }
+        }
+        for assembly in self.design.assemblies() {
+            let (Some(path), Some(mechanism)) = (self.path(assembly.id), &assembly.mechanism)
+            else {
+                continue;
+            };
+            let name = self.assembly_name(assembly.id);
+            for held in Self::set_holds(mechanism, None) {
+                let values: Vec<PoseValue> = mechanism
+                    .drives()
+                    .iter()
+                    .zip(&held)
+                    .map(|(named, value)| match named.drive.amount_of(*value) {
+                        Some(DriveValue::Turn(angle)) => PoseValue::Angle(angle),
+                        Some(DriveValue::Travel(length)) => PoseValue::Travel(length),
+                        None => PoseValue::Closed,
+                    })
+                    .collect();
+                let placements = self
+                    .bodies
+                    .iter()
+                    .map(|body| {
+                        if !body.chain.contains(&assembly.id) {
+                            return Placement::REST;
+                        }
+                        let link = body
+                            .link
+                            .filter(|(own, _)| *own == assembly.id)
+                            .map(|(_, link)| link);
+                        Placement::of_poses(&[(path.mechanism(), values.as_slice())], link)
+                    })
+                    .collect();
+                // The one drive away from closed, as a message names it.
+                let words = mechanism
+                    .drives()
+                    .iter()
+                    .zip(held.iter().zip(mechanism.closed()))
+                    .find(|(_, (value, from))| **value != *from)
+                    .map(|(named, (value, _))| {
+                        let drive = match &named.name {
+                            Some(drive) if mechanism.drives().len() > 1 => {
+                                format!("{name}.{drive}")
+                            }
+                            Some(_) | None => name.clone(),
+                        };
+                        let amount = match named.drive.amount_of(*value) {
+                            Some(DriveValue::Turn(angle)) => angle.to_string(),
+                            Some(DriveValue::Travel(length)) => length_text(length),
+                            None => String::new(),
+                        };
+                        format!("{drive} is set at {amount}")
+                    })
+                    .unwrap_or_default();
+                poses.push((Pose::Set(words), placements));
+            }
+        }
+        poses
+    }
+
     /// The first gap in a piece of hardware's stack, if it has a clamp and
-    /// a gap.
-    fn clamp_gap(&self, hardware: &Hardware) -> Option<Gap> {
+    /// a gap: at rest, or with every body where `placements` puts it.
+    fn clamp_gap(&self, hardware: &Hardware, placements: Option<&[Placement]>) -> Option<Gap> {
         let clamp = hardware.clamp?;
         let member = |body| hardware.members.iter().find(|m| m.id.body == body);
         let bearing = member(clamp.bearing)?;
@@ -77,10 +183,21 @@ impl Checker<'_> {
         let BodyCarrier::Part(far) = drawn.carrier else {
             return None;
         };
-        let far_box = self.design.part(far)?.drawn_box();
+        // Each body as the drawn member sees it: the walk runs where it is.
+        let placed = |item: Item| -> Placement {
+            placements
+                .and_then(|placements| {
+                    let index = self.bodies.iter().position(|body| body.item == item)?;
+                    placements.get(index).copied()
+                })
+                .unwrap_or(Placement::REST)
+        };
+        let drawn_at = placed(Item::Member(drawn.id));
+        let seen = |item: Item| placed(item).seen_from(&drawn_at);
+        let far_box = placed_bounds(&self.design.part(far)?.drawn_box(), &seen(Item::Part(far)));
         let axis = clamp.axis;
         let line = Line::through_middle(axis, &drawn.bounds());
-        let bearing_box = bearing.bounds();
+        let bearing_box = placed_bounds(&bearing.bounds(), &seen(Item::Member(bearing.id)));
         let (bearing_low, bearing_high) =
             (bearing_box.min().get(axis), bearing_box.max().get(axis));
         let (far_low, far_high) = (far_box.min().get(axis), far_box.max().get(axis));
@@ -111,7 +228,19 @@ impl Checker<'_> {
                 }
                 Item::Member(_) => continue,
             };
-            let mut stretches = line.in_solid(&body.solid);
+            // Where the line runs in the body as it sees it; a body the
+            // pose slants across the line fills nothing.
+            let Some((own_line, back)) = line.seen_by(&seen(body.item)) else {
+                continue;
+            };
+            let mut stretches: Vec<Stretch> = own_line
+                .in_solid(&body.solid)
+                .into_iter()
+                .filter_map(|stretch| back.stretch(stretch))
+                .collect();
+            // The room cut for the clamp itself goes where the clamp goes
+            // (a bolt set lower in the slot cut for it): taken where it
+            // is with the drawn member at rest.
             if let Item::Part(part) = body.item {
                 stretches.extend(
                     self.own_cuts(part, hardware)
@@ -174,9 +303,10 @@ impl Checker<'_> {
             .collect()
     }
 
-    /// Reports a gap at the hardware's call; another piece of hardware of
-    /// the same call with a gap is a note on the first.
-    fn report_gap(&mut self, hardware: &Hardware, gap: Gap) {
+    /// Reports a gap at the hardware's call, at rest or at a pose; another
+    /// piece of hardware of the same call with a gap is a note on the
+    /// first.
+    fn report_gap(&mut self, hardware: &Hardware, gap: Gap, pose: Option<&Pose>) {
         let place = self.hardware_place(hardware.id);
         if let Some((file, span)) = place
             && let Some((earlier, _)) = self.diagnostics.iter_mut().find(|(d, _)| {
@@ -237,7 +367,24 @@ impl Checker<'_> {
                 contact.items.push(item);
             }
         }
+        if let Some(Pose::Scene(scene_index)) = pose {
+            contact.scene = self.design.scenes.get(*scene_index).map(|scene| scene.id);
+        }
         self.next_contact = Some(contact);
+        let mut notes = Vec::new();
+        match pose {
+            Some(Pose::Scene(scene_index)) => {
+                if let Some(scene) = self.design.scenes.get(*scene_index) {
+                    notes.push(format!("as scene '{}' poses it", scene.name));
+                }
+            }
+            Some(Pose::Set(words)) => notes.push(format!("when {words}")),
+            None => {}
+        }
+        notes.push(format!(
+            "tightening the {} would pull {pulled} {width} toward {near}",
+            member_name(clamp.bearing)
+        ));
         self.report(
             Severity::Error,
             Code::NoContact,
@@ -246,10 +393,7 @@ impl Checker<'_> {
                 hardware.name
             ),
             place,
-            vec![format!(
-                "tightening the {} would pull {pulled} {width} toward {near}",
-                member_name(clamp.bearing)
-            )],
+            notes,
             Some(format!(
                 "put a washer or spacer in the gap, or place {far} against {near}"
             )),

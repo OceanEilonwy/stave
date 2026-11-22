@@ -1,0 +1,21 @@
+---
+source: crates/stave-app/tests/clamps.rs
+expression: rendered(&opened)
+---
+error[no-contact]: frame.pivot_l draws frame.stile_l toward upright_l, but they are 3mm apart with nothing between
+   --> /project/project.stave:167:22
+    |
+167 |   hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: when frame.height is set at 100mm
+    = note: tightening the knob would pull frame.stile_l 3mm toward upright_l
+    = help: put a washer or spacer in the gap, or place frame.stile_l against upright_l
+
+error[no-contact]: frame.pivot_r draws frame.stile_r toward upright_r, but they are 3mm apart with nothing between
+   --> /project/project.stave:168:22
+    |
+168 |   hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: when frame.height is set at 100mm
+    = note: tightening the knob would pull frame.stile_r 3mm toward upright_r
+    = help: put a washer or spacer in the gap, or place frame.stile_r against upright_r

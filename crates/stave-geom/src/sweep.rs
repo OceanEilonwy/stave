@@ -66,7 +66,8 @@ use crate::collide::{
 use crate::mechanism::MechanismPath;
 use crate::planar::MechanismError;
 use crate::plane::{
-    Bores, Motion2, Piece, Plane, corners_of, intersect, piece_depth, piece_pairs, polygon_distance,
+    Bores, Motion2, Pair, Piece, Plane, Room, corners_of, intersect, piece_depth, piece_pairs,
+    polygon_distance,
 };
 use crate::render;
 use stave_model::mechanism::MotionShape;
@@ -180,11 +181,177 @@ pub fn slide_contact(
             }
         }
     }
+    // A round shape that starts inside a hole of the other solid (the
+    // room a cut made for it) overlaps the block the hole is drilled in,
+    // and is clear of its wood only while it stays in the hole: once it
+    // slides out, into wood, it hits. Exact for a solid placed by a
+    // translation; the moving solid's holes meet the fixed one's rods
+    // sliding the other way.
+    if let Placement::Exact(offset) = fixed_at {
+        let fixed_holes: Vec<WorldRod> = fixed
+            .holes()
+            .iter()
+            .map(|hole| rod_translated(hole, *offset))
+            .collect();
+        let fixed_blocks: Vec<WorldBox> = fixed
+            .boxes()
+            .iter()
+            .map(|block| translate_box(block, *offset))
+            .collect();
+        let fixed_rods: Vec<WorldRod> = fixed
+            .rods()
+            .iter()
+            .map(|rod| rod_translated(rod, *offset))
+            .collect();
+        let holes_of_fixed = fixed_holes.as_slice();
+        let pairs = moving
+            .rods()
+            .iter()
+            .flat_map(|rod| {
+                fixed_blocks
+                    .iter()
+                    .map(move |block| (*rod, holes_of_fixed, *block, toward))
+            })
+            .chain(fixed_rods.iter().flat_map(|rod| {
+                moving
+                    .boxes()
+                    .iter()
+                    .map(move |block| (*rod, moving.holes(), *block, toward.opposite()))
+            }));
+        for (rod, holes, block, way) in pairs {
+            let Some(distance) = room_exit(&rod, holes, &block, way) else {
+                continue;
+            };
+            let hit = SlideHit {
+                distance: Length::from_nm(distance),
+                shrink: None,
+            };
+            if distance.saturating_add(tolerance) < travel.nm() && best.is_none_or(|b| hit < b) {
+                best = Some(hit);
+            }
+        }
+    }
     best
 }
 
-fn rotate(p: DVec2, angle: f64) -> DVec2 {
-    DVec2::from_angle(angle).rotate(p)
+/// A rod moved by an exact offset.
+fn rod_translated(rod: &WorldRod, by: Point) -> WorldRod {
+    let [first, second] = rod.axis.others();
+    let moved =
+        |value: Length, axis: Axis| Length::from_nm(value.nm().saturating_add(by.get(axis).nm()));
+    WorldRod {
+        centre: [moved(rod.centre[0], first), moved(rod.centre[1], second)],
+        start: moved(rod.start, rod.axis),
+        end: moved(rod.end, rod.axis),
+        ..*rod
+    }
+}
+
+/// How far `rod` slides `toward` before it leaves the round holes of
+/// `holes` it starts inside, out into the wood of `block` (the block they
+/// are drilled in), in whole nanometres; `None` when it doesn't start
+/// overlapping the block inside one of them (then it is clear of the
+/// block, or the static checks report it), or never meets wood beyond
+/// the hole. A hole that it slides straight on into (one of a row close
+/// enough to hold it on the way) carries it on.
+fn room_exit(
+    rod: &WorldRod,
+    holes: &[WorldRod],
+    block: &WorldBox,
+    toward: Direction,
+) -> Option<i64> {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let axis = rod.axis;
+    let [first, second] = axis.others();
+    let bounds = rod.bounds();
+    let clear = CONTACT_TOLERANCE.nm();
+    if Axis::ALL
+        .into_iter()
+        .any(|on| shared(&bounds, block, on) <= clear)
+    {
+        return None;
+    }
+    let radius = render::nm(rod.diameter) / 2.0;
+    let sign = if toward.is_positive() { 1.0 } else { -1.0 };
+    let (low, high) = (
+        render::nm(rod.start.max(block.min().get(axis))),
+        render::nm(rod.end.min(block.max().get(axis))),
+    );
+    let centre = [render::nm(rod.centre[0]), render::nm(rod.centre[1])];
+    let hole_centre = |hole: &WorldRod| [render::nm(hole.centre[0]), render::nm(hole.centre[1])];
+    // Whether the rod, slid `t` along, lies inside `hole` where it is in
+    // the block.
+    let holds = |hole: &WorldRod, t: f64| -> bool {
+        if hole.axis != axis {
+            return false;
+        }
+        let shift = |on: Axis| if toward.axis() == on { sign * t } else { 0.0 };
+        let (from, to) = (low + shift(axis), high + shift(axis));
+        let along =
+            render::nm(hole.start) <= from + tolerance && render::nm(hole.end) >= to - tolerance;
+        let [h0, h1] = hole_centre(hole);
+        let d0 = centre[0] + shift(first) - h0;
+        let d1 = centre[1] + shift(second) - h1;
+        along && (d0 * d0 + d1 * d1).sqrt() + radius <= render::nm(hole.diameter) / 2.0 + tolerance
+    };
+    let mut hole = holes.iter().find(|hole| holds(hole, 0.0))?;
+    let mut at = 0.0;
+    let mut exit = at;
+    for _ in 0..=holes.len() {
+        let room = render::nm(hole.diameter) / 2.0 + tolerance;
+        exit = if toward.axis() == axis {
+            // Along its own axis: until its leading end reaches the
+            // hole's end.
+            if toward.is_positive() {
+                render::nm(hole.end) - render::nm(rod.end)
+            } else {
+                render::nm(rod.start) - render::nm(hole.start)
+            }
+        } else {
+            let [h0, h1] = hole_centre(hole);
+            let (ahead, beside) = if toward.axis() == first {
+                (sign * (centre[0] - h0), centre[1] - h1)
+            } else {
+                (sign * (centre[1] - h1), centre[0] - h0)
+            };
+            let reach = room - radius;
+            (reach * reach - beside * beside).max(0.0).sqrt() - ahead
+        }
+        .max(at);
+        let onward = exit + tolerance;
+        match holes
+            .iter()
+            .find(|next| !std::ptr::eq(*next, hole) && holds(next, onward))
+        {
+            Some(next) => {
+                hole = next;
+                at = onward;
+            }
+            None => break,
+        }
+    }
+    // Wood beyond: the block reaches past where the rod's leading side
+    // leaves the hole.
+    let leading = if toward.axis() == axis {
+        let end = if toward.is_positive() {
+            rod.end
+        } else {
+            rod.start
+        };
+        render::nm(end) + sign * exit
+    } else {
+        let index = usize::from(toward.axis() != first);
+        centre.get(index).copied().unwrap_or(0.0) + sign * (exit + radius)
+    };
+    let face = if toward.is_positive() {
+        block.max().get(toward.axis())
+    } else {
+        block.min().get(toward.axis())
+    };
+    if sign * (render::nm(face) - leading) <= tolerance {
+        return None;
+    }
+    render::length_from_nm(exit.floor()).map(|length| length.nm())
 }
 
 /// The angles in `(0, limit]` at which the circle of radius `|p|` about the
@@ -219,12 +386,49 @@ fn crossings(p: DVec2, a: DVec2, b: DVec2, forward: bool, limit: f64, out: &mut 
 /// counter-clockwise about the origin, overlaps the fixed one; `None` when
 /// it turns the whole way clear. Polygons overlapping at the start are
 /// left out (reported by the static checks).
+#[cfg(test)]
 fn turn_first(moving: &[DVec2], fixed: &[DVec2], limit: f64) -> Option<f64> {
-    if intersect(moving, fixed) {
+    let moving = Piece {
+        corners: moving.to_vec(),
+        low: 0.0,
+        high: 0.0,
+        round: None,
+    };
+    let fixed = Piece {
+        corners: fixed.to_vec(),
+        low: 0.0,
+        high: 0.0,
+        round: None,
+    };
+    turn_first_in(&moving, &fixed, None, limit)
+}
+
+/// [`turn_first`] for two pieces, one of which may start inside a round
+/// hole of the other's solid (its room, see [`Room`]): they overlap only
+/// where the polygons do and the piece is out of the hole. The angles at
+/// which it leaves the hole are found in closed form with the rest.
+fn turn_first_in(moving: &Piece, fixed: &Piece, room: Option<Room>, limit: f64) -> Option<f64> {
+    let overlapping = |angle: f64| {
+        let turn = Motion2 {
+            rotation: DVec2::from_angle(angle),
+            offset: DVec2::ZERO,
+        };
+        let turned = moving.moved(turn);
+        intersect(&turned.corners, &fixed.corners)
+            && !room.is_some_and(|room| room.holds(moving, fixed, turn, Motion2::STILL))
+    };
+    if overlapping(0.0) {
         return None;
     }
+    let (moving_corners, fixed_corners) = (moving.corners.as_slice(), fixed.corners.as_slice());
     let mut events = vec![0.0, limit];
-    for (polygon, other, forward) in [(moving, fixed, true), (fixed, moving, false)] {
+    if let Some(room) = room {
+        room_exits(moving, fixed, &room, limit, &mut events);
+    }
+    for (polygon, other, forward) in [
+        (moving_corners, fixed_corners, true),
+        (fixed_corners, moving_corners, false),
+    ] {
         let n = other.len();
         for p in polygon {
             for i in 0..n {
@@ -243,13 +447,50 @@ fn turn_first(moving: &[DVec2], fixed: &[DVec2], limit: f64) -> Option<f64> {
     events.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
     for pair in events.windows(2) {
         let &[from, to] = pair else { continue };
-        let middle = (from + to) / 2.0;
-        let turned: Vec<DVec2> = moving.iter().map(|p| rotate(*p, middle)).collect();
-        if intersect(&turned, fixed) {
+        if overlapping((from + to) / 2.0) {
             return Some(from);
         }
     }
     None
+}
+
+/// The angles in `(0, limit]` at which a piece turning about the origin
+/// (or the hole, when the hole is in the turning piece's solid) brings
+/// the round piece to the side of its room: where `|turned(u) - v|` is the
+/// room's radius less the piece's, `u` the centre that turns and `v` the
+/// one that stays.
+fn room_exits(moving: &Piece, fixed: &Piece, room: &Room, limit: f64, out: &mut Vec<f64>) {
+    let (round, hole_turns) = if room.in_second {
+        (moving.round, false)
+    } else {
+        (fixed.round, true)
+    };
+    let Some((centre, radius)) = round else {
+        return;
+    };
+    let reach = room.radius - radius;
+    let (u, v) = if hole_turns {
+        (room.centre, centre)
+    } else {
+        (centre, room.centre)
+    };
+    let (lu, lv) = (u.length(), v.length());
+    if lu * lv < 1e-9 {
+        return;
+    }
+    let cosine = (lu * lu + lv * lv - reach * reach) / (2.0 * lu * lv);
+    if !(-1.0..=1.0).contains(&cosine) {
+        return;
+    }
+    // turned(u)·v = |u||v|cos(θ + α), α the angle from v to u.
+    let alpha = u.to_angle() - v.to_angle();
+    let spread = cosine.acos();
+    for angle in [spread - alpha, -spread - alpha] {
+        let angle = angle.rem_euclid(TAU);
+        if angle > 0.0 && angle <= limit {
+            out.push(angle);
+        }
+    }
 }
 
 /// A motion ready to sweep (grammar, "Scenes"): an assembly's mechanism
@@ -271,6 +512,11 @@ pub enum Mover<'a> {
     /// It is (or rides on) that member of the path's mechanism, from rest:
     /// the mechanism places it as the assembly moves.
     Member(&'a Path, MemberIndex),
+    /// It moves with the path as one piece with the assembly, from where
+    /// an assembly inside it holds it (that placement, from rest): a tray
+    /// tilted on its hinge in a drawer that slides. Swept by conservative
+    /// advancement, the body as that placement turns it.
+    Carried(&'a Path, Placement),
 }
 
 impl PartialEq for Mover<'_> {
@@ -279,7 +525,10 @@ impl PartialEq for Mover<'_> {
             (Mover::Fixed(a), Mover::Fixed(b)) => a == b,
             (Mover::Rigid(a), Mover::Rigid(b)) => std::ptr::eq(*a, *b),
             (Mover::Member(a, x), Mover::Member(b, y)) => std::ptr::eq(*a, *b) && x == y,
-            (Mover::Fixed(_) | Mover::Rigid(_) | Mover::Member(..), _) => false,
+            (Mover::Carried(a, x), Mover::Carried(b, y)) => std::ptr::eq(*a, *b) && x == y,
+            (Mover::Fixed(_) | Mover::Rigid(_) | Mover::Member(..) | Mover::Carried(..), _) => {
+                false
+            }
         }
     }
 }
@@ -288,7 +537,15 @@ impl Mover<'_> {
     fn path(&self) -> Option<&Path> {
         match self {
             Mover::Fixed(_) => None,
-            Mover::Rigid(path) | Mover::Member(path, _) => Some(path),
+            Mover::Rigid(path) | Mover::Member(path, _) | Mover::Carried(path, _) => Some(path),
+        }
+    }
+
+    /// Whether it moves with its path as one piece with the assembly.
+    fn rigid(&self) -> bool {
+        match self {
+            Mover::Rigid(_) | Mover::Carried(..) => true,
+            Mover::Fixed(_) | Mover::Member(..) => false,
         }
     }
 }
@@ -354,7 +611,7 @@ impl Path {
     fn motion2(&self, mover: &Mover<'_>, amount: f64) -> Option<Motion2> {
         let member = match mover {
             Mover::Fixed(_) => return Some(Motion2::STILL),
-            Mover::Rigid(_) => self.mechanism.moving(),
+            Mover::Rigid(_) | Mover::Carried(..) => self.mechanism.moving(),
             Mover::Member(_, member) => *member,
         };
         let (rotation, offset) = self.mechanism.motion(member, amount)?;
@@ -365,7 +622,7 @@ impl Path {
     fn speed(&self, mover: &Mover<'_>, piece: &Piece) -> f64 {
         let member = match mover {
             Mover::Fixed(_) => return 0.0,
-            Mover::Rigid(_) => self.mechanism.moving(),
+            Mover::Rigid(_) | Mover::Carried(..) => self.mechanism.moving(),
             Mover::Member(_, member) => *member,
         };
         self.mechanism
@@ -410,6 +667,12 @@ impl Path {
     /// The box a body can reach as the path moves it.
     pub fn reach(&self, solid: &WorldSolid, mover: &Mover<'_>) -> Option<WorldBox> {
         let offset = self.mechanism.offset().unwrap_or_default();
+        if let Mover::Carried(path, held) = mover {
+            // The box around it where the assembly inside holds it, moved
+            // as one piece with this one.
+            let held_box = WorldSolid::from_boxes(vec![placed_bounds(&solid.bounds()?, held)]);
+            return self.reach(&held_box, &Mover::Rigid(path));
+        }
         match (self.relative_shape(), mover) {
             (_, Mover::Fixed(placement)) => Some(placed_bounds(&solid.bounds()?, placement)),
             (MotionShape::Turn { line: pivot, .. }, Mover::Rigid(_)) => {
@@ -427,6 +690,8 @@ impl Path {
             (_, Mover::Member(_, member)) => sampled_reach(solid, self, mover, |amount| {
                 self.mechanism.matrix(*member, amount)
             }),
+            // Taken as the box where it is held, above.
+            (_, Mover::Carried(..)) => None,
         }
     }
 
@@ -437,6 +702,9 @@ impl Path {
             Mover::Rigid(_) => Placement::of_mechanisms(&[(&self.mechanism, value)], None),
             Mover::Member(_, member) => {
                 Placement::of_mechanisms(&[(&self.mechanism, value)], Some(*member))
+            }
+            Mover::Carried(_, held) => {
+                Placement::of_mechanisms(&[(&self.mechanism, value)], None).after(held)
             }
         }
     }
@@ -458,6 +726,7 @@ fn sampled_reach(
         corners: corners.iter().map(|c| plane.project(*c)).collect(),
         low: 0.0,
         high: 0.0,
+        round: None,
     };
     let count: u32 = 180;
     let step = path.limit() / f64::from(count);
@@ -495,13 +764,14 @@ fn start_pairs(
     ma: &Mover<'_>,
     b: &WorldSolid,
     mb: &Mover<'_>,
-) -> Vec<(Piece, Piece)> {
+) -> Vec<Pair> {
     let matrix = |mover: &Mover<'_>| match mover {
-        Mover::Fixed(placement) => placement.matrix(),
+        Mover::Fixed(placement) | Mover::Carried(_, placement) => placement.matrix(),
         Mover::Rigid(_) | Mover::Member(..) => DMat4::IDENTITY,
     };
     // The pieces move other than about one fixed line: a hole along the
-    // axis is wood.
+    // axis keeps nothing apart all the motion long, but a piece that
+    // starts inside one is clear while it stays in it (its room).
     piece_pairs(plane, a, &matrix(ma), b, &matrix(mb), Bores::Wood)
 }
 
@@ -511,27 +781,35 @@ fn start_pairs(
 /// each step is no more than the distance between them over the fastest
 /// their corners can close it, never less than a quarter of the contact
 /// tolerance's worth; the first overlap is then bisected.
-fn advance(
-    path: &Path,
-    a: &Piece,
-    ma: &Mover<'_>,
-    b: &Piece,
-    mb: &Mover<'_>,
-    limit: f64,
-) -> Option<f64> {
-    let at = |theta: f64| -> Option<(Vec<DVec2>, Vec<DVec2>)> {
+fn advance(path: &Path, pair: &Pair, ma: &Mover<'_>, mb: &Mover<'_>, limit: f64) -> Option<f64> {
+    let (a, b) = (&pair.first, &pair.second);
+    let at = |theta: f64| -> Option<(Piece, Piece)> {
         Some((
-            a.moved(path.motion2(ma, theta)?).corners,
-            b.moved(path.motion2(mb, theta)?).corners,
+            a.moved(path.motion2(ma, theta)?),
+            b.moved(path.motion2(mb, theta)?),
         ))
+    };
+    // They overlap where their polygons do, unless one is still inside
+    // the round hole it started in (its room).
+    let overlapping = |x: &Piece, y: &Piece| {
+        intersect(&x.corners, &y.corners)
+            && !pair
+                .room
+                .is_some_and(|room| room.holds(x, y, Motion2::STILL, Motion2::STILL))
+    };
+    // How far apart they are, for the next step: inside its room, how far
+    // the piece is from the hole's side.
+    let apart = |x: &Piece, y: &Piece| match pair.room {
+        Some(room) if intersect(&x.corners, &y.corners) => room.clearance(x, y).max(0.0),
+        Some(_) | None => polygon_distance(&x.corners, &y.corners),
     };
     // Where the motion starts: at rest, or where the held drives put it.
     let (mut here_a, mut here_b) = if path.mechanism.held_closed() {
-        (a.corners.clone(), b.corners.clone())
+        (a.clone(), b.clone())
     } else {
         at(0.0)?
     };
-    if intersect(&here_a, &here_b) {
+    if overlapping(&here_a, &here_b) {
         return None;
     }
     let speed = path.speed(ma, a) + path.speed(mb, b);
@@ -541,15 +819,15 @@ fn advance(
     let smallest = render::nm(CONTACT_TOLERANCE) / 4.0 / speed;
     let mut theta = 0.0;
     loop {
-        let step = (polygon_distance(&here_a, &here_b) / speed).max(smallest);
+        let step = (apart(&here_a, &here_b) / speed).max(smallest);
         let next = (theta + step).min(limit);
         let (there_a, there_b) = at(next)?;
-        if intersect(&there_a, &there_b) {
+        if overlapping(&there_a, &there_b) {
             let (mut clear, mut hit) = (theta, next);
             for _ in 0..60 {
                 let middle = (clear + hit) / 2.0;
                 let (x, y) = at(middle)?;
-                if intersect(&x, &y) {
+                if overlapping(&x, &y) {
                     hit = middle;
                 } else {
                     clear = middle;
@@ -582,15 +860,22 @@ pub fn first_contact(
 ) -> Option<Reach> {
     let path = ma.path().or_else(|| mb.path())?;
     // One rigid motion moves both: they never move against each other.
-    if matches!((&ma, &mb), (Mover::Rigid(_), Mover::Rigid(_))) {
+    if ma.rigid() && mb.rigid() {
         return None;
     }
     if ma == mb {
         return None;
     }
+    // A body an inner assembly holds turned has no exact shape here.
+    let carried = matches!(ma, Mover::Carried(..)) || matches!(mb, Mover::Carried(..));
+    let shape = if carried {
+        MotionShape::General
+    } else {
+        path.relative_shape()
+    };
     // With the other drives held, the moving bodies start where they put
     // them: the fast paths meet them with the fixed body placed back.
-    match (path.relative_shape(), &ma, &mb) {
+    match (shape, &ma, &mb) {
         (MotionShape::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
             slide_contact(a, b, &path.relative(placement), toward, travel).map(Reach::Distance)
         }
@@ -617,8 +902,8 @@ pub fn first_contact(
             let plane = path.plane();
             let limit = path.limit();
             let mut best: Option<f64> = None;
-            for (p, q) in start_pairs(&plane, a, &ma, b, &mb) {
-                if let Some(amount) = advance(path, &p, &ma, &q, &mb, best.unwrap_or(limit))
+            for pair in start_pairs(&plane, a, &ma, b, &mb) {
+                if let Some(amount) = advance(path, &pair, &ma, &mb, best.unwrap_or(limit))
                     && best.is_none_or(|b| amount < b)
                 {
                     best = Some(amount);
@@ -655,12 +940,14 @@ pub fn deepest_overlap(
     let path = ma.path().or_else(|| mb.path())?;
     // One rigid motion moves both: what they share at rest is all they
     // ever share, and the static checks measure it.
-    if matches!((&ma, &mb), (Mover::Rigid(_), Mover::Rigid(_))) {
+    if ma.rigid() && mb.rigid() {
         return None;
     }
     let samples = samples.max(1);
     let mut worst: Option<(f64, PoseValue)> = None;
-    let rigid_only = !matches!(ma, Mover::Member(..)) && !matches!(mb, Mover::Member(..));
+    let rigid_only = [&ma, &mb]
+        .iter()
+        .all(|mover| matches!(mover, Mover::Fixed(_) | Mover::Rigid(_)));
     let travel = match path.mechanism.shape() {
         MotionShape::Travel { travel, .. } if rigid_only => Some(travel),
         MotionShape::Travel { .. } | MotionShape::Turn { .. } | MotionShape::General => None,
@@ -676,7 +963,12 @@ pub fn deepest_overlap(
             else {
                 continue;
             };
-            for (p, q) in &pairs {
+            for Pair {
+                first: p,
+                second: q,
+                ..
+            } in &pairs
+            {
                 let Some((depth, _)) = piece_depth(&p.moved(moved_a), &q.moved(moved_b)) else {
                     continue;
                 };
@@ -732,7 +1024,7 @@ pub fn turn_contact(
     let trimmed = moving.without_rods_on(pivot);
     let moving = trimmed.as_ref().unwrap_or(moving);
     let mut best: Option<f64> = None;
-    for (m, f) in piece_pairs(
+    for pair in piece_pairs(
         &plane,
         moving,
         &DMat4::IDENTITY,
@@ -740,7 +1032,8 @@ pub fn turn_contact(
         &fixed_at.matrix(),
         Bores::Turning,
     ) {
-        if let Some(angle) = turn_first(&m.corners, &f.corners, best.unwrap_or(limit))
+        if let Some(angle) =
+            turn_first_in(&pair.first, &pair.second, pair.room, best.unwrap_or(limit))
             && best.is_none_or(|b| angle < b)
         {
             best = Some(angle);
@@ -1006,6 +1299,129 @@ mod tests {
         .unwrap();
         assert!(angle < Angle::from_deg(1), "{angle}");
     }
+
+    /// An upright 45mm thick (across), with a row of four 9mm holes
+    /// through it, 100mm apart from 850mm up down, and an 8mm bolt through
+    /// the top one.
+    fn holed_upright() -> (WorldSolid, WorldSolid) {
+        let hole = |up: i64| WorldRod {
+            axis: Axis::Across,
+            // `Axis::Across`'s others are up, then deep.
+            centre: [mm(up), mm(0)],
+            diameter: mm(9),
+            start: mm(0),
+            end: mm(45),
+        };
+        let upright = [850, 750, 650, 550]
+            .into_iter()
+            .fold(block(point(0, 0, -35), point(45, 1500, 35)), |solid, up| {
+                solid.with_hole(hole(up))
+            });
+        let bolt = WorldSolid::default().with_rod(WorldRod {
+            diameter: mm(8),
+            start: mm(-10),
+            end: mm(60),
+            ..hole(850)
+        });
+        (upright, bolt)
+    }
+
+    #[test]
+    fn a_bolt_sliding_out_of_its_hole_into_wood_hits() {
+        // Grammar, "Sweeps see cuts": the bolt overlaps the upright's
+        // block where it starts, but only inside the hole cut for it, so
+        // it is clear only while it stays in the hole. Slid down, it meets
+        // the wood between the holes half a millimetre (and the contact
+        // tolerance) on.
+        let (upright, bolt) = holed_upright();
+        let hit = slide_contact(&bolt, &upright, &Placement::REST, Direction::Down, mm(300))
+            .expect("the bolt leaves its hole");
+        assert_eq!(hit.distance, Length::from_nm(550_000));
+        // The upright sliding up past the bolt is the same motion.
+        let back = slide_contact(&upright, &bolt, &Placement::REST, Direction::Up, mm(300))
+            .expect("the hole leaves the bolt");
+        assert_eq!(back.distance, Length::from_nm(550_000));
+        // Slid along its own axis, out of the through hole: no wood beyond.
+        assert_eq!(
+            slide_contact(&bolt, &upright, &Placement::REST, Direction::Right, mm(300)),
+            None
+        );
+        // Less than half a millimetre: still in its hole.
+        assert_eq!(
+            slide_contact(
+                &bolt,
+                &upright,
+                &Placement::REST,
+                Direction::Down,
+                Length::from_nm(400_000)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_bolt_in_a_hole_that_holds_it_all_the_way_is_clear() {
+        // A slot made of holes that overlap enough to hold the bolt the
+        // whole way: each carries it on to the next.
+        let hole = |up: i64| WorldRod {
+            axis: Axis::Across,
+            centre: [mm(up), mm(0)],
+            diameter: mm(12),
+            start: mm(0),
+            end: mm(45),
+        };
+        let slotted = (0..=10).fold(block(point(0, 0, -35), point(45, 1500, 35)), |solid, k| {
+            solid.with_hole(hole(850 - k))
+        });
+        let (_, bolt) = holed_upright();
+        let hit = slide_contact(&bolt, &slotted, &Placement::REST, Direction::Down, mm(300))
+            .expect("past the last hole it meets wood");
+        assert!(
+            hit.distance > mm(10) && hit.distance < mm(13),
+            "{:?}",
+            hit.distance
+        );
+    }
+
+    #[test]
+    fn a_piece_turning_out_of_its_hole_into_wood_hits() {
+        // A pin 8mm across, 100mm from the line it turns about, in a 9mm
+        // hole: it leaves the hole once its centre has moved 0.55mm, about
+        // 0.315deg round, and is then in the wood.
+        let pin = Piece {
+            corners: vec![
+                DVec2::new(96.0, -4.0),
+                DVec2::new(104.0, -4.0),
+                DVec2::new(104.0, 4.0),
+                DVec2::new(96.0, 4.0),
+            ],
+            low: 0.0,
+            high: 10.0,
+            round: Some((DVec2::new(100.0, 0.0), 4.0)),
+        };
+        let wood = Piece {
+            corners: vec![
+                DVec2::new(50.0, -50.0),
+                DVec2::new(150.0, -50.0),
+                DVec2::new(150.0, 50.0),
+                DVec2::new(50.0, 50.0),
+            ],
+            low: 0.0,
+            high: 10.0,
+            round: None,
+        };
+        let room = Room {
+            centre: DVec2::new(100.0, 0.0),
+            radius: 4.55,
+            in_second: true,
+        };
+        let angle = turn_first_in(&pin, &wood, Some(room), TAU).expect("it leaves the hole");
+        let expected = 2.0 * (0.55f64 / 200.0).asin();
+        assert!((angle - expected).abs() < 1e-9, "{angle} vs {expected}");
+        // Without its room it overlaps the wood from the start: left to
+        // the static checks.
+        assert_eq!(turn_first_in(&pin, &wood, None, TAU), None);
+    }
 }
 
 #[cfg(test)]
@@ -1147,7 +1563,7 @@ mod linkage_tests {
                 &DMat4::IDENTITY,
                 Bores::Wood,
             );
-            let (m, f) = (&pairs[0].0, &pairs[0].1.corners);
+            let (m, f) = (&pairs[0].first, &pairs[0].second.corners);
             let cup = path.mechanism().moving();
             let dense = (1..=11_000)
                 .map(|k| (f64::from(k) / 100.0).to_radians())
@@ -1229,5 +1645,85 @@ mod linkage_tests {
         );
         let unbored = deepest_overlap(&inner_link(), link, &door(false), door_moves, 2000).unwrap();
         assert!(unbored.depth > mm(1), "{:?}", unbored);
+    }
+
+    /// A runner on a rail along a held guide, its pins along `across`,
+    /// running down 300mm.
+    fn runner() -> Path {
+        let frame = MechanismFrame::new(
+            Axis::Across,
+            Point::default(),
+            Direction::Up,
+            Direction::Front,
+        )
+        .unwrap();
+        let member = |name: &str, holding| MechanismMember {
+            hardware: HardwareId::from_usize(0),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
+            name: name.to_owned(),
+            holding,
+        };
+        let mechanism = Mechanism::new(
+            frame,
+            vec![
+                member("runner", Holding::Free),
+                member("guide", Holding::Held),
+            ],
+            vec![MechanismEntry::Rail {
+                runner: index(0),
+                guide: index(1),
+                direction: stave_model::mechanism::FrameDirection::new(mm(1), Length::ZERO)
+                    .unwrap(),
+            }],
+            MechanismDrive::Travel {
+                member: index(0),
+                from: Length::ZERO,
+                to: mm(-300),
+            },
+            None,
+            vec![HardwareId::from_usize(0)],
+        )
+        .unwrap();
+        Path::new(&mechanism).unwrap()
+    }
+
+    /// Swept by conservative advancement (as a member its mechanism
+    /// places), a bolt that starts in its hole is clear only while it
+    /// stays in it, and hits the wood between the holes once out: its
+    /// room, as in the exact sweeps.
+    #[test]
+    fn a_member_leaving_its_hole_into_wood_hits_when_advanced() {
+        let path = runner();
+        let hole = |up: i64| WorldRod {
+            axis: Axis::Across,
+            centre: [mm(up), mm(0)],
+            diameter: mm(9),
+            start: mm(0),
+            end: mm(45),
+        };
+        let upright = [850, 750]
+            .into_iter()
+            .fold(block([0, 0, -35], [45, 1500, 35]), |solid, up| {
+                solid.with_hole(hole(up))
+            });
+        let bolt = WorldSolid::default().with_rod(WorldRod {
+            diameter: mm(8),
+            start: mm(-10),
+            end: mm(60),
+            ..hole(850)
+        });
+        let Some(Reach::Distance(hit)) = first_contact(
+            &bolt,
+            Mover::Member(&path, index(0)),
+            &upright,
+            Mover::Fixed(Placement::REST),
+        ) else {
+            panic!("the bolt leaves its hole into wood");
+        };
+        assert!(
+            (Length::from_nm(540_000)..=Length::from_nm(560_000)).contains(&hit.distance),
+            "{:?}",
+            hit.distance
+        );
     }
 }

@@ -357,6 +357,115 @@ fn the_drawn_member_moves_with_a_part() {
     );
 }
 
+/// One of the turning-frames designs in `tests/turning/`.
+fn turning(name: &str) -> String {
+    let path = format!("{}/tests/turning/{name}.stave", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// The design with its first scene and everything after it taken out.
+fn without_scenes(text: &str) -> String {
+    let scene = text.find("\nscene ").expect("the scenes");
+    text[..scene].trim_end().to_owned() + "\n"
+}
+
+/// The design with the washer riding on the upright instead of on the
+/// bolt: it stays behind when the frame is set lower.
+fn washer_on_the_upright(text: &str) -> String {
+    let washer = "  member washer {\n    with:  bolt\n";
+    assert_eq!(text.matches(washer).count(), 1);
+    text.replace(washer, "  member washer {\n    with:  piece\n")
+}
+
+#[test]
+fn a_clamp_turned_about_its_own_axis_is_solid_at_every_angle() {
+    // The cheval's frame posed tilted back 15deg: the stile, bolt, washer
+    // and knob turn about the bolt's line, which is the clamp's, so its
+    // stack is the same as at rest: clean.
+    let opened = open(&turning("cheval"));
+    assert!(opened.diagnostics.is_empty(), "{}", rendered(&opened));
+    // With a washer too thin, the tilted pose finds the gap too, but each
+    // bolt's is reported once, at rest.
+    let thin = turning("cheval").replace(
+        "washer_thickness: washer)",
+        "washer_thickness: washer - 1mm)",
+    );
+    let opened = open(&thin);
+    let gaps = opened
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == Code::NoContact)
+        .count();
+    assert_eq!(gaps, 2, "{}", rendered(&opened));
+    assert!(
+        opened
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == Code::NoContact)
+            .all(|d| !d.notes.iter().any(|note| note.contains("poses it"))),
+        "{}",
+        rendered(&opened)
+    );
+}
+
+#[test]
+fn a_washer_left_behind_at_a_set_height_is_no_contact() {
+    // The holed cheval's washer rides on the upright: at rest it fills the
+    // gap, but set one hole lower, the bolt and the stile move down and
+    // the washer stays, and each knob would pull its stile 3mm across.
+    let text = washer_on_the_upright(&without_scenes(&turning("holed_cheval")));
+    let opened = open(&text);
+    assert_eq!(
+        opened
+            .diagnostics
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>(),
+        [Code::NoContact, Code::NoContact],
+        "{}",
+        rendered(&opened)
+    );
+    let diagnostic = &opened.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "frame.pivot_l draws frame.stile_l toward upright_l, but they are 3mm apart with nothing between"
+    );
+    assert!(
+        diagnostic
+            .notes
+            .iter()
+            .any(|note| note == "when frame.height is set at 100mm"),
+        "{}",
+        rendered(&opened)
+    );
+    insta::assert_snapshot!(rendered(&opened));
+}
+
+#[test]
+fn a_washer_left_behind_at_a_scenes_poses_is_no_contact() {
+    // The rising cheval's frame lowered 150mm by a scene, its washer riding
+    // on the upright: the stack has a gap there.
+    let opened = open(&washer_on_the_upright(&turning("rising_cheval")));
+    let diagnostic = opened
+        .diagnostics
+        .iter()
+        .find(|d| d.code == Code::NoContact)
+        .unwrap_or_else(|| panic!("{}", rendered(&opened)));
+    assert!(
+        diagnostic
+            .notes
+            .iter()
+            .any(|note| note == "as scene 'lowered' poses it"),
+        "{}",
+        rendered(&opened)
+    );
+    // Without the scenes the washer is never left behind: clean.
+    let opened = open(&washer_on_the_upright(&without_scenes(&turning(
+        "rising_cheval",
+    ))));
+    assert!(opened.diagnostics.is_empty(), "{}", rendered(&opened));
+}
+
 #[test]
 fn a_joint_kind_has_no_clamp() {
     let opened = fragment(&format!(
