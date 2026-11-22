@@ -18,7 +18,15 @@ stop it:
 4. A patch can't change the `project { }` block, and there is no field for
    the finish.
 
-This note proposes five small language changes that cover all four. It also
+A fifth gap showed up while writing the loom: its frame stiles sit flat
+against the uprights, wood on wood, and would turn rubbing face to face.
+Nothing reports it, because two bodies may touch.
+
+This note proposes seven small primitives that cover all five: `pins:`, a
+role in a mechanism entry, named drives, `set_at:`, `loose` on a member,
+one rule for sweeping several motions, and a running clearance worked out
+from the wood. Each is generic. None names a kind, and each removes a
+restriction or a special case rather than adding one. It also
 says why the general `turn(about:, by:)` placement term asked for in gap 1
 is the wrong tool for this job.
 
@@ -32,7 +40,7 @@ hardware's motion, as a door's does, and not from a new placement term. That
 keeps principle 2 (woodworking words, not geometry): the pivot line *is* the
 bolt, a thing you buy and drill for, and not a line the design has to draw.
 What is missing is narrower than gap 1 suggests. The motion system needs to
-accept a pin that runs into the face (gap 2), two drives on one assembly
+accept a pin that runs into the face (gap 2), more than one drive on an assembly
 (gap 3), set positions (gap 3), and a correct sweep for a pin turning in
 its own hole. Gap 4 is separate and small.
 
@@ -88,37 +96,42 @@ role whose value is a region, or a list of parts, is `error[mechanism]`
 (`a pin turns in one part; 'opening' is a region`). The first name stays a
 member, because the moving side is what the mechanism places.
 
-## Change 3: two drives, one turning and one travelling (gap 3)
+## Change 3: named drives (gap 3)
 
-A mechanism may have **up to two** drives: at most one `turn(...)` and at
-most one `travel(...)`.
+A mechanism may have **any number of drives**, each with a name:
 
-- **Freedom.** The count must come to the number of drives (one or two).
-  The formula is unchanged: three for each free member, less two for each
-  `pivot` or `rail`, less one for each `slot` or `couple`. A pin in a slot
-  that also turns, which is a pivot bolt in a slot or a row of holes, is
-  three less one: two freedoms.
-- **One new solving step**, before "Hang": *Set*. A member whose angle and
-  travel are both known, with its pin in a slot in a placed member or part,
-  is placed. Its pin sits `travel` along the slot from `from`, and the
-  member is turned by its angle about that pin. It is closed form, like
-  the rest.
-- **One motion each.** The assembly now has one motion for each drive,
-  and the motion is named by what it does. `pose` picks it by the value's
-  type: an `Angle` sets the turn and a `Length` sets the travel. So a scene
-  may pose one assembly twice, once with each type.
+```
+drive tilt:   turn(bolt, from: 0deg, to: 360deg)
+drive height: travel(bolt, from: 0mm, to: -300mm, set_at: every(50mm))
+```
+
+- **Freedom.** The count must come to the number of drives. The formula is
+  unchanged: three for each free member, less two for each `pivot` or
+  `rail`, less one for each `slot` or `couple`. A pin in a slot that also
+  turns, which is a pivot bolt in a slot or a row of holes, is three less
+  one: two freedoms, so two drives.
+- **No new solving step.** Once a travel along a slot is known, the pin's
+  point is known. So "Hang" is reworded from "pinned to a placed member" to
+  "**pinned at a known point**" (a pivot on a placed member, or a slot pin
+  whose travel is known), and it places the bolt. The steps stay closed
+  form.
+- **One motion per drive.** The assembly has one motion for each drive,
+  and `pose` names it through the assembly:
 
   ```
   scene weaving "Weaving" {
-    pose frame = 15deg       // tilted back to weave
-    pose frame = 150mm       // three holes down
+    pose frame.tilt   = 15deg     // tilted back to weave
+    pose frame.height = 150mm     // three holes down
   }
   ```
 
-  Two poses of the same type for one assembly are `error[duplicate-name]`,
-  as now. A `Length` pose on an assembly that only turns is
-  `error[type-mismatch]` (`frame turns; it doesn't slide`). `open` and
-  `closed` set every drive of the assembly.
+  A mechanism with one drive may leave it unnamed (`drive: turn(...)`),
+  and `pose door = 110deg` works as today, so no existing file changes.
+  With two or more drives, each must be named, and a pose that doesn't
+  name one is `error[motion]` (`frame moves two ways; write frame.tilt or
+  frame.height`). A drive name that clashes with an item of the component
+  is `error[duplicate-name]`. `open` and `closed` without a drive name set
+  every drive.
 - **Several items on one assembly** must still move alike, drive for
   drive. The rule needs one correction for pivots: two drivers **mirrored
   across the assembly** (a pivot bolt on the left face of the left upright
@@ -134,11 +147,12 @@ an inner one would make the beginner invent a part that doesn't exist.
 Nesting is still the answer for two *different* pieces of hardware (a
 drawer on slides that carries a tilting tray), and Change 5 makes it work.
 
-**Why a cap of one turn and one travel?** It covers every real case found
-so far (a loom, an easel, a tilting drafting table, a swivel chair on a
-gas lift), and it lets the type of a pose choose the motion with no new
-naming. Two turns about different axes (a mirror that tilts and swivels)
-is two pieces of hardware, so it is two nested assemblies.
+**Why names, not a cap?** An earlier draft allowed one turn and one
+travel and let the pose's type pick between them. That only worked
+because of the cap, and the cap was arbitrary: a mirror that tilts and
+swivels on one fitting would have needed nesting for no reason. Names
+cost one word and have no limit. They are also what the motion bar and
+the MCP tools need to label each slider.
 
 ## Change 4: set positions and lift-out members (gap 3)
 
@@ -148,7 +162,7 @@ list (`[0deg, 15deg, 30deg]`) or `every(d)`, meaning every `d` from `from`
 up to `to`.
 
 ```
-drive: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
+drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
 ```
 
 - A pose must be one of the values: `error[motion]` at the pose otherwise
@@ -161,12 +175,12 @@ drive: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(ho
   angle.
 
 **`loose: true` on a member.** This reuses the part field of the same name,
-which already means "meant to lift out". A loose member is taken out to
-change a drive that has `set_at:`. It is not swept while that drive moves.
-It is checked wherever the hardware is set: at rest, at every pose and at
-every set value. A member carried by a loose member (`with:` it) is loose
-too. While a continuous drive moves, loose members stay in and are swept
-like any other.
+which already means "meant to lift out". A loose member is **checked
+wherever it is set and never swept**: at rest, at every pose and at every
+set value. A member carried by a loose member (`with:` it) is loose too.
+It has one meaning, whatever the drives are. Nothing is lost by not
+sweeping it while a continuous drive moves: a round bolt turning in its
+own hole sweeps only itself (Change 5).
 
 This is what makes a row of holes correct. Moving the frame down a hole
 means pulling the bolt, sliding the frame down and putting the bolt back.
@@ -180,7 +194,7 @@ is swept and the bolt is not.
 Today each assembly's single motion is swept from rest and from each
 scene's poses, and a motion inside a moving assembly is skipped
 (`stave-check/src/motion.rs`, the `nested` test). Replace that with one
-rule that covers both two drives and nesting:
+rule that covers both several drives and nesting:
 
 > **Motions are made one at a time.** Each motion is swept through its
 > whole range while every other motion is held still at each of: closed,
@@ -215,6 +229,84 @@ turning in its hole in the upright would hit the upright. Add:
 
 Both statements are exact, not conservative, so this adds no false
 negatives.
+
+## Change 6: running clearance (gap 5)
+
+**The problem.** In the loom, `frame_stile_l` is placed
+`against(upright_l.right)`. When the frame turns, the two faces slide on
+each other the whole way round. The sweep allows it, because two bodies
+may touch within the 0.05mm contact tolerance. In the shop, the frame
+binds as soon as the beech swells. The design is bad and it checks out.
+
+**No annotation is needed.** The stile doesn't need to say that it moves:
+with Changes 1 to 3, its hardware already says so. Following principle 6
+(store intent, compute results), the needed gap is **worked out** from
+what Stave already knows: which bodies move relative to each other, and
+how much solid wood swells across its grain (grammar, "Grain and wood
+movement": about 1mm per `max_held_width` of width).
+
+**The rule.** For every sweep, take each pair of **wooden** bodies that move
+differently (parts, and joint members of wood). Let:
+
+- *gap* be the least distance between them over the sweep, leaving out
+  **seating contact**: a closest approach at an end of the range (closed,
+  or a `stop`) where the gap opens as the motion leaves it. A door shutting
+  onto its stop, or an overlay door resting on the carcass front, is
+  seating, not rubbing.
+- *swell* be how far the pair can close up with the seasons along the line
+  of that closest approach: for each solid board whose grain runs across
+  that line, half its size along the line divided by its stock's
+  `max_held_width`, times 1mm. A sheet, or a board whose grain runs along
+  the line, adds nothing. The two boards' amounts are added.
+- *running gap* be the new project field below.
+
+Then:
+
+| Gap | Result |
+|---|---|
+| *gap* ≤ *swell* | `error[motion]`: it binds. `frame.stile_l rubs upright_l the whole way as frame.tilt turns: the gap is 0mm, and the beech closes up to 0.8mm with the seasons`, help `leave at least 1.8mm between them, against(upright_l.right, gap: 1.8mm), with a washer on the pivot to fill it` |
+| *swell* < *gap* < *swell* + *running gap* | `warning[clearance]`: it is tight. `frame.stile_l passes 1.2mm from upright_l as frame.tilt turns; leave 1.8mm (0.8mm for the seasons and a running gap of 1mm)` |
+| otherwise | clean |
+
+So the error is kept for a design that *will* fail (touching while it
+moves, or closing up with the seasons), and the warning is for one that
+might. That is the split you suggested, but it comes from the wood
+instead of from a severity the author has to pick.
+
+**Running gap.** Add to the `project "Title" { }` table:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `running_gap` | `Length` | no (default `1mm`) | the least gap, beyond what the wood moves with the seasons, between wooden parts that move past each other. 0mm or more |
+
+**What it doesn't cover, on purpose.**
+
+- **Steel members** keep today's rule: they may touch. Hardware is where a
+  design puts a bearing surface (a washer, a slide, a hinge knuckle), and a
+  kind's `require` can ask for its own gap, as `slide.clearance` does.
+  This is also how the rule stays free of exceptions: wood that has to
+  bear on something moving bears on a steel member, and no pair of parts
+  is let off.
+- **Bodies that move together** (inside one assembly, held by joints) are
+  not checked. They don't rub.
+- **At rest, nothing changes.** A gap matters only to things that move.
+
+**How it is checked.** The sweep already finds the first contact by
+conservative advancement to the contact tolerance. Asking whether two
+bodies come within a distance *d* is the same query with *d* in place of
+the tolerance, so the error and the warning are each one more pass of the
+existing sweep. Seating is read from the distance at the two ends of the
+range and its sign as the motion leaves them.
+
+**It finds more than looms.** The same rule catches an inset door whose
+hinge-side edge brushes the cabinet side as it swings, a lid that scrapes
+its back rail, and a drawer front with no reveal. These are common
+beginner mistakes, and none of them is reported today.
+
+**For the loom**, the fix is a washer: a `washer` member of `pivot_bolt`,
+`with: piece`, between the upright and the stile, and the stile placed
+`against(upright_l.right, gap: washer_thickness)`. The stile then turns
+on the washer, steel on wood, with a running gap to the upright.
 
 ## Gap 1: why not `turn(about:, by:)` on a part
 
@@ -292,6 +384,9 @@ kind pivot_bolt : fitting {
   param projection    = 30mm
   param bolt_diameter = 8mm
   param thread_length = 25mm
+  /// The steel washer the frame turns on, between the upright and the stile.
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
   param wall          = 6mm
   /// Spare holes below the bolt, for setting the frame's height.
   param holes_below   = 0
@@ -307,7 +402,12 @@ kind pivot_bolt : fitting {
   member bolt {
     with:  into
     loose: true
-    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + thread_length)
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  /// The washer: the stile turns on it, steel on wood, clear of the upright.
+  member washer {
+    with:  bolt
+    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
   }
   /// The knob: tighten to hold the frame at an angle, loosen to turn it.
   member knob {
@@ -322,23 +422,39 @@ kind pivot_bolt : fitting {
     pins:  depth
     slot bolt, piece from point(along: 0mm, across: 0mm)
                      to   point(along: -(holes_below * hole_pitch), across: 0mm)
-    drive: turn(bolt, from: 0deg, to: 360deg)
-    drive: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
+    drive tilt:   turn(bolt, from: 0deg, to: 360deg)
+    drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
   }
 }
 
 component Frame {
   param stand_l : Part
   param stand_r : Part
-  // stile_l, stile_r, top_beam, bottom_beam, tension_bar, shed brackets:
-  // as in the current file, placed against stand_l / stand_r.
-  hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left,  holes_below: 6) {
+  param middle : Anchor          // the plane the frame is mirrored about
+  param frame_height = 1250mm
+  param frame_drop   = 0mm      // how far the stile's top sits below the upright's
+  param washer       = 3mm
+
+  part stile_l : beech_45 {
+    length: frame_height
+    width:  70mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_l.top, inset: frame_drop)
+      against(stand_l.right, gap: washer)   // was against(upright_l.right): rubs
+      center(stand_l, deep)
+    }
+  }
+  part stile_r = mirror(stile_l, about: middle)
+  // top_beam, bottom_beam, tension_bar, shed brackets: as in the current file.
+
+  hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left,  holes_below: 6, washer_thickness: washer) {
     place {
       center(stand_l, deep)
       flush(stand_l.top, inset: 60mm)
     }
   }
-  hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, holes_below: 6) {
+  hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, holes_below: 6, washer_thickness: washer) {
     place {
       center(stand_r, deep)
       flush(stand_r.top, inset: 60mm)
@@ -349,21 +465,24 @@ component Frame {
 assembly frame : Frame {
   stand_l: upright_l
   stand_r: upright_r
+  middle:  mid(envelope, across)
 }
 
 scene weaving "Weaving" {
-  pose frame = 15deg
-  pose frame = 150mm
+  pose frame.tilt   = 15deg
+  pose frame.height = 150mm
 }
 
 scene warping "Winding the warp" {
-  pose frame = 90deg
+  pose frame.tilt = 90deg
 }
 ```
 
 Stave would then check the frame turning all the way round at each of its
 seven heights, the frame sliding between heights with the bolts out, and
-the weaving pose. It would cut the row of holes in each upright and put
+the weaving pose. It would also check that each stile clears its upright
+by the running gap plus what the beech moves. With the old `against`
+placement, that check is the error in Change 6. It would cut the row of holes in each upright and put
 the bolts and knobs on the hardware list. The cut list and work cards
 don't change, because every part is still square in its own frame.
 
@@ -371,18 +490,18 @@ don't change, because every part is still square in its own frame.
 
 | Area | Change |
 |---|---|
-| `docs/grammar.md` | Mechanisms (`pins:`, role in an entry, two drives, `set_at:`); How a mechanism is solved (positive turn, step *Set*, freedom count, version-1 limits); Shapes (`loose:` on a member); One collision model (pin in its own hole); Scenes (pose by type, the one-at-a-time rule); Placement (the rake/splay sentence); `project` table (`finish`); Patches (`project.` paths). Lexical grammar: `pins` and `set_at` as soft keywords in a mechanism |
+| `docs/grammar.md` | Mechanisms (`pins:`, role in an entry, named drives, `set_at:`); How a mechanism is solved (positive turn, "Hang" reworded to a known point, freedom count, version-1 limits); Shapes (`loose:` on a member); One collision model (pin in its own hole); Scenes (`pose a.drive`, the one-at-a-time rule); Checks (running clearance, `warning[clearance]`); Placement (the rake/splay sentence); `project` table (`finish`, `running_gap`); Patches (`project.` paths). Lexical grammar: `pins` and `set_at` as soft keywords in a mechanism |
 | `stave-lang` | parse the new entries; patch paths rooted at `project` / `library` |
-| `stave-schema`, `stave-model` | a mechanism's pin axis, up to two drives, set values; member `loose` |
-| `stave-solve` | declare the plane from `pins:`; step *Set*; roles in entries; the mirrored-driver rule |
-| `stave-check` | sweep per motion with the others held (remove the `nested` skip); pin-axis holes; poses against `set_at` |
+| `stave-schema`, `stave-model` | a mechanism's pin axis, named drives, set values; member `loose` |
+| `stave-solve` | declare the plane from `pins:`; "Hang" from a known point; roles in entries; the mirrored-driver rule |
+| `stave-check` | sweep per motion with the others held (remove the `nested` skip); pin-axis holes; poses against `set_at`; the running-clearance pass with seating and swell |
 | `stave-output` | `finish` on the cover and as the last plan step |
-| `stave-gtk`, `stave-web` | one motion-bar slider per drive. A `set_at` drive snaps to its values |
+| `stave-gtk`, `stave-web` | one motion-bar slider per drive, labelled with its name. A `set_at` drive snaps to its values |
 | `editors/` | highlight `pins`, `set_at` |
 | corpus | `examples/tapestry_loom`; diagnostic snapshots for each new error |
 
-No kind name enters a core crate. `pins`, `set_at` and `loose` are language
-words, and they work for every kind.
+No kind name enters a core crate. `pins`, `set_at`, `loose` and
+`running_gap` are language words, and they work for every kind.
 
 ## Open questions to settle before building
 
