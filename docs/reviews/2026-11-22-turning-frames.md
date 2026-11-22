@@ -1,6 +1,6 @@
 # Turning frames: weaving angles, pivot bolts and set positions
 
-Status: **proposed**. Nothing here is built yet.
+Status: **proposed**. Nothing here is built yet. This is the full design note; the one-page summary for the go/no-go is [`2026-11-22-turning-frames-decision.md`](2026-11-22-turning-frames-decision.md).
 
 A tapestry loom (`~/stavetest/tapestry_loom`) cannot be written. Its frame
 hangs between two uprights on a pivot bolt each side. It tilts back to a
@@ -288,7 +288,22 @@ instead of from a severity the author has to pick.
   kind's `require` can ask for its own gap, as `slide.clearance` does.
   This is also how the rule stays free of exceptions: wood that has to
   bear on something moving bears on a steel member, and no pair of parts
-  is let off.
+  is let off. A hardware member is bought hardware and is never wood:
+  anything made from wood is a part, and it goes on the cut list. The spec
+  says so in one line, so a wooden disc can't pass as steel by being
+  written as a member.
+- **A spacer is a bearing, not a rub.** A **spacer** is a body in a
+  [clamp](#change-7-clamp-hardware-that-draws-parts-together-gap-6)'s
+  stack that touches nothing but its two neighbours in the stack and the
+  clamp's own members: a washer, or a wooden disc made as a part. A
+  sliding contact with a spacer has no air gap to close and no broad faces
+  to drag, so it is not checked as rubbing. A spacer of wood is
+  `warning[clearance]` (`spacer_l is wood: it wears as stile_l turns on
+  it; a steel or nylon washer lasts longer`). Anything else is clean. Two
+  parts touching directly are still the error above, because neither is a
+  spacer. Tried in today's Stave: a 32mm beech disc turned as a part, with
+  a `spacer` role in the kind so it is drilled for the bolt, checks clean
+  in the cheval mirror.
 - **Bodies that move together** (inside one assembly, held by joints) are
   not checked. They don't rub.
 - **At rest, nothing changes.** A gap matters only to things that move.
