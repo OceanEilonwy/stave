@@ -405,7 +405,7 @@ mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
               | "rail" , IDENT , "," , IDENT , "along" , IDENT
               | "couple" , IDENT , "to" , IDENT , ":" , expr   (* couple middle to drawer_member: 1/2 *)
               | "stop" , ":" , expr , STRING             (* stop: opening_angle "the limiter stops it here" *)
-              | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg) *)
+              | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg); pins: depth *)
 adjust        = "adjust" , IDENT , "on" , IDENT , ":" , IDENT , "within" , expr ;
                                                          (* adjust arm on plate: across within 2mm *)
 clamp         = "clamp" , IDENT , "," , IDENT , "along" , IDENT ;
@@ -3299,8 +3299,10 @@ Outside a member, `box(length:, width:, thickness:)` and
 #### Mechanisms
 
 A hardware kind says how its members move in one `mechanism { }` block.
-Every name in it is a member with a body declared in the kind
-(`error[unknown-name]` otherwise); the two members of one entry are
+Every name in it is a member with a body declared in the kind, except
+that the second name of a `pivot`, `slot` or `rail` may be a role of the
+kind (see "A role in an entry" below); a name that is
+neither is `error[unknown-name]`. The two names of one entry are
 different.
 
 | Entry | Meaning |
@@ -3312,19 +3314,63 @@ different.
 | `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | the one input and its range: member `m` turns through angles, or travels through lengths |
 | `stop: <value> "message"` | what stops the drive there; the message is shown when a pose or a design asks for more |
 | `pin_diameter: <length>` | how thick every pin is (optional, default `0mm`) |
+| `pins: along \| across \| depth` | the frame direction every pin is parallel to; the members move in the plane of the other two (optional; see [The plane](#mechanisms)) |
 
-`drive`, `stop` and `pin_diameter` are optional, each at most once. A
+`drive`, `stop`, `pin_diameter` and `pins` are optional, each at most
+once (`error[duplicate-name]` for the second). A
 drive's `to` beyond its `stop` is `error[motion]`, with the stop's
-message. A drive may run either way from its `from`: a slide whose `along`
+message. A turn may run all the way round: `to: 360deg` from `from:
+0deg` turns the assembly a whole turn, back to where it started, and it is
+swept through every angle between. A turn about one line comes back to
+the same pose every whole turn, so a pose at `360deg` is the closed pose.
+A drive may run either way from its `from`: a slide whose `along`
 runs back from its front end pulls out toward the front with
 `travel(drawer_member, from: 0mm, to: -length)`. A pose or a scene's
 amount is measured from the closed pose toward `to` (a drawer pulled out
 200mm), whichever way that runs.
 
-**The plane.** A mechanism is planar. Its members move in the across/depth
-plane and every pin is parallel to `along`; a mechanism with a `rail ...
-along along` (a slide) moves in the along/depth plane instead, its pins
-parallel to `across`. A rail along the pins' axis is `error[mechanism]`.
+**The plane.** A mechanism is planar: every pin is parallel to one
+direction of the [kind's frame](#the-kinds-frame), and the members move
+in the plane of the other two. `pins:` names that direction. Left out,
+the pins run along `along` and the members move in the across/depth
+plane (a hinge's pin runs along its door's edge), or, in a mechanism
+with a `rail ... along along` (a slide), along `across`, with the
+members moving in the along/depth plane. `pins: depth` is a pin that
+runs into the mount face, as a pivot bolt, a lazy Susan or a swivel's
+does: its members move in the along/across plane, flat on the face.
+
+A mechanism's points are written in the plane's two directions only: a
+`point(...)` in a `pivot` or `slot` that gives a value on the pins' own
+direction is `error[mechanism]` at that value (`this mechanism's pins
+run along 'depth', so a point is given by 'along' and 'across'`). A
+rail along the pins' direction is `error[mechanism]` too: with `pins:`
+written, at the rail (`this mechanism's pins run along 'depth', so a
+rail can't run along 'depth'`); left out, a mechanism with rails along
+`along` and along `across` doesn't move in one plane. `pins:` is one of
+the three frame words (`error[type-mismatch]` otherwise).
+
+```
+  mechanism {
+    pins: depth
+    pivot bolt, piece at point(along: 0mm, across: 0mm)
+    drive: turn(bolt, from: 0deg, to: 360deg)
+  }
+```
+
+That is a pivot bolt through an upright, turning a frame flat against
+the upright's face, all the way round.
+
+**A role in an entry.** The second name of a `pivot`, `slot` or `rail`
+may be a role of the kind whose type is `Part`: the role's part, held or
+moving as that role is (it moves when its part moves with the assembly,
+as a member `with:` it would). A pivot bolt turns in a hole in the wood,
+and nothing of steel need be drawn there to pin it to: `pivot bolt,
+piece at point(...)` pins the bolt to the part the hardware is mounted
+on. The part is placed by the design, never by the mechanism, so a role
+adds nothing to the freedom count. A role whose type is `Region` is
+`error[mechanism]` at the name (`a pin turns in one part; 'opening' is a
+region`). The first name of an entry is always a member: it is the side
+the mechanism places.
 
 **One freedom.** Three for each member the mechanism moves (the driven
 member and each member with no `with:`), less two for each `pivot` or
@@ -3363,7 +3409,13 @@ hardware inside it (not inside an assembly within it). Its items with a
 `drive` must all move it alike: seen in the first one's plane (the first
 in the design's order), the same members, held the same way, the same
 entries at the same points (to the nanometre) and the same drive from the
-same `from`. Two cup hinges of one kind and setting on one door do; a cup
+same `from`. Seen in the first one's plane, a point's place along the
+pins carries no meaning, and an item whose plane is the mirror image of
+the first one's has its turn read the other way. So two drivers mirrored
+across the assembly move alike when their pins lie on one line and their
+drives match: a pivot bolt on the left face of the left upright and one
+on the right face of the right upright, each written on its own, turn a
+frame between them as one. Two cup hinges of one kind and setting on one door do; a cup
 hinge and a butt hinge on one door don't (`error[motion]` at the second,
 "`door`'s hardware doesn't move alike", naming both). Every pin of every
 item is parallel to one axis (`error[motion]` otherwise). Items without a
@@ -3386,9 +3438,13 @@ own, so a mechanism that can't move is reported wherever it is used.
 **The words.** A member is **held** (`with:` a role whose part stays put),
 **free** (the mechanism places it; the driven member is free even when it
 is `with:` the moving part) or **carried** (`with:` another member, one
-rigid piece with it). The declared pose is the drive at its `from`; at a
+rigid piece with it). A role named in an entry is held or carried as a
+member `with:` it would be. The declared pose is the drive at its `from`; at a
 value `v` the driven member has turned, or travelled, by `v - from`. A
-positive turn carries `across` toward `depth`. A `slot a, b from P to Q`
+positive turn goes round the pins in the order `along`, `across`,
+`depth`: with the pins along `along`, it carries `across` toward
+`depth`; along `across`, `depth` toward `along`; along `depth`, `along`
+toward `across`. A `slot a, b from P to Q`
 has `a`'s pin at `P` when closed and lets it run to `Q`. A member's
 **travel** is how far it has moved along its rail from its closed place,
 measured against the held members; `couple a to b: r` makes `a`'s travel

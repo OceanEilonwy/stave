@@ -1390,7 +1390,7 @@ impl BodyId {
 }
 
 /// A role of a kind: its index among [`KindDef::roles`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct RoleIndex(u32);
 
 impl RoleIndex {
@@ -1868,6 +1868,18 @@ impl FrameAxis {
     pub fn from_word(word: &str) -> Option<FrameAxis> {
         FrameAxis::ALL.into_iter().find(|axis| axis.word() == word)
     }
+
+    /// The two directions of the plane a mechanism moves in when its pins
+    /// run along this one, in the order a positive turn carries the first
+    /// toward the second: cyclically along, across, depth (grammar, "How a
+    /// mechanism is solved").
+    pub fn plane(self) -> [FrameAxis; 2] {
+        match self {
+            FrameAxis::Along => [FrameAxis::Across, FrameAxis::Depth],
+            FrameAxis::Across => [FrameAxis::Depth, FrameAxis::Along],
+            FrameAxis::Depth => [FrameAxis::Along, FrameAxis::Across],
+        }
+    }
 }
 
 /// `mechanism { ... }`: how a hardware kind's bodies move.
@@ -1886,6 +1898,30 @@ pub struct MechanismDef {
     pub stop: Option<StopDef>,
     /// How thick every pin is, when the kind says.
     pub pin_diameter: Option<RExpr>,
+    /// The frame direction every pin is parallel to, when the kind writes
+    /// `pins:`; `None` for the default (grammar, "Mechanisms", the plane).
+    pub pins: Option<FrameAxis>,
+}
+
+/// The second name of a pivot, slot or rail: a member with a body, or a
+/// role of the kind that is a `Part` (grammar, "Mechanisms", a role in an
+/// entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EntrySide {
+    /// A member with a body.
+    Member(BodyId),
+    /// A role's part, held or moving as the role is.
+    Role(RoleIndex),
+}
+
+/// The two names of a pivot, slot or rail: a member, then a member or a
+/// role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntryPair {
+    /// The first name: always a member, the side the mechanism places.
+    pub member: BodyId,
+    /// The second name.
+    pub other: EntrySide,
 }
 
 /// A pivot, slot or rail between two bodies.
@@ -1894,7 +1930,7 @@ pub enum ConstraintDef {
     /// `pivot a, b at point(...)`
     Pivot {
         /// The two bodies on the pin.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// Where the pin is.
         at: Box<KindPoint>,
         /// The whole entry.
@@ -1903,7 +1939,7 @@ pub enum ConstraintDef {
     /// `slot a, b from point(...) to point(...)`
     Slot {
         /// The body with the pin, then the body with the slot.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// One end of the slot.
         from: Box<KindPoint>,
         /// The other end.
@@ -1914,7 +1950,7 @@ pub enum ConstraintDef {
     /// `rail a, b along <word>`
     Rail {
         /// The body that runs, then the body it runs along.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// The direction it runs.
         along: FrameAxis,
         /// The whole entry.

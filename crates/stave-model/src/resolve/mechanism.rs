@@ -18,11 +18,14 @@ use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
     AdjustDef, BodyDef, BodyId, BodyName, Carrier, ClampDef, ConstraintDef, CouplingDef,
-    CylinderTilt, DriveDef, FrameAxis, KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr,
-    RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
+    CylinderTilt, DriveDef, EntryPair, EntrySide, FrameAxis, KindPoint, LayoutDef, MechanismDef,
+    NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
+
+/// The mechanism field that names the direction its pins run.
+const PINS: &str = "pins";
 
 /// The fields of a joint's member that say where it goes.
 const LAYOUT_FIELDS: [&str; 3] = ["on", "count", "spaced"];
@@ -762,11 +765,12 @@ impl Resolver<'_> {
         }
     }
 
-    /// A kind's `mechanism { }`, over its bodies.
+    /// A kind's `mechanism { }`, over its roles and bodies.
     pub(super) fn lower_mechanism(
         &mut self,
         cx: &Cx,
         kind: &str,
+        roles: &[RoleDef],
         bodies: &[BodyDef],
         block: &ast::MechanismBlock,
     ) -> Option<MechanismDef> {
@@ -777,11 +781,43 @@ impl Resolver<'_> {
         let mut pin_diameter: Option<RExpr> = None;
         let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
         let mut ok = true;
+        // The direction the pins run (grammar, "Mechanisms", the plane):
+        // the first `pins:` written, or the default, which a rail along
+        // `along` turns to `across`.
+        let written = block.entries.iter().find_map(|entry| match entry {
+            ast::MechanismEntry::Field(field) if field.key.as_str() == PINS => Some(field),
+            ast::MechanismEntry::Field(_)
+            | ast::MechanismEntry::Pivot { .. }
+            | ast::MechanismEntry::Slot { .. }
+            | ast::MechanismEntry::Rail { .. }
+            | ast::MechanismEntry::Couple { .. }
+            | ast::MechanismEntry::Drive { .. }
+            | ast::MechanismEntry::Stop { .. } => None,
+        });
+        let pins_written = match written {
+            Some(field) => match self.pins(cx, field) {
+                Some(axis) => Some(axis),
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+            None => None,
+        };
+        let rail_along = block.entries.iter().any(|entry| {
+            matches!(entry, ast::MechanismEntry::Rail { along, .. }
+                if FrameAxis::from_word(along.as_str()) == Some(FrameAxis::Along))
+        });
+        let pins = pins_written.unwrap_or(if rail_along {
+            FrameAxis::Across
+        } else {
+            FrameAxis::Along
+        });
         for entry in &block.entries {
             match entry {
                 ast::MechanismEntry::Pivot { members, at, span } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "pivot");
-                    let at = self.point(cx, at, "at");
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "pivot");
+                    let at = self.mechanism_point(cx, at, "at", pins);
                     match (pair, at) {
                         (Some(bodies), Some(at)) => constraints.push(ConstraintDef::Pivot {
                             bodies,
@@ -797,9 +833,9 @@ impl Resolver<'_> {
                     to,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "slot");
-                    let from = self.point(cx, from, "from");
-                    let to = self.point(cx, to, "to");
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "slot");
+                    let from = self.mechanism_point(cx, from, "from", pins);
+                    let to = self.mechanism_point(cx, to, "to", pins);
                     match (pair, from, to) {
                         (Some(bodies), Some(from), Some(to)) => {
                             constraints.push(ConstraintDef::Slot {
@@ -817,8 +853,8 @@ impl Resolver<'_> {
                     along,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "rail");
-                    let axis = FrameAxis::from_word(along.as_str());
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "rail");
+                    let mut axis = FrameAxis::from_word(along.as_str());
                     if axis.is_none() {
                         self.error_help(
                             Code::TypeMismatch,
@@ -827,6 +863,23 @@ impl Resolver<'_> {
                             along.span(),
                             "write rail a, b along along (or across, or depth)",
                         );
+                    }
+                    // Left out, rails along `along` and `across` are
+                    // reported where the plane is chosen.
+                    if let Some(written) = pins_written
+                        && axis == Some(written)
+                    {
+                        let word = written.word();
+                        self.error_help(
+                            Code::Mechanism,
+                            format!(
+                                "this mechanism's pins run along '{word}', so a rail can't run along '{word}'"
+                            ),
+                            cx.file,
+                            along.span(),
+                            "run the rail along one of the two directions the members move in, or change 'pins'",
+                        );
+                        axis = None;
                     }
                     match (pair, axis) {
                         (Some(bodies), Some(along)) => constraints.push(ConstraintDef::Rail {
@@ -843,7 +896,7 @@ impl Resolver<'_> {
                     ratio,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, [member, to], "couple");
+                    let pair = self.member_pair(cx, kind, bodies, [member, to], "couple");
                     let ratio = self.value(cx, ratio, &Expect::ty(Ty::Ratio).named("couple"));
                     match pair {
                         Some([body, to]) => couplings.push(CouplingDef {
@@ -879,6 +932,13 @@ impl Resolver<'_> {
                 }
                 ast::MechanismEntry::Field(field) => {
                     let key = field.key.as_str();
+                    if key == PINS {
+                        // Read before the entries; a second is reported.
+                        if let Some(first) = seen.insert(PINS, field.key.span()) {
+                            self.duplicate(key, field.key.span(), first, cx);
+                        }
+                        continue;
+                    }
                     if key != "pin_diameter" {
                         self.unknown(
                             Code::UnknownField,
@@ -886,8 +946,8 @@ impl Resolver<'_> {
                             cx.file,
                             field.key.span(),
                             key,
-                            ["drive", "stop", "pin_diameter"],
-                            "a mechanism holds pivot, slot, rail and couple entries, drive:, stop: and pin_diameter:",
+                            ["drive", "stop", "pin_diameter", PINS],
+                            "a mechanism holds pivot, slot, rail and couple entries, drive:, stop:, pin_diameter: and pins:",
                         );
                         ok = false;
                         continue;
@@ -926,7 +986,67 @@ impl Resolver<'_> {
             drive,
             stop,
             pin_diameter,
+            pins: pins_written,
         })
+    }
+
+    /// The direction a mechanism's `pins:` names: one of the three frame
+    /// words. `None` (reported) for anything else.
+    fn pins(&mut self, cx: &Cx, field: &ast::Field) -> Option<FrameAxis> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only a bare word means anything here, and every other expression is the error case"
+        )]
+        let axis = match &field.value.kind {
+            ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
+            _ => None,
+        };
+        if axis.is_none() {
+            self.error_help(
+                Code::TypeMismatch,
+                "'pins' needs along, across or depth",
+                cx.file,
+                field.value.span,
+                "write pins: depth for a pin that runs into the mount face, or leave it out for along",
+            );
+        }
+        axis
+    }
+
+    /// A `point(...)` of a pivot or a slot: written in the two directions
+    /// of the plane, never on the pins' own (`error[mechanism]`).
+    fn mechanism_point(
+        &mut self,
+        cx: &Cx,
+        expr: &ast::Expr,
+        what: &str,
+        pins: FrameAxis,
+    ) -> Option<KindPoint> {
+        if let ExprKind::Call { args, .. } = &expr.kind
+            && let Some(arg) = args
+                .iter()
+                .find(|arg| arg.name.as_ref().is_some_and(|n| n.as_str() == pins.word()))
+        {
+            let [first, second] = pins.plane();
+            self.error_help(
+                Code::Mechanism,
+                format!(
+                    "this mechanism's pins run along '{}', so a point is given by '{}' and '{}'",
+                    pins.word(),
+                    first.word(),
+                    second.word()
+                ),
+                cx.file,
+                arg.span,
+                format!(
+                    "remove '{}:' from the point; every pin is parallel to '{}', so the point is anywhere along it",
+                    pins.word(),
+                    pins.word()
+                ),
+            );
+            return None;
+        }
+        self.point(cx, expr, what)
     }
 
     /// The body a mechanism entry names.
@@ -1189,7 +1309,86 @@ impl Resolver<'_> {
     }
 
     /// The two different bodies of a mechanism entry.
-    fn pair(
+    /// The two names of a pivot, slot or rail: a member, then a member or
+    /// a role of the kind that is a `Part` (grammar, "Mechanisms", a role
+    /// in an entry).
+    fn entry_pair(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        roles: &[RoleDef],
+        bodies: &[BodyDef],
+        members: &[ast::Ident; 2],
+        entry: &str,
+    ) -> Option<EntryPair> {
+        let [a, b] = members;
+        let first = self.body(cx, kind, bodies, a);
+        let word = b.as_str();
+        let second = match bodies.iter().position(|body| body.name.as_str() == word) {
+            Some(index) => BodyId::new(index).map(EntrySide::Member),
+            None => match roles.iter().position(|role| role.name == word) {
+                Some(index) => self.entry_role(cx, roles, index, b),
+                None => {
+                    self.unknown(
+                        Code::UnknownName,
+                        format!("unknown name '{word}'"),
+                        cx.file,
+                        b.span(),
+                        word,
+                        bodies
+                            .iter()
+                            .map(|body| body.name.as_str())
+                            .chain(roles.iter().map(|role| role.name.as_str())),
+                        format!(
+                            "a {entry} names a member with a body declared in kind '{kind}', then a member or one of its roles"
+                        ),
+                    );
+                    None
+                }
+            },
+        };
+        let (member, other) = (first?, second?);
+        if other == EntrySide::Member(member) {
+            self.error_help(
+                Code::DuplicateName,
+                format!("'{a}' is named twice in one {entry}"),
+                cx.file,
+                b.span(),
+                format!("a {entry} joins two different members"),
+            );
+            return None;
+        }
+        Some(EntryPair { member, other })
+    }
+
+    /// A role named as the second name of an entry: one part.
+    fn entry_role(
+        &mut self,
+        cx: &Cx,
+        roles: &[RoleDef],
+        index: usize,
+        ident: &ast::Ident,
+    ) -> Option<EntrySide> {
+        let role = roles.get(index)?;
+        let what = match role.ty {
+            stave_schema::kinds::RoleType::Part => {
+                return RoleIndex::new(index).map(EntrySide::Role);
+            }
+            stave_schema::kinds::RoleType::Region => "a region",
+            stave_schema::kinds::RoleType::Parts => "a list of parts",
+        };
+        self.error_help(
+            Code::Mechanism,
+            format!("a pin turns in one part; '{ident}' is {what}"),
+            cx.file,
+            ident.span(),
+            "name a role that is a Part, or a member of the kind",
+        );
+        None
+    }
+
+    /// The two members of a couple.
+    fn member_pair(
         &mut self,
         cx: &Cx,
         kind: &str,

@@ -770,6 +770,16 @@ mod tests {
     }
 
     #[test]
+    fn lays_out_pins_and_a_role_in_an_entry() {
+        assert_eq!(
+            format(
+                "stave 1\nkind k : fitting {\n  mechanism {\n    pins : depth\n    pivot bolt ,piece at point(along: 0mm,across: 0mm)\n    drive: turn(bolt, from: 0deg, to: 360deg)\n  }\n}\n"
+            ),
+            "stave 1\nkind k : fitting {\n  mechanism {\n    pins: depth\n    pivot bolt, piece at point(along: 0mm, across: 0mm)\n    drive: turn(bolt, from: 0deg, to: 360deg)\n  }\n}\n"
+        );
+    }
+
+    #[test]
     fn lays_out_a_clamp() {
         assert_eq!(
             format("stave 1\nkind k : fitting {\n  clamp  knob ,bolt  along   depth\n}\n"),

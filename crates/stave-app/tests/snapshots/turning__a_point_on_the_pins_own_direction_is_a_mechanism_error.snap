@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/turning.rs
+expression: rendered(&opened)
+---
+error[mechanism]: this mechanism's pins run along 'depth', so a point is given by 'along' and 'across'
+  --> /project/project.stave:97:57
+   |
+97 |     pivot bolt, piece at point(along: 0mm, across: 0mm, depth: 5mm)
+   |                                                         ^^^^^^^^^^
+   = help: remove 'depth:' from the point; every pin is parallel to 'depth', so the point is anywhere along it

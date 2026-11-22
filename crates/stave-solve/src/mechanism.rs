@@ -19,12 +19,13 @@ use stave_lang::placement::{Axis, Direction, PerAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::{
-    BodyId, Carrier, ConstraintDef, DriveDef, FrameAxis, KindDef, MechanismDef, RoleIndex,
+    BodyId, Carrier, ConstraintDef, DriveDef, EntryPair, EntrySide, FrameAxis, KindDef,
+    MechanismDef, RoleIndex,
 };
 use stave_model::ids::{AssemblyId, HardwareId, KindId};
 use stave_model::mechanism::{
     DriveValue, FrameDirection, FramePoint, Holding, Mechanism, MechanismDrive, MechanismEntry,
-    MechanismError, MechanismFrame, MechanismMember, MechanismStop, MemberIndex,
+    MechanismError, MechanismFrame, MechanismMember, MechanismStop, MemberBody, MemberIndex,
 };
 use stave_model::solved::Point;
 use stave_model::value::Value;
@@ -70,6 +71,20 @@ pub(crate) struct Plane {
 }
 
 impl Plane {
+    /// The plane a piece of hardware's mechanism moves in, placed by its
+    /// frame, with its pins along `pins`: its two coordinates are the
+    /// other two frame directions, in the order a positive turn carries
+    /// the first toward the second (grammar, "How a mechanism is solved").
+    pub fn of_frame(frame: &Frame, pins: FrameAxis) -> Plane {
+        let [first, second] = pins.plane();
+        Plane {
+            origin: frame.origin,
+            axis: frame.direction(pins).axis(),
+            across: frame.direction(first),
+            depth: frame.direction(second),
+        }
+    }
+
     /// The plane reflected across the world plane at `plane` on `axis`.
     pub fn reflected(&self, axis: Axis, plane: ExactLength) -> Option<Plane> {
         let mut origin = self.origin;
@@ -181,30 +196,31 @@ pub(crate) struct KindMember {
     pub with: MemberWith,
 }
 
-/// An entry of a kind's mechanism, exact, in its plane.
+/// An entry of a kind's mechanism, exact, in its plane: a member, then a
+/// member or a role's part (a couple's are both members).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Entry {
     Pivot {
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         at: PlanePoint,
     },
     Slot {
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         from: PlanePoint,
         to: PlanePoint,
     },
     Rail {
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         direction: PlanePoint,
     },
     Couple {
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         ratio: Rational,
     },
 }
 
 impl Entry {
-    fn bodies(&self) -> [BodyId; 2] {
+    fn bodies(&self) -> EntryPair {
         match self {
             Entry::Pivot { bodies, .. }
             | Entry::Slot { bodies, .. }
@@ -251,6 +267,8 @@ pub(crate) struct HardwareMechanism {
     pub plane: Plane,
     /// Its members with a body, in the kind's order.
     pub members: Vec<KindMember>,
+    /// The names of its kind's roles, in order: an entry may name one.
+    pub roles: Vec<String>,
     pub entries: Vec<Entry>,
     /// `None` for a mechanism that follows its assembly's.
     pub drive: Option<Drive>,
@@ -316,7 +334,7 @@ fn declare(
         let at = index(members.len())?;
         members.push(MechanismMember {
             hardware,
-            body: member.body,
+            body: MemberBody::Body(member.body),
             name: member.name.clone(),
             holding,
         });
@@ -372,7 +390,40 @@ fn declare(
         }
         left = next;
     }
+    // Then each role an entry names: its part, held or riding on the
+    // driven member as a member with: it would. It adds no freedom.
+    let mut role_members: BTreeMap<RoleIndex, MemberIndex> = BTreeMap::new();
+    for entry in &mechanism.entries {
+        let EntrySide::Role(role) = entry.bodies().other else {
+            continue;
+        };
+        if role_members.contains_key(&role) {
+            continue;
+        }
+        let holding = match driven {
+            Some(driven) if moving(role) => Holding::Carried(driven),
+            Some(_) | None => Holding::Held,
+        };
+        let name = mechanism
+            .roles
+            .get(role.index())
+            .ok_or(DeclareError::Internal)?;
+        role_members.insert(role, index(members.len())?);
+        members.push(MechanismMember {
+            hardware,
+            body: MemberBody::Role { role },
+            name: name.clone(),
+            holding,
+        });
+    }
     let to = |body: &BodyId| bodies.get(body).copied().ok_or(DeclareError::Internal);
+    let side = |side: EntrySide| match side {
+        EntrySide::Member(body) => to(&body),
+        EntrySide::Role(role) => role_members
+            .get(&role)
+            .copied()
+            .ok_or(DeclareError::Internal),
+    };
     let point = |p: PlanePoint| -> Result<FramePoint, DeclareError> {
         let [across, depth] = base
             .point_of(&mechanism.plane, p)
@@ -384,8 +435,8 @@ fn declare(
     };
     let mut entries = Vec::new();
     for entry in &mechanism.entries {
-        let [a, b] = entry.bodies();
-        let (a, b) = (to(&a)?, to(&b)?);
+        let pair = entry.bodies();
+        let (a, b) = (to(&pair.member)?, side(pair.other)?);
         entries.push(match *entry {
             Entry::Pivot { at, .. } => MechanismEntry::Pivot {
                 first: a,
@@ -565,7 +616,9 @@ pub(crate) struct AssemblyMechanism {
 
 impl Solver<'_> {
     /// Which roles of a placed piece of hardware move with `assembly`:
-    /// the piece, and every role bound to something inside it.
+    /// every role bound to something inside it. A piece of hardware no
+    /// assembly moves is counted with its piece (the first role) moving,
+    /// so that a mechanism is checked wherever it is used.
     fn moving_roles(
         &self,
         roles: &[(String, RoleBound)],
@@ -574,21 +627,21 @@ impl Solver<'_> {
         roles
             .iter()
             .enumerate()
-            .map(|(index, (_, bound))| {
-                index == 0
-                    || assembly.is_some_and(|assembly| {
-                        let inside = match *bound {
-                            RoleBound::Part(part) => {
-                                self.model.parts.get(part.index()).and_then(|p| p.assembly)
-                            }
-                            RoleBound::Region(region) => self
-                                .model
-                                .regions
-                                .get(region.index())
-                                .and_then(|r| r.assembly),
-                        };
-                        self.within(inside, assembly)
-                    })
+            .map(|(index, (_, bound))| match assembly {
+                None => index == 0,
+                Some(assembly) => {
+                    let inside = match *bound {
+                        RoleBound::Part(part) => {
+                            self.model.parts.get(part.index()).and_then(|p| p.assembly)
+                        }
+                        RoleBound::Region(region) => self
+                            .model
+                            .regions
+                            .get(region.index())
+                            .and_then(|r| r.assembly),
+                    };
+                    self.within(inside, assembly)
+                }
             })
             .collect()
     }
@@ -1050,9 +1103,10 @@ impl Solver<'_> {
     }
 
     /// A kind's mechanism for one piece of hardware, every value worked
-    /// out exactly in the plane it moves in: across/depth with the pins
-    /// along `along`, or along/depth (pins across) when a rail runs
-    /// `along`.
+    /// out exactly in the plane it moves in: the two frame directions
+    /// other than the one its pins run along (`pins:`, or by default
+    /// `along`, or `across` when a rail runs `along`), in the order a
+    /// positive turn carries the first toward the second.
     pub(crate) fn kind_mechanism(
         &mut self,
         binding: &Binding,
@@ -1071,17 +1125,21 @@ impl Solver<'_> {
             })
             .collect();
         let runs_along = rails.contains(&FrameAxis::Along);
-        let (first, second, pins) = if runs_along {
-            (FrameAxis::Along, FrameAxis::Depth, FrameAxis::Across)
-        } else {
-            (FrameAxis::Across, FrameAxis::Depth, FrameAxis::Along)
+        let pins = match def.pins {
+            Some(pins) => pins,
+            None if runs_along => FrameAxis::Across,
+            None => FrameAxis::Along,
         };
-        if rails.contains(&pins) {
+        let [first, second] = pins.plane();
+        // A rail along pins that are written is reported where it is
+        // lowered; left out, rails along `along` and `across` are reported
+        // here.
+        if def.pins.is_none() && rails.contains(&pins) {
             return Err(self.error(
                 Code::Mechanism,
                 format!(
                     "{kind_name}'s mechanism has rails along {} and along {}: it doesn't move in one plane",
-                    first.word(),
+                    FrameAxis::Along.word(),
                     pins.word()
                 ),
                 file,
@@ -1126,7 +1184,10 @@ impl Solver<'_> {
                     _ => return Err(Fault::Earlier.into()),
                 };
                 entries.push(Entry::Couple {
-                    bodies: [coupling.body, coupling.to],
+                    bodies: EntryPair {
+                        member: coupling.body,
+                        other: EntrySide::Member(coupling.to),
+                    },
                     ratio,
                 });
             }
@@ -1218,13 +1279,9 @@ impl Solver<'_> {
             .collect();
         Ok(HardwareMechanism {
             kind: binding.kind,
-            plane: Plane {
-                origin: frame.origin,
-                axis: frame.direction(pins).axis(),
-                across: frame.direction(first),
-                depth: frame.direction(second),
-            },
+            plane: Plane::of_frame(frame, pins),
             members,
+            roles: kind.roles.iter().map(|role| role.name.clone()).collect(),
             entries,
             drive,
             stop,
@@ -1236,9 +1293,17 @@ impl Solver<'_> {
 mod tests {
     use super::*;
     use stave_lang::units::Angle;
+    use stave_model::mechanism::MotionShape;
 
     fn body(index: usize) -> BodyId {
         BodyId::new(index).unwrap()
+    }
+
+    fn pair(a: usize, b: usize) -> EntryPair {
+        EntryPair {
+            member: body(a),
+            other: EntrySide::Member(body(b)),
+        }
     }
 
     fn mm(value: i64) -> ExactLength {
@@ -1266,7 +1331,7 @@ mod tests {
             with,
         };
         let pivot = |a: usize, b: usize, across: i64, depth: i64| Entry::Pivot {
-            bodies: [body(a), body(b)],
+            bodies: pair(a, b),
             at: [mm(across), mm(depth)],
         };
         HardwareMechanism {
@@ -1278,6 +1343,7 @@ mod tests {
                 member(2, "inner_link", MemberWith::Placed),
                 member(3, "outer_link", MemberWith::Placed),
             ],
+            roles: vec!["piece".to_owned(), "on".to_owned()],
             entries: vec![
                 pivot(0, 2, 13, 11),
                 pivot(1, 2, -9, 7),
@@ -1342,7 +1408,7 @@ mod tests {
             });
         }
         mechanism.entries.push(Entry::Pivot {
-            bodies: [body(4), body(5)],
+            bodies: pair(4, 5),
             at: [mm(1), mm(1)],
         });
         let piece_moves = |role: RoleIndex| role.index() == 0;
@@ -1404,6 +1470,222 @@ mod tests {
         let point = [mm(-150), mm(0)];
         assert_eq!(left.point_of(&right, point), Some(point));
         assert_eq!(left.vector_of(&right, point), Some(point));
+    }
+
+    /// A frame on the left face of an upright standing up, its width
+    /// running back: `along` up, `across` back, `depth` right, into it.
+    fn upright_frame() -> Frame {
+        Frame {
+            origin: PerAxis {
+                across: mm(0),
+                up: mm(850),
+                deep: mm(200),
+            },
+            along: Direction::Up,
+            across: Direction::Back,
+            depth: Direction::Right,
+            across_edge: None,
+        }
+    }
+
+    #[test]
+    fn pins_choose_the_plane_and_the_way_a_turn_goes_round() {
+        let frame = upright_frame();
+        // Each `pins:` value: the pins' world axis, then the plane's first
+        // and second directions, a positive turn carrying the first toward
+        // the second, cyclically along, across, depth.
+        let cases = [
+            (
+                FrameAxis::Along,
+                Axis::Up,
+                Direction::Back,
+                Direction::Right,
+            ),
+            (
+                FrameAxis::Across,
+                Axis::Deep,
+                Direction::Right,
+                Direction::Up,
+            ),
+            (
+                FrameAxis::Depth,
+                Axis::Across,
+                Direction::Up,
+                Direction::Back,
+            ),
+        ];
+        for (pins, axis, first, second) in cases {
+            let plane = Plane::of_frame(&frame, pins);
+            assert_eq!(
+                (plane.axis, plane.across, plane.depth),
+                (axis, first, second),
+                "pins along {}",
+                pins.word()
+            );
+            assert_eq!(plane.origin, frame.origin);
+            assert!(plane.frame().is_some(), "pins along {}", pins.word());
+        }
+    }
+
+    #[test]
+    fn a_pivot_bolt_into_the_face_turns_its_frame_along_toward_across() {
+        // A bolt through the upright (pins along depth), pinned to the
+        // upright itself (a role, held) and driven a quarter turn: the
+        // frame turns about the bolt's line, from up toward back.
+        let plane = Plane::of_frame(&upright_frame(), FrameAxis::Depth);
+        let piece = RoleIndex::new(0).unwrap();
+        let into = RoleIndex::new(1).unwrap();
+        let mechanism = HardwareMechanism {
+            kind: KindId::from_usize(0),
+            plane,
+            members: vec![KindMember {
+                body: body(0),
+                name: "bolt".to_owned(),
+                with: MemberWith::Role(into),
+            }],
+            roles: vec!["piece".to_owned(), "into".to_owned()],
+            entries: vec![Entry::Pivot {
+                bodies: EntryPair {
+                    member: body(0),
+                    other: EntrySide::Role(piece),
+                },
+                at: [mm(0), mm(0)],
+            }],
+            drive: Some(Drive::Turn {
+                body: body(0),
+                from: ExactAngle::ZERO,
+                to: Angle::from_deg(90).to_exact(),
+            }),
+            stop: None,
+        };
+        let into_moves = |role: RoleIndex| role == into;
+        let Ok(declared) = declare(
+            HardwareId::from_usize(0),
+            &mechanism,
+            &into_moves,
+            &plane,
+            None,
+            0,
+        ) else {
+            panic!("declared");
+        };
+        // The driven bolt, then the upright's part, held: one freedom.
+        let holdings: Vec<(&str, Holding, MemberBody)> = declared
+            .members
+            .iter()
+            .map(|m| (m.name.as_str(), m.holding, m.body))
+            .collect();
+        assert_eq!(
+            holdings,
+            [
+                ("bolt", Holding::Free, MemberBody::Body(body(0))),
+                ("piece", Holding::Held, MemberBody::Role { role: piece }),
+            ]
+        );
+        assert_eq!(freedoms(&declared.members, &declared.entries), Some(1));
+        assert!(unreachable(&declared.members, &declared.entries).is_empty());
+        let counted = Mechanism::new(
+            plane.frame().unwrap(),
+            declared.members,
+            declared.entries,
+            declared.drive.unwrap(),
+            None,
+            vec![HardwareId::from_usize(0)],
+        )
+        .unwrap();
+        let MotionShape::Turn { line, opening } = counted.shape() else {
+            panic!("a turn about the bolt");
+        };
+        assert_eq!(line.axis, Axis::Across);
+        assert_eq!(
+            (line.free_side, line.swing_toward),
+            (Direction::Up, Direction::Back)
+        );
+        assert_eq!(opening, Angle::from_deg(90));
+    }
+
+    #[test]
+    fn a_role_that_moves_rides_on_the_driven_member() {
+        // The same bolt pinned to a role whose part moves with the
+        // assembly: the part rides on the bolt, one rigid piece with it.
+        let plane = Plane::of_frame(&upright_frame(), FrameAxis::Depth);
+        let into = RoleIndex::new(1).unwrap();
+        let mechanism = HardwareMechanism {
+            kind: KindId::from_usize(0),
+            plane,
+            members: vec![KindMember {
+                body: body(0),
+                name: "bolt".to_owned(),
+                with: MemberWith::Role(into),
+            }],
+            roles: vec!["piece".to_owned(), "into".to_owned()],
+            entries: vec![Entry::Pivot {
+                bodies: EntryPair {
+                    member: body(0),
+                    other: EntrySide::Role(into),
+                },
+                at: [mm(0), mm(0)],
+            }],
+            drive: Some(Drive::Turn {
+                body: body(0),
+                from: ExactAngle::ZERO,
+                to: Angle::from_deg(90).to_exact(),
+            }),
+            stop: None,
+        };
+        let into_moves = |role: RoleIndex| role == into;
+        let Ok(declared) = declare(
+            HardwareId::from_usize(0),
+            &mechanism,
+            &into_moves,
+            &plane,
+            None,
+            0,
+        ) else {
+            panic!("declared");
+        };
+        let driven = MemberIndex::new(0).unwrap();
+        assert_eq!(
+            declared.members.get(1).map(|m| m.holding),
+            Some(Holding::Carried(driven))
+        );
+        // A pin between the bolt and what rides on it holds nothing.
+        assert!(matches!(
+            Mechanism::new(
+                plane.frame().unwrap(),
+                declared.members,
+                declared.entries,
+                declared.drive.unwrap(),
+                None,
+                vec![HardwareId::from_usize(0)],
+            ),
+            Err(MechanismError::OnePiece { .. })
+        ));
+    }
+
+    #[test]
+    fn two_pivot_bolts_on_one_line_through_facing_uprights_move_alike() {
+        // One bolt on the left face of the left upright, the other on the
+        // right face of the right upright, each placed by its own mount:
+        // their depths point opposite ways, but their pins lie on one
+        // line, so they are seen at the same points and turn the same way.
+        let left = Plane::of_frame(&upright_frame(), FrameAxis::Depth);
+        let right = Plane::of_frame(
+            &Frame {
+                origin: PerAxis {
+                    across: mm(700),
+                    up: mm(850),
+                    deep: mm(200),
+                },
+                depth: Direction::Left,
+                ..upright_frame()
+            },
+            FrameAxis::Depth,
+        );
+        assert_eq!(left.axis, right.axis);
+        assert_eq!(left.same_hand(&right), Some(true));
+        let point = [mm(0), mm(0)];
+        assert_eq!(left.point_of(&right, point), Some(point));
     }
 
     #[test]

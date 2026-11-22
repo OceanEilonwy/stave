@@ -511,7 +511,14 @@ impl Resolver<'_> {
                 }
             }
         }
-        let mechanism = self.kind_mechanism(&cx, syntax, base_kind, bodies.as_deref(), &mechanisms);
+        let mechanism = self.kind_mechanism(
+            &cx,
+            syntax,
+            base_kind,
+            &roles,
+            bodies.as_deref(),
+            &mechanisms,
+        );
         let hardware = if mounted {
             self.hardware_kind(
                 &cx,
@@ -651,6 +658,7 @@ impl Resolver<'_> {
         cx: &Cx,
         syntax: &ast::Kind,
         base_kind: BaseKind,
+        roles: &[RoleDef],
         bodies: Option<&[crate::defs::BodyDef]>,
         mechanisms: &[&ast::MechanismBlock],
     ) -> Option<crate::defs::MechanismDef> {
@@ -680,7 +688,7 @@ impl Resolver<'_> {
             );
             return None;
         }
-        self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
+        self.lower_mechanism(cx, syntax.name.as_str(), roles, bodies?, first)
     }
 
     /// A kind's `member` entries: each named once; only a slide, hinge or

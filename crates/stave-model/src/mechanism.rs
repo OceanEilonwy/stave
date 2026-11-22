@@ -24,7 +24,7 @@ use serde::Serialize;
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length, Rational};
 
-use crate::defs::BodyId;
+use crate::defs::{BodyId, RoleIndex};
 use crate::ids::HardwareId;
 use crate::solved::Point;
 
@@ -178,15 +178,42 @@ pub enum Holding {
     Carried(MemberIndex),
 }
 
+/// What a member of a mechanism is: one of its kind's members with a
+/// body, or the part of a role named in an entry (grammar, "Mechanisms",
+/// a role in an entry), which the design places and which has no shape of
+/// its own here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(untagged)]
+pub enum MemberBody {
+    /// One of the kind's members with a body.
+    Body(BodyId),
+    /// The part a role of the kind binds.
+    Role {
+        /// Which role.
+        role: RoleIndex,
+    },
+}
+
+impl MemberBody {
+    /// The kind's member, when it is one.
+    pub fn body(self) -> Option<BodyId> {
+        match self {
+            MemberBody::Body(body) => Some(body),
+            MemberBody::Role { .. } => None,
+        }
+    }
+}
+
 /// A member of a mechanism: which member of which piece of hardware, and
 /// how it is held.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MechanismMember {
     /// The piece of hardware it belongs to (for several alike, the first).
     pub hardware: HardwareId,
-    /// Which of its kind's members.
-    pub body: BodyId,
-    /// The member's name in its kind, for messages: `cup`, `inner_link`.
+    /// Which of its kind's members, or which role's part.
+    pub body: MemberBody,
+    /// The member's name in its kind, for messages: `cup`, `inner_link`;
+    /// a role's name for a role's part (`piece`).
     pub name: String,
     /// How it is held.
     pub holding: Holding,
@@ -826,7 +853,7 @@ mod tests {
     fn member(name: &str, holding: Holding) -> MechanismMember {
         MechanismMember {
             hardware: HardwareId::from_usize(0),
-            body: BodyId::new(0).unwrap(),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
             name: name.to_owned(),
             holding,
         }

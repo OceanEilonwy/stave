@@ -56,6 +56,9 @@ use crate::solid::{Rod, Solid, across};
 /// Surfaces this close touch; anything deeper overlaps (0.05mm).
 pub const CONTACT_TOLERANCE: Length = Length::from_nm(50_000);
 
+/// A whole turn, in micro-degrees.
+const FULL_TURN: i64 = 360 * stave_lang::units::MICRODEG_PER_DEG;
+
 /// A cylinder along a world axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorldRod {
@@ -1505,6 +1508,10 @@ impl Placement {
                         PoseValue::Angle(angle) => angle,
                         PoseValue::Closed | PoseValue::Travel(_) => continue,
                     };
+                    // A turn about one line comes back to where it began
+                    // every whole turn: a pose at 360deg is the closed
+                    // pose (grammar, "Mechanisms").
+                    let angle = Angle::from_microdeg(angle.microdeg().rem_euclid(FULL_TURN));
                     if angle.microdeg() == 0 {
                         continue;
                     }
@@ -1938,7 +1945,7 @@ mod tests {
     fn a_turned_door_hits_what_is_in_its_way() {
         use stave_model::mechanism::{
             FramePoint, Holding, Mechanism, MechanismDrive, MechanismEntry, MechanismFrame,
-            MechanismMember,
+            MechanismMember, MemberBody,
         };
         use stave_model::solved::{BodyId, HardwareId};
         // A door 500mm wide hinged at its left edge, swinging out toward
@@ -1948,7 +1955,7 @@ mod tests {
         let post = block(point(5, 0, -150), point(15, 700, -100));
         let member = |name: &str, holding| MechanismMember {
             hardware: HardwareId::from_usize(0),
-            body: BodyId::new(0).unwrap(),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
             name: name.to_owned(),
             holding,
         };

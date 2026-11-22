@@ -900,6 +900,7 @@ mod linkage_tests {
     use stave_lang::placement::{Axis, Direction};
     use stave_model::mechanism::{
         FramePoint, Holding, MechanismDrive, MechanismEntry, MechanismFrame, MechanismMember,
+        MemberBody,
     };
     use stave_model::solved::{BodyId, HardwareId};
 
@@ -939,7 +940,7 @@ mod linkage_tests {
         .unwrap();
         let member = |name: &str, holding| MechanismMember {
             hardware: HardwareId::from_usize(0),
-            body: BodyId::new(0).unwrap(),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
             name: name.to_owned(),
             holding,
         };
