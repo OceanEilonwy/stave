@@ -20,12 +20,14 @@ stop it:
 
 A fifth gap showed up while writing the loom: its frame stiles sit flat
 against the uprights, wood on wood, and would turn rubbing face to face.
-Nothing reports it, because two bodies may touch.
+Nothing reports it, because two bodies may touch. And a sixth: with the
+stile moved 3mm off the upright but no washer in the gap, the design also
+checks out, though tightening the knob would pull the gap shut.
 
-This note proposes seven small primitives that cover all five: `pins:`, a
+This note proposes eight small primitives that cover all six: `pins:`, a
 role in a mechanism entry, named drives, `set_at:`, `loose` on a member,
-one rule for sweeping several motions, and a running clearance worked out
-from the wood. Each is generic. None names a kind, and each removes a
+one rule for sweeping several motions, a running clearance worked out
+from the wood, and `clamp` for hardware that draws parts together. Each is generic. None names a kind, and each removes a
 restriction or a special case rather than adding one. It also
 says why the general `turn(about:, by:)` placement term asked for in gap 1
 is the wrong tool for this job.
@@ -308,6 +310,67 @@ beginner mistakes, and none of them is reported today.
 `against(upright_l.right, gap: washer_thickness)`. The stile then turns
 on the washer, steel on wood, with a running gap to the upright.
 
+## Change 7: `clamp`, hardware that draws parts together (gap 6)
+
+**The problem.** With the stile placed `against(upright_l.right, gap:
+3mm)` and no washer, the design checks out. It shouldn't. The bolt is
+threaded into the stile and slides freely through its hole in the upright.
+The knob bears on the upright's outer face. Tighten the knob and it pulls
+the stile across the 3mm until it meets the upright. The frame is not
+where the drawing puts it, and once it is, it rubs.
+
+**Why nothing catches it.** "Held" asks whether a part is joined to the
+rest, not where it ends up: a piece of hardware holds every part its roles
+name, whatever the gap. A joint is checked for contact, but hardware only
+needs one member to touch each part. Nothing in the language says that
+this hardware *pulls*.
+
+**The primitive.** One new entry in a hardware kind:
+
+| Entry | Meaning |
+|---|---|
+| `clamp a, b along <word>` | tightening draws member `a` and member `b` toward each other along `along`, `across` or `depth` of the kind's frame |
+
+```
+clamp knob, bolt along depth
+```
+
+**The check.** Take the line along that axis through the clamp, from the
+face `a` bears on to the part that carries `b` (here, the knob's face on
+the upright to the stile the bolt is threaded into). Every body the line
+passes through is in the **stack**: parts, and members of the same piece
+of hardware (a washer). The room cut for the clamp itself (the bolt hole)
+doesn't count as a gap. Each body in the stack must touch the next, within
+the contact tolerance. A gap is `error[no-contact]` at the hardware call:
+
+```
+error[no-contact]: pivot_l draws stile_l toward upright_l, but they are 3mm apart with nothing between
+   = note: tightening the knob would pull stile_l 3mm toward upright_l
+   = help: put a washer or spacer in the gap, or place stile_l against upright_l
+```
+
+- It is checked wherever the hardware is tightened: at rest, at every
+  pose and at every set value. While a continuous drive moves, the clamp
+  is loose, so it isn't checked during the sweep.
+- It reads only language words (`clamp`, members, `with:`, the frame
+  axes) and never a kind's name, so it covers every fitting that draws
+  parts together: knob bolts, bed bolts and barrel nuts, cam locks,
+  connector bolts.
+- A kind without `clamp` is checked as today. Nothing changes for hinges,
+  slides or shelf pins.
+
+**How Changes 6 and 7 work together on the loom.** Each catches one wrong
+version, and only the right one passes both:
+
+| Stile placed | Change 6 (running clearance) | Change 7 (clamp) |
+|---|---|---|
+| against the upright, no washer | error: it binds | clean |
+| 3mm off, no washer | clean | error: the knob pulls it shut |
+| 3mm off, a 3mm washer between | clean (wood clears wood) | clean (stile on washer on upright) |
+
+No rule names a washer. The washer is simply the only way to satisfy
+both.
+
 ## Gap 1: why not `turn(about:, by:)` on a part
 
 A placement term that tilts any part looks like the direct answer. It is
@@ -415,6 +478,8 @@ kind pivot_bolt : fitting {
     shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
   }
 
+  clamp knob, bolt along depth
+
   cut bolt_hole:   row(crossing(piece, bolt), pitch: hole_pitch, down: holes_below) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
   cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
 
@@ -490,18 +555,18 @@ don't change, because every part is still square in its own frame.
 
 | Area | Change |
 |---|---|
-| `docs/grammar.md` | Mechanisms (`pins:`, role in an entry, named drives, `set_at:`); How a mechanism is solved (positive turn, "Hang" reworded to a known point, freedom count, version-1 limits); Shapes (`loose:` on a member); One collision model (pin in its own hole); Scenes (`pose a.drive`, the one-at-a-time rule); Checks (running clearance, `warning[clearance]`); Placement (the rake/splay sentence); `project` table (`finish`, `running_gap`); Patches (`project.` paths). Lexical grammar: `pins` and `set_at` as soft keywords in a mechanism |
+| `docs/grammar.md` | Mechanisms (`pins:`, role in an entry, named drives, `set_at:`); How a mechanism is solved (positive turn, "Hang" reworded to a known point, freedom count, version-1 limits); Shapes (`loose:` on a member); Hardware (`clamp a, b along <word>`); One collision model (pin in its own hole); Scenes (`pose a.drive`, the one-at-a-time rule); Checks (running clearance, `warning[clearance]`); Placement (the rake/splay sentence); `project` table (`finish`, `running_gap`); Patches (`project.` paths). Lexical grammar: `pins` and `set_at` as soft keywords in a mechanism, `clamp` at the start of an entry in a hardware kind |
 | `stave-lang` | parse the new entries; patch paths rooted at `project` / `library` |
 | `stave-schema`, `stave-model` | a mechanism's pin axis, named drives, set values; member `loose` |
 | `stave-solve` | declare the plane from `pins:`; "Hang" from a known point; roles in entries; the mirrored-driver rule |
-| `stave-check` | sweep per motion with the others held (remove the `nested` skip); pin-axis holes; poses against `set_at`; the running-clearance pass with seating and swell |
+| `stave-check` | sweep per motion with the others held (remove the `nested` skip); pin-axis holes; poses against `set_at`; the running-clearance pass with seating and swell; the clamp stack check |
 | `stave-output` | `finish` on the cover and as the last plan step |
 | `stave-gtk`, `stave-web` | one motion-bar slider per drive, labelled with its name. A `set_at` drive snaps to its values |
-| `editors/` | highlight `pins`, `set_at` |
+| `editors/` | highlight `pins`, `set_at`, `clamp` |
 | corpus | `examples/tapestry_loom`; diagnostic snapshots for each new error |
 
-No kind name enters a core crate. `pins`, `set_at`, `loose` and
-`running_gap` are language words, and they work for every kind.
+No kind name enters a core crate. `pins`, `set_at`, `loose`,
+`running_gap` and `clamp` are language words, and they work for every kind.
 
 ## Open questions to settle before building
 
