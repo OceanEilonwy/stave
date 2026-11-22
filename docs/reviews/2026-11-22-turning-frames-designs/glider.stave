@@ -70,8 +70,8 @@ part seat_cross_rail : oak_25 {
   }
 }
 
-joint top_rail_tenons  : mortise_tenon(top_rail, into: [post_l, post_r], length: 30mm)
-joint seat_tenons      : mortise_tenon(seat_cross_rail, into: [seat_rail_l, seat_rail_r], length: 30mm)
+joint top_rail_tenons : mortise_tenon(top_rail, into: [post_l, post_r], length: 30mm)
+joint seat_tenons     : mortise_tenon(seat_cross_rail, into: [seat_rail_l, seat_rail_r], length: 30mm)
 
 kind knob_bolt : fitting {
   roles {

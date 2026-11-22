@@ -6,8 +6,8 @@ project "Tilting Drafting Table" {
 
 region envelope = box(across: 900mm, up: 800mm, deep: 650mm)
 
-stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
-stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+stock beech_45     { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25     { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
 stock birch_ply_24 { species: birch, form: plywood, thickness: 24mm, max_width: 1220mm, max_length: 2440mm }
 
 part leg_l : beech_45 {
