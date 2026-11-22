@@ -406,6 +406,8 @@ fn contextual_words_in_their_positions() {
          \x20 member: 6\n\
          \x20 adjust cup on plate: across within 2mm\n\
          \x20 adjust: 8\n\
+         \x20 clamp cup, plate along depth\n\
+         \x20 clamp: 9\n\
          }\n\
          recipe r : notch {\n\
          \x20 mark { knife(walls) }\n\
@@ -450,6 +452,12 @@ fn contextual_words_in_their_positions() {
                 assert_eq!(adjust.axis.as_str(), "across");
                 "adjust"
             }
+            KindEntry::Clamp(clamp) => {
+                assert_eq!(clamp.members[0].as_str(), "cup");
+                assert_eq!(clamp.members[1].as_str(), "plate");
+                assert_eq!(clamp.axis.as_str(), "depth");
+                "clamp"
+            }
             KindEntry::Param(_) | KindEntry::Require(_) => "other",
         })
         .collect();
@@ -468,7 +476,9 @@ fn contextual_words_in_their_positions() {
             "member",
             "member",
             "adjust",
-            "adjust"
+            "adjust",
+            "clamp",
+            "clamp"
         ]
     );
     let ItemKind::Recipe(recipe) = &file.items[3].kind else {

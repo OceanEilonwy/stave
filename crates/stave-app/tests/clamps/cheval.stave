@@ -1,0 +1,132 @@
+// One of the turning-frames designs (docs/reviews/2026-11-22-turning-frames.md):
+// a knob bolt across a 3mm gap with nothing in it. Its kind says `clamp`, so
+// tightening the knob would pull the gap shut: error[no-contact].
+stave 1
+
+project "Cheval Mirror" {
+  goal: "A tall mirror that tilts between two uprights"
+}
+
+region envelope = box(across: 700mm, up: 1600mm, deep: 400mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part upright_l : beech_45 {
+  length: 1500mm
+  width:  70mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part upright_r = mirror(upright_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(upright_l.bottom, inset: 100mm)
+    center(envelope, across)
+    center(upright_l, deep)
+  }
+}
+
+part stile_l : beech_45 {
+  length: 1100mm
+  width:  50mm
+  place {
+    orient(length: up, width: back)
+    flush(upright_l.bottom, inset: 300mm)
+    against(upright_l.right, gap: 3mm)
+    center(upright_l, deep)
+  }
+}
+
+part stile_r = mirror(stile_l, about: mid(envelope, across))
+
+part top_rail : beech_25 {
+  length: fit
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    flush(stile_l.top)
+    center(envelope, across)
+    center(stile_l, deep)
+  }
+}
+
+part bottom_rail : beech_25 {
+  length: fit
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    flush(stile_l.bottom)
+    center(envelope, across)
+    center(stile_l, deep)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [upright_l, upright_r], length: 30mm)
+joint rail_tenons      : mortise_tenon([top_rail, bottom_rail], into: [stile_l, stile_r], length: 20mm)
+
+kind knob_bolt : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the other part, into a threaded insert.
+  param thread_length = 25mm
+  /// The gap the bolt crosses between the two parts.
+  param span = 0mm
+  /// Wood left round the holes.
+  param wall = 6mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob: turned by hand to lock or free the joint.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+  /// The bolt: through the piece, across the gap, into a threaded insert.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + span + thread_length - 3mm)
+  }
+
+  // Tightening the knob draws the bolt, and the part it is threaded
+  // into, toward the knob.
+  clamp knob, bolt along depth
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+}
+
+hardware pivot_l : knob_bolt(upright_l, into: stile_l, face: left, span: 3mm) {
+  place {
+    center(upright_l, deep)
+    flush(stile_l.top, inset: 550mm)
+  }
+}
+
+hardware pivot_r : knob_bolt(upright_r, into: stile_r, face: right, span: 3mm) {
+  place {
+    center(upright_r, deep)
+    flush(stile_r.top, inset: 550mm)
+  }
+}

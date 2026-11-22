@@ -1869,6 +1869,23 @@ pub struct Hardware {
     pub settings: Vec<Setting>,
     /// Whether its kind's rules hold where it is placed.
     pub rules: Rules,
+    /// Its kind's `clamp`, when it has one, along a world axis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clamp: Option<Clamp>,
+}
+
+/// A piece of hardware's `clamp` (grammar, "Clamps"): tightening draws
+/// member `bearing` and member `drawn` toward each other along `axis`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Clamp {
+    /// The member that bears on what lies between them, among its kind's
+    /// members with a body.
+    pub bearing: BodyId,
+    /// The member drawn toward it, which moves with a part.
+    pub drawn: BodyId,
+    /// The world axis its kind's frame axis runs along here.
+    #[serde(serialize_with = "serialize_axis")]
+    pub axis: Axis,
 }
 
 /// What a member with a body belongs to: a piece of hardware, or one pair

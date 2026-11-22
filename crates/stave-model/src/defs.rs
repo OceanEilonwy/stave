@@ -1506,6 +1506,25 @@ pub struct HardwareKindDef {
     pub uses: Vec<UseDef>,
     /// Its `adjust` entries, in source order.
     pub adjusts: Vec<AdjustDef>,
+    /// Its one `clamp`, when it has one.
+    pub clamp: Option<ClampDef>,
+}
+
+/// `clamp a, b along axis` (grammar, "Clamps"): tightening draws member
+/// `bearing` and member `drawn` toward each other along `axis` of the
+/// kind's frame. They are two different members with a body, and
+/// `drawn` moves with a role that is a part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClampDef {
+    /// The member that bears on what lies between them (`a`).
+    pub bearing: BodyId,
+    /// The member drawn toward it (`b`), and with it the part it moves
+    /// with.
+    pub drawn: BodyId,
+    /// The frame axis.
+    pub axis: FrameAxis,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// `adjust a on b: axis within d` (grammar, "Adjustment"): member `body`

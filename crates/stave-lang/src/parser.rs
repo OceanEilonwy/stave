@@ -1805,6 +1805,14 @@ impl<'t> Parser<'t> {
                 p.value(name, at)
             });
         }
+        if self.at_entry_word("clamp") {
+            return self.node(CLAMP, |p| {
+                p.bump();
+                p.member_pair()?;
+                p.expect_word("along")?;
+                p.root_name()
+            });
+        }
         if self.at_entry_word("roles") {
             return self.node(ROLES, |p| {
                 p.bump();

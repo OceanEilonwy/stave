@@ -262,6 +262,7 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "couple",
     "adjust",
     "on",
+    "clamp",
     "from",
     "along",
     "mark",

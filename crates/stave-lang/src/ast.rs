@@ -682,7 +682,8 @@ impl KindBody {
             | KindEntry::Cut(_)
             | KindEntry::Mount(_)
             | KindEntry::Mechanism(_)
-            | KindEntry::Adjust(_) => None,
+            | KindEntry::Adjust(_)
+            | KindEntry::Clamp(_) => None,
         })
     }
 }
@@ -719,6 +720,8 @@ pub enum KindEntry {
     Mechanism(MechanismBlock),
     /// `adjust arm on plate: across within 2mm`
     Adjust(Adjust),
+    /// `clamp knob, bolt along depth`
+    Clamp(Clamp),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
 }
@@ -735,6 +738,19 @@ pub struct Adjust {
     pub axis: Ident,
     /// How far either way.
     pub within: Expr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `clamp a, b along axis`: tightening draws member `a` and member `b`
+/// toward each other along one axis of the kind's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clamp {
+    /// The member that bears on what lies between them, then the member
+    /// it draws toward it.
+    pub members: [Ident; 2],
+    /// The frame axis, as written (`depth`).
+    pub axis: Ident,
     /// The whole entry.
     pub span: Span,
 }

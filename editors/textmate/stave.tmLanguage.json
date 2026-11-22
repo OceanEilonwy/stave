@@ -199,7 +199,7 @@
           }
         },
         {
-          "match": "^\\s*(roles|cut|makes|member|mechanism|adjust|mount|pivot|slot|rail|couple|mark|replace|unset|rename)(?![A-Za-z0-9_])(?!\\s*:)",
+          "match": "^\\s*(roles|cut|makes|member|mechanism|adjust|clamp|mount|pivot|slot|rail|couple|mark|replace|unset|rename)(?![A-Za-z0-9_])(?!\\s*:)",
           "captures": {
             "1": { "name": "keyword.other.$1.stave" }
           }

@@ -264,6 +264,8 @@ syntax_kinds! {
     MOUNT,
     /// `adjust a on b: axis within d` in a hardware kind
     ADJUST,
+    /// `clamp a, b along axis` in a hardware kind
+    CLAMP,
     /// `pivot a, b at point(...)` in a mechanism
     PIVOT,
     /// `slot a, b from point(...) to point(...)` in a mechanism

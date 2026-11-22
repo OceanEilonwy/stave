@@ -643,6 +643,14 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     span: span_of(&entry),
                 })
             }
+            SyntaxKind::CLAMP => {
+                let mut names = children(&entry, SyntaxKind::NAME);
+                KindEntry::Clamp(Clamp {
+                    members: [ident(&names.next()?)?, ident(&names.next()?)?],
+                    axis: ident(&names.next()?)?,
+                    span: span_of(&entry),
+                })
+            }
             SyntaxKind::CUT => KindEntry::Cut(Cut {
                 name: match child(&entry, SyntaxKind::NAME) {
                     Some(node) => Some(name(&node)?),

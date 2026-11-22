@@ -887,7 +887,8 @@ impl Resolver<'_> {
                         | ast::KindEntry::Cut(_)
                         | ast::KindEntry::Mount(_)
                         | ast::KindEntry::Mechanism(_)
-                        | ast::KindEntry::Adjust(_) => None,
+                        | ast::KindEntry::Adjust(_)
+                        | ast::KindEntry::Clamp(_) => None,
                     }))
                     .collect(),
                 _ => Vec::new(),

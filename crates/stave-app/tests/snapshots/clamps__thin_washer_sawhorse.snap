@@ -1,0 +1,19 @@
+---
+source: crates/stave-app/tests/clamps.rs
+expression: rendered(&opened)
+---
+error[no-contact]: lock_l draws extension_l toward lock_l's washer, but they are 2mm apart with nothing between
+   --> /project/project.stave:115:19
+    |
+115 | hardware lock_l : knob_bolt(leg_l, into: extension_l, face: left, span: 3mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull extension_l 2mm toward lock_l's washer
+    = help: put a washer or spacer in the gap, or place extension_l against lock_l's washer
+
+error[no-contact]: lock_r draws extension_r toward lock_r's washer, but they are 2mm apart with nothing between
+   --> /project/project.stave:122:19
+    |
+122 | hardware lock_r : knob_bolt(leg_r, into: extension_r, face: right, span: 3mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull extension_r 2mm toward lock_r's washer
+    = help: put a washer or spacer in the gap, or place extension_r against lock_r's washer

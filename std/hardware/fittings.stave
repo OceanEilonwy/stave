@@ -118,6 +118,11 @@ kind cam_lock : fitting {
     shape: cylinder(diameter: thread_diameter, axis: along, along: -setback - thread_length..-setback, at: point(depth: piece.thickness / 2))
   }
 
+  // Turning the cam draws the bolt, and the panel it is screwed into,
+  // along the panel toward the cam: the panel's end must meet the other
+  // panel's face.
+  clamp cam, bolt along along
+
   cut cam_bore: crossing(piece, cam) { drill(diameter: cam_diameter, depth: bore_depth, wall: 3mm) }
   cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_hole_diameter, depth: setback, wall: 3mm) }
   cut thread_hole: crossing(into, thread) { drill(diameter: thread_diameter, depth: thread_length, wall: 3mm) }
