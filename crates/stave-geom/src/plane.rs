@@ -9,8 +9,12 @@
 //! axis lies in the plane (a cup's bore) is taken out of each box it
 //! crosses as its narrowest chord over the range, along the axis, that the
 //! other piece shares with it, so no more is taken than the hole takes.
-//! Other holes and angled cuts are left as wood: more wood than there is,
-//! never less. Everything here is `f64` nanometres from exact inputs,
+//! A round hole along the axis keeps a piece inside it clear of the
+//! blocks it is drilled in ([`Bores`]): at one pose, and all the way round
+//! a turn about the plane's origin, which is exact for a hole on the line
+//! the body turns about. Other holes and angled cuts are left as wood:
+//! more wood than there is, never less. Everything here is `f64`
+//! nanometres from exact inputs,
 //! converted in [`render`](crate::render).
 
 use glam::{DMat4, DVec2, DVec3};
@@ -139,18 +143,40 @@ impl Motion2 {
 /// world.
 #[derive(Debug, Clone)]
 enum Element {
-    Box(WorldBox),
+    /// A box; `block` when it is one of the solid's blocks, which its
+    /// holes are drilled in (not the box around a rod or a slant).
+    Box {
+        region: WorldBox,
+        block: bool,
+    },
     Outline(Vec<DVec3>),
 }
 
+impl Element {
+    /// One of the solid's blocks, which its holes are drilled in.
+    fn is_block(&self) -> bool {
+        match self {
+            Element::Box { block, .. } => *block,
+            Element::Outline(_) => false,
+        }
+    }
+}
+
 fn elements(solid: &WorldSolid) -> Vec<Element> {
+    let boxed = |block: bool| move |region: WorldBox| Element::Box { region, block };
     solid
         .boxes()
         .iter()
         .copied()
-        .chain(solid.rods().iter().map(WorldRod::bounds))
-        .chain(solid.slant_bounds())
-        .map(Element::Box)
+        .map(boxed(true))
+        .chain(
+            solid
+                .rods()
+                .iter()
+                .map(WorldRod::bounds)
+                .chain(solid.slant_bounds())
+                .map(boxed(false)),
+        )
         .chain(
             solid
                 .prisms()
@@ -158,6 +184,88 @@ fn elements(solid: &WorldSolid) -> Vec<Element> {
                 .map(|prism| Element::Outline(prism.corners_3d())),
         )
         .collect()
+}
+
+/// What a round hole along the plane's axis takes out of the pairs of
+/// pieces (grammar, "Sweeps see cuts").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bores {
+    /// Nothing: the pieces will move some other way (a linkage), so such
+    /// a hole is left as wood.
+    Wood,
+    /// The pieces stay where they are (a check at one pose): a piece
+    /// inside a hole of the other solid is clear of the blocks the hole
+    /// is drilled in.
+    Still,
+    /// One solid turns about the line through the plane's origin: a
+    /// piece that stays inside a hole of the other solid all the way
+    /// round is clear of the blocks the hole is drilled in. Exact for a
+    /// hole on the line (taken out as itself); for one off it by `e`,
+    /// only the round hole `e` narrower that every turn keeps covered is.
+    Turning,
+}
+
+/// A round hole along the plane's axis, on the plane: its centre and
+/// radius there and its range along the axis.
+#[derive(Debug, Clone, Copy)]
+struct Bore {
+    centre: DVec2,
+    radius: f64,
+    low: f64,
+    high: f64,
+}
+
+/// The holes of a solid moved by `matrix` that run along the plane's axis.
+fn bores(plane: &Plane, solid: &WorldSolid, matrix: &DMat4) -> Vec<Bore> {
+    let axis = point_vector(Point::default().with(plane.axis, Length::from_nm(1)));
+    solid
+        .holes()
+        .iter()
+        .filter_map(|hole| {
+            let [first, second] = hole.axis.others();
+            let end = |at: Length| {
+                matrix.transform_point3(point_vector(
+                    Point::default()
+                        .with(hole.axis, at)
+                        .with(first, hole.centre[0])
+                        .with(second, hole.centre[1]),
+                ))
+            };
+            let (start, finish) = (end(hole.start), end(hole.end));
+            let direction = (finish - start).normalize_or_zero();
+            // Only a hole along the axis is round on the plane.
+            if direction.cross(axis).length() > 1e-9 {
+                return None;
+            }
+            let (a, b) = (plane.along(start), plane.along(finish));
+            Some(Bore {
+                centre: plane.project(start),
+                radius: render::nm(hole.diameter) / 2.0,
+                low: a.min(b),
+                high: a.max(b),
+            })
+        })
+        .collect()
+}
+
+/// Whether `piece` lies inside one of `bores` over the range along the
+/// axis it shares with `block` (a block of the solid they are drilled
+/// in), at one pose or all the way round a turn as `rule` says. Touching
+/// the hole's side, within the contact tolerance, is inside.
+fn inside(piece: &Piece, block: &Piece, bores: &[Bore], rule: Bores) -> bool {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let (low, high) = (piece.low.max(block.low), piece.high.min(block.high));
+    bores.iter().any(|bore| {
+        let along = low >= bore.low - tolerance && high <= bore.high + tolerance;
+        // The piece's corners are shrunk by half the tolerance.
+        let room = bore.radius + tolerance / 2.0;
+        along
+            && match rule {
+                Bores::Wood => false,
+                Bores::Still => piece.radius_about(bore.centre) <= room,
+                Bores::Turning => piece.radius_about(DVec2::ZERO) + bore.centre.length() <= room,
+            }
+    })
 }
 
 /// The eight corners of a box, world nanometres.
@@ -269,7 +377,7 @@ fn piece(plane: &Plane, corners: &[DVec3], matrix: &DMat4) -> Option<Piece> {
 fn element_range(plane: &Plane, element: &Element, matrix: &DMat4) -> (f64, f64) {
     let boxed;
     let corners: &[DVec3] = match element {
-        Element::Box(region) => {
+        Element::Box { region, .. } => {
             boxed = corners_of(region);
             &boxed
         }
@@ -293,7 +401,7 @@ fn element_pieces(
     range: (f64, f64),
 ) -> Vec<Piece> {
     match element {
-        Element::Box(region) => {
+        Element::Box { region, .. } => {
             // The range in the solid's own place: a motion in the plane
             // only shifts what lies along the axis.
             let shift = plane.along(matrix.transform_point3(DVec3::ZERO));
@@ -309,16 +417,23 @@ fn element_pieces(
 
 /// Every pair of pieces of `a` (moved by `ma`) and `b` (moved by `mb`) that
 /// share more than the contact tolerance along the axis, each solid's
-/// boxes less its holes over the range the other piece covers.
+/// boxes less its holes over the range the other piece covers, and
+/// without the pairs of a piece and a block that a round hole along the
+/// axis, drilled in the block, keeps apart as `rule` says.
 pub(crate) fn piece_pairs(
     plane: &Plane,
     a: &WorldSolid,
     ma: &DMat4,
     b: &WorldSolid,
     mb: &DMat4,
+    rule: Bores,
 ) -> Vec<(Piece, Piece)> {
     let tolerance = render::nm(CONTACT_TOLERANCE);
     let (ea, eb) = (elements(a), elements(b));
+    let (bores_a, bores_b) = match rule {
+        Bores::Wood => (Vec::new(), Vec::new()),
+        Bores::Still | Bores::Turning => (bores(plane, a, ma), bores(plane, b, mb)),
+    };
     let mut out = Vec::new();
     for x in &ea {
         let rx = element_range(plane, x, ma);
@@ -332,9 +447,13 @@ pub(crate) fn piece_pairs(
             let py = element_pieces(plane, y, b.holes(), mb, shared);
             for p in &px {
                 for q in &py {
-                    if p.shared(q) > tolerance {
-                        out.push((p.clone(), q.clone()));
+                    if p.shared(q) <= tolerance
+                        || (y.is_block() && inside(p, q, &bores_b, rule))
+                        || (x.is_block() && inside(q, p, &bores_a, rule))
+                    {
+                        continue;
                     }
+                    out.push((p.clone(), q.clone()));
                 }
             }
         }

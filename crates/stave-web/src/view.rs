@@ -198,14 +198,19 @@ impl View {
 
     /// Opens motion `index` (a door, a drawer; in
     /// [`Project::motions`] order) to `amount`, from 0 (closed) to 1
-    /// (fully open).
+    /// (fully open). A drive with set positions snaps to the nearest one
+    /// (grammar, "Mechanisms", set positions).
     pub fn set_pose(&mut self, index: usize, amount: f32) -> Result<(), NoSuchMotion> {
         let count = self.amounts.len();
+        let snapped = match self.project.motions().get(index) {
+            Some(motion) => motion.snapped(fraction(amount)),
+            None => fraction(amount),
+        };
         let slot = self
             .amounts
             .get_mut(index)
             .ok_or(NoSuchMotion { index, count })?;
-        *slot = fraction(amount);
+        *slot = fraction(snapped);
         Ok(())
     }
 

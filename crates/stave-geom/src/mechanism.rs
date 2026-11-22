@@ -313,12 +313,16 @@ impl MechanismPath {
     }
 
     /// The amount of a pose value along the range, clamped to it: `open`
-    /// is the whole range, an angle or a travel is measured from the
-    /// closed pose; a value of the other kind is the closed pose.
+    /// is the whole range (or the furthest set value, for a drive with
+    /// set positions), an angle or a travel is measured from the closed
+    /// pose; a value of the other kind is the closed pose.
     pub fn amount(&self, value: PoseValue) -> f64 {
         let amount = match (value, self.drive) {
             (PoseValue::Closed, _) => 0.0,
-            (PoseValue::Open, _) => self.limit,
+            (PoseValue::Open, _) => self
+                .drives
+                .get(self.swept().index())
+                .map_or(self.limit, open_amount),
             (PoseValue::Angle(angle), MechanismDrive::Turn { .. }) => render::radians_f64(angle),
             (PoseValue::Travel(length), MechanismDrive::Travel { .. }) => render::nm(length),
             (PoseValue::Angle(_), MechanismDrive::Travel { .. })
@@ -375,7 +379,7 @@ impl MechanismPath {
         };
         let amount = match (value, named.drive) {
             (PoseValue::Closed, _) => 0.0,
-            (PoseValue::Open, _) => limit,
+            (PoseValue::Open, _) => open_amount(named),
             (PoseValue::Angle(angle), MechanismDrive::Turn { .. }) => render::radians_f64(angle),
             (PoseValue::Travel(length), MechanismDrive::Travel { .. }) => render::nm(length),
             (PoseValue::Angle(_), MechanismDrive::Travel { .. })
@@ -436,6 +440,17 @@ impl MechanismPath {
     pub fn speed(&self, member: MemberIndex, radius: f64) -> Option<f64> {
         let id = *self.ids.get(member.index())?;
         Some(self.path.speed(id)?.bound(radius))
+    }
+}
+
+/// Where `open` puts a drive, as an amount from its `from` (radians or
+/// nanometres): the whole range, or the furthest set value for a drive
+/// with set positions.
+fn open_amount(named: &NamedDrive) -> f64 {
+    match named.drive.amount_of(named.open()) {
+        Some(DriveValue::Turn(angle)) => render::radians_f64(angle),
+        Some(DriveValue::Travel(length)) => render::nm(length),
+        None => 0.0,
     }
 }
 

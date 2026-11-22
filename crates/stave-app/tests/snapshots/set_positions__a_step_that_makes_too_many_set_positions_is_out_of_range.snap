@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[out-of-range]: every(0.1mm) makes 3001 set positions; a drive has at most 1000
+   --> /project/project.stave:110:90
+    |
+110 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(0.1mm))
+    |                                                                                          ^^^^^
+    = help: make the step larger, or list the values instead

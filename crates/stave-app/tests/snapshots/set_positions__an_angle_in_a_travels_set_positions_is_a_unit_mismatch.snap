@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[unit-mismatch]: 'every' needs a length, found an angle
+   --> /project/project.stave:110:90
+    |
+110 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(15deg))
+    |                                                                                          ^^^^^
+    = help: lengths go with lengths and angles with angles; a plain number scales them, as in 2 * 19mm

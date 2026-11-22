@@ -454,6 +454,9 @@ pub struct SceneGraph {
     pub scenes: Vec<SceneEntry>,
     /// Each assembly's motion, by [`AssemblyId`].
     motions: Vec<Option<AssemblyMove>>,
+    /// Each assembly's drives' set positions, by [`AssemblyId`] and then
+    /// drive, as amounts from closed: empty for a continuous drive.
+    sets: Vec<Vec<Vec<PoseValue>>>,
     /// Per node: how far its assembly moves out in an exploded view, the
     /// first stage (millimetres, render frame).
     explode_assembly: Vec<Vec3>,
@@ -513,6 +516,29 @@ pub struct DriveRange {
     pub name: Option<String>,
     /// How far it goes.
     pub range: MotionRange,
+    /// The amounts from closed it is set at, in order (grammar,
+    /// "Mechanisms", set positions); empty for a continuous drive, set
+    /// anywhere.
+    pub set_at: Vec<PoseValue>,
+}
+
+impl DriveRange {
+    /// A slider's render amount (radians or millimetres) moved to the
+    /// nearest set position, for a drive with them; as it is otherwise.
+    pub fn snapped(&self, amount: f32) -> f32 {
+        snapped(self.range, &self.set_at, amount)
+    }
+}
+
+/// A render amount (radians or millimetres) of a drive with range
+/// `range` moved to the nearest of its set positions `set_at` (amounts
+/// from closed); as it is when it has none.
+pub fn snapped(range: MotionRange, set_at: &[PoseValue], amount: f32) -> f32 {
+    set_at
+        .iter()
+        .map(|value| range.amount(*value))
+        .min_by(|a, b| (a - amount).abs().total_cmp(&(b - amount).abs()))
+        .unwrap_or(amount)
 }
 
 /// The range of an assembly's motion, for a slider: exact, with its unit
@@ -900,6 +926,36 @@ impl SceneGraph {
             .iter()
             .map(|path| path.as_ref().map(AssemblyMove::of_path))
             .collect();
+        // Each drive's set positions, as amounts from closed (grammar,
+        // "Mechanisms", set positions): empty for a continuous drive.
+        let sets: Vec<Vec<Vec<PoseValue>>> = paths
+            .iter()
+            .map(|path| {
+                path.as_ref()
+                    .map(|path| {
+                        path.drives()
+                            .iter()
+                            .map(|named| {
+                                named
+                                    .set_values()
+                                    .filter_map(|value| match named.drive.amount_of(value)? {
+                                        DriveValue::Turn(angle) => Some(PoseValue::Angle(angle)),
+                                        DriveValue::Travel(length) => {
+                                            Some(PoseValue::Travel(length))
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let set_of = |assembly: AssemblyId, drive: DriveIndex| -> &[PoseValue] {
+            sets.get(assembly.index())
+                .and_then(|drives| drives.get(drive.index()))
+                .map_or(&[], Vec::as_slice)
+        };
         let scenes = design
             .scenes
             .iter()
@@ -921,7 +977,13 @@ impl SceneGraph {
                         };
                         drives.into_iter().filter_map(move |drive| {
                             let range = motion?.range_of(drive)?;
-                            Some((pose.assembly, drive, range.amount(pose.value)))
+                            // Open is the furthest set position of a
+                            // drive with them.
+                            let value = match (pose.value, set_of(pose.assembly, drive).last()) {
+                                (PoseValue::Open, Some(furthest)) => *furthest,
+                                (value, _) => value,
+                            };
+                            Some((pose.assembly, drive, range.amount(value)))
                         })
                     })
                     .collect(),
@@ -969,6 +1031,7 @@ impl SceneGraph {
             nodes,
             scenes,
             motions,
+            sets,
             explode_assembly,
             explode_part,
             drawn,
@@ -1011,6 +1074,12 @@ impl SceneGraph {
                     drive,
                     name,
                     range: motion.range_of(drive)?,
+                    set_at: self
+                        .sets
+                        .get(assembly.index())
+                        .and_then(|drives| drives.get(index))
+                        .cloned()
+                        .unwrap_or_default(),
                 })
             })
             .collect()

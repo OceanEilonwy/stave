@@ -51,7 +51,7 @@ pub use focus::{
 pub use ghost::{Ghost, GhostChange, GhostOverlay, GhostVerdict, Ghosts};
 pub use graph::{
     BuildOptions, DriveRange, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId,
-    Posed, RegionNode, SceneEntry, SceneGraph, Section, Wood,
+    Posed, RegionNode, SceneEntry, SceneGraph, Section, Wood, snapped,
 };
 pub use grip::{FaceOf, GripFace, GripHandle, GripOf, GripPlace, Nudged};
 pub use pick::{Hit, PartFace};

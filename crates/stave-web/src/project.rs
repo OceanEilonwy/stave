@@ -2,7 +2,7 @@
 //! agent's suggestion drawn as ghosts over it.
 
 use stave_model::mechanism::DriveIndex;
-use stave_model::solved::{AssemblyId, SolvedDesign};
+use stave_model::solved::{AssemblyId, PoseValue, SolvedDesign};
 use stave_modules::LoadError;
 use stave_scene::pipeline::{self, Opened};
 use stave_scene::{
@@ -50,6 +50,21 @@ pub struct Motion {
     pub name: String,
     /// How far it goes.
     pub range: MotionRange,
+    /// The amounts from closed it is set at (grammar, "Mechanisms", set
+    /// positions); empty for a continuous drive.
+    pub set_at: Vec<PoseValue>,
+}
+
+impl Motion {
+    /// A slider's fraction, from 0 (closed) to 1 (fully open), moved to
+    /// the nearest set position of a drive with them; as it is otherwise.
+    pub fn snapped(&self, fraction: f32) -> f32 {
+        let full = self.range.full();
+        if self.set_at.is_empty() || full <= 0.0 {
+            return fraction;
+        }
+        stave_scene::snapped(self.range, &self.set_at, fraction * full) / full
+    }
 }
 
 /// What is drawn: the project's own scene, or the project's scene with
@@ -278,6 +293,7 @@ impl Project {
                         (Some(_) | None, _) => assembly.name.clone(),
                     },
                     range: drive.range,
+                    set_at: drive.set_at,
                 })
             })
             .collect()

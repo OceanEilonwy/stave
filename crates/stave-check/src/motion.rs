@@ -6,8 +6,10 @@
 //! Motions are made one at a time (grammar, "Scenes"): the swept drive
 //! starts closed, every other drive of its assembly is held still where
 //! the start puts it (closed from rest, where a scene poses it from that
-//! scene; [`Checker::sweep_starts`] lists them), and everything else
-//! stands where the scene puts it. Every body the motion moves (its parts,
+//! scene, at each of its set values from rest; [`Checker::sweep_starts`]
+//! lists them), and everything else stands where the scene puts it. A
+//! loose member is never swept; it is checked where it is set
+//! ([`Checker::set_positions`]). Every body the motion moves (its parts,
 //! the hardware on them, and the links its hardware's mechanism turns) is
 //! swept against every body that moves differently, the same way for
 //! every kind (grammar, "One collision model"). Each drive of an assembly
@@ -25,7 +27,7 @@ use stave_geom::sweep::{Mover, Path, Reach, first_contact};
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
-use stave_model::mechanism::{DriveIndex, DriveValue, Mechanism};
+use stave_model::mechanism::{DriveIndex, DriveValue, Mechanism, MemberIndex};
 use stave_model::solved::{AssemblyId, BodyOwner, PartId, PoseValue, SolvedDesign, WorldBox};
 
 use crate::fixes::OverlayChange;
@@ -264,8 +266,10 @@ impl Checker<'_> {
     /// The starts one drive of an assembly is swept from (grammar,
     /// "Scenes", motions are made one at a time): rest, with every other
     /// drive at its `from`, then each scene in order, with every other
-    /// drive held where the scene poses it (closed where it doesn't). The
-    /// held values of later kinds of start (set positions) go here.
+    /// drive held where the scene poses it (closed where it doesn't),
+    /// then each set value of each other drive, from rest with every
+    /// drive but that one closed ([`Checker::set_holds`]). A start the
+    /// same as an earlier one's held values from rest is left out.
     pub(crate) fn sweep_starts(
         &self,
         assembly: AssemblyId,
@@ -287,7 +291,197 @@ impl Checker<'_> {
             }
             starts.push(SweepStart { scene_index, held });
         }
+        for held in Self::set_holds(mechanism, Some(drive)) {
+            if !starts
+                .iter()
+                .any(|start| start.scene_index == 0 && start.held == held)
+            {
+                starts.push(SweepStart {
+                    scene_index: 0,
+                    held,
+                });
+            }
+        }
         starts
+    }
+
+    /// Every drive's values with one drive at one of its set values
+    /// (other than its `from`) and every other drive closed, drive by
+    /// drive and value by value (grammar, "Mechanisms", set positions):
+    /// where a loose member is checked, and, leaving out `except`'s own,
+    /// where the sweeps of `except` start.
+    pub(crate) fn set_holds(
+        mechanism: &Mechanism,
+        except: Option<DriveIndex>,
+    ) -> Vec<Vec<DriveValue>> {
+        let closed = mechanism.closed();
+        let mut holds = Vec::new();
+        for (index, named) in mechanism.drives().iter().enumerate() {
+            if except.is_some_and(|drive| drive.index() == index) {
+                continue;
+            }
+            for value in named.set_values() {
+                if value == named.drive.from() {
+                    continue;
+                }
+                let mut held = closed.clone();
+                if let Some(slot) = held.get_mut(index) {
+                    *slot = value;
+                }
+                holds.push(held);
+            }
+        }
+        holds
+    }
+
+    /// Loose members where they are set (grammar, "Shapes": a loose
+    /// member is checked wherever it is set and never swept): at each set
+    /// value of each drive, every other drive closed and everything else
+    /// at rest, against everything that moves differently. Rest and the
+    /// scenes check them where those put them. A hit is `error[motion]`
+    /// at the loose member's hardware, once for each two items.
+    pub(crate) fn set_positions(&mut self) {
+        if !self.bodies.iter().any(|body| body.loose) {
+            return;
+        }
+        let mut reported: BTreeSet<(Item, Item)> = BTreeSet::new();
+        let mut found = Vec::new();
+        for assembly in self.design.assemblies() {
+            let (Some(path), Some(mechanism)) = (self.path(assembly.id), &assembly.mechanism)
+            else {
+                continue;
+            };
+            for held in Self::set_holds(mechanism, None) {
+                let poses: Vec<PoseValue> = mechanism
+                    .drives()
+                    .iter()
+                    .zip(&held)
+                    .map(|(named, value)| match named.drive.amount_of(*value) {
+                        Some(DriveValue::Turn(angle)) => PoseValue::Angle(angle),
+                        Some(DriveValue::Travel(length)) => PoseValue::Travel(length),
+                        None => PoseValue::Closed,
+                    })
+                    .collect();
+                // Each body where the held values put it: those the
+                // assembly moves with it (a link as its linkage places
+                // it), everything else at rest.
+                let moved = |index: usize| -> Option<(bool, Option<MemberIndex>)> {
+                    let body = self.bodies.get(index)?;
+                    let moves = body.chain.contains(&assembly.id);
+                    let link = body
+                        .link
+                        .filter(|(own, _)| moves && *own == assembly.id)
+                        .map(|(_, link)| link);
+                    Some((moves, link))
+                };
+                let placement = |index: usize| -> Placement {
+                    match moved(index) {
+                        Some((true, link)) => {
+                            Placement::of_poses(&[(path.mechanism(), poses.as_slice())], link)
+                        }
+                        Some((false, _)) | None => Placement::REST,
+                    }
+                };
+                for (i, loose) in self.bodies.iter().enumerate() {
+                    if !loose.loose || self.failed.contains(&loose.item) {
+                        continue;
+                    }
+                    let at = placement(i);
+                    let reach = placed_bounds(&loose.bounds, &at);
+                    for (j, other) in self.bodies.iter().enumerate() {
+                        if i == j
+                            || moved(i) == moved(j)
+                            || self.failed.contains(&other.item)
+                            || self.exempt(loose.item, other.item)
+                            || reported.contains(&crate::ordered_items(loose.item, other.item))
+                        {
+                            continue;
+                        }
+                        let other_at = placement(j);
+                        if !boxes_overlap(&reach, &placed_bounds(&other.bounds, &other_at)) {
+                            continue;
+                        }
+                        let overlaps = overlaps_placed(&loose.solid, &at, &other.solid, &other_at);
+                        if overlaps.is_empty() {
+                            continue;
+                        }
+                        reported.insert(crate::ordered_items(loose.item, other.item));
+                        found.push((assembly.id, held.clone(), loose.item, other.item, overlaps));
+                    }
+                }
+            }
+        }
+        for (assembly, held, loose, other, overlaps) in found {
+            self.report_set_position(assembly, &held, loose, other, &overlaps);
+        }
+    }
+
+    /// A loose member that hits something where a drive sets it.
+    fn report_set_position(
+        &mut self,
+        assembly: AssemblyId,
+        held: &[DriveValue],
+        loose: Item,
+        other: Item,
+        overlaps: &[stave_geom::collide::Overlap],
+    ) {
+        let Some(mechanism) = self
+            .design
+            .assembly(assembly)
+            .and_then(|found| found.mechanism.as_ref())
+        else {
+            return;
+        };
+        let name = self.assembly_name(assembly);
+        let closed = mechanism.closed();
+        // The one drive away from closed, as a message names it.
+        let Some((named, value)) = mechanism
+            .drives()
+            .iter()
+            .zip(held.iter().zip(&closed))
+            .find(|(_, (value, from))| value != from)
+            .map(|(named, (value, _))| (named, *value))
+        else {
+            return;
+        };
+        let drive = match &named.name {
+            Some(drive) if mechanism.drives().len() > 1 => format!("{name}.{drive}"),
+            Some(_) | None => name,
+        };
+        let amount = match named.drive.amount_of(value) {
+            Some(DriveValue::Turn(angle)) => angle.to_string(),
+            Some(DriveValue::Travel(length)) => length_text(length),
+            None => String::new(),
+        };
+        let (loose_name, other_name) = (self.item_name(loose), self.item_name(other));
+        let mut notes = Vec::new();
+        if let Some(deepest) = crate::deepest(overlaps) {
+            notes.push(format!(
+                "{loose_name} goes {} into {other_name} there",
+                length_text(deepest.depth)
+            ));
+        }
+        notes.push(format!(
+            "{loose_name} is loose: it is checked where it is set, not swept"
+        ));
+        let place = loose
+            .hardware()
+            .and_then(|hardware| self.hardware_place(hardware))
+            .or_else(|| {
+                self.instance_place(self.mirror_root(assembly))
+                    .map(|p| (p.file, p.span))
+            });
+        self.next_contact = Some(crate::Contact::of(self.design, &[loose, other], overlaps));
+        self.report(
+            Severity::Error,
+            Code::Motion,
+            format!("{loose_name} hits {other_name} when {drive} is set at {amount}"),
+            place,
+            notes,
+            Some(format!(
+                "make room for {loose_name} at every value {drive} is set at, or leave {amount} out of its set_at:"
+            )),
+        );
     }
 
     /// Stops early, leaving the result partial, once `stopped` says so; it
@@ -318,11 +512,12 @@ impl Checker<'_> {
             if nested {
                 continue;
             }
+            // A loose member is never swept: it is out while things move.
             let moving: Vec<usize> = (0..self.bodies.len())
                 .filter(|&i| {
                     self.bodies
                         .get(i)
-                        .is_some_and(|b| b.chain.contains(&assembly.id))
+                        .is_some_and(|b| b.chain.contains(&assembly.id) && !b.loose)
                 })
                 .collect();
             let blocked = moving.iter().any(|&i| {
@@ -401,6 +596,7 @@ impl Checker<'_> {
         };
         for (j, fixed) in self.bodies.iter().enumerate() {
             if fixed.chain.contains(&assembly)
+                || fixed.loose
                 || self.failed.contains(&fixed.item)
                 || self.posed_failed.contains(&fixed.item)
             {

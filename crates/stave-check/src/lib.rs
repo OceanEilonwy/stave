@@ -232,7 +232,7 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     stop.check()?;
     let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
     checker.given = fast.map(|fast| fast.made.clone().into_iter());
-    let steps: [fn(&mut Checker<'m>); 13] = [
+    let steps: [fn(&mut Checker<'m>); 14] = [
         Checker::misfits,
         Checker::misshapen,
         Checker::not_supported,
@@ -246,6 +246,7 @@ fn run<'m, S: tiers::Stop + ?Sized>(
         Checker::edge_contacts,
         Checker::joint_motions,
         Checker::scenes,
+        Checker::set_positions,
     ];
     for step in steps {
         stop.check()?;
@@ -355,6 +356,9 @@ struct Body {
     /// For a member its assembly's mechanism places (a link): that
     /// assembly, and which member of its mechanism.
     link: Option<(AssemblyId, MemberIndex)>,
+    /// A loose member (grammar, "Shapes"): checked wherever it is set,
+    /// never swept.
+    loose: bool,
 }
 
 struct Checker<'a> {
@@ -430,6 +434,7 @@ impl<'a> Checker<'a> {
                     bounds,
                     chain: chain_of(part.assembly),
                     link: None,
+                    loose: false,
                 });
             }
         }
@@ -453,6 +458,7 @@ impl<'a> Checker<'a> {
                         bounds,
                         chain: chain_of(assembly),
                         link,
+                        loose: member.loose,
                     });
                 }
             }
@@ -474,6 +480,7 @@ impl<'a> Checker<'a> {
                             bounds,
                             chain: chain_of(assembly),
                             link: None,
+                            loose: false,
                         });
                     }
                 }

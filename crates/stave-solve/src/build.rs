@@ -162,6 +162,7 @@ fn reflect_members(
                     .collect::<Solved<Vec<_>>>()?,
                 body: member.body,
                 name: member.name.clone(),
+                loose: member.loose,
             })
         })
         .collect()
@@ -293,6 +294,7 @@ fn members(
                 carrier,
                 shapes,
             )
+            .map(|body| body.with_loose(member.loose))
             .ok_or_else(|| Fault::Internal("a member's shapes").into())
         })
         .collect()
@@ -2455,6 +2457,7 @@ impl Solver<'_> {
                             def.decl.file,
                             pose.span,
                         )?;
+                        self.pose_sets(assembly, mechanism, one, value, def.decl.file, pose.span)?;
                     }
                 }
                 // Two poses of one drive, or of the assembly and one of its

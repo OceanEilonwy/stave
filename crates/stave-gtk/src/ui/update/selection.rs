@@ -1065,15 +1065,24 @@ impl Window {
     /// The motion bar moved one of its sliders (`index`, the drive's place
     /// among the selection's): the selection opening that way.
     pub(in crate::ui) fn motion_moved(&mut self, index: usize, value: f64) {
+        // A drive with set positions snaps to the nearest one.
+        let drive = self.state.opening.get(index).and_then(|opening| {
+            let (_, graph) = self.session.drawable()?;
+            graph
+                .drives(opening.assembly)
+                .into_iter()
+                .find(|drive| drive.drive == opening.drive)
+        });
         {
             let state = &mut self.state;
             let value = narrow(value);
             if let Some(opening) = state.opening.get_mut(index) {
-                opening.amount = if opening.turns {
+                let amount = if opening.turns {
                     value.to_radians()
                 } else {
                     value
                 };
+                opening.amount = drive.map_or(amount, |drive| drive.snapped(amount));
                 state
                     .moved
                     .insert((opening.assembly, opening.drive), opening.amount);

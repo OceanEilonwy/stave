@@ -38,10 +38,15 @@
 //! **Sweeps see cuts**: a part's boxes are taken less the round holes
 //! whose axis lies in the plane, as their narrowest chord over the width
 //! the other piece shares with them ([`crate::plane`]), so a cup's arm and
-//! links can move in its bore. Other holes and angled cuts are left as
-//! wood, a rod is the box around it, and a fixed solid turned about
-//! another axis is the outline of its corners: each finds more wood than
-//! there is, never less. Angles are floats here (`f64` nanometres and
+//! links can move in its bore. In a turn about one fixed line, a round
+//! hole whose axis lies on the line is taken out as itself (a piece that
+//! stays inside it all the way round is clear of the wood it is drilled
+//! in), and a round shape turning about its own axis sweeps only itself,
+//! so it is left out of the sweep: a pivot bolt in its own hole. Other
+//! holes and angled cuts are left as wood, any other rod is the box
+//! around it, and a fixed solid turned about another axis is the outline
+//! of its corners: each finds more wood than there is, never less.
+//! Angles are floats here (`f64` nanometres and
 //! radians, converted in [`render`](crate::render)); results are rounded
 //! down to the micro-degree.
 
@@ -61,7 +66,7 @@ use crate::collide::{
 use crate::mechanism::MechanismPath;
 use crate::planar::MechanismError;
 use crate::plane::{
-    Motion2, Piece, Plane, corners_of, intersect, piece_depth, piece_pairs, polygon_distance,
+    Bores, Motion2, Piece, Plane, corners_of, intersect, piece_depth, piece_pairs, polygon_distance,
 };
 use crate::render;
 use stave_model::mechanism::MotionShape;
@@ -495,7 +500,9 @@ fn start_pairs(
         Mover::Fixed(placement) => placement.matrix(),
         Mover::Rigid(_) | Mover::Member(..) => DMat4::IDENTITY,
     };
-    piece_pairs(plane, a, &matrix(ma), b, &matrix(mb))
+    // The pieces move other than about one fixed line: a hole along the
+    // axis is wood.
+    piece_pairs(plane, a, &matrix(ma), b, &matrix(mb), Bores::Wood)
 }
 
 /// The first angle in `(0, limit]` at which two pieces, each moved by its
@@ -720,8 +727,19 @@ pub fn turn_contact(
 ) -> Option<Angle> {
     let plane = Plane::of_pivot(pivot);
     let limit = render::radians_f64(opening);
+    // A round shape turning about its own axis sweeps only itself, which
+    // is where it starts: what it meets there the static checks see.
+    let trimmed = moving.without_rods_on(pivot);
+    let moving = trimmed.as_ref().unwrap_or(moving);
     let mut best: Option<f64> = None;
-    for (m, f) in piece_pairs(&plane, moving, &DMat4::IDENTITY, fixed, &fixed_at.matrix()) {
+    for (m, f) in piece_pairs(
+        &plane,
+        moving,
+        &DMat4::IDENTITY,
+        fixed,
+        &fixed_at.matrix(),
+        Bores::Turning,
+    ) {
         if let Some(angle) = turn_first(&m.corners, &f.corners, best.unwrap_or(limit))
             && best.is_none_or(|b| angle < b)
         {
@@ -919,6 +937,45 @@ mod tests {
     }
 
     #[test]
+    fn a_round_shape_turning_about_its_own_axis_sweeps_only_itself() {
+        // A pin 20mm across standing on the door's pivot line, and a block
+        // 1mm clear of it: the box around the pin would swing its corners
+        // 4mm into the block, but the pin turning about its own axis
+        // sweeps only itself (grammar, "Sweeps see cuts").
+        let rod = |across: i64| WorldRod {
+            axis: Axis::Up,
+            centre: [mm(across), mm(0)],
+            diameter: mm(20),
+            start: mm(0),
+            end: mm(100),
+        };
+        let pin = WorldSolid::default().with_rod(rod(0));
+        let beside = block(point(11, 0, -5), point(30, 100, 5));
+        assert_eq!(
+            turn_contact(
+                &pin,
+                &beside,
+                &Placement::REST,
+                &door_pivot(),
+                Angle::from_deg(90)
+            ),
+            None
+        );
+        // Off the line by a millimetre, it is swept as the box around it.
+        let off = WorldSolid::default().with_rod(rod(-1));
+        assert!(
+            turn_contact(
+                &off,
+                &beside,
+                &Placement::REST,
+                &door_pivot(),
+                Angle::from_deg(90)
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
     fn a_door_against_its_side_turns_away_from_it() {
         // The side the door closes against, behind it: touching, and the
         // door swings away from it.
@@ -1082,7 +1139,14 @@ mod linkage_tests {
                 panic!("a hit");
             };
             let plane = path.plane();
-            let pairs = piece_pairs(&plane, &door, &DMat4::IDENTITY, fixed, &DMat4::IDENTITY);
+            let pairs = piece_pairs(
+                &plane,
+                &door,
+                &DMat4::IDENTITY,
+                fixed,
+                &DMat4::IDENTITY,
+                Bores::Wood,
+            );
             let (m, f) = (&pairs[0].0, &pairs[0].1.corners);
             let cup = path.mechanism().moving();
             let dense = (1..=11_000)

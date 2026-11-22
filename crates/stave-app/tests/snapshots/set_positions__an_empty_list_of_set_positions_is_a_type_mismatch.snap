@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[type-mismatch]: set_at: needs at least one value
+   --> /project/project.stave:110:84
+    |
+110 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: [])
+    |                                                                                    ^^
+    = help: list the values the drive can be locked at: set_at: [0mm, 50mm, 100mm] or set_at: every(50mm)

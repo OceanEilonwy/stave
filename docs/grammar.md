@@ -3141,7 +3141,8 @@ the motions: a member moves with the part or region it is `with:` (or with
 the member it rides on), and a member the mechanism places (a link) moves
 as the mechanism moves it. One overlap check covers every body at rest and
 at every scene's poses, and one sweep covers every motion (see
-[Scenes](#scenes)). Two bodies may touch (within the 0.05mm contact
+[Scenes](#scenes)). A loose member (see [Shapes](#shapes)) is checked
+wherever it is set, and never swept. Two bodies may touch (within the 0.05mm contact
 tolerance); they may share room only where a cut has made it: a bore, a
 mortise, a pilot hole. A piece of hardware makes its own room with its
 `cut`s, as a joint does: a cup sits in its door because the kind bores the
@@ -3170,9 +3171,19 @@ opened past 98.2deg`).
 boxes less its cuts wherever that takes away no more than the cut does: a
 round hole whose axis lies in the plane (a cup's bore) is taken out as its
 narrowest chord over the width, along the hinge's axis, that the other body
-shares with it. Box cuts are already out of the boxes. Other holes and
+shares with it. Box cuts are already out of the boxes. A round hole whose
+axis lies on the line a body turns about is taken out as itself. A round
+shape turning about its own axis sweeps only itself. Other holes and
 angled cuts are left as wood there: a contact may be reported that a finer
-model would clear, never the reverse. A slide's travel and a turn about one
+model would clear, never the reverse. Both rules are exact, and they hold
+at a scene's poses as in the sweeps: a pivot bolt turning in its own hole
+touches nothing new, and anything that stays inside a round hole as it
+turns about the hole's axis is clear of the part it is drilled in. A
+round shape is on the line when its axis is, to the nanometre (both are
+worked out to the nanometre from the same exact values); one off it is
+swept as the box around it. A hole a little off the line still clears
+whatever stays inside it all the way round: what is taken out is the
+round hole every turn keeps covered, narrower by how far off it is. A slide's travel and a turn about one
 fixed line are swept exactly; a linkage, and every member its mechanism
 moves, by conservative advancement to the contact tolerance.
 
@@ -3259,6 +3270,29 @@ placement](#hardware-placement)). Fasteners, tools and joints have no
 members: `member head` in one is `error[unknown-field]` (`a fastener kind
 has no member 'head'`).
 
+**A loose member.** `loose: true` in a member's block (a `Bool`, default
+`false`) means what it means for a part: meant to lift out. A loose
+member is taken out to move the hardware and put back where it is set,
+as a pivot bolt is pulled to move a frame from one hole to the next. A
+member carried by a loose member (`with:` it, or riding on a member that
+is) is loose too. A loose member is **checked wherever it is set and
+never swept**: it is checked at rest, at every scene's poses, and at each
+set value of each drive with every other drive closed (see [Set
+positions](#mechanisms) and [Scenes](#scenes)), and it takes no part in
+any sweep, neither moving nor in the way, because it is out while things
+move. It has one meaning, whatever the drives are. It still counts in a
+[clamp](#clamps)'s stack, which is checked at rest. A joint's member has
+no `loose:` (`error[unknown-field]`).
+
+```
+  /// The bolt: pulled out to set the frame higher or lower.
+  member bolt {
+    with:  into
+    loose: true
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + thread_length)
+  }
+```
+
 A member's shapes are what it is made of: convex solids, written in the
 [kind's frame](#the-kinds-frame), with the hardware closed. Sizes and
 points may use the kind's params (as every expression in a kind may; its
@@ -3312,7 +3346,7 @@ different.
 | `slot a, b from point(...) to point(...)` | a pin on `a` runs in a straight slot in `b` |
 | `rail a, b along <word>` | `a` runs straight along `b` without turning, along `along`, `across` or `depth` |
 | `couple a to b: <ratio>` | `a` travels that share of `b`'s travel (a full-extension slide's middle member) |
-| `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | an input and its range: member `m` turns through angles, or travels through lengths |
+| `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | an input and its range: member `m` turns through angles, or travels through lengths; `set_at:` (optional) lists the values it can be locked at (see "Set positions" below) |
 | `drive <name>: turn(...)` or `drive <name>: travel(...)` | a named input, for a mechanism with more than one (see "Drives" below) |
 | `stop: <value> "message"` | what stops the drive there; the message is shown when a pose or a design asks for more |
 | `pin_diameter: <length>` | how thick every pin is (optional, default `0mm`) |
@@ -3384,6 +3418,41 @@ each drive through the assembly (`pose frame.tilt = 15deg`, see
   nothing a scene can pose, so its drives' names clash with nothing.
 - **A follower's stop** (a lid stay's) stops the drive of its kind: an
   angle the turning drive, a length the travelling one.
+
+**Set positions.** `turn(...)` and `travel(...)` take an optional
+`set_at:`: the values the drive can be locked at, in the drive's own
+values, as `from` and `to` are. A drive without it is continuous: it is
+set anywhere in its range, as a knob bolt clamped by friction is. A row
+of holes, or an indexed angle, sets it at a few values only:
+
+```
+    drive height: travel(bolt, from: 0mm, to: -300mm, set_at: every(50mm))
+    drive tilt:   turn(bolt, from: 0deg, to: 30deg, set_at: [0deg, 15deg, 30deg])
+```
+
+- `set_at: [a, b, ...]` lists the values. `set_at: every(d)` is every
+  `d` from `from` toward `to`: `from`, then each `d` further on, and `to`
+  when it lands on a step. `d` is how far apart they are, more than
+  nothing whichever way the range runs: `every(50mm)` on a travel from
+  `0mm` to `-300mm` sets it at `0mm`, `-50mm`, ... `-300mm`.
+- The closed pose, at `from`, is always one of them, written or not (it
+  is where the design is drawn); a value written twice is one set
+  position.
+- Each value is the drive's kind of value, as `from` and `to` are: a
+  length in a turn's `set_at:` (or an angle in a travel's) is
+  `error[unit-mismatch]`, as it is in its `from:` or `to:`. A list with
+  nothing in it is `error[type-mismatch]` (`set_at: needs at least one
+  value`), and so is anything but a list or `every(...)`.
+- `every(d)` with `d` not more than nothing is `error[out-of-range]` at
+  `d` (`every(...) needs a step more than 0mm, found 0mm`), and so is one
+  that would make more than 1000 set positions.
+- Every value lies within the range, from `from` to `to`, and so short of
+  the kind's `stop`: one outside it is `error[motion]` at the `set_at:`,
+  in the kind (`pivot_bolt's drive height can't be set at -350mm: it
+  runs from 0mm to -300mm`).
+- A pose of the drive must land on one of its values, and `open` is the
+  furthest of them within the range (see [Scenes](#scenes)). Two items
+  that drive one assembly move alike only with the same set positions.
 
 **The plane.** A mechanism is planar: every pin is parallel to one
 direction of the [kind's frame](#the-kinds-frame), and the members move
@@ -3951,6 +4020,15 @@ scene drawer_bench "Top drawer on the bench" {
   turn, an angle for a travel) is `error[type-mismatch]` at the value
   (`` `frame.tilt` turns, so its pose is an angle, found a length ``). A
   pose past a drive's range is `error[motion]`, as above, for that drive.
+- **A pose of a drive with set positions** (`set_at:`, see
+  [Mechanisms](#mechanisms)) lands on one of them, measured from closed
+  like any pose: with `set_at: every(50mm)`, `pose frame.height = 120mm`
+  is `error[motion]` at the pose (`frame.height can't be set at 120mm: it
+  sets every 50mm`), with the help giving the nearest set values (`pose
+  frame.height at 100mm or 150mm`). With a list, the message lists them
+  (`frame.tilt can't be set at 20deg: it sets at 0deg, 15deg and 30deg`).
+  `closed` is always a set position, and `open` is the furthest one within
+  the drive's range.
 - Every scene is collision checked, and every motion is checked through its
   whole travel, not only at its ends (`error[motion]`): every body that
   moves (a door, the hardware on it, a member its mechanism places) is
@@ -3962,11 +4040,17 @@ scene drawer_bench "Top drawer on the bench" {
   within the 0.05mm contact tolerance, never stepped over.
 - **Motions are made one at a time.** Each drive is swept through its
   whole range while every other drive of the same assembly is held still
-  at each of: its closed value (from rest, everything else at rest), and
+  at each of: its closed value (from rest, everything else at rest),
   each value a scene poses it at (from that scene, everything else where
-  the scene puts it). The loom's frame is tilted all the way round at
-  rest height and at each height a scene names, and raised through its
-  whole travel at rest angle and at each angle a scene names. Each sweep
+  the scene puts it), and each of its set values (from rest, every other
+  drive closed). The swept drive itself is swept
+  continuously through its whole range, set positions or not. The loom's
+  frame is tilted all the way round at each height its holes set it at
+  and at each height a scene names, and raised through its whole travel
+  at rest angle and at each angle a scene names. A loose member (see
+  [Shapes](#shapes)) is not swept; it is checked, as at a scene's poses,
+  at each set value of each drive with every other drive closed: the
+  bolt in each of its holes. Each sweep
   is still one motion, so a turn about one fixed line and a travel along
   one fixed direction stay exact. Two motions made at the same moment
   are not checked, and a person doesn't make them: a continuous motion is

@@ -2122,6 +2122,10 @@ pub struct Body {
     /// How many copies its shapes are (a joint's member laid out `count:`
     /// times); at least 1, and the shapes divide evenly among them.
     copies: u32,
+    /// `loose: true` in its kind, or riding on a loose member: meant to
+    /// lift out, so it is checked wherever it is set and never swept
+    /// (grammar, "Shapes").
+    pub loose: bool,
 }
 
 impl Body {
@@ -2140,7 +2144,13 @@ impl Body {
             item: None,
             shapes,
             copies: 1,
+            loose: false,
         })
+    }
+
+    /// The same member, loose or not.
+    pub fn with_loose(self, loose: bool) -> Body {
+        Body { loose, ..self }
     }
 
     /// The same member laid out `copies` times, its shapes in copy order

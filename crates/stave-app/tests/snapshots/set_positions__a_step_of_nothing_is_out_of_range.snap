@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[out-of-range]: every(...) needs a step more than 0mm, found 0mm
+   --> /project/project.stave:110:90
+    |
+110 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(0mm))
+    |                                                                                          ^^^
+    = help: write how far apart the set positions are, such as every(50mm) or every(15deg)

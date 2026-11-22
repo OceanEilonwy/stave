@@ -1456,6 +1456,9 @@ pub struct BodyDef {
     /// Its own `mount { }`: the frame axes it is placed on from an anchor
     /// instead of from the kind's origin, each at most once.
     pub mount: Vec<MemberPlacement>,
+    /// `loose:`, when written: `true` for a member meant to lift out,
+    /// checked wherever it is set and never swept (grammar, "Shapes").
+    pub loose: Option<RExpr>,
 }
 
 /// One entry of a member's `mount { }`: `depth: from(face(on, toward:
@@ -1985,6 +1988,37 @@ pub struct NamedDriveDef {
     pub name: Option<String>,
     /// The drive.
     pub drive: DriveDef,
+    /// Its `set_at:`, when written: the values it can be locked at.
+    pub set_at: Option<SetAtDef>,
+}
+
+/// `set_at:` of a drive (grammar, "Mechanisms", set positions): the
+/// values it can be locked at, in the drive's own values.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetAtDef {
+    /// `set_at: [a, b, ...]`: never empty.
+    List {
+        /// The values, as written.
+        values: NonEmpty<RExpr>,
+        /// The whole value.
+        span: Span,
+    },
+    /// `set_at: every(d)`: every `d` from `from` toward `to`.
+    Every {
+        /// How far apart the set positions are.
+        step: RExpr,
+        /// The whole value.
+        span: Span,
+    },
+}
+
+impl SetAtDef {
+    /// The whole value.
+    pub fn span(&self) -> Span {
+        match self {
+            SetAtDef::List { span, .. } | SetAtDef::Every { span, .. } => *span,
+        }
+    }
 }
 
 /// `drive: turn(...)` or `drive: travel(...)`

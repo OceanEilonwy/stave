@@ -19,7 +19,8 @@ use super::{Cx, Resolver};
 use crate::defs::{
     AdjustDef, BodyDef, BodyId, BodyName, Carrier, ClampDef, ConstraintDef, CouplingDef,
     CylinderTilt, DriveDef, EntryPair, EntrySide, FrameAxis, KindPoint, LayoutDef, MechanismDef,
-    NamedDriveDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
+    NamedDriveDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, SetAtDef, ShapeDef,
+    StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
@@ -40,6 +41,12 @@ struct Layout {
 
 /// The named arguments of a call, by name.
 type Arguments<'a> = BTreeMap<&'a str, &'a ast::Arg>;
+
+/// `set_at:`, a drive's set positions.
+const SET_AT: &str = "set_at";
+
+/// `every(d)` in a `set_at:`.
+const EVERY: &str = "every";
 
 /// `turn` and `travel`: the two drives.
 const DRIVES: [&str; 2] = ["turn", "travel"];
@@ -97,6 +104,7 @@ impl Resolver<'_> {
             let mut mount = Vec::new();
             let mut mount_span: Option<Span> = None;
             let mut layout = Layout::default();
+            let mut loose: Option<RExpr> = None;
             let item = self.member_item(cx, joint, member);
             for entry in &body.entries {
                 match entry {
@@ -145,6 +153,17 @@ impl Resolver<'_> {
                         mount_span = Some(block.span);
                         mount = self.member_mount(cx, roles, block);
                     }
+                    ast::MemberEntry::Field(field) if !joint && field.key.as_str() == "loose" => {
+                        if let Some(first) = loose.as_ref().map(|value| value.span) {
+                            self.duplicate("loose", field.key.span(), first, cx);
+                            continue;
+                        }
+                        loose = Some(self.value(
+                            cx,
+                            &field.value,
+                            &Expect::ty(Ty::Bool).named("loose"),
+                        ));
+                    }
                     ast::MemberEntry::Field(field) if field.key.as_str() == "with" => {
                         if let Some(first) = with_span {
                             self.duplicate("with", field.key.span(), first, cx);
@@ -174,8 +193,8 @@ impl Resolver<'_> {
                                 cx.file,
                                 field.key.span(),
                                 key,
-                                ["with", "shape", "mount"],
-                                "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
+                                ["with", "shape", "mount", "loose"],
+                                "a member's body holds its shapes (shape: box(...)), what carries it (with: ...), its own mount { } and loose: true when it lifts out",
                             );
                         }
                     }
@@ -250,6 +269,7 @@ impl Resolver<'_> {
                     item,
                     shapes,
                     mount,
+                    loose,
                 },
                 rides_on,
             ));
@@ -941,9 +961,10 @@ impl Resolver<'_> {
                         None => unnamed_drives.push(key.span()),
                     }
                     match self.drive(cx, kind, bodies, value, *span) {
-                        Some(lowered) => drives.push(NamedDriveDef {
+                        Some((lowered, set_at)) => drives.push(NamedDriveDef {
                             name: name.as_ref().map(|name| name.as_str().to_owned()),
                             drive: lowered,
+                            set_at,
                         }),
                         None => ok = false,
                     }
@@ -1524,7 +1545,8 @@ impl Resolver<'_> {
         Some([first, second])
     }
 
-    /// `turn(m, from:, to:)` or `travel(m, from:, to:)`.
+    /// `turn(m, from:, to:)` or `travel(m, from:, to:)`, with its
+    /// `set_at:` when written.
     fn drive(
         &mut self,
         cx: &Cx,
@@ -1532,7 +1554,7 @@ impl Resolver<'_> {
         bodies: &[BodyDef],
         value: &ast::Expr,
         span: Span,
-    ) -> Option<DriveDef> {
+    ) -> Option<(DriveDef, Option<SetAtDef>)> {
         #[expect(
             clippy::wildcard_enum_match_arm,
             reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
@@ -1587,7 +1609,7 @@ impl Resolver<'_> {
             }
         };
         let named: Vec<ast::Arg> = named.into_iter().cloned().collect();
-        let found = self.arguments(cx, function, &named, &["from", "to"])?;
+        let found = self.arguments(cx, function, &named, &["from", "to", SET_AT])?;
         let from = self.required(cx, function, &found, "from", value.span);
         let to = self.required(cx, function, &found, "to", value.span);
         let (body, from, to) = (member?, from?, to?);
@@ -1596,9 +1618,13 @@ impl Resolver<'_> {
         } else {
             Ty::Length
         };
+        let set_at = match found.get(SET_AT) {
+            Some(arg) => Some(self.set_at(cx, &arg.value, &ty)?),
+            None => None,
+        };
         let from = self.value(cx, from, &Expect::ty(ty.clone()).named("from"));
         let to = self.value(cx, to, &Expect::ty(ty).named("to"));
-        Some(if function == "turn" {
+        let drive = if function == "turn" {
             DriveDef::Turn {
                 body,
                 from,
@@ -1612,7 +1638,82 @@ impl Resolver<'_> {
                 to,
                 span,
             }
-        })
+        };
+        Some((drive, set_at))
+    }
+
+    /// `set_at: [a, b, ...]` or `set_at: every(d)`, each value of the
+    /// drive's type `ty`. `None` (reported) for anything else, or a list
+    /// with nothing in it.
+    fn set_at(&mut self, cx: &Cx, value: &ast::Expr, ty: &Ty) -> Option<SetAtDef> {
+        let example = if *ty == Ty::Angle {
+            "set_at: [0deg, 15deg, 30deg] or set_at: every(15deg)"
+        } else {
+            "set_at: [0mm, 50mm, 100mm] or set_at: every(50mm)"
+        };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
+        match &value.kind {
+            ExprKind::List(items) => {
+                let values: Vec<RExpr> = items
+                    .iter()
+                    .map(|item| self.value(cx, item, &Expect::ty(ty.clone()).named(SET_AT)))
+                    .collect();
+                let Some(values) = NonEmpty::new(values) else {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "set_at: needs at least one value",
+                        cx.file,
+                        value.span,
+                        format!("list the values the drive can be locked at: {example}"),
+                    );
+                    return None;
+                };
+                Some(SetAtDef::List {
+                    values,
+                    span: value.span,
+                })
+            }
+            ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Name(head) if head.as_str() == EVERY) =>
+            {
+                let [step] = args.as_slice() else {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "every(...) needs one value: how far apart the set positions are",
+                        cx.file,
+                        value.span,
+                        format!("write {example}"),
+                    );
+                    return None;
+                };
+                if step.name.is_some() {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "every(...) takes its step without a name",
+                        cx.file,
+                        step.span,
+                        format!("write {example}"),
+                    );
+                    return None;
+                }
+                Some(SetAtDef::Every {
+                    step: self.value(cx, &step.value, &Expect::ty(ty.clone()).named(EVERY)),
+                    span: value.span,
+                })
+            }
+            _ => {
+                self.error_help(
+                    Code::TypeMismatch,
+                    "set_at: needs a list of values or every(...)",
+                    cx.file,
+                    value.span,
+                    format!("write {example}"),
+                );
+                None
+            }
+        }
     }
 }
 

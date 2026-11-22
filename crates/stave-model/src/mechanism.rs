@@ -420,6 +420,95 @@ impl DriveIndex {
     }
 }
 
+impl MechanismDrive {
+    /// How far a value of this drive lies from its `from`, toward its
+    /// `to` (negative behind `from`), in micro-degrees or nanometres;
+    /// `None` for a value of the other kind.
+    pub fn signed_amount(&self, value: DriveValue) -> Option<i64> {
+        let toward = |from: i64, to: i64, at: i64| {
+            if to >= from {
+                at.saturating_sub(from)
+            } else {
+                from.saturating_sub(at)
+            }
+        };
+        match (*self, value) {
+            (MechanismDrive::Turn { from, to, .. }, DriveValue::Turn(at)) => {
+                Some(toward(from.microdeg(), to.microdeg(), at.microdeg()))
+            }
+            (MechanismDrive::Travel { from, to, .. }, DriveValue::Travel(at)) => {
+                Some(toward(from.nm(), to.nm(), at.nm()))
+            }
+            (MechanismDrive::Turn { .. }, DriveValue::Travel(_))
+            | (MechanismDrive::Travel { .. }, DriveValue::Turn(_)) => None,
+        }
+    }
+
+    /// Whether a value lies in its range, from `from` to `to`, ends
+    /// included.
+    pub fn reaches(&self, value: DriveValue) -> bool {
+        let extent = match self.extent() {
+            DriveValue::Turn(angle) => angle.microdeg(),
+            DriveValue::Travel(length) => length.nm(),
+        };
+        self.signed_amount(value)
+            .is_some_and(|amount| (0..=extent).contains(&amount))
+    }
+
+    /// A value as the amount a pose names: how far from `from` toward
+    /// `to` (an angle for a turn, a length for a travel); `None` for a
+    /// value of the other kind.
+    pub fn amount_of(&self, value: DriveValue) -> Option<DriveValue> {
+        let amount = self.signed_amount(value)?;
+        Some(match self {
+            MechanismDrive::Turn { .. } => DriveValue::Turn(Angle::from_microdeg(amount)),
+            MechanismDrive::Travel { .. } => DriveValue::Travel(Length::from_nm(amount)),
+        })
+    }
+}
+
+/// The values a drive can be locked at (grammar, "Mechanisms", set
+/// positions): drive values of its own kind, each once, in order from
+/// its `from` toward its `to`, its `from` always among them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct SetPositions {
+    values: Vec<DriveValue>,
+    every: Option<DriveValue>,
+}
+
+impl SetPositions {
+    /// The set positions of `drive`: `values` in any order, repeats
+    /// allowed, with its `from` added, and the step of `every(d)` when
+    /// they were written so. `None` when a value or the step is the
+    /// other kind of value.
+    pub fn new(
+        drive: &MechanismDrive,
+        values: Vec<DriveValue>,
+        every: Option<DriveValue>,
+    ) -> Option<SetPositions> {
+        let same = |value: &DriveValue| drive.signed_amount(*value).is_some();
+        if !values.iter().all(same) || !every.iter().all(same) {
+            return None;
+        }
+        let mut values = values;
+        values.push(drive.from());
+        values.sort_by_key(|value| drive.signed_amount(*value));
+        values.dedup();
+        Some(SetPositions { values, every })
+    }
+
+    /// Every set value, from `from` toward `to`: never empty.
+    pub fn values(&self) -> &[DriveValue] {
+        &self.values
+    }
+
+    /// The step of `every(d)`, when they were written so; `None` for a
+    /// list.
+    pub fn every(&self) -> Option<DriveValue> {
+        self.every
+    }
+}
+
 /// A drive with its name in its kind, when it has one (grammar,
 /// "Mechanisms", drives): `tilt` in `drive tilt: turn(...)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -428,12 +517,59 @@ pub struct NamedDrive {
     pub name: Option<String>,
     /// The drive and its range.
     pub drive: MechanismDrive,
+    /// The values it can be locked at; `None` for a continuous drive,
+    /// set anywhere in its range.
+    pub set_at: Option<SetPositions>,
 }
 
 impl NamedDrive {
-    /// An unnamed drive.
+    /// An unnamed, continuous drive.
     pub fn unnamed(drive: MechanismDrive) -> NamedDrive {
-        NamedDrive { name: None, drive }
+        NamedDrive {
+            name: None,
+            drive,
+            set_at: None,
+        }
+    }
+
+    /// Its set values within its range, from `from` toward `to`; empty
+    /// for a continuous drive.
+    pub fn set_values(&self) -> impl Iterator<Item = DriveValue> + '_ {
+        self.set_at
+            .iter()
+            .flat_map(|set| set.values().iter().copied())
+            .filter(|value| self.drive.reaches(*value))
+    }
+
+    /// Whether it can be locked at a value: any value in its range of a
+    /// continuous drive, one of its set values otherwise.
+    pub fn sets_at(&self, value: DriveValue) -> bool {
+        match &self.set_at {
+            None => self.drive.reaches(value),
+            Some(_) => self.set_values().any(|set| set == value),
+        }
+    }
+
+    /// Where `open` puts it: the far end of its range, or for a drive
+    /// with set positions the furthest of them within its range.
+    pub fn open(&self) -> DriveValue {
+        match &self.set_at {
+            None => self.drive.to(),
+            Some(_) => self.set_values().last().unwrap_or(self.drive.from()),
+        }
+    }
+
+    /// The set values nearest a value, one either side of it (toward
+    /// `from`, toward `to`), when there are; both `None` for a
+    /// continuous drive.
+    pub fn nearest_set(&self, value: DriveValue) -> (Option<DriveValue>, Option<DriveValue>) {
+        let Some(at) = self.drive.signed_amount(value) else {
+            return (None, None);
+        };
+        let amount = |set: &DriveValue| self.drive.signed_amount(*set).unwrap_or(0);
+        let below = self.set_values().filter(|set| amount(set) < at).last();
+        let above = self.set_values().find(|set| amount(set) > at);
+        (below, above)
     }
 }
 
@@ -731,14 +867,16 @@ impl Mechanism {
     }
 
     /// The exact value a scene's pose value means for one drive: its
-    /// `from` for `closed`, its `to` for `open`, and an amount measured
+    /// `from` for `closed`, its `to` for `open` (the furthest set value,
+    /// for a drive with set positions), and an amount measured
     /// from its `from` toward its `to` otherwise; a value of the other
     /// kind is its `from`. `None` for a drive it doesn't have.
     pub fn value_of(&self, drive: DriveIndex, pose: PoseValue) -> Option<DriveValue> {
-        let drive = self.drives.get(drive.index())?.drive;
+        let named = self.drives.get(drive.index())?;
+        let drive = named.drive;
         Some(match pose {
             PoseValue::Closed => drive.from(),
-            PoseValue::Open => drive.to(),
+            PoseValue::Open => named.open(),
             PoseValue::Angle(angle) => drive
                 .value_at(DriveValue::Turn(angle))
                 .unwrap_or(drive.from()),

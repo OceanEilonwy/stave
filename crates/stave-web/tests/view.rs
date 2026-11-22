@@ -288,3 +288,27 @@ fn a_frame_with_two_drives_has_a_slider_for_each() {
     let summary: serde_json::Value = serde_json::from_str(&view.summary_json()).unwrap();
     assert_eq!(summary["motions"][1]["name"], "frame.height");
 }
+
+/// A frame set in a row of holes (grammar, "Mechanisms", set positions):
+/// its height slider snaps to the nearest hole, its tilt slider doesn't.
+#[test]
+fn a_drive_with_set_positions_snaps_its_slider() {
+    let text = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../stave-app/tests/turning/holed_cheval.stave"),
+    )
+    .unwrap();
+    let files = Files::new("/p", BTreeMap::from([("project.stave".to_owned(), text)])).unwrap();
+    let mut view = View::new(Project::open(&files, None).unwrap(), 400, 300);
+    let height = view.project().motions()[1].clone();
+    assert_eq!(height.name, "frame.height");
+    // Four holes 100mm apart over 300mm: a third of the way is a hole.
+    assert!((height.snapped(0.4) - 1.0 / 3.0).abs() < 1e-6);
+    assert!((height.snapped(0.9) - 1.0).abs() < 1e-6);
+    let tilt = view.project().motions()[0].clone();
+    assert_eq!(tilt.snapped(0.4), 0.4);
+    // Setting the slider between holes poses the frame at the nearest.
+    view.set_pose(1, 0.4).unwrap();
+    let between = view.posed().unwrap();
+    view.set_pose(1, 1.0 / 3.0).unwrap();
+    assert_eq!(between, view.posed().unwrap());
+}

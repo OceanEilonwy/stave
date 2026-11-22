@@ -20,13 +20,13 @@ use stave_lang::units::{ExactAngle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::{
     BodyId, Carrier, ConstraintDef, DriveDef, EntryPair, EntrySide, FrameAxis, KindDef,
-    MechanismDef, RoleIndex,
+    MechanismDef, RoleIndex, SetAtDef,
 };
 use stave_model::ids::{AssemblyId, HardwareId, KindId};
 use stave_model::mechanism::{
     DriveIndex, DriveValue, FrameDirection, FramePoint, Holding, Mechanism, MechanismDrive,
     MechanismEntry, MechanismError, MechanismFrame, MechanismMember, MechanismStop, MemberBody,
-    MemberIndex, NamedDrive,
+    MemberIndex, NamedDrive, SetPositions,
 };
 use stave_model::solved::Point;
 use stave_model::value::Value;
@@ -254,19 +254,44 @@ impl Drive {
     }
 }
 
-/// A kind's drive with its name, when written.
+/// A kind's drive with its name, when written, and its set positions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindDrive {
     pub name: Option<String>,
     pub drive: Drive,
+    pub set_at: Option<KindSetAt>,
 }
 
 impl KindDrive {
-    /// An unnamed drive.
+    /// An unnamed, continuous drive.
     #[cfg(test)]
     pub fn unnamed(drive: Drive) -> KindDrive {
-        KindDrive { name: None, drive }
+        KindDrive {
+            name: None,
+            drive,
+            set_at: None,
+        }
     }
+}
+
+/// A drive's set positions, exact, in micro-degrees for a turn or
+/// nanometres for a travel (grammar, "Mechanisms", set positions): every
+/// one within its range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KindSetAt {
+    pub values: Vec<Rational>,
+    /// The step of `every(d)`, more than nothing; `None` for a list.
+    pub every: Option<Rational>,
+}
+
+/// The most set positions a drive may have.
+const MOST_SET_POSITIONS: i128 = 1000;
+
+/// A drive's `set_at:` as written, evaluated: in micro-degrees or
+/// nanometres.
+enum WrittenSetAt {
+    List(Vec<Rational>, stave_lang::ast::Span),
+    Every(Rational, stave_lang::ast::Span),
 }
 
 /// Where a kind's `stop` stops the drive, exact.
@@ -523,9 +548,44 @@ fn declare(
                 to: length(end)?,
             },
         };
+        // A set value is a drive value, turned the other way with the
+        // plane as `from` and `to` are; a step is how far apart they are.
+        let value = |value: Rational| -> Result<DriveValue, DeclareError> {
+            Ok(match drive {
+                MechanismDrive::Turn { .. } => DriveValue::Turn(angle(ExactAngle::new(value))?),
+                MechanismDrive::Travel { .. } => {
+                    DriveValue::Travel(length(ExactLength::new(value))?)
+                }
+            })
+        };
+        let step = |step: Rational| -> Result<DriveValue, DeclareError> {
+            Ok(match drive {
+                MechanismDrive::Turn { .. } => DriveValue::Turn(
+                    ExactAngle::new(step)
+                        .to_nearest_angle()
+                        .ok_or(DeclareError::Internal)?,
+                ),
+                MechanismDrive::Travel { .. } => {
+                    DriveValue::Travel(length(ExactLength::new(step))?)
+                }
+            })
+        };
+        let set_at = match &named.set_at {
+            Some(set) => {
+                let values = set
+                    .values
+                    .iter()
+                    .map(|v| value(*v))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let every = set.every.map(step).transpose()?;
+                Some(SetPositions::new(&drive, values, every).ok_or(DeclareError::Internal)?)
+            }
+            None => None,
+        };
         drives.push(NamedDrive {
             name: named.name.clone(),
             drive,
+            set_at,
         });
     }
     let stop = match &mechanism.stop {
@@ -963,6 +1023,7 @@ impl Solver<'_> {
                     named.drive.member(),
                     named.drive.from(),
                     named.drive.turns(),
+                    named.set_at.clone(),
                 )
             };
             let alike = other
@@ -1394,6 +1455,187 @@ impl Solver<'_> {
             .into())
     }
 
+    /// A drive's set positions, checked (grammar, "Mechanisms", set
+    /// positions): a step of `every(d)` not more than nothing, or one
+    /// that makes more than 1000 of them, is `error[out-of-range]`; a
+    /// value outside the range is `error[motion]` at the `set_at:`.
+    fn set_positions(
+        &mut self,
+        kind_name: &str,
+        file: stave_lang::FileId,
+        name: Option<&str>,
+        drive: &Drive,
+        written: WrittenSetAt,
+    ) -> Solved<KindSetAt> {
+        let (from, to) = match *drive {
+            Drive::Turn { from, to, .. } => (from.value(), to.value()),
+            Drive::Travel { from, to, .. } => (from.value(), to.value()),
+        };
+        let turns = matches!(drive, Drive::Turn { .. });
+        let text = |value: Rational| -> String {
+            if turns {
+                ExactAngle::new(value)
+                    .to_nearest_angle()
+                    .map(|angle| angle.to_string())
+                    .unwrap_or_default()
+            } else {
+                ExactLength::new(value)
+                    .to_nearest_length()
+                    .map(|length| length.to_string())
+                    .unwrap_or_default()
+            }
+        };
+        let (low, high) = (from.min(to), from.max(to));
+        match written {
+            WrittenSetAt::Every(step, span) => {
+                if step <= Rational::ZERO {
+                    let zero = text(Rational::ZERO);
+                    return Err(self
+                        .error(
+                            Code::OutOfRange,
+                            format!(
+                                "every(...) needs a step more than {zero}, found {}",
+                                text(step)
+                            ),
+                            file,
+                            span,
+                            "write how far apart the set positions are, such as every(50mm) or every(15deg)",
+                        )
+                        .into());
+                }
+                let reach = high.checked_sub(low).ok_or(Fault::Overflow)?;
+                let steps = reach.checked_div(step).ok_or(Fault::Overflow)?.floor();
+                if steps >= MOST_SET_POSITIONS {
+                    return Err(self
+                        .error(
+                            Code::OutOfRange,
+                            format!(
+                                "every({}) makes {} set positions; a drive has at most {MOST_SET_POSITIONS}",
+                                text(step),
+                                steps.saturating_add(1)
+                            ),
+                            file,
+                            span,
+                            "make the step larger, or list the values instead",
+                        )
+                        .into());
+                }
+                let toward = if to >= from {
+                    step
+                } else {
+                    step.checked_neg().ok_or(Fault::Overflow)?
+                };
+                let mut values = Vec::new();
+                for count in 0..=steps {
+                    let by = toward
+                        .checked_mul(Rational::from_int(count))
+                        .ok_or(Fault::Overflow)?;
+                    values.push(from.checked_add(by).ok_or(Fault::Overflow)?);
+                }
+                Ok(KindSetAt {
+                    values,
+                    every: Some(step),
+                })
+            }
+            WrittenSetAt::List(values, span) => {
+                if let Some(outside) = values.iter().find(|value| **value < low || **value > high) {
+                    let drive_name = match name {
+                        Some(name) => format!("drive {name}"),
+                        None => "drive".to_owned(),
+                    };
+                    return Err(self
+                        .error(
+                            Code::Motion,
+                            format!(
+                                "{kind_name}'s {drive_name} can't be set at {}: it runs from {} to {}",
+                                text(*outside),
+                                text(from),
+                                text(to)
+                            ),
+                            file,
+                            span,
+                            "set it only at values from its from: to its to:",
+                        )
+                        .into());
+                }
+                Ok(KindSetAt {
+                    values,
+                    every: None,
+                })
+            }
+        }
+    }
+
+    /// A scene's pose of a drive with set positions lands on one of them
+    /// (grammar, "Scenes"): an angle or a travel between them is
+    /// `error[motion]`, with the nearest set values in the help.
+    pub(crate) fn pose_sets(
+        &mut self,
+        assembly: AssemblyId,
+        mechanism: &Mechanism,
+        drive: DriveIndex,
+        value: stave_model::solved::PoseValue,
+        file: stave_lang::FileId,
+        span: stave_lang::ast::Span,
+    ) -> Solved<()> {
+        use stave_model::solved::PoseValue;
+        let Some(named) = mechanism.drive_at(drive) else {
+            return Ok(());
+        };
+        let Some(set) = &named.set_at else {
+            return Ok(());
+        };
+        let amount = match value {
+            PoseValue::Angle(angle) => DriveValue::Turn(angle),
+            PoseValue::Travel(length) => DriveValue::Travel(length),
+            PoseValue::Open | PoseValue::Closed => return Ok(()),
+        };
+        let Some(at) = named.drive.value_at(amount) else {
+            return Ok(());
+        };
+        if named.sets_at(at) {
+            return Ok(());
+        }
+        let text = |value: DriveValue| match value {
+            DriveValue::Turn(angle) => angle.to_string(),
+            DriveValue::Travel(length) => length.to_string(),
+        };
+        let amount_text =
+            |value: DriveValue| named.drive.amount_of(value).map(text).unwrap_or_default();
+        let assembly_name = self
+            .model
+            .assemblies
+            .get(assembly.index())
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let name = match &named.name {
+            Some(drive_name) if mechanism.drives().len() > 1 => {
+                format!("{assembly_name}.{drive_name}")
+            }
+            Some(_) | None => assembly_name,
+        };
+        let sets = match set.every() {
+            Some(step) => format!("it sets every {}", text(step)),
+            None => {
+                let values: Vec<String> = named.set_values().map(amount_text).collect();
+                format!("it sets at {}", and_list(&values, "and"))
+            }
+        };
+        let nearest: Vec<String> = {
+            let (below, above) = named.nearest_set(at);
+            below.into_iter().chain(above).map(amount_text).collect()
+        };
+        Err(self
+            .error(
+                Code::Motion,
+                format!("{name} can't be set at {}: {sets}", text(amount)),
+                file,
+                span,
+                format!("pose {name} at {}", and_list(&nearest, "or")),
+            )
+            .into())
+    }
+
     /// A kind's mechanism for one piece of hardware, every value worked
     /// out exactly in the plane it moves in: the two frame directions
     /// other than the one its pins run along (`pins:`, or by default
@@ -1485,6 +1727,7 @@ impl Solver<'_> {
             }
             let mut drives = Vec::with_capacity(def.drives.len());
             for named in &def.drives {
+                let turns = named.drive.turns();
                 let drive = match &named.drive {
                     DriveDef::Turn { body, from, to, .. } => Drive::Turn {
                         body: *body,
@@ -1497,10 +1740,27 @@ impl Solver<'_> {
                         to: solver.kind_length(to, env)?,
                     },
                 };
-                drives.push(KindDrive {
-                    name: named.name.clone(),
-                    drive,
-                });
+                let mut amount = |expr: &stave_model::defs::RExpr| -> Solved<Rational> {
+                    Ok(if turns {
+                        solver.kind_angle(expr, env)?.value()
+                    } else {
+                        solver.kind_length(expr, env)?.value()
+                    })
+                };
+                let written = match &named.set_at {
+                    Some(SetAtDef::List { values, span }) => {
+                        let mut exact = Vec::with_capacity(values.len());
+                        for value in values.iter() {
+                            exact.push(amount(value)?);
+                        }
+                        Some(WrittenSetAt::List(exact, *span))
+                    }
+                    Some(SetAtDef::Every { step, .. }) => {
+                        Some(WrittenSetAt::Every(amount(step)?, step.span))
+                    }
+                    None => None,
+                };
+                drives.push((named.name.clone(), drive, written));
             }
             let stop = match &def.stop {
                 Some(stop) => Some((solver.eval(&stop.value, env)?, stop)),
@@ -1508,7 +1768,21 @@ impl Solver<'_> {
             };
             Ok((entries, drives, stop))
         })?;
-        let (entries, drives, stop) = evaluated;
+        let (entries, written_drives, stop) = evaluated;
+        let mut drives = Vec::with_capacity(written_drives.len());
+        for (name, drive, written) in written_drives {
+            let set_at = match written {
+                Some(written) => {
+                    Some(self.set_positions(kind_name, file, name.as_deref(), &drive, written)?)
+                }
+                None => None,
+            };
+            drives.push(KindDrive {
+                name,
+                drive,
+                set_at,
+            });
+        }
         let drive = drives.first().map(|named| named.drive);
         let stop = match stop {
             None => None,

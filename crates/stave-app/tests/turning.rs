@@ -166,17 +166,11 @@ fn the_sweep_turns_the_frame_about_the_bolts() {
     insta::assert_snapshot!(rendered(&opened));
 }
 
-// The frame posed at 15deg: the bolt turning inside its own hole in the
-// upright is reported as hitting the upright, because a posed overlap and
-// a sweep take a hole whose axis is the line of the turn as wood. That is
-// the known gap that Change 6, "A pin turning in its own hole", in
-// docs/reviews/2026-11-22-turning-frames.md (section "Change 5: one rule
-// for sweeping several motions") closes, in a later step:
-//
-//   error[motion]: frame.pivot_l's bolt hits upright_l when frame is open 15deg
-//      = note: frame.pivot_l's bolt goes 8mm into upright_l there
+// The frame posed at 15deg: the bolt turns inside its own hole in the
+// upright (grammar, "One collision model", sweeps see cuts: a round shape
+// turning about its own axis is where it was, in its hole), so it is
+// clear of the upright at the pose as at rest.
 #[test]
-#[ignore = "a pin turning in its own hole: Change 6 of the turning-frames review"]
 fn the_frame_posed_tilted_back_checks_clean() {
     let opened = open(&fixture());
     assert!(opened.diagnostics.is_empty(), "{}", rendered(&opened));
