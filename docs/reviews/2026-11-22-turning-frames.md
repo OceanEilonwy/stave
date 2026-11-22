@@ -582,3 +582,82 @@ No kind name enters a core crate. `pins`, `set_at`, `loose`,
    sweeps grows (motions × held values). The loom needs about 7 + 3. If a
    design reaches hundreds, the help should name the cause rather than the
    check silently slowing down.
+4. **Pivots that don't draw.** A plain pin or a shoulder bolt (a cradle
+   hung between posts) has no `clamp`, so Change 7 doesn't apply, and the
+   part may float along the pin until it rubs. Change 6 catches it only
+   where it is drawn touching. Whether a free pivot needs its own primitive
+   (a collar, or `clamp` with a stop) is left for its own review.
+
+## Appendix: five more designs with the same fault
+
+To check that Changes 6 and 7 are general and not tuned to the loom, five
+other designs that bolt one wooden part beside another were written in
+today's Stave. They are in
+[`2026-11-22-turning-frames-designs/`](2026-11-22-turning-frames-designs/).
+Each uses the same `knob_bolt` fitting as the loom, with a `span` param for
+the gap the bolt crosses. Each is drawn in its bad version (a 3mm gap with
+nothing in it). The variants were tried with `try_patch` on scratch copies.
+
+| Design | What turns or locks | Pivot or clamp |
+|---|---|---|
+| `cheval.stave`, a cheval mirror | the mirror frame tilts between two uprights | stile beside upright |
+| `stool.stave`, a folding camp stool (drawn folded) | the inner legs swing inside the outer legs | inner leg beside outer leg |
+| `drafting_table.stave`, a tilting drafting table | the board's cleats tilt between the legs | cleat beside leg |
+| `sawhorse.stave`, an adjustable sawhorse | nothing moves: extensions are locked at a height | extension beside leg |
+| `glider.stave`, a porch glider | the hanger arms swing from the posts, and the seat swings on the arms | arm beside post, seat rail beside arm |
+
+### Today's Stave: none of the faults is caught
+
+Run on 2026-11-22 against `main` (7f9343a):
+
+| Variant | cheval | stool | drafting | sawhorse | glider |
+|---|---|---|---|---|---|
+| 3mm gap, nothing in it | clean | clean | clean | clean | clean |
+| touching, no washer | clean | clean | clean | clean | clean |
+| 3mm gap, 3mm washer | clean | clean | clean | clean | clean |
+| 3mm gap, 1mm washer | | | | | clean |
+| 3mm gap, 5mm washer | | | | | `error[overlap]`: `hang_l's washer goes 2mm into arm_l` |
+
+So today Stave can't tell the broken versions from the right one. The one
+thing it already catches is a spacer too *thick* for its gap. Change 7 is
+the missing other half: a spacer too *thin*, or none at all.
+
+### The proposed rules, applied by hand
+
+These are worked by hand from the rules as written above, because neither
+rule is built yet. *Swell* uses the default `max_held_width` of 80mm (none
+of the stocks says otherwise). In every design the bolt runs `across`.
+Every part beside a bolt has its thickness along `across`, which is
+across its grain, so it moves.
+
+| Design | Swell (both parts) | Gap Change 6 needs |
+|---|---|---|
+| cheval (45mm upright, 45mm stile) | 0.28 + 0.28 = 0.56mm | 1.56mm |
+| stool (30mm legs) | 0.19 + 0.19 = 0.38mm | 1.38mm |
+| drafting table (45mm leg, 45mm cleat) | 0.56mm | 1.56mm |
+| sawhorse | (nothing moves) | none |
+| glider, both joints (45mm parts) | 0.56mm | 1.56mm |
+
+| Variant | Change 6 (running clearance) | Change 7 (clamp) | Result |
+|---|---|---|---|
+| touching, no washer, in the four designs that move | the faces stay at 0mm the whole way through the turn, which is not seating, so `error[motion]`: it binds | clean: knob, part, part touch | **error** |
+| touching, sawhorse | not asked: nothing moves | clean | **clean**, and right: it's how a fixed extension is built |
+| 3mm gap, nothing in it, all five | clean (3mm > what each needs) | the stack has 3mm of air between the two parts, so `error[no-contact]` | **error** |
+| 3mm gap, 1mm washer | clean | 2mm of air between washer and part, so `error[no-contact]` | **error** |
+| 3mm gap, 5mm washer | | today's `error[overlap]` | **error** |
+| 3mm gap, 3mm washer, all five | clean: the wood is 3mm apart, and the washer is steel | clean: knob, part, washer, part touch | **clean** |
+
+In every design that moves, only the version with a washer that fills the
+gap checks out. In the one that doesn't move, closing the gap and adding a
+spacer both check out, which matches the shop. Nothing in either rule
+names a washer, a stool or a mirror.
+
+Two things the designs taught:
+
+- **The glider has two clamps on one arm,** at the post and at the seat.
+  The stack is checked per clamp, so both need a washer. A rule that
+  looked only at "the" pivot of an assembly would have missed the second
+  one.
+- **The sawhorse shows that Change 6 must stay tied to motion.** If
+  running clearance were asked of every bolted pair, the correct sawhorse
+  (touching) would fail.

@@ -1,0 +1,141 @@
+stave 1
+
+project "Porch Glider" {
+  goal: "A seat that swings on hanger arms, each bolted to a post at the top and to the seat at the bottom"
+}
+
+region envelope = box(across: 900mm, up: 800mm, deep: 500mm)
+
+stock oak_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock oak_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part post_l : oak_45 {
+  length: 700mm
+  width:  90mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part post_r = mirror(post_l, about: mid(envelope, across))
+
+part top_rail : oak_25 {
+  length: fit
+  width:  40mm
+  place {
+    orient(length: right, width: up)
+    flush(post_l.top)
+    center(envelope, across)
+    center(post_l, deep)
+  }
+}
+
+part arm_l : oak_45 {
+  length: 400mm
+  width:  70mm
+  place {
+    orient(length: up, width: back)
+    flush(post_l.top, inset: 50mm)
+    against(post_l.right, gap: 3mm)
+    center(post_l, deep)
+  }
+}
+
+part arm_r = mirror(arm_l, about: mid(envelope, across))
+
+part seat_rail_l : oak_45 {
+  length: 400mm
+  width:  70mm
+  place {
+    orient(length: back, width: up)
+    flush(arm_l.bottom)
+    against(arm_l.right, gap: 3mm)
+    center(arm_l, deep)
+  }
+}
+
+part seat_rail_r = mirror(seat_rail_l, about: mid(envelope, across))
+
+part seat_cross_rail : oak_25 {
+  length: fit
+  width:  70mm
+  place {
+    orient(length: right, width: up)
+    flush(seat_rail_l.bottom)
+    center(envelope, across)
+    flush(seat_rail_l.back)
+  }
+}
+
+joint top_rail_tenons  : mortise_tenon(top_rail, into: [post_l, post_r], length: 30mm)
+joint seat_tenons      : mortise_tenon(seat_cross_rail, into: [seat_rail_l, seat_rail_r], length: 30mm)
+
+kind knob_bolt : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the other part, into a threaded insert.
+  param thread_length = 25mm
+  /// The gap the bolt crosses between the two parts.
+  param span = 0mm
+  /// Wood left round the holes.
+  param wall = 6mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob: turned by hand to lock or free the joint.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+  /// The bolt: through the piece, across the gap, into a threaded insert.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + span + thread_length - 3mm)
+  }
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+}
+
+hardware hang_l : knob_bolt(post_l, into: arm_l, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+  place {
+    center(post_l, deep)
+    flush(arm_l.top, inset: 40mm)
+  }
+}
+
+hardware hang_r : knob_bolt(post_r, into: arm_r, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+  place {
+    center(post_r, deep)
+    flush(arm_r.top, inset: 40mm)
+  }
+}
+
+hardware seat_l : knob_bolt(seat_rail_l, into: arm_l, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+  place {
+    center(arm_l, deep)
+    flush(arm_l.bottom, inset: 35mm)
+  }
+}
+
+hardware seat_r : knob_bolt(seat_rail_r, into: arm_r, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+  place {
+    center(arm_r, deep)
+    flush(arm_r.bottom, inset: 35mm)
+  }
+}

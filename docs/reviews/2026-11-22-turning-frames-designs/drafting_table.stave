@@ -1,0 +1,115 @@
+stave 1
+
+project "Tilting Drafting Table" {
+  goal: "A drawing board that tilts on knob bolts between two legs"
+}
+
+region envelope = box(across: 900mm, up: 800mm, deep: 650mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+stock birch_ply_24 { species: birch, form: plywood, thickness: 24mm, max_width: 1220mm, max_length: 2440mm }
+
+part leg_l : beech_45 {
+  length: 750mm
+  width:  90mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part leg_r = mirror(leg_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(leg_l.bottom, inset: 150mm)
+    center(envelope, across)
+    center(leg_l, deep)
+  }
+}
+
+part cleat_l : beech_45 {
+  length: 600mm
+  width:  70mm
+  place {
+    orient(length: back, width: up)
+    flush(leg_l.top)
+    against(leg_l.right, gap: 3mm)
+    center(leg_l, deep)
+  }
+}
+
+part cleat_r = mirror(cleat_l, about: mid(envelope, across))
+
+part board : birch_ply_24 {
+  length: 900mm
+  width:  600mm
+  place {
+    orient(length: right, width: back)
+    against(cleat_l.top)
+    center(envelope, across)
+    center(cleat_l, deep)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [leg_l, leg_r], length: 30mm)
+joint board_dowels     : dowel([cleat_l, cleat_r], into: board)
+
+kind knob_bolt : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the other part, into a threaded insert.
+  param thread_length = 25mm
+  /// The gap the bolt crosses between the two parts.
+  param span = 0mm
+  /// Wood left round the holes.
+  param wall = 6mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob: turned by hand to lock or free the joint.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+  /// The bolt: through the piece, across the gap, into a threaded insert.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + span + thread_length - 3mm)
+  }
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+}
+
+hardware tilt_l : knob_bolt(leg_l, into: cleat_l, face: left, span: 3mm) {
+  place {
+    center(leg_l, deep)
+    center(cleat_l, up)
+  }
+}
+
+hardware tilt_r : knob_bolt(leg_r, into: cleat_r, face: right, span: 3mm) {
+  place {
+    center(leg_r, deep)
+    center(cleat_r, up)
+  }
+}
