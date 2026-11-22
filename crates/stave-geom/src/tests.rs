@@ -470,6 +470,7 @@ fn design_of_all(parts: Vec<Part>) -> SolvedDesign {
         project: ProjectInfo {
             title: "test".into(),
             goal: None,
+            finish: None,
             units: OutputUnit::Millimetre,
             resolution: Length::from_nm(500_000),
             style: None,

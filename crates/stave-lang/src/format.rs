@@ -825,5 +825,11 @@ mod tests {
             format("stave 1\npatch \"p\" {\n set a.b=1mm\n    rename part a to b\n}\n"),
             "stave 1\npatch \"p\" {\n  set a.b = 1mm\n  rename part a to b\n}\n"
         );
+        assert_eq!(
+            format(
+                "stave 1\npatch \"p\" {\n set project.finish=\"wax\"\n  unset  library.about\n}\n"
+            ),
+            "stave 1\npatch \"p\" {\n  set project.finish = \"wax\"\n  unset library.about\n}\n"
+        );
     }
 }

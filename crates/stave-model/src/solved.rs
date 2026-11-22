@@ -715,6 +715,9 @@ pub struct ProjectInfo {
     pub title: String,
     /// `goal:`
     pub goal: Option<String>,
+    /// `finish:`: the finish, in words, for the cover and the last step of
+    /// the build plan.
+    pub finish: Option<String>,
     /// `units:`
     #[serde(serialize_with = "serialize_word")]
     pub units: OutputUnit,

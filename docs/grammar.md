@@ -497,12 +497,14 @@ patch         = "patch" , STRING , block(patch_op) ;
 patch_op      = "add" , item , [ "to" , ref ] , [ "in" , STRING ]
               | "add" , import , [ "in" , STRING ]
               | "replace" , item
-              | "set" , path , "=" , expr
-              | "unset" , path
+              | "set" , set_target , "=" , expr
+              | "unset" , set_target
               | "remove" , ( item_tag , path | "import" , STRING , [ "in" , STRING ] )
               | "rename" , item_tag , path , "to" , IDENT ;
 item_tag      = "kind" | "recipe" | "param" | "let" | "region" | "stock" | "part" | "joint"
               | "hardware" | "assembly" | "profile" | "component" | "scene" | "require" ;
+set_target    = path
+              | ( "project" | "library" ) , "." , NAME ;   (* project.goal, library.about *)
 ```
 
 Notes for the parser:
@@ -761,6 +763,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `goal` | `Text` | no | one sentence about what is being built; shown on the cover |
+| `finish` | `Text` | no | the finish, in words ("Danish oil, three coats, cut back between coats"). Printed on the cover and as the last step of the build plan (the *finish* phase of the [Order of operations](#order-of-operations)) |
 | `units` | `mm` \| `cm` \| `m` \| `in` \| `ft` | no (default `mm`) | units used in output |
 | `resolution` | `Length` | no (default `0.5mm`) | the cut list rounds to this, and says where it rounded. More than 0mm, or `error[out-of-range]` (`'resolution' must be more than 0mm, found 0mm`) |
 | `style` | `Text` | no | a hint for suggestions |
@@ -4701,6 +4704,30 @@ What a `set` or `unset` path can address:
 | `side_l.place.up`, `.place.across`, `.place.deep` | the placement term that fixes that axis (each axis has exactly one). A term that fixes two axes (`corners`) is replaced as a whole |
 | `side_l.place.orient` | the `orient` term |
 | `casework.Drawer.box_height` | the same, inside a component of a local module |
+| `project.goal`, `project.finish`, `project.units`, … | a field of the module's `project "Title" { }` block (any field of its table), added when it isn't written yet |
+| `project.title` | the project's title string |
+| `library.about`, `library.license`, `library.title` | the same, in a module that is a `library` |
+
+`project` and `library` are keywords, so a path rooted at one can't clash
+with an item's name. Such a path names one field and nothing after it
+(`project.goal.x` is a syntax error), and it reaches only the block of the
+module the patch edits, never a local module's. A field that isn't in the
+block's table is written as asked, and the check that follows refuses it
+with `error[unknown-field]`, as it would in the file. A patch is refused,
+with nothing applied, when:
+
+- `set project.title` is given anything but a non-empty title in quotes:
+  a project needs a title (`set project.title = ""` is refused). The same
+  holds for `library.title`.
+- `unset project.title` (or `library.title`): the title can't be left out.
+- the module has no block of that keyword: `project.goal` in a module that
+  is a `library`, or `library.about` in a project's module.
+
+A `library` written without a body gets one for its first field.
+`replace project "Title" { ... }` (or `replace library "Title" { ... }`)
+replaces the module's block as a whole, its title as the replacement writes
+it; the block is found by its keyword, not by its title, and a module
+without one is refused as above.
 
 The elements of an array share one declaration, so a path through one
 element (`drawer[top].slide`) is refused: the patch is not applied, and the

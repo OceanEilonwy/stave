@@ -41,6 +41,7 @@ fn project_fields_have_their_defaults() {
     let info = &design(&opened).project;
     assert_eq!(info.title, "Test");
     assert_eq!(info.goal.as_deref(), Some("a box"));
+    assert_eq!(info.finish, None);
     assert_eq!(info.units, OutputUnit::Millimetre);
     assert_eq!(info.resolution, mm("0.5"));
     assert_eq!(info.tools, None, "left out: every tool is assumed");
@@ -50,12 +51,13 @@ fn project_fields_have_their_defaults() {
 #[test]
 fn project_fields_are_read() {
     let opened = open_project(
-        "  units:      in\n  resolution: 1/32in\n  style:      \"shaker\"\n  tools:      [chisel, mallet]\n  methods:    [notch_by_hand]",
+        "  units:      in\n  finish:     \"Danish oil, three coats\"\n  resolution: 1/32in\n  style:      \"shaker\"\n  tools:      [chisel, mallet]\n  methods:    [notch_by_hand]",
     );
     let info = &design(&opened).project;
     assert_eq!(info.units, OutputUnit::Inch);
     assert_eq!(info.resolution, mm("0.79375"));
     assert_eq!(info.style.as_deref(), Some("shaker"));
+    assert_eq!(info.finish.as_deref(), Some("Danish oil, three coats"));
     let tools: Vec<&str> = info
         .tools
         .as_ref()
@@ -91,6 +93,15 @@ fn a_misspelt_tool_is_an_unknown_name() {
 }
 
 #[test]
+fn project_finish_is_text() {
+    only_error(
+        &open_project("  finish: 3mm"),
+        "type-mismatch",
+        "'finish' needs a text, found a length",
+    );
+}
+
+#[test]
 fn project_methods_are_recipes() {
     only_error(
         &open_project("  methods: [chisel]"),
@@ -109,7 +120,7 @@ fn an_unknown_project_field_lists_the_fields() {
     );
     assert_eq!(
         common::help(&opened),
-        "the fields are: goal, units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width"
+        "the fields are: goal, finish, units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width"
     );
 }
 

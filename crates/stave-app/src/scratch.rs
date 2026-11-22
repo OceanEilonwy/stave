@@ -59,7 +59,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use stave_check::{BoxOverlap, Cancelled, Contact, Fast};
-use stave_lang::ast::{self, Span};
+use stave_lang::ast::{self, DeclarationKeyword, Span};
 use stave_lang::{
     Code, Diagnostic, FileId, Label, ModuleKey, Parse, PatchError, PatchErrorKind, PatchTarget,
     SourceMap, apply_patch, parse_file, parse_patch_file,
@@ -756,6 +756,21 @@ fn unapplied(error: &PatchError, file: FileId) -> Vec<Diagnostic> {
             Code::DuplicateName,
             "remove the import that is there first, in the same patch".to_owned(),
         ),
+        PatchErrorKind::NoDeclaration(declaration) => (
+            Code::UnknownName,
+            match declaration {
+                DeclarationKeyword::Project => {
+                    "a library's fields are written library.about, library.license".to_owned()
+                }
+                DeclarationKeyword::Library => {
+                    "a project's fields are written project.goal, project.finish".to_owned()
+                }
+            },
+        ),
+        PatchErrorKind::NeedsTitle(declaration) => (
+            Code::MissingField,
+            format!("write the title in quotes: set {declaration}.title = \"Wall shelf\""),
+        ),
         PatchErrorKind::WrongTerm { .. } => (
             Code::TypeMismatch,
             "set the path for the axis the term fixes, or write a term for this axis".to_owned(),
@@ -1164,6 +1179,70 @@ patch "Add a shelf through the divider" {
         );
         let opened = tried.opened().unwrap();
         assert_eq!(opened.diagnostics, reopened.diagnostics);
+    }
+
+    #[test]
+    fn a_patch_records_the_finish_and_the_goal_in_the_project_block() {
+        let files = cabinet();
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let tried = try_patch(
+            &base,
+            "stave 1\n\npatch \"Record the finish\" {\n  set project.finish = \"Danish oil, three coats\"\n  set project.goal = \"A clothing cabinet\"\n}\n",
+        );
+        assert_eq!(
+            refused_codes(&tried),
+            None,
+            "{}",
+            render_diagnostics(tried.sources(), &tried.shown())
+        );
+        let changed: Vec<&Path> = tried.changed().iter().map(|f| f.path.as_path()).collect();
+        assert_eq!(changed, [Path::new(FOLDER).join("cabinet.stave")]);
+        let project = &tried
+            .opened()
+            .and_then(|opened| opened.design.as_ref())
+            .expect("the cabinet is solved")
+            .project;
+        assert_eq!(project.finish.as_deref(), Some("Danish oil, three coats"));
+        assert_eq!(project.goal.as_deref(), Some("A clothing cabinet"));
+    }
+
+    #[test]
+    fn a_field_the_project_does_not_have_is_refused_as_an_unknown_field() {
+        let files = cabinet();
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let tried = try_patch(
+            &base,
+            "stave 1\n\npatch \"Paint it\" {\n  set project.colour = \"red\"\n}\n",
+        );
+        assert_eq!(refused_codes(&tried), Some(vec![Code::UnknownField]));
+        let shown = render_diagnostics(tried.sources(), &tried.shown());
+        assert!(
+            shown.contains("the project has no field 'colour'"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_project_without_a_title_and_a_library_path_in_a_project_are_refused() {
+        let files = cabinet();
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let tried = try_patch(
+            &base,
+            "stave 1\n\npatch \"No title\" {\n  set project.title = \"\"\n}\n",
+        );
+        assert_eq!(refused_codes(&tried), Some(vec![Code::MissingField]));
+        let shown = render_diagnostics(tried.sources(), &tried.shown());
+        assert!(shown.contains("a project needs a title"), "{shown}");
+        let tried = try_patch(
+            &base,
+            "stave 1\n\npatch \"About\" {\n  set library.about = \"jigs\"\n}\n",
+        );
+        assert_eq!(refused_codes(&tried), Some(vec![Code::UnknownName]));
+        let shown = render_diagnostics(tried.sources(), &tried.shown());
+        assert!(
+            shown.contains("there is no 'library' block in the project's module"),
+            "{shown}"
+        );
     }
 
     #[test]

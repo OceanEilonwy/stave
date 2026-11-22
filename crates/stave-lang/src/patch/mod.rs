@@ -36,7 +36,7 @@ mod tree;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::ast::{self, ItemTag, Span};
+use crate::ast::{self, DeclarationKeyword, ItemTag, Span};
 use crate::diagnostics::{Diagnostic, FileId};
 use crate::placement::Axis;
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -286,6 +286,14 @@ pub enum PatchErrorKind {
         /// The term already written, as the file writes it.
         other: String,
     },
+    /// `project.goal` or `replace project ...` in a module without a
+    /// `project` block (or the same for `library`).
+    #[error("there is no '{0}' block in the project's module")]
+    NoDeclaration(DeclarationKeyword),
+    /// `set project.title` to anything but a title in quotes with words in
+    /// it, or `unset project.title`.
+    #[error("a {0} needs a title: set it to a title in quotes, such as \"Wall shelf\"")]
+    NeedsTitle(DeclarationKeyword),
     /// An operation the patcher doesn't apply yet.
     #[error("'{0}' is not supported yet")]
     NotSupported(&'static str),
@@ -435,6 +443,14 @@ enum Slot {
         address: TermAddress,
         others: Vec<SyntaxNode>,
     },
+    /// The title string of the module's `project` or `library` block.
+    Title {
+        declaration: DeclarationKeyword,
+        title: SyntaxNode,
+    },
+    /// A field of a `library` written without a body: the body is added
+    /// with the field.
+    NoBody { item: SyntaxNode, key: String },
 }
 
 struct Applier<'p> {
@@ -573,6 +589,64 @@ impl<'p> Applier<'p> {
             .map(|(key, _)| key.clone())
             .or(first)
             .ok_or(PatchErrorKind::NoFiles)
+    }
+
+    /// The module's `project` or `library` block, and its file.
+    fn find_declaration(
+        &self,
+        declaration: DeclarationKeyword,
+    ) -> Result<(FileKey, SyntaxNode), PatchErrorKind> {
+        let kind = match declaration {
+            DeclarationKeyword::Project => SyntaxKind::PROJECT,
+            DeclarationKeyword::Library => SyntaxKind::LIBRARY,
+        };
+        self.module_files(&ModuleKey::Project)
+            .find_map(|(key, state)| {
+                state
+                    .root
+                    .children()
+                    .find(|child| child.kind() == kind)
+                    .map(|node| (key.clone(), node))
+            })
+            .ok_or(PatchErrorKind::NoDeclaration(declaration))
+    }
+
+    /// The file and the slot a `set` or `unset` target addresses.
+    fn target_slot(&self, target: &ast::SetTarget) -> Result<(FileKey, Slot), PatchErrorKind> {
+        match target {
+            ast::SetTarget::Path(path) => {
+                let located = self.locate(path)?;
+                let slot = self.slot(&located, path)?;
+                Ok((located.file, slot))
+            }
+            ast::SetTarget::Declaration(field) => {
+                let (file, item) = self.find_declaration(field.declaration)?;
+                let key = field.field.as_str();
+                let slot = if key == "title" {
+                    let title = item
+                        .children()
+                        .find(|child| child.kind() == SyntaxKind::STRING)
+                        .ok_or(PatchErrorKind::NeedsTitle(field.declaration))?;
+                    Slot::Title {
+                        declaration: field.declaration,
+                        title,
+                    }
+                } else {
+                    match tree::block(&item) {
+                        Some(block) => Slot::Field {
+                            field: tree::field(&block, key),
+                            key: key.to_owned(),
+                            block,
+                        },
+                        None => Slot::NoBody {
+                            item,
+                            key: key.to_owned(),
+                        },
+                    }
+                };
+                Ok((file, slot))
+            }
+        }
     }
 
     /// Follows a path to the item it names: through a local module's name
@@ -788,16 +862,29 @@ impl<'p> Applier<'p> {
 
     // ---- set and unset ----
 
-    fn set(&mut self, path: &ast::Path, value: &ast::Expr) -> Result<(), PatchErrorKind> {
-        let located = self.locate(path)?;
-        let slot = self.slot(&located, path)?;
-        let text = &self.state(&located.file)?.text;
+    fn set(&mut self, target: &ast::SetTarget, value: &ast::Expr) -> Result<(), PatchErrorKind> {
+        let (file, slot) = self.target_slot(target)?;
+        let text = &self.state(&file)?.text;
         let value_text = self.snippet(value.span);
-        if let Slot::Term {
-            address, others, ..
-        } = &slot
-        {
-            check_term(self.slice(path.span), &value_text, *address, others, text)?;
+        match &slot {
+            Slot::Term {
+                address, others, ..
+            } => check_term(
+                self.slice(target.span()),
+                &value_text,
+                *address,
+                others,
+                text,
+            )?,
+            Slot::Title { declaration, .. } if !is_title(value) => {
+                return Err(PatchErrorKind::NeedsTitle(*declaration));
+            }
+            Slot::ParamDefault { .. }
+            | Slot::Value(_)
+            | Slot::Field { .. }
+            | Slot::Arg { .. }
+            | Slot::Title { .. }
+            | Slot::NoBody { .. } => {}
         }
         let replace = |node: &SyntaxNode| -> Vec<Edit> {
             let old = range(node);
@@ -815,7 +902,8 @@ impl<'p> Applier<'p> {
             | Slot::Value(node)
             | Slot::Term {
                 term: Some(node), ..
-            } => replace(&node),
+            }
+            | Slot::Title { title: node, .. } => replace(&node),
             Slot::Field {
                 field: Some(field),
                 key,
@@ -873,16 +961,29 @@ impl<'p> Applier<'p> {
             Slot::Term {
                 item, term: None, ..
             } => vec![add_term(text, &item, &value_text)],
+            Slot::NoBody { item, key } => {
+                let entry = format!("{key}: {value_text}");
+                let body = if entry.contains('\n') {
+                    let indent = indentation(text, range(&item).start).to_owned();
+                    let inside = format!("{indent}  ");
+                    format!(" {{\n{inside}{}\n{indent}}}", indent_lines(&entry, &inside))
+                } else {
+                    format!(" {{ {entry} }}")
+                };
+                let after = item
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::STRING)
+                    .map_or(range(&item).end, |title| range(&title).end);
+                vec![Edit::insert(after, body)]
+            }
         };
-        let key = located.file;
-        self.edit(&key, edits)
+        self.edit(&file, edits)
     }
 
-    fn unset(&mut self, path: &ast::Path) -> Result<(), PatchErrorKind> {
-        let located = self.locate(path)?;
-        let slot = self.slot(&located, path)?;
-        let text = &self.state(&located.file)?.text;
-        let path_text = self.slice(path.span).to_owned();
+    fn unset(&mut self, target: &ast::SetTarget) -> Result<(), PatchErrorKind> {
+        let (file, slot) = self.target_slot(target)?;
+        let text = &self.state(&file)?.text;
+        let path_text = self.slice(target.span()).to_owned();
         let not_set = || PatchErrorKind::NotSet(path_text.clone());
         let edit = match slot {
             Slot::ParamDefault { item, value } => {
@@ -912,9 +1013,10 @@ impl<'p> Applier<'p> {
             Slot::Field { field, .. } => remove_entry(text, range(&field.ok_or_else(not_set)?)),
             Slot::Arg { arg, .. } => remove_entry(text, range(&arg.ok_or_else(not_set)?)),
             Slot::Term { term, .. } => remove_entry(text, range(&term.ok_or_else(not_set)?)),
+            Slot::Title { declaration, .. } => return Err(PatchErrorKind::NeedsTitle(declaration)),
+            Slot::NoBody { .. } => return Err(not_set()),
         };
-        let key = located.file;
-        self.edit(&key, vec![edit])
+        self.edit(&file, vec![edit])
     }
 
     // ---- replace ----
@@ -924,6 +1026,44 @@ impl<'p> Applier<'p> {
     /// item writes its own; a comment after its last line stays too.
     fn replace(&mut self, item: &ast::Item) -> Result<(), PatchErrorKind> {
         let entry = self.snippet(item.span);
+        let declaration = match &item.kind {
+            ast::ItemKind::Project(_) => Some(DeclarationKeyword::Project),
+            ast::ItemKind::Library(_) => Some(DeclarationKeyword::Library),
+            ast::ItemKind::Kind(_)
+            | ast::ItemKind::Recipe(_)
+            | ast::ItemKind::Stock(_)
+            | ast::ItemKind::Profile(_)
+            | ast::ItemKind::Component(_)
+            | ast::ItemKind::Scene(_)
+            | ast::ItemKind::Design(_) => None,
+        };
+        let (key, old) = match declaration {
+            Some(declaration) => self.find_declaration(declaration)?,
+            None => self.named_item_to_replace(item, &entry)?,
+        };
+        let text = &self.state(&key)?.text;
+        let whole = range(&old);
+        let old_range = if item.docs.is_empty() {
+            tree::after_docs(&old).unwrap_or(whole.start)..whole.end
+        } else {
+            whole
+        };
+        let old_text = text.get(old_range.clone()).unwrap_or("");
+        if tokens(old_text) == tokens(&entry) {
+            return Ok(());
+        }
+        let indent = indentation(text, old_range.start).to_owned();
+        let edit = Edit::replace(old_range, indent_lines(&entry, &indent));
+        self.edit(&key, vec![edit])
+    }
+
+    /// The item `replace` replaces: the top-level item of the project's
+    /// module with the new item's name, refused if it is of another kind.
+    fn named_item_to_replace(
+        &self,
+        item: &ast::Item,
+        entry: &str,
+    ) -> Result<(FileKey, SyntaxNode), PatchErrorKind> {
         let Some(name) = item.kind.name().map(|name| name.as_str().to_owned()) else {
             return Err(PatchErrorKind::Unaddressable {
                 path: entry.lines().next().unwrap_or("").to_owned(),
@@ -946,20 +1086,7 @@ impl<'p> Applier<'p> {
                 found: found.map_or("declaration", ItemTag::keyword),
             });
         }
-        let text = &self.state(&key)?.text;
-        let whole = range(&old);
-        let old_range = if item.docs.is_empty() {
-            tree::after_docs(&old).unwrap_or(whole.start)..whole.end
-        } else {
-            whole
-        };
-        let old_text = text.get(old_range.clone()).unwrap_or("");
-        if tokens(old_text) == tokens(&entry) {
-            return Ok(());
-        }
-        let indent = indentation(text, old_range.start).to_owned();
-        let edit = Edit::replace(old_range, indent_lines(&entry, &indent));
-        self.edit(&key, vec![edit])
+        Ok((key, old))
     }
 
     // ---- remove ----
@@ -1319,6 +1446,18 @@ fn check_term(
         }
     }
     Ok(())
+}
+
+/// `true` for a title in quotes with something in it besides spaces: what
+/// `set project.title` takes.
+fn is_title(value: &ast::Expr) -> bool {
+    let ast::ExprKind::String(string) = &value.kind else {
+        return false;
+    };
+    string.parts.iter().any(|part| match part {
+        ast::StringPart::Text { text, .. } => !text.trim().is_empty(),
+        ast::StringPart::Interp { .. } => true,
+    })
 }
 
 /// Indents every line of `text` after the first by `indent`.
