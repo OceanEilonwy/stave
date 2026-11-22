@@ -53,6 +53,7 @@ mod build;
 pub mod clearance;
 pub mod collide;
 pub mod glb;
+pub mod line;
 pub mod mechanism;
 mod mesh;
 mod mesh_cut;

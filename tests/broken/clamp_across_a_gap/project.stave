@@ -1,0 +1,80 @@
+// expect: error[no-contact] lock draws extension toward leg, but they are 3mm apart with nothing between
+stave 1
+
+// An extension bolted beside a leg with a knob bolt, 3mm clear of it with
+// nothing in the gap. The kind says `clamp`, so tightening the knob would
+// pull the extension across the gap until it meets the leg.
+
+project "Clamp across a gap" {
+  units: mm
+}
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+
+part leg : beech_45 {
+  length: 700mm
+  width:  70mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part extension : beech_45 {
+  length: 500mm
+  width:  50mm
+  place {
+    orient(length: up, width: back)
+    flush(leg.top, inset: 300mm)
+    against(leg.right, gap: 3mm)
+    center(leg, deep)
+  }
+}
+
+/// A hand knob on a bolt through one part into a threaded insert in the
+/// other.
+kind knob_bolt : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the other part.
+  param thread_length = 25mm
+  /// The gap the bolt crosses between the two parts.
+  param span = 0mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob: turned by hand to lock the joint.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: knob_diameter, depth: -30mm..0mm)
+  }
+  /// The bolt: through the piece, across the gap, into the insert.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + span + thread_length - 3mm)
+  }
+
+  // Tightening the knob draws the bolt, and the part it is threaded
+  // into, toward the knob.
+  clamp knob, bolt along depth
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: 6mm) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: 6mm) }
+}
+
+hardware lock : knob_bolt(leg, into: extension, face: left, span: 3mm) {
+  place {
+    center(leg, deep)
+    flush(extension.top, inset: 100mm)
+  }
+}

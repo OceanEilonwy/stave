@@ -17,9 +17,9 @@ use stave_schema::words::WordSet;
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
-    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, CylinderTilt,
-    DriveDef, FrameAxis, KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr, RExprKind,
-    RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
+    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ClampDef, ConstraintDef, CouplingDef,
+    CylinderTilt, DriveDef, FrameAxis, KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr,
+    RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
@@ -953,6 +953,101 @@ impl Resolver<'_> {
         None
     }
 
+    /// A hardware kind's one `clamp` (grammar, "Clamps"): two different
+    /// members with a body, an axis of the frame, and the second member
+    /// moving with a role that is a part. Any `clamp` after the first is
+    /// `error[duplicate-name]`; one that doesn't lower is reported and left
+    /// out.
+    pub(super) fn lower_clamps(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        roles: &[RoleDef],
+        bodies: &[BodyDef],
+        clamps: &[&ast::Clamp],
+    ) -> Option<ClampDef> {
+        let (first, rest) = clamps.split_first()?;
+        for again in rest {
+            self.report(
+                Diagnostic::error(
+                    Code::DuplicateName,
+                    "'clamp' is declared twice",
+                    Label::new(cx.file, again.span),
+                )
+                .with_label(Label::with_message(cx.file, first.span, "first written here"))
+                .with_help(
+                    "a kind draws parts together in one place; hardware that draws in two places is two pieces of hardware, each with its own call",
+                ),
+            );
+        }
+        let clamp = first;
+        let named = |this: &mut Self, ident: &ast::Ident| -> Option<BodyId> {
+            let word = ident.as_str();
+            if let Some(index) = bodies.iter().position(|body| body.name.as_str() == word) {
+                return BodyId::new(index);
+            }
+            this.unknown(
+                Code::UnknownName,
+                format!("unknown name '{word}'"),
+                cx.file,
+                ident.span(),
+                word,
+                bodies.iter().map(|body| body.name.as_str()),
+                format!("a clamp names members with a body declared in kind '{kind}'"),
+            );
+            None
+        };
+        let [bearing_name, drawn_name] = &clamp.members;
+        let bearing = named(self, bearing_name);
+        let drawn = named(self, drawn_name);
+        let axis = FrameAxis::from_word(clamp.axis.as_str());
+        if axis.is_none() {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "a clamp draws along along, across or depth, found '{}'",
+                    clamp.axis
+                ),
+                cx.file,
+                clamp.axis.span(),
+                "write clamp a, b along depth (or along, or across)",
+            );
+        }
+        let (Some(bearing), Some(drawn), Some(axis)) = (bearing, drawn, axis) else {
+            return None;
+        };
+        if bearing == drawn {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("'{drawn_name}' is named twice in one clamp"),
+                cx.file,
+                drawn_name.span(),
+                "a clamp draws one member toward another: name two different members",
+            );
+            return None;
+        }
+        if !moves_with_a_part(roles, bodies, drawn) {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "clamp {bearing_name}, {drawn_name}: '{drawn_name}' moves with no part, so there is nothing for it to draw"
+                ),
+                cx.file,
+                drawn_name.span(),
+                format!(
+                    "give '{drawn_name}' with: a role that is a Part, or a member that moves with one"
+                ),
+            );
+            return None;
+        }
+        Some(ClampDef {
+            bearing,
+            drawn,
+            axis,
+            span: clamp.span,
+        })
+    }
+
     /// A hardware kind's `adjust` entries (grammar, "Adjustment"): each
     /// names two members with a body and an axis of the frame on which
     /// exactly one of them has its own mount; each member is adjusted on an
@@ -1236,4 +1331,24 @@ fn argument_list(names: &[&str]) -> String {
         .map(|name| format!("{name}:"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Whether a member moves with a role that is a part: its `with:` names
+/// one, or a member that does, followed member by member. A loop of
+/// members riding on each other (reported where members are lowered)
+/// moves with nothing.
+fn moves_with_a_part(roles: &[RoleDef], bodies: &[BodyDef], body: BodyId) -> bool {
+    let mut current = body;
+    for _ in 0..=bodies.len() {
+        match bodies.get(current.index()).map(|body| &body.with) {
+            Some(Carrier::Role(role)) => {
+                return roles
+                    .get(role.index())
+                    .is_some_and(|role| role.ty == stave_schema::kinds::RoleType::Part);
+            }
+            Some(Carrier::Body(next)) => current = *next,
+            Some(Carrier::Mechanism | Carrier::Contact(_)) | None => return false,
+        }
+    }
+    false
 }

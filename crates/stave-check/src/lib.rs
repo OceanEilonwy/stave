@@ -19,6 +19,9 @@
 //!    at least one of its counterparts over an area, after every cut; a
 //!    part that touches only along an edge or at a corner (an offset half
 //!    lap whose notches don't meet) is reported as such.
+//!    **Clamps** (`error[no-contact]`, [`clamps`]): hardware whose kind
+//!    has a `clamp` draws two parts together, so what lies between them
+//!    along the clamp, at rest, must be solid.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
 //!    `gap` that runs past its `to` anchor. Hardware whose kind's
 //!    `require` or `adjust` failed where the solver placed it
@@ -75,6 +78,7 @@
 #![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 #![warn(missing_docs)]
 
+mod clamps;
 mod explain;
 mod fixes;
 mod grain;
@@ -225,13 +229,14 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     stop.check()?;
     let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
     checker.given = fast.map(|fast| fast.made.clone().into_iter());
-    let steps: [fn(&mut Checker<'m>); 12] = [
+    let steps: [fn(&mut Checker<'m>); 13] = [
         Checker::misfits,
         Checker::misshapen,
         Checker::not_supported,
         Checker::cut_sizes,
         Checker::mechanisms,
         Checker::contact,
+        Checker::clamps,
         Checker::overruns,
         Checker::rest,
         Checker::walls,

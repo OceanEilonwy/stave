@@ -117,10 +117,11 @@ grammar position only:
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
 | `adjust`, `on` | `adjust` at the start of an entry in a hardware `kind` body, when not followed by `:`; `on` between its two members (`adjust arm on plate: across within 2mm`) |
+| `clamp` | at the start of an entry in a hardware `kind` body, when not followed by `:` (`clamp knob, bolt along depth`) |
 | `mount` | at the start of an entry in a hardware `kind` body or a member's body, when not followed by `:` |
 | `shape` | at the start of an entry in a member's body, when followed by a name and `:` (`shape knuckle: box(...)`); `shape: ...` is a field |
 | `pivot`, `slot`, `rail`, `couple` | at the start of an entry in a `mechanism` block, when not followed by `:` |
-| `from`, `along` | inside a `slot` (`from point(...) to point(...)`) and a `rail` (`along across`) |
+| `from`, `along` | inside a `slot` (`from point(...) to point(...)`), and `along` in a `rail` (`along across`) and a `clamp` (`along depth`) |
 | `mark`, `cut` | at the start of an entry in a `recipe` body, when not followed by `:` |
 | `same` | as the whole content of an index: `drawer_bay[same]` |
 | `to`, `in` | after the item of a patch's `add`, and in `rename ... to`; `to` also in a `slot` and a `couple`; `in` also between two numbers, a slope: `1 in 8` |
@@ -387,7 +388,7 @@ library       = "library" , STRING , [ block(field) ] ;
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "support" | "fitting" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
-              | roles | cut | mount | mechanism | adjust | field ;
+              | roles | cut | mount | mechanism | adjust | clamp | field ;
 member        = "member" , IDENT , [ ":" , expr ] , [ block(member_entry) ] ;
                 (* a kind's piece: member arm { shape: box(...) }, or in a joint kind
                    member pin : dowel_pin(...) { on: contact(piece, into), ... };
@@ -407,6 +408,8 @@ mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
               | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg) *)
 adjust        = "adjust" , IDENT , "on" , IDENT , ":" , IDENT , "within" , expr ;
                                                          (* adjust arm on plate: across within 2mm *)
+clamp         = "clamp" , IDENT , "," , IDENT , "along" , IDENT ;
+                                                         (* clamp knob, bolt along depth *)
 roles         = "roles" , block(role) ;
 role          = NAME , ":" , IDENT ;                     (* piece: Part   into: Parts *)
 cut           = "cut" , [ IDENT , ":" ] , call , block(call) ;
@@ -1038,6 +1041,7 @@ kind may contain:
 | `require` | no | rules, checked for each piece of hardware where it is placed; `mount` names its mount face as an anchor (see [Adjustment](#adjustment)) |
 | `member` | no | its pieces, each with its shapes (see [Shapes](#shapes)) |
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
+| `clamp a, b along axis` | no | tightening draws member `a` and member `b` toward each other along one axis of the frame; what lies between them must be solid (see [Clamps](#clamps)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
 | `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)); a name is what messages call the cut (see [Named cuts](#named-cuts)). `row(crossing(role, member), pitch:, up:, ...)` makes the same cut again in a row beside it (see [Rows of holes](#rows-of-holes)) |
 | `uses` | no | fasteners it consumes without placing them, as a joint's `uses:`: counted, never placed |
@@ -2859,7 +2863,7 @@ support: a tabletop fastener, a cam lock or another knock-down fitting, a
 magnetic catch, a lid stay. The base gives neutral words ("fitted"; the
 window calls one a "fitting") and the type `FittingKind`, and decides
 nothing else: a fitting may hold every entry a slide, hinge, pull or
-support may (`roles`, `mount`, `member`, `adjust`, `mechanism`, `cut`,
+support may (`roles`, `mount`, `member`, `adjust`, `clamp`, `mechanism`, `cut`,
 `uses`, catalogue data), and it is placed, drawn, checked, held and cut
 exactly as they are. A fitting with a `mechanism` moves as it says (a lid
 stay follows its lid); one without doesn't move. Nothing about any
@@ -3036,11 +3040,102 @@ rule measures 10mm and needs 12.7mm`). Hardware whose `require` or
 `adjust` failed is left out of the overlap check and the motion checks:
 it is not where it can be, and one mistake is one error.
 
+#### Clamps
+
+Some hardware draws two parts together when it is tightened: a knob bolt
+pulls the part its bolt is threaded into toward the part its knob bears
+on, and a cam lock pulls a panel's end against the face its bolt is
+screwed into. A kind says so with `clamp`:
+
+```
+  clamp knob, bolt along depth
+```
+
+`clamp a, b along w` says that tightening draws member `a` and member
+`b` toward each other along `w` (`along`, `across` or `depth`) of the
+[kind's frame](#the-kinds-frame). Both are members with a body
+(`error[unknown-name]` otherwise), and they are two different members
+(`error[type-mismatch]`). `w` is one of the three frame words
+(`error[type-mismatch]`). `b` moves with a part: its `with:` names a
+role that is a `Part`, or a member that moves with one
+(`error[type-mismatch]` otherwise: there would be no part for it to
+draw). A kind has at most one `clamp` (`error[duplicate-name]`): the
+check follows one line through each piece of hardware, and a fitting
+that draws in two places is two pieces of hardware, each with its own
+call (a porch glider's arm has one at the post and one at the seat).
+A joint, fastener or tool kind has no members that draw parts together:
+`clamp` in one is `error[unknown-field]`.
+
+**The stack.** For each piece of hardware of the kind, where it is
+placed:
+
+- **The line** runs along `w` through the middle of `b`: the centre,
+  seen along `w`, of the box around all of `b`'s shapes. For a round
+  bolt that runs along `w`, it is the bolt's axis.
+- **The far part** is the part `b` moves with. The line is followed from
+  the end of `a` nearer the far part to the face of the far part nearer
+  `a` (measured along `w`: `a` as the box around its shapes, the far
+  part as its drawn box). When `a` and the far part already touch or
+  overlap along `w`, there is nothing between them to check.
+- **The stack** is every body the line meets between those two ends,
+  on its surface or inside it: every part, and every member of the same
+  piece of hardware but `a` and `b` themselves, which are the clamp (a
+  washer, a spacer). Members of other hardware, and joint members, are
+  not in it.
+- A part is its wood less its square cuts (a groove, a rabbet, a
+  mortise); its drilled holes and angled cuts count as wood, so a hole
+  is never a gap. Nor is a cut that the same piece of hardware makes:
+  the room cut for the clamp itself (a bolt's hole, a cam's bore)
+  doesn't count. A member is its shapes; a slanted cylinder counts as
+  the box around it. Where the line crosses a round or slanted outline,
+  its ends are taken to the nanometre.
+- **Each body in the stack must touch the next**, from `a` to the far
+  part, within the 0.05mm contact tolerance. Bodies may overlap (that is
+  for the overlap check), but the line may not cross more than 0.05mm of
+  air.
+
+A gap is `error[no-contact]` at the hardware's call. It names the two
+bodies on either side of the first gap from `a`, and the note names `a`
+by its member name:
+
+```
+error[no-contact]: pivot_l draws stile_l toward upright_l, but they are 3mm apart with nothing between
+  --> project.stave:118:20
+   = note: tightening the knob would pull stile_l 3mm toward upright_l
+   = help: put a washer or spacer in the gap, or place stile_l against upright_l
+```
+
+The message is `<hardware> draws <body> toward <body>, but they are
+<gap> apart with nothing between`, the note `tightening the <a> would
+pull <far part> <gap> toward <body>`, the help `put a washer or spacer
+in the gap, or place <body> against <body>`, and a member is written
+`<hardware>'s <member>`, as in every diagnostic. With a 1mm washer in a
+3mm gap the error is `pivot_l draws stile_l toward pivot_l's washer, but
+they are 2mm apart with nothing between`. The other pieces of hardware of
+the same call (the elements of an array) that fail the same way are a
+note on the first error, `the same for <hardware>`, as for
+`error[adjust]`. Hardware whose `require` or `adjust` failed is not
+checked: it is not where it can be.
+
+A clamp is checked where the hardware is set: at rest, as the design
+places it. It is not checked while a mechanism moves (a clamp is loose
+while it turns), and in this version it is not checked at a scene's
+poses either.
+
+A kind without a `clamp` is checked exactly as before. Nothing in the
+check names a kind or a member: it reads only `clamp`, the members,
+their `with:` and the frame, so it covers every fitting that draws parts
+together (knob bolts, bed bolts, cam locks, connector bolts). No rule
+names a washer either: a washer is a member like any other, and filling
+the gap with one is simply what makes the stack solid.
+
 #### One collision model
 
 Every solid in the design is a **body**: every part with its cuts made,
-every shape of every hardware member, wood or steel, and every copy of
-every joint member (a dowel's pins, see [Joint members](#joint-members)). Each body is posed by
+every shape of every hardware member, and every copy of every joint
+member, wood or steel (a dowel's pins, see [Joint members](#joint-members)).
+A hardware member is bought hardware and is never wood: anything made
+from wood is a part, and it goes on the cut list. Each body is posed by
 the motions: a member moves with the part or region it is `with:` (or with
 the member it rides on), and a member the mechanism places (a link) moves
 as the mechanism moves it. One overlap check covers every body at rest and
@@ -4246,7 +4341,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
 | 3 | `internal` | `Stave could not work out <what>; this is a bug in Stave`: a failure inside Stave that no check explains; it is reported rather than leaving the design unbuilt without a word |
-| 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, `<joint>: once cut, <a> and <b> touch only along an edge`, or for `contact(a, b)` `<a> and <b> don't touch` |
+| 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, `<joint>: once cut, <a> and <b> touch only along an edge`, for `contact(a, b)` `<a> and <b> don't touch`, or for a [clamp](#clamps) `<hardware> draws <b> toward <a>, but they are <3mm> apart with nothing between` |
 | 4 | `overhang` | `<hardware>: its <member> hangs off the <end> of <part>`, with the note `<part> holds <5mm> of the <40mm> <member>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |

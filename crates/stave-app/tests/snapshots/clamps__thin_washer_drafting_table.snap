@@ -1,0 +1,19 @@
+---
+source: crates/stave-app/tests/clamps.rs
+expression: rendered(&opened)
+---
+error[no-contact]: tilt_l draws cleat_l toward tilt_l's washer, but they are 2mm apart with nothing between
+   --> /project/project.stave:116:19
+    |
+116 | hardware tilt_l : knob_bolt(leg_l, into: cleat_l, face: left, span: 3mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull cleat_l 2mm toward tilt_l's washer
+    = help: put a washer or spacer in the gap, or place cleat_l against tilt_l's washer
+
+error[no-contact]: tilt_r draws cleat_r toward tilt_r's washer, but they are 2mm apart with nothing between
+   --> /project/project.stave:123:19
+    |
+123 | hardware tilt_r : knob_bolt(leg_r, into: cleat_r, face: right, span: 3mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull cleat_r 2mm toward tilt_r's washer
+    = help: put a washer or spacer in the gap, or place cleat_r against tilt_r's washer

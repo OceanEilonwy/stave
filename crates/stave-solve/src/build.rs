@@ -2151,6 +2151,7 @@ impl Solver<'_> {
                     })
                     .collect::<Solved<Vec<_>>>()?,
                 rules: hw.rules,
+                clamp: hw.clamp,
                 entries: hw
                     .entries
                     .into_iter()

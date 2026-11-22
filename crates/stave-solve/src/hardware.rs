@@ -427,6 +427,8 @@ pub(crate) struct Placed {
     pub settings: Vec<AdjustSetting>,
     /// Whether its kind's rules hold where it is placed.
     pub rules: Rules,
+    /// Its kind's `clamp`, along the world axis its frame gives it.
+    pub clamp: Option<stave_model::solved::Clamp>,
 }
 
 /// Where a piece of hardware sits at rest, before its cuts and motion.
@@ -663,6 +665,16 @@ impl Solver<'_> {
         } else {
             rules
         };
+        // The clamp's frame axis as a world axis; the stack it draws
+        // together is checked once every part is placed (stave-check).
+        let clamp = hardware_kind
+            .clamp
+            .as_ref()
+            .map(|clamp| stave_model::solved::Clamp {
+                bearing: clamp.bearing,
+                drawn: clamp.drawn,
+                axis: frame.direction(clamp.axis).axis(),
+            });
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name,
@@ -679,6 +691,7 @@ impl Solver<'_> {
             members,
             settings,
             rules,
+            clamp,
         })
     }
 

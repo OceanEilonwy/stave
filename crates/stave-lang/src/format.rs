@@ -770,6 +770,14 @@ mod tests {
     }
 
     #[test]
+    fn lays_out_a_clamp() {
+        assert_eq!(
+            format("stave 1\nkind k : fitting {\n  clamp  knob ,bolt  along   depth\n}\n"),
+            "stave 1\nkind k : fitting {\n  clamp knob, bolt along depth\n}\n"
+        );
+    }
+
+    #[test]
     fn lays_out_mounts_and_named_cuts() {
         assert_eq!(
             format(

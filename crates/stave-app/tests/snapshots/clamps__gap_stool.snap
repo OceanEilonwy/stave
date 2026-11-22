@@ -1,0 +1,19 @@
+---
+source: crates/stave-app/tests/clamps.rs
+expression: rendered(&opened)
+---
+error[no-contact]: pivot_l draws inner_leg_l toward outer_leg_l, but they are 3mm apart with nothing between
+   --> /project/project.stave:120:20
+    |
+120 | hardware pivot_l : knob_bolt(outer_leg_l, into: inner_leg_l, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm, thread_length: 15mm) {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull inner_leg_l 3mm toward outer_leg_l
+    = help: put a washer or spacer in the gap, or place inner_leg_l against outer_leg_l
+
+error[no-contact]: pivot_r draws inner_leg_r toward outer_leg_r, but they are 3mm apart with nothing between
+   --> /project/project.stave:127:20
+    |
+127 | hardware pivot_r : knob_bolt(outer_leg_r, into: inner_leg_r, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm, thread_length: 15mm) {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull inner_leg_r 3mm toward outer_leg_r
+    = help: put a washer or spacer in the gap, or place inner_leg_r against outer_leg_r

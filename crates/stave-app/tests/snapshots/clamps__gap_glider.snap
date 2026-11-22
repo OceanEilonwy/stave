@@ -1,0 +1,35 @@
+---
+source: crates/stave-app/tests/clamps.rs
+expression: rendered(&opened)
+---
+error[no-contact]: hang_l draws arm_l toward post_l, but they are 3mm apart with nothing between
+   --> /project/project.stave:122:19
+    |
+122 | hardware hang_l : knob_bolt(post_l, into: arm_l, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull arm_l 3mm toward post_l
+    = help: put a washer or spacer in the gap, or place arm_l against post_l
+
+error[no-contact]: hang_r draws arm_r toward post_r, but they are 3mm apart with nothing between
+   --> /project/project.stave:129:19
+    |
+129 | hardware hang_r : knob_bolt(post_r, into: arm_r, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull arm_r 3mm toward post_r
+    = help: put a washer or spacer in the gap, or place arm_r against post_r
+
+error[no-contact]: seat_l draws arm_l toward seat_rail_l, but they are 3mm apart with nothing between
+   --> /project/project.stave:136:19
+    |
+136 | hardware seat_l : knob_bolt(seat_rail_l, into: arm_l, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull arm_l 3mm toward seat_rail_l
+    = help: put a washer or spacer in the gap, or place arm_l against seat_rail_l
+
+error[no-contact]: seat_r draws arm_r toward seat_rail_r, but they are 3mm apart with nothing between
+   --> /project/project.stave:143:19
+    |
+143 | hardware seat_r : knob_bolt(seat_rail_r, into: arm_r, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: tightening the knob would pull arm_r 3mm toward seat_rail_r
+    = help: put a washer or spacer in the gap, or place arm_r against seat_rail_r
