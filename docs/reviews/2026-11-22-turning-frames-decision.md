@@ -1,6 +1,6 @@
 # Turning frames: decision
 
-Status: **awaiting go/no-go**. The full design, with reasons, worked
+Status: **go** (2026-11-22), being built in the order A, B, C. The full design, with reasons, worked
 examples and the evidence, is in
 [`2026-11-22-turning-frames.md`](2026-11-22-turning-frames.md). Where the
 two differ, this page is the proposal.
@@ -106,9 +106,11 @@ take when Phase B is built.
    300 sweeps is under a second. *Still to do in B:* a test that keeps the
    loom's check under a fixed time, so a regression shows up.
 4. **Pivots that don't draw** (a plain pin, a cradle) aren't covered by
-   `clamp`. They are left out of scope.
+   `clamp`. They are left out of scope, and tracked in
+   [#89](https://github.com/OceanEilonwy/stave/issues/89).
 5. **End grain under a clamp.** A spindle-turned disc has end-grain faces
-   and crushes. A possible future grain warning, not part of this.
+   and crushes. A possible future grain warning, not part of this. Tracked
+   in [#90](https://github.com/OceanEilonwy/stave/issues/90).
 
 ## Decision
 
