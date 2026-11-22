@@ -306,6 +306,9 @@ syntax_kinds! {
     REF,
     /// `side_l.place.deep`, `drawer[top]`
     PATH,
+    /// `project.goal`, `library.about`: a patch's `set` or `unset` of a
+    /// field of the module's own declaration.
+    DECLARATION_FIELD,
     /// `[*]`, `[same]`, `[top]`, `[0]`
     INDEX,
     /// `rabbet(back, into: side_l)`: a kind and its arguments.

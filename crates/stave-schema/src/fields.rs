@@ -162,6 +162,7 @@ const RECIPE: ValueType = Type(TypeName::Recipe);
 /// `project "Title" { }`
 pub const PROJECT: &[FieldSpec] = &[
     field("goal", Type(TypeName::Text), Optional, false),
+    field("finish", Type(TypeName::Text), Optional, false),
     field("units", Words(WordSet::OutputUnit), Optional, false),
     field("resolution", Type(TypeName::Length), Optional, false),
     field("style", Type(TypeName::Text), Optional, false),

@@ -368,11 +368,11 @@ impl Lowering {
                 item: Box::new(self.item(&item_child()?)?),
             },
             SyntaxKind::SET_OP => PatchOpKind::Set {
-                target: path(&child(node, SyntaxKind::PATH)?)?,
+                target: set_target(node)?,
                 value: expr(&exprs(node).next()?)?,
             },
             SyntaxKind::UNSET_OP => PatchOpKind::Unset {
-                target: path(&child(node, SyntaxKind::PATH)?)?,
+                target: set_target(node)?,
             },
             SyntaxKind::REMOVE_OP => {
                 if token(node, SyntaxKind::KW_IMPORT).is_some() {
@@ -1050,6 +1050,26 @@ fn path(node: &SyntaxNode) -> Option<Path> {
         segments,
         span: span_of(node),
     })
+}
+
+/// The target of a `set` or `unset` operation node.
+fn set_target(op: &SyntaxNode) -> Option<SetTarget> {
+    if let Some(target) = child(op, SyntaxKind::PATH) {
+        return path(&target).map(SetTarget::Path);
+    }
+    let target = child(op, SyntaxKind::DECLARATION_FIELD)?;
+    let declaration = if token(&target, SyntaxKind::KW_PROJECT).is_some() {
+        DeclarationKeyword::Project
+    } else if token(&target, SyntaxKind::KW_LIBRARY).is_some() {
+        DeclarationKeyword::Library
+    } else {
+        return None;
+    };
+    Some(SetTarget::Declaration(DeclarationField {
+        declaration,
+        field: name(&child(&target, SyntaxKind::NAME)?)?,
+        span: span_of(&target),
+    }))
 }
 
 fn index(node: &SyntaxNode) -> Option<Index> {

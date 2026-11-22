@@ -312,6 +312,9 @@ impl<'a> Resolver<'a> {
                 let goal = found
                     .get("goal")
                     .and_then(|f| self.plain_text(&cx, &f.value, "goal"));
+                let finish = found
+                    .get("finish")
+                    .and_then(|f| self.plain_text(&cx, &f.value, "finish"));
                 let style = found
                     .get("style")
                     .and_then(|f| self.plain_text(&cx, &f.value, "style"));
@@ -351,6 +354,7 @@ impl<'a> Resolver<'a> {
                     Some(ProjectDef {
                         title,
                         goal,
+                        finish,
                         units,
                         resolution,
                         style,

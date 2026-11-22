@@ -2569,6 +2569,7 @@ impl Solver<'_> {
         Ok(ProjectInfo {
             title: project.title.clone(),
             goal: project.goal.clone(),
+            finish: project.finish.clone(),
             units: project.units,
             resolution,
             style: project.style.clone(),

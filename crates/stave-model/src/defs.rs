@@ -2276,6 +2276,8 @@ pub struct ProjectDef {
     pub title: String,
     /// `goal:`
     pub goal: Option<String>,
+    /// `finish:`: the finish, in words.
+    pub finish: Option<String>,
     /// `units:`
     pub units: OutputUnit,
     /// `resolution:`

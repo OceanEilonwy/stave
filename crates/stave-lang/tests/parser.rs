@@ -865,6 +865,62 @@ fn patch_files_parse() {
 }
 
 #[test]
+fn set_and_unset_reach_the_project_and_library_blocks() {
+    let text = "stave 1\n\
+                patch \"Record the finish\" {\n\
+                \x20 set project.finish = \"Danish oil\"\n\
+                \x20 unset library.about\n\
+                \x20 set project.title = \"Hall shelf\"\n\
+                \x20 replace project \"Hall shelf\" { goal: \"A shelf\" }\n\
+                }\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("p.stave", text).unwrap();
+    let parse = parse_patch_file(file, text);
+    assert!(parse.diagnostics.is_empty(), "{:#?}", parse.diagnostics);
+    assert_eq!(parse.syntax().to_string(), text);
+    let patches = parse.ast.unwrap().patches;
+    let targets: Vec<(DeclarationKeyword, &str)> = patches[0]
+        .ops
+        .iter()
+        .filter_map(|op| match &op.kind {
+            PatchOpKind::Set {
+                target: SetTarget::Declaration(field),
+                ..
+            }
+            | PatchOpKind::Unset {
+                target: SetTarget::Declaration(field),
+            } => Some((field.declaration, field.field.as_str())),
+            PatchOpKind::Set { .. }
+            | PatchOpKind::Unset { .. }
+            | PatchOpKind::Add { .. }
+            | PatchOpKind::AddImport { .. }
+            | PatchOpKind::Replace { .. }
+            | PatchOpKind::Remove { .. }
+            | PatchOpKind::RemoveImport { .. }
+            | PatchOpKind::Rename { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            (DeclarationKeyword::Project, "finish"),
+            (DeclarationKeyword::Library, "about"),
+            (DeclarationKeyword::Project, "title"),
+        ]
+    );
+    assert!(matches!(
+        &patches[0].ops[3].kind,
+        PatchOpKind::Replace { item } if matches!(item.kind, ItemKind::Project(_))
+    ));
+
+    let broken = "stave 1\npatch \"p\" {\n  set project = \"x\"\n}\n";
+    let file = sources.add("q.stave", broken).unwrap();
+    let parse = parse_patch_file(file, broken);
+    assert_eq!(parse.diagnostics.len(), 1, "{:#?}", parse.diagnostics);
+    assert_eq!(parse.diagnostics[0].message, "expected '.', found '='");
+}
+
+#[test]
 fn deep_nesting_is_an_error_not_a_crash() {
     let text = format!(
         "stave 1\nlet a = {}1{}\nlet b = 2\n",
