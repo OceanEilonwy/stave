@@ -24,11 +24,16 @@
 //!   `rail a, b along <word>` is [`Constraint::Rail`] with the word's
 //!   [`PlanarDirection`]; `couple a to b: <ratio>` is
 //!   [`Constraint::Couple`] with a [`Ratio`].
-//! - **The drive** ([`Drive`]): `turn(m, from:, to:)` or
-//!   `travel(m, from:, to:)`. The declared (closed) pose is the drive at
-//!   `from`; at a value `v` the driven member has turned (or travelled) by
-//!   `v - from`. A member's **travel** is how far it has moved along its
-//!   rail from its closed place, measured against the held members.
+//! - **The drives** ([`Drive`]): `turn(m, from:, to:)` or
+//!   `travel(m, from:, to:)`, one for most mechanisms, a turn and a travel
+//!   of one member for a pin that turns in a slot
+//!   ([`Mechanism::with_drives`]). The declared (closed) pose is every
+//!   drive at its `from`; at a value `v` the driven member has turned (or
+//!   travelled) by `v - from`. A member's **travel** is how far it has
+//!   moved along its rail from its closed place, measured against the
+//!   held members, or how far its pin has run along its slot. One drive
+//!   is run through its range at a time, the others held
+//!   ([`Mechanism::sweeping`]).
 //!
 //! # What comes out
 //!
@@ -63,7 +68,9 @@
 //!
 //! - **Turn** and **travel**: the drive gives the driven member's angle,
 //!   or its travel; a `couple` passes a travel on, times its ratio.
-//! - **Hang**: a member whose angle is known, pinned to a placed member.
+//! - **Hang**: a member whose angle is known, pinned at a known point: by
+//!   a pivot on a placed member, or by a slot in a placed member when its
+//!   travel along the slot is known.
 //! - **Rail**: a member whose travel is known, on a rail along a placed
 //!   member that does not turn.
 //! - **Two links** (a dyad): a point on one or two unplaced members lies on
@@ -489,12 +496,32 @@ pub enum MechanismError {
         /// The value.
         at: DriveValue,
     },
-    /// A travelling drive or a couple on a member with no rail.
+    /// A travelling drive or a couple on a member with no rail (or, for a
+    /// travelling drive, no slot along a direction of the plane).
     #[error("`{member}` travels, but runs on no rail")]
     TravelWithoutRail {
         /// The member.
         member: MemberName,
     },
+    /// The members of a mechanism with several drives don't add up to one
+    /// freedom for each.
+    #[error(
+        "the mechanism has {found} freedoms; it needs exactly {drives}, one for each drive (3 for each moving member, less 2 for each pivot or rail and 1 for each slot or couple)"
+    )]
+    DriveFreedom {
+        /// How many it has.
+        found: i64,
+        /// How many drives it has.
+        drives: usize,
+    },
+    /// Two drives move different members, or one member twice the same
+    /// way.
+    #[error("every drive moves one member, once turning and once travelling")]
+    DrivesApart,
+    /// A drive asked for that the mechanism doesn't have, or held values
+    /// that don't match its drives.
+    #[error("the mechanism has no such drive")]
+    NoSuchDrive,
     /// No order of closed-form steps places every member.
     #[error(
         "this mechanism can't be solved one step at a time from its drive; left over: {}",
@@ -588,6 +615,9 @@ impl MechanismError {
             | MechanismError::DriveHeld { .. }
             | MechanismError::EmptyRange { .. }
             | MechanismError::TravelWithoutRail { .. }
+            | MechanismError::DriveFreedom { .. }
+            | MechanismError::DrivesApart
+            | MechanismError::NoSuchDrive
             | MechanismError::NoOrder { .. }
             | MechanismError::Overconstrained { .. }
             | MechanismError::Overflow

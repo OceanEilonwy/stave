@@ -784,11 +784,21 @@ fn mechanism(node: &SyntaxNode, block: &SyntaxNode) -> Option<MechanismBlock> {
                         span,
                     }
                 }
+                SyntaxKind::DRIVE => {
+                    let word = token(&entry, SyntaxKind::IDENT)?;
+                    MechanismEntry::Drive {
+                        key: Name::new(word.text(), token_span(&word)).ok()?,
+                        name: Some(name(&child(&entry, SyntaxKind::NAME)?)?),
+                        value: expr(&values.next()?)?,
+                        span,
+                    }
+                }
                 SyntaxKind::FIELD => {
                     let field = field(&entry)?;
                     if field.key.as_str() == "drive" {
                         MechanismEntry::Drive {
                             key: field.key,
+                            name: None,
                             value: field.value,
                             span: field.span,
                         }

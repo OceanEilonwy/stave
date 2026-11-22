@@ -1,6 +1,7 @@
 //! A project opened in the viewer: its files through the pipeline, and an
 //! agent's suggestion drawn as ghosts over it.
 
+use stave_model::mechanism::DriveIndex;
 use stave_model::solved::{AssemblyId, SolvedDesign};
 use stave_modules::LoadError;
 use stave_scene::pipeline::{self, Opened};
@@ -36,13 +37,16 @@ impl SuggestionVerdict {
     }
 }
 
-/// An assembly that moves (a door on its hinges, a drawer on its slides),
-/// for a slider.
+/// One way an assembly moves (a door on its hinges, a drawer on its
+/// slides; one drive of a frame that tilts and rises), for a slider.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Motion {
     /// The assembly, in the drawn design.
     pub assembly: AssemblyId,
-    /// Its name as written: `door_l`.
+    /// Which of its drives (the first, for one with one).
+    pub drive: DriveIndex,
+    /// Its name as written: `door_l`, or with the drive's name for an
+    /// assembly with several (`frame.tilt`).
     pub name: String,
     /// How far it goes.
     pub range: MotionRange,
@@ -258,14 +262,22 @@ impl Project {
         let (Some(design), Some(graph)) = (self.design(), self.graph()) else {
             return Vec::new();
         };
+        // One slider for each drive, labelled with its name when the
+        // assembly has several.
         design
             .assemblies()
             .iter()
-            .filter_map(|assembly| {
-                Some(Motion {
+            .flat_map(|assembly| {
+                let drives = graph.drives(assembly.id);
+                let several = drives.len() > 1;
+                drives.into_iter().map(move |drive| Motion {
                     assembly: assembly.id,
-                    name: assembly.name.clone(),
-                    range: graph.motion_range(assembly.id)?,
+                    drive: drive.drive,
+                    name: match (&drive.name, several) {
+                        (Some(name), true) => format!("{}.{name}", assembly.name),
+                        (Some(_) | None, _) => assembly.name.clone(),
+                    },
+                    range: drive.range,
                 })
             })
             .collect()

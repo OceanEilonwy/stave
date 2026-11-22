@@ -1,16 +1,20 @@
-//! Motion sweeps (layer 5): every assembly with a motion is moved through
-//! its whole travel, from rest and from each scene's poses, and the first
-//! thing it hits is reported with the angle or distance where it hits.
+//! Motion sweeps (layer 5): every drive of every assembly with a motion is
+//! moved through its whole travel, from rest and from each scene's poses,
+//! and the first thing it hits is reported with the angle or distance
+//! where it hits.
 //!
-//! The moving assembly starts closed; everything else stands where the
-//! scene puts it. Every body the motion moves (its parts, the hardware on
-//! them, and the links its hardware's mechanism turns) is swept against
-//! every body that moves differently, the same way for every kind
-//! (grammar, "One collision model"). Each assembly is reported once: the
-//! first start (rest, then the scenes in order) at which it hits
-//! something, with its first contact. An assembly inside another that
-//! moves, or with an item already reported at rest or at a scene's poses,
-//! is left out.
+//! Motions are made one at a time (grammar, "Scenes"): the swept drive
+//! starts closed, every other drive of its assembly is held still where
+//! the start puts it (closed from rest, where a scene poses it from that
+//! scene; [`Checker::sweep_starts`] lists them), and everything else
+//! stands where the scene puts it. Every body the motion moves (its parts,
+//! the hardware on them, and the links its hardware's mechanism turns) is
+//! swept against every body that moves differently, the same way for
+//! every kind (grammar, "One collision model"). Each drive of an assembly
+//! is reported once: the first start (rest, then the scenes in order) at
+//! which it hits something, with its first contact. An assembly inside
+//! another that moves, or with an item already reported at rest or at a
+//! scene's poses, is left out.
 
 use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
 use stave_model::mechanism::MotionShape;
@@ -21,7 +25,7 @@ use stave_geom::sweep::{Mover, Path, Reach, first_contact};
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
-use stave_model::mechanism::DriveValue;
+use stave_model::mechanism::{DriveIndex, DriveValue, Mechanism};
 use stave_model::solved::{AssemblyId, BodyOwner, PartId, PoseValue, SolvedDesign, WorldBox};
 
 use crate::fixes::OverlayChange;
@@ -37,6 +41,16 @@ fn reach_key(reach: &Reach, a: Item, b: Item) -> (i64, bool, bool, Item, Item) {
     };
     let hardware = |item: Item| !matches!(item, Item::Part(_));
     (amount, hardware(a), hardware(b), a, b)
+}
+
+/// Where one drive is swept from: a scene (0 for rest), and every drive's
+/// exact value there (the swept one's is its `from`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SweepStart {
+    /// The scene whose placements the rest of the design takes.
+    pub scene_index: usize,
+    /// Every drive of the assembly, held.
+    pub held: Vec<DriveValue>,
 }
 
 /// An angle rounded down to a tenth of a degree: `87.3deg`.
@@ -247,6 +261,35 @@ impl Checker<'_> {
         }
     }
 
+    /// The starts one drive of an assembly is swept from (grammar,
+    /// "Scenes", motions are made one at a time): rest, with every other
+    /// drive at its `from`, then each scene in order, with every other
+    /// drive held where the scene poses it (closed where it doesn't). The
+    /// held values of later kinds of start (set positions) go here.
+    pub(crate) fn sweep_starts(
+        &self,
+        assembly: AssemblyId,
+        mechanism: &Mechanism,
+        drive: DriveIndex,
+    ) -> Vec<SweepStart> {
+        let closed = mechanism.closed();
+        let mut starts = vec![SweepStart {
+            scene_index: 0,
+            held: closed.clone(),
+        }];
+        for (scene_index, scene) in self.design.scenes.iter().enumerate().skip(1) {
+            let (poses, _) = scene.poses_of(assembly, mechanism.drives().len());
+            let mut held = mechanism.values_of(&poses);
+            if let (Some(own), Some(from)) =
+                (held.get_mut(drive.index()), closed.get(drive.index()))
+            {
+                *own = *from;
+            }
+            starts.push(SweepStart { scene_index, held });
+        }
+        starts
+    }
+
     /// Stops early, leaving the result partial, once `stopped` says so; it
     /// is read before each motion and each scene of it.
     pub(crate) fn sweeps(&mut self, stopped: &dyn Fn() -> bool) {
@@ -256,6 +299,9 @@ impl Checker<'_> {
                 return;
             }
             let Some(path) = self.path(assembly.id) else {
+                continue;
+            };
+            let Some(mechanism) = assembly.mechanism.as_ref() else {
                 continue;
             };
             // Inside another assembly that moves: its path isn't a sweep
@@ -287,22 +333,35 @@ impl Checker<'_> {
             if moving.is_empty() || blocked {
                 continue;
             }
-            for scene_index in 0..self.design.scenes.len() {
-                if stopped() {
-                    return;
-                }
-                let (moves, placements) = self.scene_moves(scene_index);
-                if scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
-                    continue;
-                }
-                if let Some(hit) = self.first_hit(assembly.id, path, &moving, &placements) {
-                    found.push((assembly.id, scene_index, hit));
-                    break;
+            for drive in (0..mechanism.drives().len()).filter_map(DriveIndex::new) {
+                for start in self.sweep_starts(assembly.id, mechanism, drive) {
+                    if stopped() {
+                        return;
+                    }
+                    let (moves, placements) = self.scene_moves(start.scene_index);
+                    if start.scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
+                        continue;
+                    }
+                    // The first drive from rest is the assembly's own path;
+                    // any other start is run on its own.
+                    let own = drive == DriveIndex::FIRST && start.held == mechanism.closed();
+                    let swept = if own {
+                        path.clone()
+                    } else {
+                        match Path::sweeping(mechanism, drive, &start.held) {
+                            Ok(swept) => swept,
+                            Err(_) => continue,
+                        }
+                    };
+                    if let Some(hit) = self.first_hit(assembly.id, &swept, &moving, &placements) {
+                        found.push((assembly.id, start.scene_index, swept, hit));
+                        break;
+                    }
                 }
             }
         }
-        for (assembly, scene_index, (reach, a, b)) in found {
-            self.report_sweep(assembly, scene_index, reach, a, b);
+        for (assembly, scene_index, path, (reach, a, b)) in found {
+            self.report_sweep(assembly, scene_index, &path, reach, a, b);
         }
     }
 
@@ -399,12 +458,13 @@ impl Checker<'_> {
         &self,
         assembly: AssemblyId,
         scene_index: usize,
+        path: &Path,
         a: Item,
         b: Item,
     ) -> (String, Option<OverlayChange>) {
-        let name = self.assembly_name(assembly);
+        let name = self.motion_name(assembly, path);
         let b_name = self.item_name(b);
-        self.clearance(assembly, scene_index, a, b).unwrap_or_else(|| {
+        self.clearance(assembly, scene_index, path, a, b).unwrap_or_else(|| {
             (
                 format!(
                     "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
@@ -424,12 +484,12 @@ impl Checker<'_> {
         &self,
         assembly: AssemblyId,
         scene_index: usize,
+        path: &Path,
         a: Item,
         b: Item,
     ) -> Option<(String, Option<OverlayChange>)> {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
-        let path = self.path(assembly)?;
         let (free, _) = path.mechanism().swing()?;
         let (_, placements) = self.scene_moves(scene_index);
         let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
@@ -564,13 +624,11 @@ impl Checker<'_> {
         &self,
         assembly: AssemblyId,
         scene_index: usize,
+        path: &Path,
         reach: Reach,
         a: Item,
         b: Item,
     ) -> Contact {
-        let Some(path) = self.path(assembly) else {
-            return Contact::default();
-        };
         let (at, shown) = match (reach, path.mechanism().extent()) {
             (Reach::Angle(angle), DriveValue::Turn(limit)) => (
                 PoseValue::Angle(angle),
@@ -632,25 +690,80 @@ impl Checker<'_> {
             .flatten();
         contact.motion = Some(ContactMotion {
             assembly,
+            drive: path.mechanism().swept(),
             at,
             shown,
         });
         contact
     }
 
+    /// The motion a path sweeps, as a message names it: the assembly, or
+    /// the assembly and the drive's name for one with several drives
+    /// (`frame.tilt`).
+    fn motion_name(&self, assembly: AssemblyId, path: &Path) -> String {
+        let name = self.assembly_name(assembly);
+        let mechanism = path.mechanism();
+        match mechanism
+            .drives()
+            .get(mechanism.swept().index())
+            .and_then(|named| named.name.as_ref())
+        {
+            Some(drive) if mechanism.drives().len() > 1 => format!("{name}.{drive}"),
+            Some(_) | None => name,
+        }
+    }
+
+    /// Where the other drives are held while a path sweeps one, for a note
+    /// (`with frame.height held at 150mm`); `None` when they are all
+    /// closed.
+    fn held_note(&self, assembly: AssemblyId, path: &Path) -> Option<String> {
+        let mechanism = path.mechanism();
+        if mechanism.held_closed() {
+            return None;
+        }
+        let name = self.assembly_name(assembly);
+        let held: Vec<String> = mechanism
+            .drives()
+            .iter()
+            .zip(mechanism.held())
+            .enumerate()
+            .filter(|(index, (named, value))| {
+                *index != mechanism.swept().index() && named.drive.from() != **value
+            })
+            .map(|(_, (named, value))| {
+                let amount = match (named.drive.from(), *value) {
+                    (DriveValue::Turn(from), DriveValue::Turn(at)) => Angle::from_microdeg(
+                        at.microdeg()
+                            .saturating_sub(from.microdeg())
+                            .saturating_abs(),
+                    )
+                    .to_string(),
+                    (DriveValue::Travel(from), DriveValue::Travel(at)) => length_text(
+                        Length::from_nm(at.nm().saturating_sub(from.nm()).saturating_abs()),
+                    ),
+                    (DriveValue::Turn(_), DriveValue::Travel(_))
+                    | (DriveValue::Travel(_), DriveValue::Turn(_)) => String::new(),
+                };
+                match &named.name {
+                    Some(drive) => format!("{name}.{drive} held at {amount}"),
+                    None => format!("{name} held at {amount}"),
+                }
+            })
+            .collect();
+        (!held.is_empty()).then(|| format!("with {}", crate::names::and_list(&held)))
+    }
+
     fn report_sweep(
         &mut self,
         assembly: AssemblyId,
         scene_index: usize,
+        path: &Path,
         reach: Reach,
         a: Item,
         b: Item,
     ) {
-        let name = self.assembly_name(assembly);
+        let name = self.motion_name(assembly, path);
         let (a_name, b_name) = (self.item_name(a), self.item_name(b));
-        let Some(path) = self.path(assembly) else {
-            return;
-        };
         let extent = path.mechanism().extent();
         // A door that doesn't turn about one fixed line (a cup hinge's)
         // swings its edges out as it starts to open: an early hit is
@@ -661,11 +774,11 @@ impl Checker<'_> {
             (Reach::Angle(angle), DriveValue::Turn(limit)) => {
                 let at = angle_text(angle);
                 let (help, overlay) = if angle.microdeg() < 1_000_000 {
-                    self.clearance_help(assembly, scene_index, a, b)
+                    self.clearance_help(assembly, scene_index, path, a, b)
                 } else {
                     let early = swings_out && angle < Angle::from_deg(30);
                     early
-                        .then(|| self.clearance(assembly, scene_index, a, b))
+                        .then(|| self.clearance(assembly, scene_index, path, a, b))
                         .flatten()
                         .unwrap_or_else(|| (format!(
                             "open {name} no further than {at} (give its hardware's kind a smaller range), or move {b_name} out of its way"
@@ -703,6 +816,9 @@ impl Checker<'_> {
                 return;
             }
         };
+        if let Some(held) = self.held_note(assembly, path) {
+            notes.push(held);
+        }
         if scene_index > 0
             && let Some(scene) = self.design.scenes.get(scene_index)
         {
@@ -720,7 +836,7 @@ impl Checker<'_> {
                 self.motion_hardware(assembly)
                     .and_then(|hardware| self.hardware_place(hardware))
             });
-        self.next_contact = Some(self.sweep_contact(assembly, scene_index, reach, a, b));
+        self.next_contact = Some(self.sweep_contact(assembly, scene_index, path, reach, a, b));
         self.report(
             Severity::Error,
             Code::Motion,
@@ -743,13 +859,25 @@ pub(crate) fn mechanism_paths(design: &SolvedDesign) -> crate::Mechanisms {
     let mut broken = Vec::new();
     for assembly in design.assemblies() {
         paths.push(match &assembly.mechanism {
-            Some(mechanism) => match Path::new(mechanism) {
-                Ok(path) => Some(path),
-                Err(error) => {
-                    broken.push((assembly.id, error));
-                    None
+            Some(mechanism) => {
+                // Each drive is run through its range with the others at
+                // their `from` (grammar, "How a mechanism is solved", dead
+                // points); the first drive's is the assembly's path.
+                let closed = mechanism.closed();
+                let others = (1..mechanism.drives().len())
+                    .filter_map(DriveIndex::new)
+                    .map(|drive| Path::sweeping(mechanism, drive, &closed).map(|_| ()));
+                match Path::new(mechanism).and_then(|path| {
+                    others.collect::<Result<Vec<()>, _>>()?;
+                    Ok(path)
+                }) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        broken.push((assembly.id, error));
+                        None
+                    }
                 }
-            },
+            }
             None => None,
         });
     }

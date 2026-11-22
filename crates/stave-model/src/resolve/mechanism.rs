@@ -19,7 +19,7 @@ use super::{Cx, Resolver};
 use crate::defs::{
     AdjustDef, BodyDef, BodyId, BodyName, Carrier, ClampDef, ConstraintDef, CouplingDef,
     CylinderTilt, DriveDef, EntryPair, EntrySide, FrameAxis, KindPoint, LayoutDef, MechanismDef,
-    NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
+    NamedDriveDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
@@ -776,7 +776,10 @@ impl Resolver<'_> {
     ) -> Option<MechanismDef> {
         let mut constraints = Vec::new();
         let mut couplings = Vec::new();
-        let mut drive: Option<DriveDef> = None;
+        let mut drives: Vec<NamedDriveDef> = Vec::new();
+        let mut drives_written = 0usize;
+        let mut drive_names: BTreeMap<&str, Span> = BTreeMap::new();
+        let mut unnamed_drives: Vec<Span> = Vec::new();
         let mut stop: Option<(&ast::Expr, &ast::StringLit, Span)> = None;
         let mut pin_diameter: Option<RExpr> = None;
         let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
@@ -908,13 +911,40 @@ impl Resolver<'_> {
                         None => ok = false,
                     }
                 }
-                ast::MechanismEntry::Drive { key, value, span } => {
-                    if let Some(first) = seen.insert("drive", key.span()) {
-                        self.duplicate("drive", key.span(), first, cx);
-                        continue;
+                ast::MechanismEntry::Drive {
+                    key,
+                    name,
+                    value,
+                    span,
+                } => {
+                    drives_written += 1;
+                    match name {
+                        Some(name) => {
+                            if let Some(first) = drive_names.insert(name.as_str(), name.span()) {
+                                self.report(
+                                    Diagnostic::error(
+                                        Code::DuplicateName,
+                                        format!("two drives are called '{name}'"),
+                                        Label::new(cx.file, name.span()),
+                                    )
+                                    .with_label(Label::with_message(
+                                        cx.file,
+                                        first,
+                                        "first written here",
+                                    ))
+                                    .with_help("give each drive its own name"),
+                                );
+                                ok = false;
+                                continue;
+                            }
+                        }
+                        None => unnamed_drives.push(key.span()),
                     }
                     match self.drive(cx, kind, bodies, value, *span) {
-                        Some(lowered) => drive = Some(lowered),
+                        Some(lowered) => drives.push(NamedDriveDef {
+                            name: name.as_ref().map(|name| name.as_str().to_owned()),
+                            drive: lowered,
+                        }),
                         None => ok = false,
                     }
                 }
@@ -960,10 +990,91 @@ impl Resolver<'_> {
                 }
             }
         }
-        if drive.is_none() && seen.contains_key("drive") {
-            // Written, but it didn't lower (reported).
+        if drives.len() != drives_written {
+            // Written, but one didn't lower (reported).
             return None;
         }
+        // With more than one drive, each is named, they move one member,
+        // one turning and one travelling, and nothing stops them.
+        if drives.len() > 1 {
+            let count = drives.len();
+            for at in &unnamed_drives {
+                self.error_help(
+                    Code::Mechanism,
+                    format!("this mechanism has {count} drives, so each needs a name"),
+                    cx.file,
+                    *at,
+                    "write drive <name>: ..., such as drive tilt: turn(...)",
+                );
+                ok = false;
+            }
+            if let Some((first, rest)) = drives.split_first() {
+                let label = |drive: &NamedDriveDef| match &drive.name {
+                    Some(name) => format!("`{name}`"),
+                    None => "the drive".to_owned(),
+                };
+                let member = |body: BodyId| {
+                    bodies
+                        .get(body.index())
+                        .map(|b| b.name.as_str().to_owned())
+                        .unwrap_or_default()
+                };
+                for (index, other) in rest.iter().enumerate() {
+                    let earlier = drives
+                        .get(..=index)
+                        .unwrap_or_default()
+                        .iter()
+                        .find(|d| d.drive.turns() == other.drive.turns());
+                    if other.drive.body() != first.drive.body() {
+                        self.error_help(
+                            Code::Mechanism,
+                            format!(
+                                "{} moves `{}`, but {} moves `{}`: every drive moves one member",
+                                label(other),
+                                member(other.drive.body()),
+                                label(first),
+                                member(first.drive.body())
+                            ),
+                            cx.file,
+                            other.drive.span(),
+                            "drive the member that is with: the part that moves, once turning and once travelling",
+                        );
+                        ok = false;
+                    } else if let Some(earlier) = earlier {
+                        let verb = if other.drive.turns() { "turn" } else { "move" };
+                        let way = if other.drive.turns() {
+                            "turns"
+                        } else {
+                            "travels"
+                        };
+                        self.error_help(
+                            Code::Mechanism,
+                            format!(
+                                "{} and {} both {verb} `{}`: a member {way} one way",
+                                label(earlier),
+                                label(other),
+                                member(other.drive.body())
+                            ),
+                            cx.file,
+                            other.drive.span(),
+                            "make one drive a turn(...) and the other a travel(...)",
+                        );
+                        ok = false;
+                    }
+                }
+            }
+            if let Some((_, _, span)) = stop.take() {
+                self.error_help(
+                    Code::Mechanism,
+                    "a stop belongs to a mechanism with one drive",
+                    cx.file,
+                    span,
+                    "end each drive's range with its to: instead",
+                );
+                ok = false;
+            }
+        }
+        let drive = drives.first().map(|named| &named.drive);
         // A mechanism without a drive follows the hardware that drives its
         // assembly (a lid stay); its stop is an angle or a length, as that
         // drive's values are.
@@ -983,7 +1094,7 @@ impl Resolver<'_> {
             span: block.span,
             constraints,
             couplings,
-            drive,
+            drives,
             stop,
             pin_diameter,
             pins: pins_written,

@@ -13,7 +13,8 @@ use stave_lang::units::Length;
 use stave_model::Model;
 use stave_model::defs::KindDef;
 use stave_model::mechanism::{
-    DriveValue, FramePoint, Mechanism, MechanismEntry, MemberIndex, MotionShape,
+    DriveIndex, DriveValue, FramePoint, Mechanism, MechanismDrive, MechanismEntry, MemberIndex,
+    MotionShape,
 };
 use stave_model::solved::{
     Body, BodyCarrier, BodyOwner, BodyRef, Contact, CutKind, CutPlace, Depth, End, EntryName,
@@ -305,9 +306,37 @@ fn frame_point(point: FramePoint) -> String {
 
 /// An assembly's motion, from its mechanism: a turn about one pin and a
 /// travel along one rail in world terms, anything else as its plane and
-/// entries.
+/// entries. One for each drive of a mechanism with several, named, each
+/// with the others closed.
 fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
-    match mechanism.shape() {
+    if mechanism.drives().len() <= 1 {
+        return drive_motion(design, mechanism, mechanism.shape(), mechanism.drive());
+    }
+    let closed = mechanism.closed();
+    mechanism
+        .drives()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, named)| {
+            let shape = mechanism.shape_of(DriveIndex::new(index)?, &closed);
+            let words = drive_motion(design, mechanism, shape, &named.drive);
+            Some(match &named.name {
+                Some(name) => format!("{name}: {words}"),
+                None => words,
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// One drive's motion of a mechanism, of the shape it has.
+fn drive_motion(
+    design: &SolvedDesign,
+    mechanism: &Mechanism,
+    shape: MotionShape,
+    drive: &MechanismDrive,
+) -> String {
+    match shape {
         MotionShape::Travel { toward, travel } => {
             format!("travels {} toward the {}", mm(travel), toward.word())
         }
@@ -380,7 +409,7 @@ fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
                     } => format!("couple {} to {}: {ratio}", member(follower), member(leader)),
                 })
                 .collect();
-            let reach = match mechanism.drive().extent() {
+            let reach = match drive.extent() {
                 DriveValue::Turn(angle) => format!("turns up to {angle}"),
                 DriveValue::Travel(length) => format!("travels up to {}", mm(length)),
             };

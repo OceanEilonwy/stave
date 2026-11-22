@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[type-mismatch]: `frame.tilt` turns, so its pose is an angle, found a length
+   --> /project/project.stave:170:21
+    |
+170 |   pose frame.tilt = 150mm
+    |                     ^^^^^
+    = help: write an angle such as 15deg, or open or closed

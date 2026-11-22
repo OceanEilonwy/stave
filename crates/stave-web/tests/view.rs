@@ -251,3 +251,40 @@ fn what_a_part_is_is_said_in_words() {
     assert!(!picked.what.contains('_'), "{picked:?}");
     assert!(picked.what.starts_with("Part cut from"), "{picked:?}");
 }
+
+/// A frame that tilts and rises (one assembly, two named drives): one
+/// slider for each drive, labelled with its name, each moving the frame
+/// its own way.
+#[test]
+fn a_frame_with_two_drives_has_a_slider_for_each() {
+    let text = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../stave-app/tests/turning/rising_cheval.stave"),
+    )
+    .unwrap();
+    let files = Files::new("/p", BTreeMap::from([("project.stave".to_owned(), text)])).unwrap();
+    let mut view = View::new(Project::open(&files, None).unwrap(), 400, 300);
+    let names: Vec<&str> = view
+        .project()
+        .motions()
+        .iter()
+        .map(|motion| motion.name.as_str())
+        .collect();
+    assert_eq!(names, ["frame.tilt", "frame.height"]);
+    let turns: Vec<bool> = view
+        .project()
+        .motions()
+        .iter()
+        .map(|motion| motion.range.turns())
+        .collect();
+    assert_eq!(turns, [true, false]);
+    let closed = view.posed().unwrap();
+    view.set_pose(1, 0.5).unwrap();
+    let lowered = view.posed().unwrap();
+    assert_ne!(closed, lowered);
+    view.set_pose(0, 0.25).unwrap();
+    let both = view.posed().unwrap();
+    assert_ne!(lowered, both);
+    let summary: serde_json::Value = serde_json::from_str(&view.summary_json()).unwrap();
+    assert_eq!(summary["motions"][1]["name"], "frame.height");
+}

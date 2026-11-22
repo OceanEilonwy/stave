@@ -111,6 +111,35 @@ impl Point {
         }
         self
     }
+
+    /// The point moved by `by` (an offset), saturating.
+    pub fn plus(self, by: Point) -> Self {
+        let mut moved = self;
+        for axis in Axis::ALL {
+            moved = moved.with(
+                axis,
+                Length::from_nm(self.get(axis).nm().saturating_add(by.get(axis).nm())),
+            );
+        }
+        moved
+    }
+
+    /// The offset the other way, saturating.
+    pub fn negated(self) -> Self {
+        Point::default().minus(self)
+    }
+
+    /// The point moved back by `by`, saturating.
+    pub fn minus(self, by: Point) -> Self {
+        let mut moved = self;
+        for axis in Axis::ALL {
+            moved = moved.with(
+                axis,
+                Length::from_nm(self.get(axis).nm().saturating_sub(by.get(axis).nm())),
+            );
+        }
+        moved
+    }
 }
 
 /// An axis-aligned box in world coordinates. `min <= max` on every axis.
@@ -2509,8 +2538,51 @@ pub enum PoseValue {
 pub struct ScenePose {
     /// The assembly.
     pub assembly: AssemblyId,
+    /// The drive it sets (`frame.tilt`); `None` for every drive of the
+    /// assembly: its one drive, or `open` and `closed` for all of them.
+    pub drive: Option<crate::mechanism::DriveIndex>,
     /// Its motion value.
     pub value: PoseValue,
+}
+
+impl ScenePose {
+    /// The value this pose gives `drive` of its assembly, if it sets it.
+    pub fn value_for(&self, drive: crate::mechanism::DriveIndex) -> Option<PoseValue> {
+        match self.drive {
+            Some(set) if set != drive => None,
+            Some(_) | None => Some(self.value),
+        }
+    }
+}
+
+impl Scene {
+    /// The value this scene poses one drive of an assembly at, if it does.
+    pub fn pose_of(
+        &self,
+        assembly: AssemblyId,
+        drive: crate::mechanism::DriveIndex,
+    ) -> Option<PoseValue> {
+        self.poses
+            .iter()
+            .filter(|pose| pose.assembly == assembly)
+            .find_map(|pose| pose.value_for(drive))
+    }
+
+    /// The values this scene poses every drive of an assembly with
+    /// `drives` drives at (`closed` where it doesn't), and whether it poses
+    /// the assembly at all.
+    pub fn poses_of(&self, assembly: AssemblyId, drives: usize) -> (Vec<PoseValue>, bool) {
+        let mut posed = false;
+        let values = (0..drives)
+            .map(|index| {
+                let found = crate::mechanism::DriveIndex::new(index)
+                    .and_then(|drive| self.pose_of(assembly, drive));
+                posed |= found.is_some();
+                found.unwrap_or(PoseValue::Closed)
+            })
+            .collect();
+        (values, posed)
+    }
 }
 
 /// Something a scene shows or hides.

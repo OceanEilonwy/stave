@@ -5,11 +5,11 @@
 //!
 //! Nothing here knows a kind, a base or a member by name. A piece of
 //! hardware's mechanism is counted on its own as soon as it is placed (one
-//! freedom for a mechanism with a drive, none for one that follows), and
+//! freedom for each drive, none for a mechanism that follows), and
 //! reported once per kind. An assembly's mechanism is then the first
 //! driving item's, every other driving item must move alike (the same
-//! members, entries and drive, seen in the first one's plane), and the
-//! followers' members and entries are added. The exact
+//! members, entries and drives, drive for drive, seen in the first one's
+//! plane), and the followers' members and entries are added. The exact
 //! [`stave_model::mechanism::Mechanism`] is what the solved design holds;
 //! the order of steps and the poses are worked out in `stave-geom`.
 
@@ -24,8 +24,9 @@ use stave_model::defs::{
 };
 use stave_model::ids::{AssemblyId, HardwareId, KindId};
 use stave_model::mechanism::{
-    DriveValue, FrameDirection, FramePoint, Holding, Mechanism, MechanismDrive, MechanismEntry,
-    MechanismError, MechanismFrame, MechanismMember, MechanismStop, MemberBody, MemberIndex,
+    DriveIndex, DriveValue, FrameDirection, FramePoint, Holding, Mechanism, MechanismDrive,
+    MechanismEntry, MechanismError, MechanismFrame, MechanismMember, MechanismStop, MemberBody,
+    MemberIndex, NamedDrive,
 };
 use stave_model::solved::Point;
 use stave_model::value::Value;
@@ -253,6 +254,21 @@ impl Drive {
     }
 }
 
+/// A kind's drive with its name, when written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KindDrive {
+    pub name: Option<String>,
+    pub drive: Drive,
+}
+
+impl KindDrive {
+    /// An unnamed drive.
+    #[cfg(test)]
+    pub fn unnamed(drive: Drive) -> KindDrive {
+        KindDrive { name: None, drive }
+    }
+}
+
 /// Where a kind's `stop` stops the drive, exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopValue {
@@ -270,8 +286,9 @@ pub(crate) struct HardwareMechanism {
     /// The names of its kind's roles, in order: an entry may name one.
     pub roles: Vec<String>,
     pub entries: Vec<Entry>,
-    /// `None` for a mechanism that follows its assembly's.
-    pub drive: Option<Drive>,
+    /// Empty for a mechanism that follows its assembly's; every one moves
+    /// one member.
+    pub drives: Vec<KindDrive>,
     pub stop: Option<(StopValue, String)>,
 }
 
@@ -296,7 +313,8 @@ impl HardwareMechanism {
 struct Declared {
     members: Vec<MechanismMember>,
     entries: Vec<MechanismEntry>,
-    drive: Option<MechanismDrive>,
+    /// Empty for a mechanism that follows.
+    drives: Vec<NamedDrive>,
     stop: Option<MechanismStop>,
     bodies: BTreeMap<BodyId, MemberIndex>,
 }
@@ -341,8 +359,9 @@ fn declare(
         bodies.insert(member.body, at);
         Ok(at)
     };
-    // The driven member first: what the assembly moves with.
-    let own_drive = mechanism.drive.map(|drive| drive.body());
+    // The driven member first: what the assembly moves with (every drive
+    // moves it).
+    let own_drive = mechanism.drives.first().map(|named| named.drive.body());
     let driven = match own_drive {
         Some(body) => {
             let member = mechanism.member(body).ok_or(DeclareError::Internal)?;
@@ -482,27 +501,33 @@ fn declare(
         angle.to_nearest_angle().ok_or(DeclareError::Internal)
     };
     let length = |length: ExactLength| length.to_nearest_length().ok_or(DeclareError::Internal);
-    let drive = match mechanism.drive {
-        Some(Drive::Turn {
-            body,
-            from,
-            to: end,
-        }) => Some(MechanismDrive::Turn {
-            member: to(&body)?,
-            from: angle(from)?,
-            to: angle(end)?,
-        }),
-        Some(Drive::Travel {
-            body,
-            from,
-            to: end,
-        }) => Some(MechanismDrive::Travel {
-            member: to(&body)?,
-            from: length(from)?,
-            to: length(end)?,
-        }),
-        None => None,
-    };
+    let mut drives = Vec::with_capacity(mechanism.drives.len());
+    for named in &mechanism.drives {
+        let drive = match named.drive {
+            Drive::Turn {
+                body,
+                from,
+                to: end,
+            } => MechanismDrive::Turn {
+                member: to(&body)?,
+                from: angle(from)?,
+                to: angle(end)?,
+            },
+            Drive::Travel {
+                body,
+                from,
+                to: end,
+            } => MechanismDrive::Travel {
+                member: to(&body)?,
+                from: length(from)?,
+                to: length(end)?,
+            },
+        };
+        drives.push(NamedDrive {
+            name: named.name.clone(),
+            drive,
+        });
+    }
     let stop = match &mechanism.stop {
         Some((StopValue::Angle(at), message)) => Some(MechanismStop {
             at: DriveValue::Turn(angle(*at)?),
@@ -517,7 +542,7 @@ fn declare(
     Ok(Declared {
         members,
         entries,
-        drive,
+        drives,
         stop,
         bodies,
     })
@@ -713,9 +738,17 @@ impl Solver<'_> {
         let Some(found) = freedoms(&declared.members, &declared.entries) else {
             return Err(Fault::Internal("a mechanism's freedoms").into());
         };
-        let wanted = if declared.drive.is_some() { 1 } else { 0 };
+        let wanted = i64::try_from(declared.drives.len())
+            .map_err(|_| Fault::Internal("a mechanism's drives"))?;
         if found != wanted {
-            let (message, help) = if declared.drive.is_some() {
+            let (message, help) = if declared.drives.len() > 1 {
+                (
+                    format!(
+                        "{kind_name}'s mechanism has {found} freedoms; it needs exactly {wanted}, one for each drive"
+                    ),
+                    "count three for the driven member and for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until one is left for each drive",
+                )
+            } else if !declared.drives.is_empty() {
                 (
                     format!("{kind_name}'s mechanism has {found} freedoms; it needs exactly one"),
                     "count three for the driven member and for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until one is left",
@@ -741,18 +774,18 @@ impl Solver<'_> {
                 "pin each of them to a member that is held or driven, or to one pinned to those",
             ));
         }
-        let Some(drive) = declared.drive else {
+        if declared.drives.is_empty() {
             return Ok(None);
-        };
+        }
         let frame = mechanism
             .plane
             .frame()
             .ok_or(Fault::Internal("a mechanism's plane"))?;
-        match Mechanism::new(
+        match Mechanism::with_drives(
             frame,
             declared.members,
             declared.entries,
-            drive,
+            declared.drives,
             declared.stop,
             vec![hardware],
         ) {
@@ -790,12 +823,20 @@ impl Solver<'_> {
             MechanismError::Freedom { .. } => {
                 "add or remove pins until one freedom is left for the drive"
             }
+            MechanismError::DriveFreedom { .. } => {
+                "add or remove pins until one freedom is left for each drive"
+            }
+            MechanismError::DrivesApart => {
+                "drive one member, the one with: the part that moves, once turning and once travelling"
+            }
             MechanismError::DriveNotFree { .. } => {
                 "drive the member that is with: the piece (the door, the lid, the drawer side)"
             }
             MechanismError::EmptyRange => "give the drive a from: and a to: that differ",
             // Checked when the kind is resolved.
-            MechanismError::UnknownMember { .. } | MechanismError::NoMembers => {
+            MechanismError::UnknownMember { .. }
+            | MechanismError::NoMembers
+            | MechanismError::NoDrives => {
                 return Fault::Earlier.into();
             }
             MechanismError::Overflow => return Fault::Overflow.into(),
@@ -847,7 +888,7 @@ impl Solver<'_> {
             .collect();
         let (drivers, followers): (Vec<_>, Vec<_>) = items
             .into_iter()
-            .partition(|(_, _, mechanism)| mechanism.drive.is_some());
+            .partition(|(_, _, mechanism)| !mechanism.drives.is_empty());
         let Some(&(first, first_placed, base)) = drivers.first() else {
             return Ok(None);
         };
@@ -886,13 +927,19 @@ impl Solver<'_> {
                 ).into());
             }
         }
+        // A drive's name is read through the assembly, so no item of its
+        // component has it.
+        for (id, _, mechanism) in &drivers {
+            self.drive_names_clash(assembly, *id, mechanism);
+        }
         let moving = self.moving_roles(&first_placed.roles, Some(assembly));
         let is_moving = |role: RoleIndex| moving.get(role.index()).copied().unwrap_or(false);
         // Each piece of hardware's own mechanism was checked when placed.
         let Ok(mut declared) = declare(first, base, &is_moving, &base.plane, None, 0) else {
             return Err(Fault::Earlier.into());
         };
-        let Some(mut drive) = declared.drive else {
+        let mut drives = std::mem::take(&mut declared.drives);
+        let Some(driven) = drives.first().map(|named| named.drive.member()) else {
             return Err(Fault::Internal("the drive of a mechanism").into());
         };
         let mut stop = declared.stop.take();
@@ -910,14 +957,21 @@ impl Solver<'_> {
             let Ok(other) = declare(id, mechanism, &is_moving, &base.plane, None, 0) else {
                 return Err(Fault::Earlier.into());
             };
-            let start = |d: Option<MechanismDrive>| d.map(|d| (d.member(), d.from(), d.turns()));
+            let start = |named: &NamedDrive| {
+                (
+                    named.name.clone(),
+                    named.drive.member(),
+                    named.drive.from(),
+                    named.drive.turns(),
+                )
+            };
             let alike = other
                 .members
                 .iter()
                 .map(|m| (&m.name, m.holding))
                 .eq(declared.members.iter().map(|m| (&m.name, m.holding)))
                 && other.entries == declared.entries
-                && start(other.drive) == start(Some(drive));
+                && other.drives.iter().map(start).eq(drives.iter().map(start));
             if !alike {
                 let (file, span) = self
                     .hardware_call(id)
@@ -939,16 +993,17 @@ impl Solver<'_> {
                 );
                 return Err(reported.into());
             }
-            if let Some(other_drive) = other.drive
-                && let Some(narrower) = narrower(&drive, other_drive.to())
-            {
-                drive = narrower;
+            for (named, other_named) in drives.iter_mut().zip(&other.drives) {
+                if let Some(narrower) = narrower(&named.drive, other_named.drive.to()) {
+                    named.drive = narrower;
+                }
             }
-            if let Some(other_stop) = other.stop {
+            if let Some(other_stop) = other.stop
+                && let Some(first_drive) = drives.first()
+            {
+                let from = first_drive.drive.from();
                 stop = Some(match stop {
-                    Some(current)
-                        if nearer(drive.from(), current.at, other_stop.at) == current.at =>
-                    {
+                    Some(current) if nearer(from, current.at, other_stop.at) == current.at => {
                         current
                     }
                     Some(_) | None => other_stop,
@@ -965,17 +1020,23 @@ impl Solver<'_> {
             let moving = self.moving_roles(&item_placed.roles, Some(assembly));
             let is_moving = |role: RoleIndex| moving.get(role.index()).copied().unwrap_or(false);
             let offset = declared.members.len();
-            let Ok(follower) = declare(
-                id,
-                mechanism,
-                &is_moving,
-                &base.plane,
-                Some(drive.member()),
-                offset,
-            ) else {
+            let Ok(follower) =
+                declare(id, mechanism, &is_moving, &base.plane, Some(driven), offset)
+            else {
                 return Err(Fault::Earlier.into());
             };
             if let Some(follower_stop) = follower.stop {
+                // An angle stops the drive that turns, a length the one
+                // that travels.
+                let stopped = drives
+                    .iter()
+                    .position(|named| {
+                        named.drive.turns() == matches!(follower_stop.at, DriveValue::Turn(_))
+                    })
+                    .unwrap_or(0);
+                let Some(drive) = drives.get(stopped).map(|named| named.drive) else {
+                    return Err(Fault::Internal("the drive of a mechanism").into());
+                };
                 let at = match (follower_stop.at, drive) {
                     (DriveValue::Turn(_), MechanismDrive::Turn { .. })
                     | (DriveValue::Travel(_), MechanismDrive::Travel { .. }) => follower_stop.at,
@@ -998,16 +1059,24 @@ impl Solver<'_> {
                         ).into());
                     }
                 };
-                if let Some(narrower) = narrower(&drive, at) {
-                    drive = narrower;
+                if let Some(narrower) = narrower(&drive, at)
+                    && let Some(named) = drives.get_mut(stopped)
+                {
+                    named.drive = narrower;
                 }
-                stop = Some(match stop {
-                    Some(current) if nearer(drive.from(), current.at, at) == current.at => current,
-                    Some(_) | None => MechanismStop {
-                        at,
-                        message: follower_stop.message,
-                    },
-                });
+                // What stops a mechanism with several drives is its
+                // drives' own ends.
+                if drives.len() == 1 {
+                    stop = Some(match stop {
+                        Some(current) if nearer(drive.from(), current.at, at) == current.at => {
+                            current
+                        }
+                        Some(_) | None => MechanismStop {
+                            at,
+                            message: follower_stop.message,
+                        },
+                    });
+                }
             }
             declared.members.extend(follower.members);
             declared.entries.extend(follower.entries);
@@ -1020,11 +1089,11 @@ impl Solver<'_> {
             .plane
             .frame()
             .ok_or(Fault::Internal("a mechanism's plane"))?;
-        match Mechanism::new(
+        match Mechanism::with_drives(
             frame,
             declared.members,
             declared.entries,
-            drive,
+            drives,
             stop,
             hardware,
         ) {
@@ -1034,6 +1103,15 @@ impl Solver<'_> {
                 Err(self.counted_error(base.kind, &kind_name, &error))
             }
         }
+    }
+}
+
+/// `a`, `a or b`, `a, b or c`.
+fn and_list(items: &[String], word: &str) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} {word} {last}", rest.join(", ")),
     }
 }
 
@@ -1056,19 +1134,227 @@ fn narrower(drive: &MechanismDrive, to: DriveValue) -> Option<MechanismDrive> {
 }
 
 impl Solver<'_> {
-    /// A scene's pose of an assembly asks no more of its mechanism than it
+    /// A drive name of a piece of hardware that moves `assembly` which is
+    /// also the name of an item of the assembly's component is
+    /// `error[duplicate-name]` at the hardware (grammar, "Mechanisms",
+    /// drives), once for each component and name, at the first piece of
+    /// hardware with that drive.
+    fn drive_names_clash(
+        &mut self,
+        assembly: AssemblyId,
+        hardware: HardwareId,
+        mechanism: &HardwareMechanism,
+    ) {
+        let Some(inst) = self.model.assemblies.get(assembly.index()) else {
+            return;
+        };
+        let assembly_name = inst.name.clone();
+        let Some(hardware_inst) = self.model.hardware.get(hardware.index()) else {
+            return;
+        };
+        let hardware_def = hardware_inst.def;
+        // The component the hardware is declared in.
+        let Some(stave_model::defs::Scope::Component(component)) = self
+            .model
+            .defs
+            .decl(stave_model::defs::DefId::Hardware(hardware_def))
+            .map(|decl| decl.scope)
+        else {
+            return;
+        };
+        let hardware_name = hardware_inst.name.clone();
+        let items: Vec<String> = self
+            .model
+            .defs
+            .sound_component(component)
+            .map(|def| def.items.iter().map(|item| self.def_name(*item)).collect())
+            .unwrap_or_default();
+        for named in &mechanism.drives {
+            let Some(name) = &named.name else {
+                continue;
+            };
+            if !items.contains(name) || !self.reported_drive_names.insert((component, name.clone()))
+            {
+                continue;
+            }
+            let Some((file, span)) = self.hardware_call(hardware) else {
+                continue;
+            };
+            let kind_name = self.def_name(stave_model::defs::DefId::Kind(mechanism.kind));
+            self.report(
+                Diagnostic::error(
+                    Code::DuplicateName,
+                    format!(
+                        "`{name}` is a drive of {hardware_name}'s kind and an item of {assembly_name}"
+                    ),
+                    Label::new(file, span),
+                )
+                .with_note(format!(
+                    "pose {assembly_name}.{name} would name both; {kind_name} calls one of its drives `{name}`"
+                ))
+                .with_help("rename the item, or name the drive another way in its kind"),
+            );
+        }
+    }
+
+    /// How a scene's pose names a drive (grammar, "Scenes", a pose names a
+    /// drive): `Some` for one drive of an assembly with several, `None`
+    /// for every drive (the one drive, or `open` and `closed` for all).
+    /// A name that isn't one of the assembly's drives is
+    /// `error[unknown-name]`, a value of the other kind for the drive
+    /// `error[type-mismatch]`, and an angle or a length without a drive's
+    /// name for an assembly with several `error[motion]`.
+    pub(crate) fn pose_drive(
+        &mut self,
+        assembly: AssemblyId,
+        mechanism: Option<&Mechanism>,
+        pose: &stave_model::defs::PoseDef,
+        value: stave_model::solved::PoseValue,
+        file: stave_lang::FileId,
+    ) -> Solved<Option<DriveIndex>> {
+        use stave_model::solved::PoseValue;
+        let name = self
+            .model
+            .assemblies
+            .get(assembly.index())
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let named: Vec<String> = mechanism
+            .map(|m| m.drives().iter().filter_map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
+        let drive = match (&pose.drive, mechanism) {
+            (Some((drive_name, span)), None) => {
+                return Err(self
+                    .error(
+                        Code::UnknownName,
+                        format!("`{name}` doesn't move, so it has no drive `{drive_name}`"),
+                        file,
+                        *span,
+                        format!("pose an assembly its hardware moves, or write pose {name} = ..."),
+                    )
+                    .into());
+            }
+            (Some((drive_name, span)), Some(mechanism)) => {
+                match mechanism.drive_named(drive_name) {
+                    Some(drive) => drive,
+                    None => {
+                        let help = if named.is_empty() {
+                            format!("{name} moves one way: write pose {name} = ...")
+                        } else {
+                            let choices: Vec<String> =
+                                named.iter().map(|d| format!("{name}.{d}")).collect();
+                            format!("its drives are {}", and_list(&choices, "and"))
+                        };
+                        return Err(self
+                            .error(
+                                Code::UnknownName,
+                                format!("`{name}` has no drive `{drive_name}`"),
+                                file,
+                                *span,
+                                help,
+                            )
+                            .into());
+                    }
+                }
+            }
+            (None, Some(mechanism)) if mechanism.drives().len() > 1 => {
+                if matches!(value, PoseValue::Open | PoseValue::Closed) {
+                    return Ok(None);
+                }
+                let ways = match mechanism.drives().len() {
+                    2 => "two".to_owned(),
+                    3 => "three".to_owned(),
+                    other => other.to_string(),
+                };
+                let choices: Vec<String> = named.iter().map(|d| format!("{name}.{d}")).collect();
+                return Err(self
+                    .error(
+                        Code::Motion,
+                        format!("`{name}` moves {ways} ways; write {}", and_list(&choices, "or")),
+                        file,
+                        pose.span,
+                        "name the drive the pose sets after the assembly, as in pose frame.tilt = 15deg",
+                    )
+                    .into());
+            }
+            (None, Some(_)) => DriveIndex::FIRST,
+            (None, None) => return Ok(None),
+        };
+        let Some(mechanism) = mechanism else {
+            return Ok(None);
+        };
+        let Some(found) = mechanism.drive_at(drive) else {
+            return Err(Fault::Internal("a drive of a mechanism").into());
+        };
+        let label = match (
+            &found.name,
+            mechanism.drives().len() > 1 || pose.drive.is_some(),
+        ) {
+            (Some(drive_name), true) => format!("{name}.{drive_name}"),
+            (Some(_) | None, _) => name,
+        };
+        let mismatch = match (found.drive.turns(), value) {
+            (true, PoseValue::Travel(_)) => Some(("turns", "an angle", "a length", "15deg")),
+            (false, PoseValue::Angle(_)) => Some(("travels", "a length", "an angle", "150mm")),
+            (
+                _,
+                PoseValue::Open | PoseValue::Closed | PoseValue::Angle(_) | PoseValue::Travel(_),
+            ) => None,
+        };
+        if let Some((moves, wanted, found_kind, example)) = mismatch {
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("`{label}` {moves}, so its pose is {wanted}, found {found_kind}"),
+                    file,
+                    pose.value.span,
+                    format!("write {wanted} such as {example}, or open or closed"),
+                )
+                .into());
+        }
+        // One drive is every drive.
+        Ok((mechanism.drives().len() > 1).then_some(drive))
+    }
+
+    /// An assembly, or one drive of it, as a message names it.
+    pub(crate) fn pose_name(
+        &self,
+        assembly: AssemblyId,
+        mechanism: Option<&Mechanism>,
+        drive: Option<DriveIndex>,
+    ) -> String {
+        let name = self
+            .model
+            .assemblies
+            .get(assembly.index())
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        match drive
+            .and_then(|drive| mechanism?.drive_at(drive))
+            .and_then(|named| named.name.as_ref())
+        {
+            Some(drive_name) => format!("{name}.{drive_name}"),
+            None => name,
+        }
+    }
+
+    /// A scene's pose of a drive of an assembly asks no more of it than it
     /// reaches: an angle or a travel past it is `error[motion]`, with the
     /// stop's message when a `stop` ends the range.
     pub(crate) fn pose_within(
         &mut self,
         assembly: AssemblyId,
         mechanism: &Mechanism,
+        drive: DriveIndex,
         value: stave_model::solved::PoseValue,
         file: stave_lang::FileId,
         span: stave_lang::ast::Span,
     ) -> Solved<()> {
         use stave_model::solved::PoseValue;
-        let extent = mechanism.drive().extent();
+        let Some(named) = mechanism.drive_at(drive) else {
+            return Ok(());
+        };
+        let extent = named.drive.extent();
         let asked = match (value, extent) {
             (PoseValue::Angle(angle), DriveValue::Turn(reach)) if angle > reach => {
                 Some((angle.to_string(), reach.to_string(), "open"))
@@ -1081,14 +1367,20 @@ impl Solver<'_> {
         let Some((asked, reach, verb)) = asked else {
             return Ok(());
         };
-        let name = self
+        let assembly_name = self
             .model
             .assemblies
             .get(assembly.index())
             .map(|a| a.name.clone())
             .unwrap_or_default();
+        let name = match &named.name {
+            Some(drive_name) if mechanism.drives().len() > 1 => {
+                format!("{assembly_name}.{drive_name}")
+            }
+            Some(_) | None => assembly_name,
+        };
         let why = match mechanism.stop() {
-            Some(stop) if stop.at == mechanism.drive().to() => stop.message.clone(),
+            Some(stop) if stop.at == named.drive.to() => stop.message.clone(),
             Some(_) | None => format!("its hardware goes {reach} at most"),
         };
         Err(self
@@ -1191,26 +1483,33 @@ impl Solver<'_> {
                     ratio,
                 });
             }
-            let drive = match &def.drive {
-                Some(DriveDef::Turn { body, from, to, .. }) => Some(Drive::Turn {
-                    body: *body,
-                    from: solver.kind_angle(from, env)?,
-                    to: solver.kind_angle(to, env)?,
-                }),
-                Some(DriveDef::Travel { body, from, to, .. }) => Some(Drive::Travel {
-                    body: *body,
-                    from: solver.kind_length(from, env)?,
-                    to: solver.kind_length(to, env)?,
-                }),
-                None => None,
-            };
+            let mut drives = Vec::with_capacity(def.drives.len());
+            for named in &def.drives {
+                let drive = match &named.drive {
+                    DriveDef::Turn { body, from, to, .. } => Drive::Turn {
+                        body: *body,
+                        from: solver.kind_angle(from, env)?,
+                        to: solver.kind_angle(to, env)?,
+                    },
+                    DriveDef::Travel { body, from, to, .. } => Drive::Travel {
+                        body: *body,
+                        from: solver.kind_length(from, env)?,
+                        to: solver.kind_length(to, env)?,
+                    },
+                };
+                drives.push(KindDrive {
+                    name: named.name.clone(),
+                    drive,
+                });
+            }
             let stop = match &def.stop {
                 Some(stop) => Some((solver.eval(&stop.value, env)?, stop)),
                 None => None,
             };
-            Ok((entries, drive, stop))
+            Ok((entries, drives, stop))
         })?;
-        let (entries, drive, stop) = evaluated;
+        let (entries, drives, stop) = evaluated;
+        let drive = drives.first().map(|named| named.drive);
         let stop = match stop {
             None => None,
             Some((value, stop)) => {
@@ -1283,7 +1582,7 @@ impl Solver<'_> {
             members,
             roles: kind.roles.iter().map(|role| role.name.clone()).collect(),
             entries,
-            drive,
+            drives,
             stop,
         })
     }
@@ -1350,11 +1649,11 @@ mod tests {
                 pivot(0, 3, 13, 4),
                 pivot(1, 3, -10, 1),
             ],
-            drive: Some(Drive::Turn {
+            drives: vec![KindDrive::unnamed(Drive::Turn {
                 body: body(1),
                 from: ExactAngle::ZERO,
                 to: Angle::from_deg(110).to_exact(),
-            }),
+            })],
             stop: None,
         }
     }
@@ -1551,11 +1850,11 @@ mod tests {
                 },
                 at: [mm(0), mm(0)],
             }],
-            drive: Some(Drive::Turn {
+            drives: vec![KindDrive::unnamed(Drive::Turn {
                 body: body(0),
                 from: ExactAngle::ZERO,
                 to: Angle::from_deg(90).to_exact(),
-            }),
+            })],
             stop: None,
         };
         let into_moves = |role: RoleIndex| role == into;
@@ -1588,7 +1887,7 @@ mod tests {
             plane.frame().unwrap(),
             declared.members,
             declared.entries,
-            declared.drive.unwrap(),
+            declared.drives.into_iter().next().unwrap().drive,
             None,
             vec![HardwareId::from_usize(0)],
         )
@@ -1626,11 +1925,11 @@ mod tests {
                 },
                 at: [mm(0), mm(0)],
             }],
-            drive: Some(Drive::Turn {
+            drives: vec![KindDrive::unnamed(Drive::Turn {
                 body: body(0),
                 from: ExactAngle::ZERO,
                 to: Angle::from_deg(90).to_exact(),
-            }),
+            })],
             stop: None,
         };
         let into_moves = |role: RoleIndex| role == into;
@@ -1655,7 +1954,7 @@ mod tests {
                 plane.frame().unwrap(),
                 declared.members,
                 declared.entries,
-                declared.drive.unwrap(),
+                declared.drives.into_iter().next().unwrap().drive,
                 None,
                 vec![HardwareId::from_usize(0)],
             ),

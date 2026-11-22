@@ -204,14 +204,34 @@ pub(crate) fn relative<'a>(
 }
 
 /// An assembly's motion in a few words, from its mechanism's range:
-/// "turns 110°", "slides out 400 mm".
+/// "turns 110°", "slides out 400 mm"; one for each drive of an assembly
+/// with several, each with its name ("tilt: turns 360°, height: slides
+/// out 300 mm").
 fn motion_words(mechanism: &Mechanism) -> String {
-    match mechanism.drive().extent() {
+    let words = |extent: DriveValue| match extent {
         DriveValue::Turn(angle) => fill_in(&tr("turns {angle}"), &[("angle", &degrees(angle))]),
         DriveValue::Travel(travel) => {
             fill_in(&tr("slides out {length}"), &[("length", &mm(travel))])
         }
+    };
+    if mechanism.drives().len() <= 1 {
+        return words(mechanism.drive().extent());
     }
+    let each: Vec<String> = mechanism
+        .drives()
+        .iter()
+        .map(|named| {
+            let motion = words(named.drive.extent());
+            match &named.name {
+                Some(name) => fill_in(
+                    &tr("{drive}: {motion}"),
+                    &[("drive", name), ("motion", &motion)],
+                ),
+                None => motion,
+            }
+        })
+        .collect();
+    each.join(", ")
 }
 
 /// The swatch of a part.

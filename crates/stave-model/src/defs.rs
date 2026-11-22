@@ -1171,6 +1171,10 @@ pub struct SceneDef {
 pub struct PoseDef {
     /// The assembly.
     pub target: RExpr,
+    /// The drive it names after the assembly (`tilt` in `pose
+    /// frame.tilt = ...`), with where it is written; `None` for the
+    /// assembly alone.
+    pub drive: Option<(String, Span)>,
     /// `open`, `closed`, an angle or a length.
     pub value: RExpr,
     /// The whole entry.
@@ -1891,10 +1895,12 @@ pub struct MechanismDef {
     pub constraints: Vec<ConstraintDef>,
     /// Its couplings, in source order.
     pub couplings: Vec<CouplingDef>,
-    /// Its one input; `None` for a mechanism that follows the hardware
-    /// that drives its assembly (a lid stay).
-    pub drive: Option<DriveDef>,
-    /// What stops the drive, when the kind says.
+    /// Its inputs, in source order: none for a mechanism that follows the
+    /// hardware that drives its assembly (a lid stay), one for most kinds,
+    /// two (a turn and a travel of one member, each named) for a pin that
+    /// turns in a slot (grammar, "Mechanisms", drives).
+    pub drives: Vec<NamedDriveDef>,
+    /// What stops the drive, when the kind says (only with one drive).
     pub stop: Option<StopDef>,
     /// How thick every pin is, when the kind says.
     pub pin_diameter: Option<RExpr>,
@@ -1971,6 +1977,16 @@ pub struct CouplingDef {
     pub span: Span,
 }
 
+/// One drive of a mechanism with its name, when written: `drive tilt:
+/// turn(...)`, or `drive: turn(...)` with none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedDriveDef {
+    /// The name, when written.
+    pub name: Option<String>,
+    /// The drive.
+    pub drive: DriveDef,
+}
+
 /// `drive: turn(...)` or `drive: travel(...)`
 #[derive(Debug, Clone, PartialEq)]
 pub enum DriveDef {
@@ -2010,6 +2026,14 @@ impl DriveDef {
     pub fn span(&self) -> Span {
         match self {
             DriveDef::Turn { span, .. } | DriveDef::Travel { span, .. } => *span,
+        }
+    }
+
+    /// `true` for a turn.
+    pub fn turns(&self) -> bool {
+        match self {
+            DriveDef::Turn { .. } => true,
+            DriveDef::Travel { .. } => false,
         }
     }
 }

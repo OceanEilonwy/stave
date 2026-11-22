@@ -260,7 +260,13 @@ impl Checker<'_> {
         for hardware in mechanism.hardware() {
             let found = self.design.hardware_piece(*hardware)?;
             let kind = defs.kind(found.kind_id)?;
-            let to = match kind.mechanism()?.drive.as_ref() {
+            let drives = &kind.mechanism()?.drives;
+            // A kind with several drives is narrowed drive by drive, by
+            // hand.
+            if drives.len() > 1 {
+                return None;
+            }
+            let to = match drives.first().map(|named| &named.drive) {
                 Some(DriveDef::Turn { to, .. }) => to,
                 // Hardware that follows the one that drives the assembly.
                 None => continue,

@@ -276,6 +276,8 @@ syntax_kinds! {
     COUPLE,
     /// `stop: value "message"` in a mechanism
     STOP,
+    /// `drive name: call` in a mechanism (a named drive; `drive: call` is a field)
+    DRIVE,
     /// `mark { steps }` or `cut { steps }` in a recipe
     STEP_BLOCK,
     /// `at station: value` in a profile

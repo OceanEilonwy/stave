@@ -1057,3 +1057,178 @@ fn the_proof_is_the_same_run_to_run() {
     assert_eq!(caught(), caught());
     assert!(caught().is_err());
 }
+
+/// A pivot bolt in a slot in a held upright, the slot from `(0, 0)` to
+/// `(0, -300)mm`, turned and run along it by two drives: a turn of the
+/// bolt and its travel along the slot. The frame rides on the bolt.
+fn bolt_in_slot() -> (Mechanism, MemberId, MemberId) {
+    let mut declaration = Declaration::new();
+    let upright = declaration.member(name("upright"), Holding::Held).unwrap();
+    let bolt = declaration.member(name("bolt"), Holding::Free).unwrap();
+    let frame = declaration
+        .member(name("frame"), Holding::Carried(bolt))
+        .unwrap();
+    declaration.constrain(Constraint::Slot {
+        pin: bolt,
+        guide: upright,
+        from: point_mm(0, 0),
+        to: point_mm(0, -300),
+    });
+    let drives = vec![
+        Drive::Turn {
+            member: bolt,
+            from: Angle::ZERO,
+            to: Angle::from_deg(360),
+        },
+        Drive::Travel {
+            member: bolt,
+            from: Length::ZERO,
+            to: Length::from_mm(-300),
+        },
+    ];
+    (
+        Mechanism::with_drives(declaration, drives).unwrap(),
+        bolt,
+        frame,
+    )
+}
+
+/// Hang, with the pin at a known point: the bolt's angle comes from the
+/// turn and its pin's point from its travel along the slot, so one step
+/// places it, closed form.
+#[test]
+fn a_pin_whose_travel_along_its_slot_is_known_hangs_there() {
+    let (mechanism, bolt, frame) = bolt_in_slot();
+    let path = Path::new(mechanism).unwrap();
+    // Turned a quarter and run 100mm down the slot: the bolt's pin, at the
+    // origin when closed, is 100mm down, and a point of the frame 400mm
+    // across from it has turned round to 400mm along depth from the pin.
+    let pose = path
+        .pose_all(&[
+            DriveAmount::radians(std::f64::consts::FRAC_PI_2),
+            DriveAmount::nanometres(-100e6),
+        ])
+        .unwrap();
+    let bolt_pose = pose.member(bolt).unwrap();
+    let pin = bolt_pose.apply(DVec2::ZERO);
+    assert!((pin - at_mm(0.0, -100.0)).length() < 1.0, "{pin}");
+    let corner = pose.member(frame).unwrap().apply(at_mm(400.0, 0.0));
+    assert!((corner - at_mm(0.0, 300.0)).length() < 1.0, "{corner}");
+    // Every drive at its `from` is the closed pose, exactly.
+    let closed = path
+        .pose_all(&[DriveAmount::radians(0.0), DriveAmount::nanometres(0.0)])
+        .unwrap();
+    assert_eq!(closed.member(bolt), Some(PlanarPose::REST));
+    // A travel past the slot's range is outside the drive's.
+    assert!(matches!(
+        path.pose_all(&[DriveAmount::radians(0.0), DriveAmount::nanometres(-400e6)]),
+        Err(MechanismError::OutOfRange { .. })
+    ));
+}
+
+/// Each drive is run through its range with the other held: the travel
+/// with the bolt turned a quarter, the turn with the bolt 150mm down.
+#[test]
+fn each_drive_runs_through_its_range_with_the_other_held() {
+    let (mechanism, bolt, _) = bolt_in_slot();
+    let quarter = DriveValue::Turn(Angle::from_deg(90));
+    let down = DriveValue::Travel(Length::from_mm(-150));
+    let travel = mechanism
+        .sweeping(1, &[quarter, DriveValue::Travel(Length::ZERO)])
+        .unwrap();
+    let path = Path::new(travel).unwrap();
+    // At the travel's start the bolt is already turned: not the closed
+    // pose.
+    let start = path.pose_at(DriveAmount::nanometres(0.0)).unwrap();
+    let turned = start.member(bolt).unwrap();
+    assert!((turned.angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    let end = path.pose_at(DriveAmount::nanometres(-300e6)).unwrap();
+    let pin = end.member(bolt).unwrap().apply(DVec2::ZERO);
+    assert!((pin - at_mm(0.0, -300.0)).length() < 1.0, "{pin}");
+    let turn = mechanism
+        .sweeping(0, &[DriveValue::Turn(Angle::ZERO), down])
+        .unwrap();
+    let path = Path::new(turn).unwrap();
+    let half = path
+        .pose_at(DriveAmount::radians(std::f64::consts::PI))
+        .unwrap();
+    // Turned about the pin where the travel put it.
+    let pin = half.member(bolt).unwrap().apply(DVec2::ZERO);
+    assert!((pin - at_mm(0.0, -150.0)).length() < 1.0, "{pin}");
+}
+
+/// Two drives need two freedoms; one member is driven once each way; a
+/// travel runs on a rail or a slot along a direction of the plane.
+#[test]
+fn a_mechanism_with_two_drives_is_counted_for_both() {
+    let drives = |bolt: MemberId| {
+        vec![
+            Drive::Turn {
+                member: bolt,
+                from: Angle::ZERO,
+                to: Angle::from_deg(90),
+            },
+            Drive::Travel {
+                member: bolt,
+                from: Length::ZERO,
+                to: Length::from_mm(100),
+            },
+        ]
+    };
+    // A pivot leaves one freedom: two drives can't both have one.
+    let mut pinned = Declaration::new();
+    let upright = pinned.member(name("upright"), Holding::Held).unwrap();
+    let bolt = pinned.member(name("bolt"), Holding::Free).unwrap();
+    pinned.constrain(Constraint::Pivot {
+        first: bolt,
+        second: upright,
+        at: point_mm(0, 0),
+    });
+    assert_eq!(
+        Mechanism::with_drives(pinned, drives(bolt)),
+        Err(MechanismError::DriveFreedom {
+            found: 1,
+            drives: 2
+        })
+    );
+    // Two turns of one member.
+    let mut twice = Declaration::new();
+    let upright = twice.member(name("upright"), Holding::Held).unwrap();
+    let bolt = twice.member(name("bolt"), Holding::Free).unwrap();
+    twice.constrain(Constraint::Slot {
+        pin: bolt,
+        guide: upright,
+        from: point_mm(0, 0),
+        to: point_mm(0, 100),
+    });
+    let turns = vec![
+        Drive::Turn {
+            member: bolt,
+            from: Angle::ZERO,
+            to: Angle::from_deg(90),
+        },
+        Drive::Turn {
+            member: bolt,
+            from: Angle::ZERO,
+            to: Angle::from_deg(45),
+        },
+    ];
+    assert_eq!(
+        Mechanism::with_drives(twice, turns),
+        Err(MechanismError::DrivesApart)
+    );
+    // A slot on a slant has no frame direction to travel along.
+    let mut slanted = Declaration::new();
+    let upright = slanted.member(name("upright"), Holding::Held).unwrap();
+    let bolt = slanted.member(name("bolt"), Holding::Free).unwrap();
+    slanted.constrain(Constraint::Slot {
+        pin: bolt,
+        guide: upright,
+        from: point_mm(0, 0),
+        to: point_mm(100, 100),
+    });
+    assert!(matches!(
+        Mechanism::with_drives(slanted, drives(bolt)),
+        Err(MechanismError::TravelWithoutRail { .. })
+    ));
+}

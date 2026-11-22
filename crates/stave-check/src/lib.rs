@@ -129,6 +129,9 @@ pub enum ContactItem {
 pub struct ContactMotion {
     /// The assembly that moves.
     pub assembly: AssemblyId,
+    /// Which of its drives moves (the first, for an assembly with one);
+    /// the others are where [`Contact::scene`] poses them, or closed.
+    pub drive: stave_model::mechanism::DriveIndex,
     /// Where it first touches: an angle or a distance.
     pub at: PoseValue,
     /// A little further (2deg or 2mm, within its travel), where the
@@ -1125,25 +1128,24 @@ impl<'a> Checker<'a> {
         let Some(scene) = self.design.scenes.get(scene_index) else {
             return (Vec::new(), Vec::new());
         };
-        let pose_of = |assembly: AssemblyId| {
-            scene
-                .poses
+        // Every drive of an assembly as the scene poses it, when it moves
+        // it at all.
+        let poses_of = |assembly: AssemblyId| {
+            let drives = self.path(assembly)?.mechanism().drives().len();
+            let (values, _) = scene.poses_of(assembly, drives);
+            values
                 .iter()
-                .find(|pose| pose.assembly == assembly)
-                .map(|pose| pose.value)
-                .filter(|value| !matches!(value, PoseValue::Closed))
+                .any(|value| !matches!(value, PoseValue::Closed))
+                .then_some(values)
         };
         let moves: Vec<Moves> = self
             .bodies
             .iter()
             .map(|body| {
-                let steps: Vec<(AssemblyId, PoseValue)> = body
+                let steps: Vec<(AssemblyId, Vec<PoseValue>)> = body
                     .chain
                     .iter()
-                    .filter_map(|assembly| {
-                        let value = pose_of(*assembly)?;
-                        self.path(*assembly).map(|_| (*assembly, value))
-                    })
+                    .filter_map(|assembly| Some((*assembly, poses_of(*assembly)?)))
                     .collect();
                 // A link is turned by its own assembly's linkage only when
                 // that assembly is the innermost one posed.
@@ -1160,11 +1162,11 @@ impl<'a> Checker<'a> {
                 let chain: Vec<_> = moves
                     .steps
                     .iter()
-                    .filter_map(|(assembly, value)| {
-                        Some((self.path(*assembly)?.mechanism(), *value))
+                    .filter_map(|(assembly, values)| {
+                        Some((self.path(*assembly)?.mechanism(), values.as_slice()))
                     })
                     .collect();
-                Placement::of_mechanisms(&chain, moves.link)
+                Placement::of_poses(&chain, moves.link)
             })
             .collect();
         (moves, placements)
@@ -1223,6 +1225,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// What a scene's poses of an assembly say, for a message: `door_l is
+    /// open 90deg`, or one line for each drive away from closed of an
+    /// assembly with several (`frame.tilt is open 15deg`).
+    fn pose_conditions(&self, assembly: AssemblyId, values: &[PoseValue]) -> Vec<String> {
+        let name = self.assembly_name(assembly);
+        let drives = self
+            .path(assembly)
+            .map(|path| path.mechanism().drives().to_vec())
+            .unwrap_or_default();
+        if drives.len() <= 1 {
+            return values
+                .first()
+                .map(|value| vec![format!("{name} is {}", pose_text(*value))])
+                .unwrap_or_default();
+        }
+        drives
+            .iter()
+            .zip(values)
+            .filter(|(_, value)| !matches!(value, PoseValue::Closed))
+            .map(|(named, value)| match &named.name {
+                Some(drive) => format!("{name}.{drive} is {}", pose_text(*value)),
+                None => format!("{name} is {}", pose_text(*value)),
+            })
+            .collect()
+    }
+
     fn assembly_name(&self, assembly: AssemblyId) -> String {
         self.design
             .assemblies()
@@ -1236,16 +1264,14 @@ impl<'a> Checker<'a> {
         scene_index: usize,
         a: Item,
         b: Item,
-        moved: &[(AssemblyId, PoseValue)],
-        other_moves: &[(AssemblyId, PoseValue)],
+        moved: &[(AssemblyId, Vec<PoseValue>)],
+        other_moves: &[(AssemblyId, Vec<PoseValue>)],
         found: &[Overlap],
     ) {
-        let describe = |moves: &[(AssemblyId, PoseValue)]| -> Vec<String> {
+        let describe = |moves: &[(AssemblyId, Vec<PoseValue>)]| -> Vec<String> {
             moves
                 .iter()
-                .map(|(assembly, value)| {
-                    format!("{} is {}", self.assembly_name(*assembly), pose_text(*value))
-                })
+                .flat_map(|(assembly, values)| self.pose_conditions(*assembly, values))
                 .collect()
         };
         let mut conditions = describe(moved);
@@ -1366,7 +1392,8 @@ fn merge(diagnostics: Vec<(Diagnostic, Option<Contact>)>) -> Vec<(Diagnostic, Op
 /// the link it is when the innermost one turns it on its linkage.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Moves {
-    steps: Vec<(AssemblyId, PoseValue)>,
+    /// Each assembly that moves it, with every one of its drives' poses.
+    steps: Vec<(AssemblyId, Vec<PoseValue>)>,
     link: Option<MemberIndex>,
 }
 

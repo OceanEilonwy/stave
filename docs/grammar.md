@@ -405,6 +405,7 @@ mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
               | "rail" , IDENT , "," , IDENT , "along" , IDENT
               | "couple" , IDENT , "to" , IDENT , ":" , expr   (* couple middle to drawer_member: 1/2 *)
               | "stop" , ":" , expr , STRING             (* stop: opening_angle "the limiter stops it here" *)
+              | "drive" , IDENT , ":" , expr             (* drive tilt: turn(bolt, from: 0deg, to: 360deg) *)
               | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg); pins: depth *)
 adjust        = "adjust" , IDENT , "on" , IDENT , ":" , IDENT , "within" , expr ;
                                                          (* adjust arm on plate: across within 2mm *)
@@ -456,7 +457,7 @@ component     = "component" , IDENT , block(component_item) ;
 component_item = { DOC } , design_item ;
 
 scene         = "scene" , IDENT , [ STRING ] , block(scene_entry) ;
-scene_entry   = "pose" , path , "=" , expr               (* pose door_l = open *)
+scene_entry   = "pose" , path , "=" , expr               (* pose door_l = open; pose frame.tilt = 15deg *)
               | field ;                                  (* show: drawer[top] *)
 
 require       = "require" , IDENT , ":" , expr , STRING ;
@@ -985,7 +986,7 @@ of equal value stays straight, so a cylinder stays a cylinder. Readable:
 
 | Entry | Type | Meaning |
 |---|---|---|
-| `pose <target> = <value>` | `open` \| `closed` \| `Angle` \| `Length` | sets a motion; see [Scenes](#scenes) |
+| `pose <target> = <value>` | `open` \| `closed` \| `Angle` \| `Length` | sets a motion: `<target>` is an assembly, or an assembly and one of its drives (`frame.tilt`); see [Scenes](#scenes) |
 | `show` | a part, assembly or piece of hardware, or a list of them | show only these; anything else (a region, a joint, a length) is `error[type-mismatch]` |
 | `hide` | a part, assembly or piece of hardware, or a list of them | hide these; anything else is `error[type-mismatch]` |
 | `explode` | `Bool` | pull the parts apart along their joints' insert directions |
@@ -3311,13 +3312,15 @@ different.
 | `slot a, b from point(...) to point(...)` | a pin on `a` runs in a straight slot in `b` |
 | `rail a, b along <word>` | `a` runs straight along `b` without turning, along `along`, `across` or `depth` |
 | `couple a to b: <ratio>` | `a` travels that share of `b`'s travel (a full-extension slide's middle member) |
-| `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | the one input and its range: member `m` turns through angles, or travels through lengths |
+| `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | an input and its range: member `m` turns through angles, or travels through lengths |
+| `drive <name>: turn(...)` or `drive <name>: travel(...)` | a named input, for a mechanism with more than one (see "Drives" below) |
 | `stop: <value> "message"` | what stops the drive there; the message is shown when a pose or a design asks for more |
 | `pin_diameter: <length>` | how thick every pin is (optional, default `0mm`) |
 | `pins: along \| across \| depth` | the frame direction every pin is parallel to; the members move in the plane of the other two (optional; see [The plane](#mechanisms)) |
 
-`drive`, `stop`, `pin_diameter` and `pins` are optional, each at most
-once (`error[duplicate-name]` for the second). A
+`stop`, `pin_diameter` and `pins` are optional, each at most once
+(`error[duplicate-name]` for the second); drives are optional too, and
+"Drives" below says how many there may be. A
 drive's `to` beyond its `stop` is `error[motion]`, with the stop's
 message. A turn may run all the way round: `to: 360deg` from `from:
 0deg` turns the assembly a whole turn, back to where it started, and it is
@@ -3328,6 +3331,59 @@ runs back from its front end pulls out toward the front with
 `travel(drawer_member, from: 0mm, to: -length)`. A pose or a scene's
 amount is measured from the closed pose toward `to` (a drawer pulled out
 200mm), whichever way that runs.
+
+**Drives.** A mechanism may have any number of drives, each one input
+with its range. A mechanism with one drive may leave it unnamed (`drive:
+turn(...)`), as every hinge and slide does, and a pose names its
+assembly alone (`pose door = 110deg`). With two or more drives, each is
+named:
+
+```
+  mechanism {
+    pins: depth
+    slot bolt, piece from point(along: 0mm, across: 0mm) to point(along: -300mm, across: 0mm)
+    drive tilt:   turn(bolt, from: 0deg, to: 360deg)
+    drive height: travel(bolt, from: 0mm, to: -300mm)
+  }
+```
+
+That is a pivot bolt that slides along a slot routed in an upright and
+turns in it: its frame is raised or lowered and tilted, and a pose names
+each drive through the assembly (`pose frame.tilt = 15deg`, see
+[Scenes](#scenes)).
+
+- An unnamed drive in a mechanism with more than one is
+  `error[mechanism]` at it (`this mechanism has 2 drives, so each needs a
+  name`, help `write drive <name>: ...`). Two drives with one name are
+  `error[duplicate-name]` at the second. A mechanism with one drive may
+  name it; a pose may then name it or not.
+- **Every drive moves one member**, the driven member, `with:` the part
+  that moves. A member turns one way and travels one way, so two drives
+  of one mechanism are a turn and a travel. A drive that moves another
+  member, or a second turn or travel, is `error[mechanism]` at it
+  (`` `height` moves `carriage`, but `tilt` moves `bolt`: every drive moves
+  one member ``, `` `swing` and `tilt` both turn `bolt`: a member turns one
+  way ``).
+- **A travel along a slot.** A travelling drive moves its member along its
+  rail, or, when the member is the pin of a `slot`, along the slot: its
+  travel is how far the pin has run along the slot from the slot's
+  `from` (the pin sits at `from` when the drive is at its own `from`).
+- **A stop belongs to one drive.** `stop:` is allowed only in a mechanism
+  with one drive; with two or more it is `error[mechanism]` at the stop
+  (`a stop belongs to a mechanism with one drive`, help `end each drive's
+  range with its to: instead`).
+- **A drive's name is read through its assembly** (`frame.tilt`), so it
+  must not be the name of an item of the component the hardware is
+  declared in: an item declared in that component (a param, `let`,
+  region, part, joint, piece of hardware, assembly or `require`: anything
+  `frame.<name>` reads) with a drive's name is `error[duplicate-name]`,
+  once for each component and name, at the first piece of hardware of
+  that component with the drive (`` `tilt` is a drive of frame.pivot_l's
+  kind and an item of frame ``), help `rename the item, or name the drive
+  another way in its kind`. Hardware declared outside a component moves
+  nothing a scene can pose, so its drives' names clash with nothing.
+- **A follower's stop** (a lid stay's) stops the drive of its kind: an
+  angle the turning drive, a length the travelling one.
 
 **The plane.** A mechanism is planar: every pin is parallel to one
 direction of the [kind's frame](#the-kinds-frame), and the members move
@@ -3372,12 +3428,13 @@ adds nothing to the freedom count. A role whose type is `Region` is
 region`). The first name of an entry is always a member: it is the side
 the mechanism places.
 
-**One freedom.** Three for each member the mechanism moves (the driven
+**One freedom for each drive.** Three for each member the mechanism moves (the driven
 member and each member with no `with:`), less two for each `pivot` or
-`rail` and one for each `slot` or `couple`: a mechanism with a `drive`
-must come to exactly one, which the drive takes, and one without a drive
+`rail` and one for each `slot` or `couple`: a mechanism with drives
+must come to exactly as many as it has drives, one for each, and one without a drive
 to none once its assembly's motion is given (`error[mechanism]` at the
-kind otherwise, giving the count; counted on its own as soon as a piece of
+kind otherwise, giving the count; a pin in a slot that also turns is
+three less one, two freedoms, so two drives; counted on its own as soon as a piece of
 hardware is placed, and reported once per kind). The driven member is
 `with:` the part that moves (the door, the lid, the drawer side): the
 assembly moves with it (`error[mechanism]` otherwise). A member with no
@@ -3404,12 +3461,14 @@ on two rails and `couple middle_member to drawer_member: 1/2`. The jargon
 stays in library files: a project still writes `hardware hinges[lower,
 upper] : euro_hinge(stile[hinge], on: side_l)`.
 
-**Several items on one assembly.** An assembly has one motion, from the
-hardware inside it (not inside an assembly within it). Its items with a
-`drive` must all move it alike: seen in the first one's plane (the first
-in the design's order), the same members, held the same way, the same
-entries at the same points (to the nanometre) and the same drive from the
-same `from`. Seen in the first one's plane, a point's place along the
+**Several items on one assembly.** An assembly has one motion for each
+drive of the hardware inside it (not inside an assembly within it). Its
+items with drives must all move it alike, drive for drive: seen in the
+first one's plane (the first in the design's order), the same members,
+held the same way, the same entries at the same points (to the
+nanometre), and the same drives in the same order, each with the same
+name, the same kind (turn or travel), the same member and the same
+range. Seen in the first one's plane, a point's place along the
 pins carries no meaning, and an item whose plane is the mirror image of
 the first one's has its turn read the other way. So two drivers mirrored
 across the assembly move alike when their pins lie on one line and their
@@ -3428,8 +3487,8 @@ whose hardware has no drive doesn't move.
 
 #### How a mechanism is solved
 
-A hardware kind's `mechanism { }` (pivots, slots, rails, couples and one
-drive, in the kind's frame with the hardware closed) is solved the same way
+A hardware kind's `mechanism { }` (pivots, slots, rails, couples and its
+drives, in the kind's frame with the hardware closed) is solved the same way
 for every kind, in closed form: no iteration, no guessing. An assembly's
 mechanism (its drivers' and its followers', see [Mechanisms](#mechanisms))
 is solved once; a piece of hardware no assembly moves is solved on its
@@ -3439,30 +3498,35 @@ own, so a mechanism that can't move is reported wherever it is used.
 **free** (the mechanism places it; the driven member is free even when it
 is `with:` the moving part) or **carried** (`with:` another member, one
 rigid piece with it). A role named in an entry is held or carried as a
-member `with:` it would be. The declared pose is the drive at its `from`; at a
-value `v` the driven member has turned, or travelled, by `v - from`. A
+member `with:` it would be. The declared pose is every drive at its `from`; at a
+value `v` of a drive the driven member has turned, or travelled, by `v - from`. A
 positive turn goes round the pins in the order `along`, `across`,
 `depth`: with the pins along `along`, it carries `across` toward
 `depth`; along `across`, `depth` toward `along`; along `depth`, `along`
 toward `across`. A `slot a, b from P to Q`
 has `a`'s pin at `P` when closed and lets it run to `Q`. A member's
 **travel** is how far it has moved along its rail from its closed place,
-measured against the held members; `couple a to b: r` makes `a`'s travel
+measured against the held members, or, for the pin of a slot driven by
+a travel, how far its pin has run along the slot from `P`; `couple a to b: r` makes `a`'s travel
 `r` times `b`'s (a full-extension slide: the middle member travels half
 the drawer member's travel).
 
-**One freedom.** Three for each free member, less two for each `pivot` or
-`rail`, less one for each `slot` or `couple`, must come to exactly one,
-which the drive takes (`error[mechanism]` otherwise, giving the count). An
+**One freedom for each drive.** Three for each free member, less two for each `pivot` or
+`rail`, less one for each `slot` or `couple`, must come to exactly the
+number of drives, one for each (`error[mechanism]` otherwise, giving the count). An
 entry between two pieces of one rigid member, or between two held members,
 is `error[mechanism]`.
 
-**The steps.** Starting from the held members and the drive, the solver
+**The steps.** Starting from the held members and every drive's value
+(each drive's value is an input: the solver places the members given
+all of them), the solver
 repeats, until every member is placed, the first of these that applies:
 
 1. **Couple**: a couple with one side's travel known gives the other's.
 2. **Hang**: a member whose angle is known (the driven member of a turn),
-   pinned to a placed member, is placed (a butt hinge).
+   pinned at a known point, is placed: by a pivot on a placed member (a
+   butt hinge), or by a slot in a placed member when its travel along the
+   slot is known (a pivot bolt raised in its slot and turned).
 3. **Rail**: a member whose travel is known, on a rail along a placed
    member that does not turn, is placed (a slide).
 4. **Hung on two**: a member whose angle is known, held by two of: a link
@@ -3492,7 +3556,8 @@ way along the line); a closed pose exactly on a dead point is
 `error[motion]`. The mechanism keeps that branch by continuity over the
 whole range.
 
-**Dead points.** The drive is run through its whole range, every 0.05deg
+**Dead points.** Each drive is run through its whole range, with every
+other drive at its `from`, every 0.05deg
 or 0.05mm, in floating point at the geometry boundary. At every sample
 each two-answer step must stay at least 0.1mm from a dead point: two
 circles' centres 0.1mm inside the sum of their radii and outside their
@@ -3517,11 +3582,17 @@ in `stay` at <value>").
 mechanism's shape and never by its kind: a driven member pinned to a held
 one turns the assembly about that pin's line (a butt hinge), and a driven
 member on a rail along a held one moves it in one direction (a slide).
+With two drives, one is swept while the other is held still (see
+[Scenes](#scenes)), so the same two shapes cover them: a pin in a slot in
+a held member turns the assembly about the pin's line where the held
+travel has put it, and travels it along the slot (straight along a frame
+direction) while the held turn is at its `from`.
 Every other motion, and every member the mechanism places, is posed by the
 solver.
 
-**Version 1 limits.** Planar, one freedom, the steps above. A travelling
-drive and a couple act on rails that do not turn. An assembly inside a
+**Version 1 limits.** Planar, the steps above, and at most two drives,
+which turn and travel one member. A travelling
+drive acts on a rail, or a slot, in a member that does not turn, and a couple on rails that do not turn. An assembly inside a
 moving assembly is not swept: its motion is posed on top of its parent's
 in scenes, but only the outer one is swept.
 
@@ -3841,7 +3912,8 @@ scene drawer_bench "Top drawer on the bench" {
 
 - Placement sets the **rest position** (doors closed, drawers shut).
 - **Motions belong to assemblies.** The hardware that has a drive,
-  declared inside a component, gives each instance one motion: the whole
+  declared inside a component, gives each instance one motion for each
+  of its drives (most hardware has one): the whole
   assembly moves, as one piece, relative to everything outside it, and the
   members its mechanism places (a link, a stay's arm) move as the
   mechanism moves them. Every item with a drive must move the assembly
@@ -3863,6 +3935,22 @@ scene drawer_bench "Top drawer on the bench" {
   message when a stop ends the range ("`door` can't open 170deg: the
   arm's limiter stops the door here"). A mirrored assembly has the mirror
   image of its source's motion.
+- **A pose names a drive** when the assembly has more than one:
+  `pose frame.tilt = 15deg` and `pose frame.height = 150mm` set two
+  motions of one assembly, and a scene applies all its poses together.
+  The drive's name follows the assembly (`frame[2].tilt` for one of an
+  array). With one drive, `pose door = 110deg` sets it, and so does its
+  name when the kind gives one. With two or more, a pose that names no
+  drive is `error[motion]` at the pose (`` `frame` moves two ways; write
+  frame.tilt or frame.height ``), except `open` and `closed`, which set
+  every drive. A name that is neither an item of the assembly nor one of
+  its drives is `error[unknown-name]` (`` `frame` has no drive `tlt` ``,
+  listing its drives). Two poses of one drive in one scene, or a pose of
+  the whole assembly and one of its drives, are `error[duplicate-name]`
+  at the second. A value of the other kind for the drive (a length for a
+  turn, an angle for a travel) is `error[type-mismatch]` at the value
+  (`` `frame.tilt` turns, so its pose is an angle, found a length ``). A
+  pose past a drive's range is `error[motion]`, as above, for that drive.
 - Every scene is collision checked, and every motion is checked through its
   whole travel, not only at its ends (`error[motion]`): every body that
   moves (a door, the hardware on it, a member its mechanism places) is
@@ -3871,7 +3959,21 @@ scene drawer_bench "Top drawer on the bench" {
   or distance at which they hit (see [One collision
   model](#one-collision-model)). Each motion is checked from the rest
   position and from every scene's poses; the first contact is found to
-  within the 0.05mm contact tolerance, never stepped over. A door on cup
+  within the 0.05mm contact tolerance, never stepped over.
+- **Motions are made one at a time.** Each drive is swept through its
+  whole range while every other drive of the same assembly is held still
+  at each of: its closed value (from rest, everything else at rest), and
+  each value a scene poses it at (from that scene, everything else where
+  the scene puts it). The loom's frame is tilted all the way round at
+  rest height and at each height a scene names, and raised through its
+  whole travel at rest angle and at each angle a scene names. Each sweep
+  is still one motion, so a turn about one fixed line and a travel along
+  one fixed direction stay exact. Two motions made at the same moment
+  are not checked, and a person doesn't make them: a continuous motion is
+  checked against the other only at the values the design names. To have
+  "tilted at the lowest height" checked, write that scene. A sweep that
+  hits is reported once for each drive, naming it (`` frame.tilt ``) and,
+  in a note, where the other drives are held. A door on cup
   hinges follows its linkage (it turns and moves at once); a door on butt
   hinges turns about its pin (see [How a mechanism is
   solved](#how-a-mechanism-is-solved), fast paths).
@@ -4395,7 +4497,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `placement-cycle` | `<a> and <b> are placed against each other` |
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
-| 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
+| 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one` (`exactly <2>, one for each drive`); `this mechanism has <2> drives, so each needs a name`; `<kind>'s mechanism: every drive moves one member ...`; `a stop belongs to a mechanism with one drive`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
 | 3 | `internal` | `Stave could not work out <what>; this is a bug in Stave`: a failure inside Stave that no check explains; it is reported rather than leaving the design unbuilt without a word |
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, `<joint>: once cut, <a> and <b> touch only along an edge`, for `contact(a, b)` `<a> and <b> don't touch`, or for a [clamp](#clamps) `<hardware> draws <b> toward <a>, but they are <3mm> apart with nothing between` |
 | 4 | `overhang` | `<hardware>: its <member> hangs off the <end> of <part>`, with the note `<part> holds <5mm> of the <40mm> <member>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
@@ -4403,7 +4505,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> leaves <2mm> of wood at <place>; it needs <6mm>` (or `runs <1mm> past <place>; it needs <6mm> of wood there`) for a cut's own `wall:` (see [Walls](#walls)), `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
-| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
+| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly> moves <two> ways; write <assembly>.<drive> or <assembly>.<drive>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |
@@ -4432,11 +4534,15 @@ component's parts labelled; its mirror image is a note on the same error.
 A motion that hits something is reported at the same place. In a `motion` message for a scene, `<open>`
 is the pose: `open`, `open 90deg` (a hinge turned to an angle) or
 `out 200mm` (a slide travelled a length); when two assemblies move, both are
-named (`door_l is open and drawer[top] is out 200mm`). For a motion swept
+named (`door_l is open and drawer[top] is out 200mm`). A drive of an
+assembly with several is named with it (`frame.tilt is open 15deg and
+frame.height is out 150mm`). For a motion swept
 through its travel, `<open>` is where it first hits: `opened past 87.3deg`
 (rounded down to a tenth of a degree) or `pulled out past 120mm`, and a note
 gives how far the hinges open or the slides travel; each assembly is
-reported once, from rest or else from the first scene whose poses make it
+reported once (once for each drive, `frame.tilt is opened past 87.3deg`,
+with a note `with frame.height held at 150mm` when another drive is held
+away from closed), from rest or else from the first scene whose poses make it
 hit. A cup hinge's own arm or link that runs into wood is named with its
 hinge: `the outer link of door_l.hinges[lower] hits door_l.stile[hinge] when
 door_l is opened past 108.2deg`, once per assembly. In an `order` message, `<step>` is written as in the source

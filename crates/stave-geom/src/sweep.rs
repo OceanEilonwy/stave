@@ -51,7 +51,7 @@ use glam::{DMat4, DVec2, DVec3};
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::TurnLine;
-use stave_model::mechanism::{Mechanism, MemberIndex};
+use stave_model::mechanism::{DriveIndex, DriveValue, Mechanism, MemberIndex};
 use stave_model::solved::{Point, PoseValue, WorldBox};
 
 use crate::collide::{
@@ -316,6 +316,19 @@ impl Path {
         })
     }
 
+    /// One drive of an assembly's mechanism run through its range with
+    /// every other drive held at `held` (one value for each drive,
+    /// absolute), ready to sweep (see [`MechanismPath::sweeping`]).
+    pub fn sweeping(
+        mechanism: &Mechanism,
+        drive: DriveIndex,
+        held: &[DriveValue],
+    ) -> Result<Path, MechanismError> {
+        Ok(Path {
+            mechanism: MechanismPath::sweeping(mechanism, drive, held)?,
+        })
+    }
+
     /// The mechanism, posed in floats.
     pub fn mechanism(&self) -> &MechanismPath {
         &self.mechanism
@@ -355,13 +368,50 @@ impl Path {
             .unwrap_or(f64::INFINITY)
     }
 
+    /// The exact shape of the motion as the moving bodies see it at rest:
+    /// with the other drives held away from closed (a pin raised in its
+    /// slot), the bodies start where [`MechanismPath::offset`] puts them,
+    /// so a turn's line is taken back by that much, and everything else
+    /// is placed back by it to meet them ([`Path::relative`]).
+    fn relative_shape(&self) -> MotionShape {
+        match (self.mechanism.shape(), self.mechanism.offset()) {
+            (MotionShape::Turn { line, opening }, Some(offset)) => MotionShape::Turn {
+                line: TurnLine {
+                    through: line.through.minus(offset),
+                    ..line
+                },
+                opening,
+            },
+            (shape @ MotionShape::Travel { .. }, Some(_)) => shape,
+            (MotionShape::Turn { .. } | MotionShape::Travel { .. }, None)
+            | (MotionShape::General, _) => MotionShape::General,
+        }
+    }
+
+    /// A fixed body's placement as the moving bodies at rest see it: moved
+    /// back by where the held drives put them.
+    fn relative(&self, placement: &Placement) -> Placement {
+        match self.mechanism.offset() {
+            Some(offset) if offset != Point::default() => match placement {
+                Placement::Exact(at) => Placement::Exact(at.minus(offset)),
+                Placement::Turned(matrix) => Placement::Turned(
+                    DMat4::from_translation(-crate::collide::point_vector(offset)) * *matrix,
+                ),
+            },
+            Some(_) | None => *placement,
+        }
+    }
+
     /// The box a body can reach as the path moves it.
     pub fn reach(&self, solid: &WorldSolid, mover: &Mover<'_>) -> Option<WorldBox> {
-        match (self.mechanism.shape(), mover) {
+        let offset = self.mechanism.offset().unwrap_or_default();
+        match (self.relative_shape(), mover) {
             (_, Mover::Fixed(placement)) => Some(placed_bounds(&solid.bounds()?, placement)),
-            (MotionShape::Turn { line: pivot, .. }, Mover::Rigid(_)) => turn_reach(solid, &pivot),
+            (MotionShape::Turn { line: pivot, .. }, Mover::Rigid(_)) => {
+                Some(translate_box(&turn_reach(solid, &pivot)?, offset))
+            }
             (MotionShape::Travel { toward, travel }, Mover::Rigid(_)) => {
-                slide_reach(solid, toward, travel)
+                Some(translate_box(&slide_reach(solid, toward, travel)?, offset))
             }
             (MotionShape::General, Mover::Rigid(_)) => {
                 let member = self.mechanism.moving();
@@ -462,22 +512,27 @@ fn advance(
     mb: &Mover<'_>,
     limit: f64,
 ) -> Option<f64> {
-    if intersect(&a.corners, &b.corners) {
-        return None;
-    }
-    let speed = path.speed(ma, a) + path.speed(mb, b);
-    if speed <= 0.0 {
-        return None;
-    }
     let at = |theta: f64| -> Option<(Vec<DVec2>, Vec<DVec2>)> {
         Some((
             a.moved(path.motion2(ma, theta)?).corners,
             b.moved(path.motion2(mb, theta)?).corners,
         ))
     };
+    // Where the motion starts: at rest, or where the held drives put it.
+    let (mut here_a, mut here_b) = if path.mechanism.held_closed() {
+        (a.corners.clone(), b.corners.clone())
+    } else {
+        at(0.0)?
+    };
+    if intersect(&here_a, &here_b) {
+        return None;
+    }
+    let speed = path.speed(ma, a) + path.speed(mb, b);
+    if speed <= 0.0 {
+        return None;
+    }
     let smallest = render::nm(CONTACT_TOLERANCE) / 4.0 / speed;
     let mut theta = 0.0;
-    let (mut here_a, mut here_b) = (a.corners.clone(), b.corners.clone());
     loop {
         let step = (polygon_distance(&here_a, &here_b) / speed).max(smallest);
         let next = (theta + step).min(limit);
@@ -526,12 +581,14 @@ pub fn first_contact(
     if ma == mb {
         return None;
     }
-    match (path.mechanism.shape(), &ma, &mb) {
+    // With the other drives held, the moving bodies start where they put
+    // them: the fast paths meet them with the fixed body placed back.
+    match (path.relative_shape(), &ma, &mb) {
         (MotionShape::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
-            slide_contact(a, b, placement, toward, travel).map(Reach::Distance)
+            slide_contact(a, b, &path.relative(placement), toward, travel).map(Reach::Distance)
         }
         (MotionShape::Travel { toward, travel }, Mover::Fixed(placement), Mover::Rigid(_)) => {
-            slide_contact(b, a, placement, toward, travel).map(Reach::Distance)
+            slide_contact(b, a, &path.relative(placement), toward, travel).map(Reach::Distance)
         }
         (
             MotionShape::Turn {
@@ -540,7 +597,7 @@ pub fn first_contact(
             },
             Mover::Rigid(_),
             Mover::Fixed(placement),
-        ) => turn_contact(a, b, placement, &pivot, opening).map(Reach::Angle),
+        ) => turn_contact(a, b, &path.relative(placement), &pivot, opening).map(Reach::Angle),
         (
             MotionShape::Turn {
                 line: pivot,
@@ -548,7 +605,7 @@ pub fn first_contact(
             },
             Mover::Fixed(placement),
             Mover::Rigid(_),
-        ) => turn_contact(b, a, placement, &pivot, opening).map(Reach::Angle),
+        ) => turn_contact(b, a, &path.relative(placement), &pivot, opening).map(Reach::Angle),
         _ => {
             let plane = path.plane();
             let limit = path.limit();

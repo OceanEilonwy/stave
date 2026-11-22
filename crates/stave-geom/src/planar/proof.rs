@@ -413,9 +413,14 @@ pub(super) fn prove(
         travel: vec![None; count],
     };
     let driven = mechanism.drive_body();
-    match mechanism.drive() {
-        Drive::Turn { .. } => put(&mut rates.turn, driven, 1.0)?,
-        Drive::Travel { .. } => put(&mut rates.travel, driven, 1.0)?,
+    // The held drives don't change over the interval; the swept one
+    // changes one unit for each unit of drive.
+    for (index, drive) in mechanism.drives().iter().enumerate() {
+        let rate = if index == mechanism.swept() { 1.0 } else { 0.0 };
+        match drive {
+            Drive::Turn { .. } => put(&mut rates.turn, driven, rate)?,
+            Drive::Travel { .. } => put(&mut rates.travel, driven, rate)?,
+        }
     }
     let mut least: Option<f64> = None;
     for (index, step) in mechanism.steps().iter().enumerate() {
@@ -438,6 +443,30 @@ pub(super) fn prove(
                 let turn = proof.rates.turn(*body)?;
                 let origin = proof.rates.point(*known, *pin)? + turn * pin.length();
                 put(&mut proof.rates.offset, *body, origin)?;
+                continue;
+            }
+            (
+                Step::HangInSlot {
+                    body,
+                    guide,
+                    from,
+                    to,
+                    ..
+                },
+                _,
+            ) => {
+                // The pin's point in the guide is within the slot's
+                // length of `from`, and runs along it at the travel's rate.
+                let turn = proof.rates.turn(*body)?;
+                let reach = from.length() + (*to - *from).length();
+                let along = get(&proof.rates.travel, *body)?;
+                let origin =
+                    proof.rates.point(*guide, *from)? + proof.rates.turn(*guide)? * reach + along;
+                put(
+                    &mut proof.rates.offset,
+                    *body,
+                    origin + turn * from.length(),
+                )?;
                 continue;
             }
             (Step::Rail { runner, guide, .. }, _) => {

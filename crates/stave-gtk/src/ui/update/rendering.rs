@@ -898,12 +898,16 @@ impl Window {
         *posed = Some(at_contact.unwrap_or_else(|| {
             // The selection's door or drawer first (it wins), then every
             // other one people moved and left where it is.
-            let overrides: Vec<(AssemblyId, f32)> = opening
+            let overrides: Vec<(AssemblyId, DriveIndex, f32)> = opening
                 .iter()
-                .map(|o| (o.assembly, o.amount))
-                .chain(moved.iter().map(|(id, amount)| (*id, *amount)))
+                .map(|o| (o.assembly, o.drive, o.amount))
+                .chain(
+                    moved
+                        .iter()
+                        .map(|((id, drive), amount)| (*id, *drive, *amount)),
+                )
                 .collect();
-            graph.pose_with(entry, &overrides, explode)
+            graph.pose_with_drives(entry, &overrides, explode)
         }));
         None
     }

@@ -224,10 +224,10 @@ impl View {
             .motions()
             .iter()
             .zip(&self.amounts)
-            .map(|(motion, amount)| (motion.assembly, amount * motion.range.full()))
+            .map(|(motion, amount)| (motion.assembly, motion.drive, amount * motion.range.full()))
             .collect();
         Some(match graph.scenes.first() {
-            Some(rest) => graph.pose_with(rest, &overrides, self.explode),
+            Some(rest) => graph.pose_with_drives(rest, &overrides, self.explode),
             None => graph.rest(),
         })
     }

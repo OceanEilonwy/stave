@@ -288,7 +288,7 @@ fn space_between(previous: &Atom, next: &Atom) -> bool {
     match next.kind {
         COLON => !matches!(
             next.parent,
-            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE | CUT | ADJUST
+            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | DRIVE | STOP | COUPLE | CUT | ADJUST
         ),
         L_PAREN => !matches!(next.parent, ARG_LIST | MIRROR),
         L_BRACK => !matches!(next.parent, INDEX | ARRAY_SPEC),
@@ -305,11 +305,13 @@ fn key(line: &Line) -> Option<(usize, u32)> {
             line.atoms.iter().enumerate().find(|(_, atom)| {
                 atom.kind == SyntaxKind::COLON && atom.parent == SyntaxKind::STATION
             })?
-        } else if first.parent == SyntaxKind::SHAPE {
-            // `shape knuckle:`
-            line.atoms.iter().enumerate().find(|(_, atom)| {
-                atom.kind == SyntaxKind::COLON && atom.parent == SyntaxKind::SHAPE
-            })?
+        } else if matches!(first.parent, SyntaxKind::SHAPE | SyntaxKind::DRIVE) {
+            // `shape knuckle:`, `drive tilt:`
+            let parent = first.parent;
+            line.atoms
+                .iter()
+                .enumerate()
+                .find(|(_, atom)| atom.kind == SyntaxKind::COLON && atom.parent == parent)?
         } else {
             let second = line.atoms.get(1)?;
             let keyed = matches!(
@@ -776,6 +778,16 @@ mod tests {
                 "stave 1\nkind k : fitting {\n  mechanism {\n    pins : depth\n    pivot bolt ,piece at point(along: 0mm,across: 0mm)\n    drive: turn(bolt, from: 0deg, to: 360deg)\n  }\n}\n"
             ),
             "stave 1\nkind k : fitting {\n  mechanism {\n    pins: depth\n    pivot bolt, piece at point(along: 0mm, across: 0mm)\n    drive: turn(bolt, from: 0deg, to: 360deg)\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn lays_out_named_drives_lined_up() {
+        assert_eq!(
+            format(
+                "stave 1\nkind k : fitting {\n  mechanism {\n    drive  tilt : turn(bolt, from: 0deg, to: 360deg)\n    drive height:travel(bolt, from: 0mm, to: -300mm)\n  }\n}\n"
+            ),
+            "stave 1\nkind k : fitting {\n  mechanism {\n    drive tilt:   turn(bolt, from: 0deg, to: 360deg)\n    drive height: travel(bolt, from: 0mm, to: -300mm)\n  }\n}\n"
         );
     }
 

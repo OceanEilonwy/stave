@@ -610,6 +610,35 @@ fn members_with_bodies_shapes_and_every_mechanism_entry() {
 }
 
 #[test]
+fn a_named_drive_is_a_drive_with_its_name() {
+    let file = clean(
+        "stave 1\nkind k : fitting {\n  mechanism {\n    drive tilt: turn(bolt, from: 0deg, to: 360deg)\n    drive: travel(bolt, from: 0mm, to: 10mm)\n  }\n}\n",
+    );
+    let ItemKind::Kind(kind) = &file.items[0].kind else {
+        panic!()
+    };
+    let Some(KindEntry::Mechanism(mechanism)) = kind.body.entries.last() else {
+        panic!()
+    };
+    let names: Vec<(&str, Option<&str>)> = mechanism
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MechanismEntry::Drive { key, name, .. } => {
+                Some((key.as_str(), name.as_ref().map(Name::as_str)))
+            }
+            MechanismEntry::Pivot { .. }
+            | MechanismEntry::Slot { .. }
+            | MechanismEntry::Rail { .. }
+            | MechanismEntry::Couple { .. }
+            | MechanismEntry::Stop { .. }
+            | MechanismEntry::Field(_) => None,
+        })
+        .collect();
+    assert_eq!(names, [("drive", Some("tilt")), ("drive", None)]);
+}
+
+#[test]
 fn a_mechanism_entry_missing_a_word_is_one_error() {
     let missing_at = parse(
         "stave 1\nkind h : hinge {\n  mechanism {\n    pivot arm, link point(across: 1mm)\n  }\n}\n",

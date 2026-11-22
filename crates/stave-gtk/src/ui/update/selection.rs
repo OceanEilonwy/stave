@@ -56,6 +56,9 @@ pub(in crate::ui) enum SelectionInput {
     },
     /// The selection's motion slider moved.
     MotionMoved(f64),
+    /// The motion bar's slider for another drive of the selection moved
+    /// (the drive's place, from 1).
+    MotionDriveMoved(usize, f64),
     /// A posed problem's slider moved.
     ProblemMoved(f64),
     /// Focus mode's scrub moved (0 to 1).
@@ -234,6 +237,9 @@ pub(in crate::ui) fn pictures_said(output: PicturesOutput) -> WindowInput {
 pub(in crate::ui) fn motion_said(output: MotionBarOutput) -> WindowInput {
     match output {
         MotionBarOutput::Moved(value) => SelectionInput::MotionMoved(value).into(),
+        MotionBarOutput::MovedMore(index, value) => {
+            SelectionInput::MotionDriveMoved(index.saturating_add(1), value).into()
+        }
     }
 }
 
@@ -294,7 +300,8 @@ impl Window {
             SelectionInput::Find => self.widgets.finder.present(&self.widgets.window, ""),
             SelectionInput::FinderSearch(query) => self.finder_search(&query),
             SelectionInput::FinderHit { hit, choice } => self.finder_hit(hit, choice),
-            SelectionInput::MotionMoved(value) => self.motion_moved(value),
+            SelectionInput::MotionMoved(value) => self.motion_moved(0, value),
+            SelectionInput::MotionDriveMoved(index, value) => self.motion_moved(index, value),
             SelectionInput::ProblemMoved(value) => self.problem_moved(value),
             SelectionInput::FocusScrubbed(value) => {
                 let value = narrow(value).clamp(0.0, 1.0);
@@ -510,7 +517,7 @@ impl Window {
                 .unwrap_or_default();
             (
                 moving,
-                state.opening.map(|o| o.assembly),
+                state.opening.first().map(|o| o.assembly),
                 state.motion_shown,
             )
         };
@@ -570,7 +577,7 @@ impl Window {
         {
             let state = &mut self.state;
             state.problem = None;
-            state.opening = None;
+            state.opening.clear();
             state.exploding = false;
             state.focus = Some(FocusState {
                 focus: found,
@@ -964,48 +971,84 @@ impl Window {
             let session = &self.session;
             assembly.and_then(|id| {
                 let (design, graph) = session.drawable()?;
-                let range = graph.motion_range(id)?;
+                let drives = graph.drives(id);
+                if drives.is_empty() {
+                    return None;
+                }
                 let name = design.assembly(id)?.name.clone();
-                Some((id, range, name))
+                Some((id, drives, name))
             })
         };
-        let amount = {
+        let amounts: Vec<f32> = {
             let state = &mut self.state;
             if state.focus.is_some() {
                 return;
             }
-            let keep = state
-                .opening
-                .filter(|o| Some(o.assembly) == found.as_ref().map(|(id, _, _)| *id));
-            // A door or drawer moved before opens where it was left.
-            state.opening = keep.or_else(|| {
-                found.as_ref().map(|(id, range, _)| Opening {
-                    assembly: *id,
-                    amount: state.moved.get(id).copied().unwrap_or(0.0),
-                    turns: range.turns(),
-                })
-            });
-            state.opening.map_or(0.0, |o| o.amount)
+            let same =
+                state.opening.first().map(|o| o.assembly) == found.as_ref().map(|(id, _, _)| *id);
+            if !same {
+                // A door or drawer moved before opens where it was left,
+                // drive by drive.
+                state.opening = found
+                    .as_ref()
+                    .map(|(id, drives, _)| {
+                        drives
+                            .iter()
+                            .map(|drive| Opening {
+                                assembly: *id,
+                                drive: drive.drive,
+                                amount: state
+                                    .moved
+                                    .get(&(*id, drive.drive))
+                                    .copied()
+                                    .unwrap_or(0.0),
+                                turns: drive.range.turns(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+            state.opening.iter().map(|o| o.amount).collect()
         };
         match &found {
-            Some((_, range, name)) => {
-                let (full, value, end) = if range.turns() {
-                    let degrees = range.full().to_degrees();
-                    (
-                        degrees,
-                        amount.to_degrees(),
-                        format!("{}°", degrees.round()),
-                    )
-                } else {
-                    (range.full(), amount, format!("{} mm", range.full().round()))
-                };
-                self.show_motion(Some(MotionShown {
-                    name: name.clone(),
-                    start: tr("closed"),
-                    end,
-                    full: f64::from(full),
-                    value: f64::from(value),
-                }));
+            Some((_, drives, name)) => {
+                let several = drives.len() > 1;
+                let mut sliders = drives.iter().zip(&amounts).map(|(drive, amount)| {
+                    let range = drive.range;
+                    let (full, value, end) = if range.turns() {
+                        let degrees = range.full().to_degrees();
+                        (
+                            degrees,
+                            amount.to_degrees(),
+                            format!("{}°", degrees.round()),
+                        )
+                    } else {
+                        (
+                            range.full(),
+                            *amount,
+                            format!("{} mm", range.full().round()),
+                        )
+                    };
+                    // Each drive of an assembly with several is labelled
+                    // with its name.
+                    let label = match (&drive.name, several) {
+                        (Some(drive_name), true) => format!("{name}.{drive_name}"),
+                        (Some(_) | None, _) => name.clone(),
+                    };
+                    MotionShown {
+                        name: label,
+                        start: tr("closed"),
+                        end,
+                        full: f64::from(full),
+                        value: f64::from(value),
+                        more: Vec::new(),
+                    }
+                });
+                let shown = sliders.next().map(|first| MotionShown {
+                    more: sliders.collect(),
+                    ..first
+                });
+                self.show_motion(shown);
             }
             None => self.show_motion(None),
         }
@@ -1019,18 +1062,21 @@ impl Window {
         self.widgets.motion.show(shown);
     }
 
-    /// The motion bar moved: the selection opening.
-    pub(in crate::ui) fn motion_moved(&mut self, value: f64) {
+    /// The motion bar moved one of its sliders (`index`, the drive's place
+    /// among the selection's): the selection opening that way.
+    pub(in crate::ui) fn motion_moved(&mut self, index: usize, value: f64) {
         {
             let state = &mut self.state;
             let value = narrow(value);
-            if let Some(opening) = state.opening.as_mut() {
+            if let Some(opening) = state.opening.get_mut(index) {
                 opening.amount = if opening.turns {
                     value.to_radians()
                 } else {
                     value
                 };
-                state.moved.insert(opening.assembly, opening.amount);
+                state
+                    .moved
+                    .insert((opening.assembly, opening.drive), opening.amount);
             }
         }
         self.repose();
@@ -1043,7 +1089,9 @@ impl Window {
         let selected = {
             let state = &mut self.state;
             state.moved.clear();
-            state.opening.take().map(|o| o.assembly)
+            let selected = state.opening.first().map(|o| o.assembly);
+            state.opening.clear();
+            selected
         };
         if selected.is_some() && self.state.focus.is_none() {
             self.update_opening(selected);
@@ -1118,7 +1166,7 @@ impl Window {
         let turns = card.as_ref().is_none_or(|c| c.turns());
         {
             let state = &mut self.state;
-            state.opening = None;
+            state.opening.clear();
             state.problem = Some(ShownProblem {
                 contact,
                 highlight,

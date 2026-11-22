@@ -473,11 +473,22 @@ fn mechanism_text(mechanism: &Mechanism) -> String {
     .into_iter()
     .flatten()
     .collect();
-    let reach = match mechanism.drive().extent() {
-        DriveValue::Turn(angle) => format!("turns up to {angle}"),
-        DriveValue::Travel(length) => format!("travels up to {} mm", millimetres(length)),
-    };
-    format!("{}; {reach}", parts.join(", "))
+    // One reach for each drive, named when the kind names them.
+    let reach: Vec<String> = mechanism
+        .drives()
+        .iter()
+        .map(|named| {
+            let reach = match named.drive.extent() {
+                DriveValue::Turn(angle) => format!("turns up to {angle}"),
+                DriveValue::Travel(length) => format!("travels up to {} mm", millimetres(length)),
+            };
+            match &named.name {
+                Some(name) if mechanism.drives().len() > 1 => format!("{name} {reach}"),
+                Some(_) | None => reach,
+            }
+        })
+        .collect();
+    format!("{}; {}", parts.join(", "), reach.join(", "))
 }
 
 /// A diagnostic as rows for a list.
@@ -546,20 +557,24 @@ pub fn pose_at_contact(
     amount: Option<f32>,
 ) -> Option<Posed> {
     let scene = contact_scene(graph, contact)?;
+    // The drive that hits; the assembly's other drives stay where the
+    // scene holds them.
     let overrides: Vec<_> = contact
         .motion
         .iter()
         .filter_map(|motion| {
-            let value = amount.or_else(|| graph.amount(motion.assembly, motion.shown))?;
-            Some((motion.assembly, value))
+            let value = amount
+                .or_else(|| graph.drive_amount(motion.assembly, motion.drive, motion.shown))?;
+            Some((motion.assembly, motion.drive, value))
         })
         .collect();
-    Some(graph.pose_with(scene, &overrides, 0.0))
+    Some(graph.pose_with_drives(scene, &overrides, 0.0))
 }
 
 /// The range a problem's motion can be scrubbed over, when it has one.
 pub fn contact_motion_range(graph: &SceneGraph, contact: &Contact) -> Option<MotionRange> {
-    graph.motion_range(contact.motion?.assembly)
+    let motion = contact.motion?;
+    graph.drive_range(motion.assembly, motion.drive)
 }
 
 /// What to tint and draw in red for a problem: every node of the items it

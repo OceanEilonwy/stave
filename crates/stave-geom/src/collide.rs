@@ -40,8 +40,8 @@
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
-use stave_model::mechanism::MemberIndex;
 use stave_model::mechanism::TurnLine;
+use stave_model::mechanism::{DriveIndex, DriveValue, MemberIndex};
 use stave_model::solved::{Body, MemberShape, Part, Point, Pose, PoseValue, WorldBox};
 
 use crate::axes::AlongWorld;
@@ -1472,76 +1472,193 @@ impl Placement {
         chain: &[(&MechanismPath, PoseValue)],
         member: Option<MemberIndex>,
     ) -> Placement {
-        let mut offset = Point::default();
-        let mut matrix = DMat4::IDENTITY;
-        let mut turned = false;
+        let mut placed = Placed::default();
         let last = chain.len().saturating_sub(1);
         for (index, (path, value)) in chain.iter().enumerate() {
             let member = member.filter(|_| index == last);
-            match (member, path.shape()) {
-                (None, MotionShape::Travel { toward, travel }) => {
-                    let amount = match *value {
-                        PoseValue::Open => travel,
-                        PoseValue::Travel(length) => length,
-                        PoseValue::Closed | PoseValue::Angle(_) => Length::ZERO,
-                    };
-                    let step = direction_offset(toward, amount);
-                    for axis in Axis::ALL {
-                        offset = offset.with(
-                            axis,
-                            Length::from_nm(
-                                offset.get(axis).nm().saturating_add(step.get(axis).nm()),
-                            ),
-                        );
-                    }
-                    matrix *= DMat4::from_translation(point_vector(step));
-                }
-                (
-                    None,
-                    MotionShape::Turn {
-                        line: pivot,
-                        opening,
-                    },
-                ) => {
-                    let angle = match *value {
-                        PoseValue::Open => opening,
-                        PoseValue::Angle(angle) => angle,
-                        PoseValue::Closed | PoseValue::Travel(_) => continue,
-                    };
-                    // A turn about one line comes back to where it began
-                    // every whole turn: a pose at 360deg is the closed
-                    // pose (grammar, "Mechanisms").
-                    let angle = Angle::from_microdeg(angle.microdeg().rem_euclid(FULL_TURN));
-                    if angle.microdeg() == 0 {
-                        continue;
-                    }
-                    turned = true;
-                    matrix *= turn_about(&pivot, angle);
-                }
-                (Some(_), _) | (None, MotionShape::General) => {
-                    let amount = path.amount(*value);
-                    if amount == 0.0 {
-                        continue;
-                    }
-                    let moved = path.matrix(member.unwrap_or_else(|| path.moving()), amount);
-                    if let Some(moved) = moved {
-                        turned = true;
-                        matrix *= moved;
-                    }
-                }
+            placed.swept(path, *value, member);
+        }
+        placed.placement()
+    }
+
+    /// The placement after a chain of assembly mechanisms, outermost first,
+    /// each with every one of its drives at a pose value (one for each
+    /// drive, in order; a scene's poses all applied together, grammar
+    /// "Scenes"). With `member`, the body is that member of the last
+    /// mechanism. A mechanism with one drive is placed as
+    /// [`Placement::of_mechanisms`] places it; with several, a translation
+    /// (every turn closed) stays exact, one drive away from closed with an
+    /// exact shape is turned or moved as it, and anything else is posed by
+    /// the solver.
+    pub fn of_poses(
+        chain: &[(&MechanismPath, &[PoseValue])],
+        member: Option<MemberIndex>,
+    ) -> Placement {
+        let mut placed = Placed::default();
+        let last = chain.len().saturating_sub(1);
+        for (index, (path, values)) in chain.iter().enumerate() {
+            let member = member.filter(|_| index == last);
+            if path.drives().len() <= 1 {
+                let value = values.first().copied().unwrap_or(PoseValue::Closed);
+                placed.swept(path, value, member);
+            } else {
+                placed.all(path, values, member);
             }
         }
-        if turned {
-            Placement::Turned(matrix)
-        } else {
-            Placement::Exact(offset)
-        }
+        placed.placement()
     }
 
     pub(crate) fn matrix(&self) -> DMat4 {
         match self {
             Placement::Exact(offset) => DMat4::from_translation(point_vector(*offset)),
             Placement::Turned(matrix) => *matrix,
+        }
+    }
+}
+
+/// A placement being built along a chain of mechanisms: an exact offset
+/// while nothing has turned, and the matrix of the whole chain.
+#[derive(Debug, Clone, Copy)]
+struct Placed {
+    offset: Point,
+    matrix: DMat4,
+    turned: bool,
+}
+
+impl Default for Placed {
+    fn default() -> Placed {
+        Placed {
+            offset: Point::default(),
+            matrix: DMat4::IDENTITY,
+            turned: false,
+        }
+    }
+}
+
+impl Placed {
+    /// Moved exactly by `by`.
+    fn moved(&mut self, by: Point) {
+        self.offset = self.offset.plus(by);
+        self.matrix *= DMat4::from_translation(point_vector(by));
+    }
+
+    /// Moved by a matrix: no longer exact.
+    fn turned_by(&mut self, matrix: DMat4) {
+        self.turned = true;
+        self.matrix *= matrix;
+    }
+
+    fn placement(self) -> Placement {
+        if self.turned {
+            Placement::Turned(self.matrix)
+        } else {
+            Placement::Exact(self.offset)
+        }
+    }
+
+    /// One mechanism with its swept drive at `value` and every other drive
+    /// where the path holds it.
+    fn swept(&mut self, path: &MechanismPath, value: PoseValue, member: Option<MemberIndex>) {
+        let held = path.offset().unwrap_or_default();
+        match (member, path.shape()) {
+            (None, MotionShape::Travel { toward, travel }) => {
+                let amount = match value {
+                    PoseValue::Open => travel,
+                    PoseValue::Travel(length) => length,
+                    PoseValue::Closed | PoseValue::Angle(_) => Length::ZERO,
+                };
+                self.moved(direction_offset(toward, amount).plus(held));
+            }
+            (
+                None,
+                MotionShape::Turn {
+                    line: pivot,
+                    opening,
+                },
+            ) => {
+                let angle = match value {
+                    PoseValue::Open => opening,
+                    PoseValue::Angle(angle) => angle,
+                    PoseValue::Closed | PoseValue::Travel(_) => Angle::ZERO,
+                };
+                // A turn about one line comes back to where it began
+                // every whole turn: a pose at 360deg is the closed
+                // pose (grammar, "Mechanisms").
+                let angle = Angle::from_microdeg(angle.microdeg().rem_euclid(FULL_TURN));
+                if angle.microdeg() == 0 {
+                    if held != Point::default() {
+                        self.moved(held);
+                    }
+                    return;
+                }
+                // Turned about the line where the held drives put it, after
+                // they moved it there.
+                self.turned_by(
+                    turn_about(&pivot, angle) * DMat4::from_translation(point_vector(held)),
+                );
+            }
+            (Some(_), _) | (None, MotionShape::General) => {
+                let amount = path.amount(value);
+                if amount == 0.0 && path.held_closed() {
+                    return;
+                }
+                if let Some(moved) = path.matrix(member.unwrap_or_else(|| path.moving()), amount) {
+                    self.turned_by(moved);
+                }
+            }
+        }
+    }
+
+    /// One mechanism with every drive at a pose value.
+    fn all(&mut self, path: &MechanismPath, values: &[PoseValue], member: Option<MemberIndex>) {
+        let mechanism = path.model();
+        let exact = mechanism.values_of(values);
+        if member.is_none() {
+            if let Some(by) = mechanism.offset_at(&exact) {
+                if by != Point::default() {
+                    self.moved(by);
+                }
+                return;
+            }
+            // One drive away from closed, with an exact shape.
+            let closed = mechanism.closed();
+            let away: Vec<usize> = (0..exact.len())
+                .filter(|index| exact.get(*index) != closed.get(*index))
+                .collect();
+            if let [only] = away.as_slice()
+                && let Some(drive) = DriveIndex::new(*only)
+                && let MotionShape::Turn { line, .. } = mechanism.shape_of(drive, &closed)
+                && let (Some(DriveValue::Turn(at)), Some(DriveValue::Turn(from))) =
+                    (exact.get(*only).copied(), closed.get(*only).copied())
+            {
+                let turned = at
+                    .microdeg()
+                    .saturating_sub(from.microdeg())
+                    .saturating_abs();
+                let angle = Angle::from_microdeg(turned.rem_euclid(FULL_TURN));
+                if angle.microdeg() != 0 {
+                    self.turned_by(turn_about(&line, angle));
+                }
+                return;
+            }
+        }
+        let amounts: Vec<f64> = (0..exact.len())
+            .filter_map(DriveIndex::new)
+            .map(|drive| {
+                path.amount_of(
+                    drive,
+                    values
+                        .get(drive.index())
+                        .copied()
+                        .unwrap_or(PoseValue::Closed),
+                )
+            })
+            .collect();
+        if amounts.iter().all(|amount| *amount == 0.0) {
+            return;
+        }
+        if let Some(moved) = path.matrix_at(member.unwrap_or_else(|| path.moving()), &amounts) {
+            self.turned_by(moved);
         }
     }
 }

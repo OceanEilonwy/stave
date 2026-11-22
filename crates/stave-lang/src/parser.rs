@@ -1947,6 +1947,16 @@ impl<'t> Parser<'t> {
                 p.value(name, at)
             });
         }
+        if self.at_word("drive") && self.nth(1) == IDENT && self.nth(2) == COLON {
+            return self.node(DRIVE, |p| {
+                p.bump();
+                let name = p.nth_text(0);
+                let at = p.span(0).to(p.span(1));
+                p.wrap(NAME);
+                p.bump();
+                p.value(name, at)
+            });
+        }
         if self.at_word("stop") && self.nth(1) == COLON {
             return self.node(STOP, |p| {
                 let at = p.span(0).to(p.span(1));

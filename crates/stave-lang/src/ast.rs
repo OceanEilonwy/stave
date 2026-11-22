@@ -864,10 +864,13 @@ pub enum MechanismEntry {
         /// The whole entry.
         span: Span,
     },
-    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`
+    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`, or a
+    /// named drive, `drive tilt: turn(...)`.
     Drive {
         /// The `drive` word.
         key: Name,
+        /// The drive's name, when written (`tilt` in `drive tilt: ...`).
+        name: Option<Name>,
         /// The call.
         value: Expr,
         /// The whole entry.

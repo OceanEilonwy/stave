@@ -382,9 +382,16 @@ impl State {
     }
 }
 
-/// Runs every step with the drive `relative` (radians or nanometres) past
-/// its closed value.
+/// Runs every step with the swept drive `relative` (radians or
+/// nanometres) past its closed value and every other drive where it is
+/// held.
 fn evaluate(mechanism: &Mechanism, relative: f64) -> Result<Evaluation, Failure> {
+    evaluate_at(mechanism, &mechanism.relatives(relative))
+}
+
+/// Runs every step with each drive `relatives[i]` (radians or
+/// nanometres) past its closed value.
+fn evaluate_at(mechanism: &Mechanism, relatives: &[f64]) -> Result<Evaluation, Failure> {
     let count = mechanism.body_count();
     let mut state = State {
         poses: (0..count)
@@ -394,11 +401,13 @@ fn evaluate(mechanism: &Mechanism, relative: f64) -> Result<Evaluation, Failure>
         travels: vec![None; count],
     };
     let driven = mechanism.drive_body().0;
-    let known = match mechanism.drive() {
-        Drive::Turn { .. } => state.angles.get_mut(driven),
-        Drive::Travel { .. } => state.travels.get_mut(driven),
-    };
-    *known.ok_or(Failure::Internal)? = Some(relative);
+    for (drive, relative) in mechanism.drives().iter().zip(relatives) {
+        let known = match drive {
+            Drive::Turn { .. } => state.angles.get_mut(driven),
+            Drive::Travel { .. } => state.travels.get_mut(driven),
+        };
+        *known.ok_or(Failure::Internal)? = Some(*relative);
+    }
 
     let mut crossings = Vec::with_capacity(mechanism.steps().len());
     let mut slots = Vec::new();
@@ -419,6 +428,33 @@ fn evaluate(mechanism: &Mechanism, relative: f64) -> Result<Evaluation, Failure>
                         offset: at - DVec2::from_angle(angle).rotate(*pin),
                     },
                 )?;
+                None
+            }
+            Step::HangInSlot {
+                body,
+                guide,
+                from,
+                unit,
+                to,
+            } => {
+                let angle = state.angle(*body)?;
+                let travel = state.travel(*body)?;
+                let local = *from + *unit * travel;
+                let at = state.pose(*guide)?.apply(local);
+                state.place(
+                    *body,
+                    PlanarPose {
+                        angle,
+                        offset: at - DVec2::from_angle(angle).rotate(*from),
+                    },
+                )?;
+                let (place, tolerance) = along(local, *from, *to - *from);
+                slots.push(SlotPlace {
+                    pin: *body,
+                    guide: *guide,
+                    along: place,
+                    tolerance,
+                });
                 None
             }
             Step::Rail {
@@ -744,6 +780,44 @@ impl Path {
     /// outside the range, or of the other kind of drive, is
     /// [`MechanismError::OutOfRange`].
     pub fn pose(&self, at: DriveValue) -> Result<Pose, MechanismError> {
+        self.pose_exact(at)
+    }
+
+    /// Every member's pose with every drive at a value in floats (radians
+    /// or nanometres, absolute; one for each drive, in order), each within
+    /// its range: for scenes that pose several drives at once. Exactly
+    /// [`PlanarPose::REST`] when every drive is at its `from`.
+    pub fn pose_all(&self, amounts: &[DriveAmount]) -> Result<Pose, MechanismError> {
+        let drives = self.mechanism.drives();
+        if amounts.len() != drives.len() {
+            return Err(MechanismError::NoSuchDrive);
+        }
+        let mut relatives = Vec::with_capacity(drives.len());
+        for (drive, amount) in drives.iter().zip(amounts) {
+            let (from, to) = (
+                DriveAmount::of(drive.from()).value(),
+                DriveAmount::of(drive.to()).value(),
+            );
+            let value = amount.value();
+            if !(from.min(to)..=from.max(to)).contains(&value) {
+                return Err(MechanismError::OutOfRange {
+                    from: drive.from(),
+                    to: drive.to(),
+                });
+            }
+            relatives.push(value - from);
+        }
+        let at = self.mechanism.drive().from();
+        let evaluation =
+            evaluate_at(&self.mechanism, &relatives).map_err(|failure| match failure {
+                Failure::Unreachable(index) => dead_point(&self.mechanism, index, at),
+                Failure::Internal => MechanismError::Internal,
+            })?;
+        let rest = relatives.iter().all(|relative| *relative == 0.0);
+        self.posed(&evaluation, rest)
+    }
+
+    fn pose_exact(&self, at: DriveValue) -> Result<Pose, MechanismError> {
         let (from, to) = self.mechanism.range_units();
         let units = match (self.mechanism.drive(), at) {
             (Drive::Turn { .. }, DriveValue::Turn(angle)) => angle.microdeg(),
@@ -793,6 +867,13 @@ impl Path {
             Failure::Unreachable(index) => dead_point(&self.mechanism, index, at),
             Failure::Internal => MechanismError::Internal,
         })?;
+        let rest = relative == 0.0 && self.mechanism.held_closed();
+        self.posed(&evaluation, rest)
+    }
+
+    /// Every member's pose from an evaluation; exactly
+    /// [`PlanarPose::REST`] at the closed pose.
+    fn posed(&self, evaluation: &Evaluation, rest: bool) -> Result<Pose, MechanismError> {
         let margin = evaluation
             .crossings
             .iter()
@@ -804,7 +885,7 @@ impl Path {
             .member_bodies()
             .iter()
             .map(|body| {
-                if relative == 0.0 {
+                if rest {
                     Ok(PlanarPose::REST)
                 } else {
                     evaluation
@@ -830,7 +911,7 @@ fn step_members(mechanism: &Mechanism, index: usize) -> Vec<super::MemberName> {
     let bodies: Vec<Body> = match mechanism.steps().get(index) {
         Some(Step::Dyad(dyad)) => dyad.members.clone(),
         Some(Step::SlotInLink(slot)) => vec![slot.link, slot.pin],
-        Some(Step::Hang { body, .. }) => vec![*body],
+        Some(Step::Hang { body, .. } | Step::HangInSlot { body, .. }) => vec![*body],
         Some(Step::Rail { runner, .. }) => vec![*runner],
         Some(Step::Couple { to, .. }) => vec![*to],
         None => Vec::new(),

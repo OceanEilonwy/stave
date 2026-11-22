@@ -50,8 +50,8 @@ pub use focus::{
 };
 pub use ghost::{Ghost, GhostChange, GhostOverlay, GhostVerdict, Ghosts};
 pub use graph::{
-    BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
-    RegionNode, SceneEntry, SceneGraph, Section, Wood,
+    BuildOptions, DriveRange, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId,
+    Posed, RegionNode, SceneEntry, SceneGraph, Section, Wood,
 };
 pub use grip::{FaceOf, GripFace, GripHandle, GripOf, GripPlace, Nudged};
 pub use pick::{Hit, PartFace};

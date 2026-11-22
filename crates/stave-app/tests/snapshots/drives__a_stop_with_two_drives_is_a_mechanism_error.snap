@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[mechanism]: a stop belongs to a mechanism with one drive
+   --> /project/project.stave:104:5
+    |
+104 |     stop: -drop "the slot ends here"
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: end each drive's range with its to: instead

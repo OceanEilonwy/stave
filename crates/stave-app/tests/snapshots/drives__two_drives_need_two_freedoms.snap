@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[mechanism]: pivot_bolt's mechanism has 1 freedoms; it needs exactly 2, one for each drive
+  --> /project/project.stave:99:3
+   |
+99 |   mechanism {
+   |   ^^^^^^^^^^^
+   = help: count three for the driven member and for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until one is left for each drive
