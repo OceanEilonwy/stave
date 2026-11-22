@@ -732,6 +732,32 @@ mod tests {
         WorldSolid::from_boxes(vec![WorldBox::new(a, b)])
     }
 
+    fn square(centre: DVec2, half: f64) -> Vec<DVec2> {
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+            .iter()
+            .map(|&(x, y)| centre + DVec2::new(x, y) * half)
+            .collect()
+    }
+
+    #[test]
+    fn a_full_turn_finds_a_contact_past_half_way_round() {
+        // A block 100mm out from the pin, and something in its way 300deg
+        // round (counter-clockwise): a frame that turns all the way round
+        // must meet it there, past 180deg, and turning the whole 360deg
+        // with nothing in the way is clear.
+        let moving = square(DVec2::new(100.0, 0.0), 10.0);
+        let at = 300f64.to_radians();
+        let fixed = square(DVec2::new(100.0 * at.cos(), 100.0 * at.sin()), 10.0);
+        let angle = turn_first(&moving, &fixed, TAU).unwrap().to_degrees();
+        assert!(
+            (270.0..300.0).contains(&angle),
+            "met at {angle}deg, expected just before 300deg"
+        );
+        assert_eq!(turn_first(&moving, &fixed, 250f64.to_radians()), None);
+        let far = square(DVec2::new(0.0, 300.0), 10.0);
+        assert_eq!(turn_first(&moving, &far, TAU), None);
+    }
+
     #[test]
     fn a_drawer_hits_what_is_in_front_of_it() {
         // A drawer 400mm deep, front at deep 0, pulled toward the front;

@@ -1382,6 +1382,31 @@ mod tests {
     }
 
     #[test]
+    fn a_pivot_mirrored_along_its_own_pins_moves_alike() {
+        // Two pivot bolts on one frame, one through each upright, their
+        // pins on one line running across: the right one is the left one
+        // reflected across the middle of the frame, along the pins. The
+        // reflection leaves the plane's own directions alone, so the two
+        // are seen at the same points and turn the same way round.
+        let left = Plane {
+            origin: PerAxis {
+                across: mm(0),
+                up: mm(1400),
+                deep: mm(200),
+            },
+            axis: Axis::Across,
+            across: Direction::Up,
+            depth: Direction::Back,
+        };
+        let right = left.reflected(Axis::Across, mm(575)).unwrap();
+        assert_eq!(right.axis, Axis::Across);
+        assert_eq!(left.same_hand(&right), Some(true));
+        let point = [mm(-150), mm(0)];
+        assert_eq!(left.point_of(&right, point), Some(point));
+        assert_eq!(left.vector_of(&right, point), Some(point));
+    }
+
+    #[test]
     fn a_drive_narrows_to_the_nearer_end() {
         let drive = MechanismDrive::Turn {
             member: MemberIndex::new(0).unwrap(),

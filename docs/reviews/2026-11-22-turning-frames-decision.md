@@ -76,13 +76,35 @@ lands with B and has to check clean after C.
 
 ## Risks and open questions
 
-1. **Mirrored pivots.** Two pivots mirrored across one assembly must count
-   as "moving alike". Check `same_hand` in `stave-solve/src/mechanism.rs`
-   first. If it refuses them, B grows a little.
-2. **A full 360deg turn.** 0deg and 360deg must be treated as the same
-   pose, and the dead-point proof checked for a wrap-around assumption.
-3. **Sweep count.** It grows as motions times held values: the loom needs
-   about 10. Report it if a design reaches hundreds.
+Risks 1 to 3 were checked on 2026-11-22. Each has a remaining step to
+take when Phase B is built.
+
+1. **Mirrored pivots: low risk.** "Moving alike" compares the other
+   driver's entries in the first driver's plane (`point_of`), and reverses
+   the turn when the two are mirror images (`same_hand`). A pivot pair
+   mirrored left to right is reflected along its own pin axis, which drops
+   out of the plane's coordinates. So the two land on the same points and
+   turn the same way. This is proven by a new unit test on today's code,
+   `a_pivot_mirrored_along_its_own_pins_moves_alike` in
+   `stave-solve/src/mechanism.rs`. *Still to do in B:* an end-to-end
+   corpus test with two `pins: depth` pivots written separately (`face:
+   left` and `face: right`), because their planes come from each one's own
+   mount rather than from a reflection.
+2. **A full 360deg turn: low risk.** The exact turn sweep measures each
+   contact angle with `rem_euclid(TAU)` and has no 180deg assumption.
+   Nothing in the solver, the checker or `Angle` caps a range. This is
+   proven by a new unit test,
+   `a_full_turn_finds_a_contact_past_half_way_round` in
+   `stave-geom/src/sweep.rs`: a contact about 300deg round is found, and a
+   clear 360deg turn reports none. The dead-point proof only runs for
+   linkages, and a plain pivot never reaches it. *Still to do in B:* a
+   corpus test that poses 360deg, and accept `to: 360deg` in the spec.
+3. **Sweep count: low risk.** Measured with the release `stave check` on
+   `examples/clothing_cabinet` (4 motions, 2 scenes): 44ms. With 20 more
+   scenes posing every motion (80 more sweeps): 235ms. That is about 2.4ms
+   per sweep. The loom needs about 10 to 12 sweeps (about 30ms), and even
+   300 sweeps is under a second. *Still to do in B:* a test that keeps the
+   loom's check under a fixed time, so a regression shows up.
 4. **Pivots that don't draw** (a plain pin, a cradle) aren't covered by
    `clamp`. They are left out of scope.
 5. **End grain under a clamp.** A spindle-turned disc has end-grain faces
