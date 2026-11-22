@@ -82,7 +82,16 @@ a line and a concrete help line for every problem:
    (`stave-geom/src/planar/proof.rs`). The 110deg cup hinge is proven
    with at least 1.016mm to spare and the 165deg wide hinge with 0.190mm,
    neither needing a halving. A slot's ends are still checked at the
-   samples only.
+   samples only. An assembly may move several ways, one named drive each
+   (`drive tilt:`, `drive height:`, posed `frame.tilt`), with pins that
+   run into the mount face (`pins: depth`), set positions (`set_at:`) and
+   lift-out members (`loose: true`): each motion is swept with every
+   other held at closed, at each scene's value and at each set position,
+   and an assembly inside a moving one is swept too.
+   `examples/tapestry_loom` turns its frame all the way round at each of
+   four heights. Hardware that draws parts together (`clamp`) must have
+   a solid stack between them (`no-contact`), at rest, at every pose and
+   at every set position.
 6. **Requires** at the current values (over whole ranges: not yet).
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
@@ -552,8 +561,11 @@ guide, and the design is
   (well under a nanometre against the 0.05mm tolerance); motion sweeps and
   rods leave angled cuts in (more wood than there is). Turned and rotated
   steps are checked by dense sampling (1mm, 0.4mm of travel), not exactly.
-- **Motion**: an assembly inside another moving assembly is not swept; the
-  rule that an assembly's hinges share one pivot (`motion`) is not checked.
+- **Motion**: the rule that an assembly's hinges share one pivot
+  (`motion`) is not checked. Wood moving past wood with too little room
+  for it to swell (running clearance, Phase C of
+  `docs/reviews/2026-11-22-turning-frames-decision.md`) is not checked
+  yet.
   A cup hinge moves on the mechanism its kind declares; `std` has the 110°
   full-overlay `euro_hinge` and a 165° `wide_hinge_165` with placeholder
   pins; half-overlay and inset hinges need their own kinds, not written

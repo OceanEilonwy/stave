@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use stave_lang::ast::{self, BaseKind, ExprKind, Span};
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, Label};
-use stave_schema::functions::{POINT, POINT_ARGUMENTS, ShapeFunction};
+use stave_schema::functions::{
+    CYLINDER_AXIS, DRIVES, EVERY, PINS, POINT, POINT_ARGUMENTS, ShapeFunction,
+};
 use stave_schema::words::WordSet;
 
 use super::expr::Expect;
@@ -24,9 +26,6 @@ use crate::defs::{
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
-
-/// The mechanism field that names the direction its pins run.
-const PINS: &str = "pins";
 
 /// The fields of a joint's member that say where it goes.
 const LAYOUT_FIELDS: [&str; 3] = ["on", "count", "spaced"];
@@ -44,12 +43,6 @@ type Arguments<'a> = BTreeMap<&'a str, &'a ast::Arg>;
 
 /// `set_at:`, a drive's set positions.
 const SET_AT: &str = "set_at";
-
-/// `every(d)` in a `set_at:`.
-const EVERY: &str = "every";
-
-/// `turn` and `travel`: the two drives.
-const DRIVES: [&str; 2] = ["turn", "travel"];
 
 /// A `with:` before the list of bodies is final.
 #[derive(Clone, Copy)]
@@ -671,7 +664,7 @@ impl Resolver<'_> {
                 })
             }
             ShapeFunction::Cylinder => {
-                let axis = match found.get("axis") {
+                let axis = match found.get(CYLINDER_AXIS) {
                     None => FrameAxis::Depth,
                     Some(arg) => {
                         #[expect(

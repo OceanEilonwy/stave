@@ -391,5 +391,6 @@ example_snapshots! {
     side_table_tokens => "side_table",
     side_table_from_box_tokens => "side_table_from_box",
     stool_tokens => "stool",
+    tapestry_loom_tokens => "tapestry_loom",
     wall_shelf_tokens => "wall_shelf",
 }

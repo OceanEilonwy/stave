@@ -1,6 +1,8 @@
 # Turning frames: decision
 
-Status: **go** (2026-11-22), being built in the order A, B, C. The full design, with reasons, worked
+Status: **go** (2026-11-22). Phases A and B are built; Phase C (running
+clearance) is still to do. The loom is
+[`examples/tapestry_loom`](../../examples/tapestry_loom/loom.stave). The full design, with reasons, worked
 examples and the evidence, is in
 [`2026-11-22-turning-frames.md`](2026-11-22-turning-frames.md). Where the
 two differ, this page is the proposal.
@@ -86,10 +88,12 @@ take when Phase B is built.
    out of the plane's coordinates. So the two land on the same points and
    turn the same way. This is proven by a new unit test on today's code,
    `a_pivot_mirrored_along_its_own_pins_moves_alike` in
-   `stave-solve/src/mechanism.rs`. *Still to do in B:* an end-to-end
-   corpus test with two `pins: depth` pivots written separately (`face:
-   left` and `face: right`), because their planes come from each one's own
-   mount rather than from a reflection.
+   `stave-solve/src/mechanism.rs`. *Done in B:* two `pins: depth`
+   pivots written separately (`face: left` and `face: right`) move alike
+   end to end: `two_pivots_written_each_on_its_own_face_move_alike` in
+   `crates/stave-app/tests/turning.rs`, and the holed cheval
+   (`set_positions.rs`) and `examples/tapestry_loom` check clean with
+   them.
 2. **A full 360deg turn: low risk.** The exact turn sweep measures each
    contact angle with `rem_euclid(TAU)` and has no 180deg assumption.
    Nothing in the solver, the checker or `Angle` caps a range. This is
@@ -97,14 +101,19 @@ take when Phase B is built.
    `a_full_turn_finds_a_contact_past_half_way_round` in
    `stave-geom/src/sweep.rs`: a contact about 300deg round is found, and a
    clear 360deg turn reports none. The dead-point proof only runs for
-   linkages, and a plain pivot never reaches it. *Still to do in B:* a
-   corpus test that poses 360deg, and accept `to: 360deg` in the spec.
+   linkages, and a plain pivot never reaches it. *Done in B:* the spec
+   accepts `to: 360deg` ("Mechanisms"), and
+   `a_turn_may_run_all_the_way_round_and_a_whole_turn_is_the_closed_pose`
+   in `crates/stave-app/tests/turning.rs` poses 360deg; the loom turns
+   all the way round at each of its four heights.
 3. **Sweep count: low risk.** Measured with the release `stave check` on
    `examples/clothing_cabinet` (4 motions, 2 scenes): 44ms. With 20 more
    scenes posing every motion (80 more sweeps): 235ms. That is about 2.4ms
    per sweep. The loom needs about 10 to 12 sweeps (about 30ms), and even
-   300 sweeps is under a second. *Still to do in B:* a test that keeps the
-   loom's check under a fixed time, so a regression shows up.
+   300 sweeps is under a second. *Done in B:* the built loom checks in
+   about 27ms in release and 300ms in debug, and
+   `the_loom_checks_in_a_bounded_time` in
+   `crates/stave-app/tests/tapestry_loom.rs` fails past 3s.
 4. **Pivots that don't draw** (a plain pin, a cradle) aren't covered by
    `clamp`. They are left out of scope, and tracked in
    [#89](https://github.com/OceanEilonwy/stave/issues/89).

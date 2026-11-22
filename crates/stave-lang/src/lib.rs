@@ -260,6 +260,7 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "slot",
     "rail",
     "couple",
+    "drive",
     "adjust",
     "on",
     "clamp",

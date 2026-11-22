@@ -1,0 +1,457 @@
+---
+source: crates/stave-ide/tests/tokens.rs
+expression: "render_project(& examples().join(\"tapestry_loom\"))"
+---
+== loom.stave ==
+   1 | stave 1
+     = stave:keyword  1:number
+  11 | project "Tapestry Loom" {
+     = project:keyword  ":text  Tapestry Loom:text  ":text
+  12 |   goal:  "A floor-standing tapestry loom whose frame tilts, turns all the way round and is set at one of four heights"
+     = goal:field  ":text  A floor-standing tapestry loom whose frame tilts, turns all the way round and is set at one of four heights:text  ":text
+  13 |   units: mm
+     = units:field  mm:word
+  21 | param overall_width    = 1150mm
+     = param:keyword  overall_width:param+decl  1150:number  mm:unit
+  22 | param overall_height   = 1650mm
+     = param:keyword  overall_height:param+decl  1650:number  mm:unit
+  23 | param overall_depth    = 700mm
+     = param:keyword  overall_depth:param+decl  700:number  mm:unit
+  24 | param frame_lift       = 400mm within 400mm..500mm    // floor to the bottom of the frame, at its highest
+     = param:keyword  frame_lift:param+decl  400:number  mm:unit  within:keyword  400:number  mm:unit  500:number  mm:unit
+  25 | param frame_height     = 1250mm within 1100mm..1250mm
+     = param:keyword  frame_height:param+decl  1250:number  mm:unit  within:keyword  1100:number  mm:unit  1250:number  mm:unit
+  26 | param warp_tension_gap = 40mm within 10mm..80mm
+     = param:keyword  warp_tension_gap:param+decl  40:number  mm:unit  within:keyword  10:number  mm:unit  80:number  mm:unit
+  27 | param washer           = 3mm within 2mm..6mm          // the gap between the stand and the frame
+     = param:keyword  washer:param+decl  3:number  mm:unit  within:keyword  2:number  mm:unit  6:number  mm:unit
+  28 | param tension_cap      = 40mm within 30mm..60mm
+     = param:keyword  tension_cap:param+decl  40:number  mm:unit  within:keyword  30:number  mm:unit  60:number  mm:unit
+  29 | let foot_height = 90mm
+     = let:keyword  foot_height:let+decl  90:number  mm:unit
+  31 | region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+     = region:keyword  envelope:region+decl  box:function  across:field  overall_width:param+ref  up:field  overall_height:param+ref  deep:field  overall_depth:param+ref
+  34 | stock beech_45       { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  beech_45:stock+decl  species:field  beech:word  form:field  solid:word  thickness:field  45:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  35 | stock beech_25       { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+     = stock:keyword  beech_25:stock+decl  species:field  beech:word  form:field  solid:word  thickness:field  25:number  mm:unit  max_width:field  200:number  mm:unit  max_length:field  2400:number  mm:unit
+  36 | stock beech_dowel_25 { species: beech, form: dowel, diameter: 25mm }
+     = stock:keyword  beech_dowel_25:stock+decl  species:field  beech:word  form:field  dowel:word  diameter:field  25:number  mm:unit
+  39 | part foot_l : beech_45 {
+     = part:keyword  foot_l:part+decl  beech_45:stock+ref
+  40 |   length: overall_depth
+     = length:field  overall_depth:param+ref
+  41 |   width:  foot_height
+     = width:field  foot_height:let+ref
+  42 |   note:   "Shape the underside with a relief so the foot stands on its two ends"
+     = note:field  ":text  Shape the underside with a relief so the foot stands on its two ends:text  ":text
+  43 |   place {
+     = place:keyword
+  44 |     orient(length: back, width: up)
+     = orient:function  length:field  back:word  width:field  up:word
+  45 |     flush(envelope.bottom)
+     = flush:function  envelope:region+ref  bottom:plain
+  46 |     flush(envelope.left)
+     = flush:function  envelope:region+ref  left:plain
+  47 |     center(envelope, deep)
+     = center:function  envelope:region+ref  deep:word
+  51 | part foot_r = mirror(foot_l, about: mid(envelope, across))
+     = part:keyword  foot_r:part+decl  mirror:keyword  foot_l:part+ref  about:field  mid:function  envelope:region+ref  across:word
+  53 | part upright_l : beech_45 {
+     = part:keyword  upright_l:part+decl  beech_45:stock+ref
+  54 |   length: 1100mm
+     = length:field  1100:number  mm:unit
+  55 |   width:  70mm
+     = width:field  70:number  mm:unit
+  56 |   note:   "Drill the row of height holes after the stand is glued up"
+     = note:field  ":text  Drill the row of height holes after the stand is glued up:text  ":text
+  57 |   place {
+     = place:keyword
+  58 |     orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+  59 |     against(foot_l.top)
+     = against:function  foot_l:part+ref  top:plain
+  60 |     flush(foot_l.left)
+     = flush:function  foot_l:part+ref  left:plain
+  61 |     center(foot_l, deep)
+     = center:function  foot_l:part+ref  deep:word
+  65 | part upright_r = mirror(upright_l, about: mid(envelope, across))
+     = part:keyword  upright_r:part+decl  mirror:keyword  upright_l:part+ref  about:field  mid:function  envelope:region+ref  across:word
+  69 | part stretcher : beech_25 {
+     = part:keyword  stretcher:part+decl  beech_25:stock+ref
+  70 |   length: fit
+     = length:field  fit:keyword
+  71 |   width:  150mm
+     = width:field  150:number  mm:unit
+  72 |   place {
+     = place:keyword
+  73 |     orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+  74 |     flush(upright_l.bottom)
+     = flush:function  upright_l:part+ref  bottom:plain
+  75 |     center(envelope, across)
+     = center:function  envelope:region+ref  across:word
+  76 |     center(upright_l, deep)
+     = center:function  upright_l:part+ref  deep:word
+  80 | joint upright_tenons   : mortise_tenon([upright_l, upright_r], into: [foot_l, foot_r], length: 35mm)
+     = joint:keyword  upright_tenons:joint+decl  mortise_tenon:type+ref+std  upright_l:part+ref  upright_r:part+ref  into:field  foot_l:part+ref  foot_r:part+ref  length:param+ref+std  35:number  mm:unit
+  81 | joint stretcher_tenons : mortise_tenon(stretcher, into: [upright_l, upright_r], length: 32mm, shoulder: 35mm)
+     = joint:keyword  stretcher_tenons:joint+decl  mortise_tenon:type+ref+std  stretcher:part+ref  into:field  upright_l:part+ref  upright_r:part+ref  length:param+ref+std  32:number  mm:unit  shoulder:param+ref+std  35:number  mm:unit
+  84 | kind pivot_bolt : fitting {
+     = kind:keyword  pivot_bolt:type+decl  fitting:plain
+  85 |   roles {
+     = roles:keyword
+  86 |     piece: Part     // the stand's upright, which the bolt turns in
+     = piece:role+decl  Part:type
+  87 |     into:  Part     // the frame's stile
+     = into:role+decl  Part:type
+  90 |   param knob_diameter = 50mm
+     = param:keyword  knob_diameter:param+decl  50:number  mm:unit
+  92 |   param projection = 30mm
+     = param:keyword  projection:param+decl  30:number  mm:unit
+  94 |   param bolt_diameter = 8mm
+     = param:keyword  bolt_diameter:param+decl  8:number  mm:unit
+  96 |   param thread_length = 25mm
+     = param:keyword  thread_length:param+decl  25:number  mm:unit
+  98 |   param washer_thickness = 3mm
+     = param:keyword  washer_thickness:param+decl  3:number  mm:unit
+  99 |   param washer_diameter  = 30mm
+     = param:keyword  washer_diameter:param+decl  30:number  mm:unit
+ 101 |   param wall = 6mm
+     = param:keyword  wall:param+decl  6:number  mm:unit
+ 103 |   param height = 1040mm
+     = param:keyword  height:param+decl  1040:number  mm:unit
+ 106 |   param holes_below = 3
+     = param:keyword  holes_below:param+decl  3:number
+ 108 |   param hole_pitch = 50mm
+     = param:keyword  hole_pitch:param+decl  50:number  mm:unit
+ 112 |   mount {
+     = mount:keyword
+ 113 |     face:   front
+     = face:field  front:word
+ 114 |     across: center(piece)
+     = across:field  center:function  piece:role+ref
+ 115 |     along:  from(end(piece, toward: down), inset: height)
+     = along:field  from:function  end:function  piece:role+ref  toward:field  down:word  inset:field  height:param+ref
+ 120 |   member bolt {
+     = member:keyword  bolt:member+decl
+ 121 |     with:  into
+     = with:field  into:role+ref
+ 122 |     loose: true
+     = loose:field  true:keyword
+ 123 |     shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+     = shape:field  cylinder:function  diameter:field  bolt_diameter:param+ref  depth:field  0:number  mm:unit  piece:role+ref  thickness:plain  washer_thickness:param+ref  thread_length:param+ref
+ 126 |   member washer {
+     = member:keyword  washer:member+decl
+ 127 |     with:  bolt
+     = with:field  bolt:member+ref
+ 128 |     shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
+     = shape:field  cylinder:function  diameter:field  washer_diameter:param+ref  depth:field  piece:role+ref  thickness:plain  piece:role+ref  thickness:plain  washer_thickness:param+ref
+ 131 |   member knob {
+     = member:keyword  knob:member+decl
+ 132 |     with:  bolt
+     = with:field  bolt:member+ref
+ 133 |     shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+     = shape:field  cylinder:function  diameter:field  knob_diameter:param+ref  depth:field  projection:param+ref  0:number  mm:unit
+ 136 |   clamp knob, bolt along depth
+     = clamp:keyword  knob:plain  bolt:plain  along:keyword  depth:plain
+ 140 |   cut bolt_hole: row(crossing(piece, bolt), pitch: hole_pitch, down: holes_below) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+     = cut:keyword  bolt_hole:plain  row:function  crossing:function  piece:role+ref  bolt:member+ref  pitch:field  hole_pitch:param+ref  down:field  holes_below:param+ref  drill:function  diameter:field  bolt_diameter:param+ref  1:number  mm:unit  depth:field  through:word  wall:field  wall:param+ref
+ 141 |   cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+     = cut:keyword  insert_hole:plain  crossing:function  into:role+ref  bolt:member+ref  drill:function  diameter:field  bolt_diameter:param+ref  4:number  mm:unit  depth:field  thread_length:param+ref  wall:field  wall:param+ref
+ 145 |   mechanism {
+     = mechanism:keyword
+ 146 |     pins: depth
+     = pins:field  depth:word
+ 147 |     slot bolt, piece from point(along: 0mm, across: 0mm) to point(along: -(holes_below * hole_pitch), across: 0mm)
+     = slot:keyword  bolt:plain  piece:plain  from:keyword  point:function  along:field  0:number  mm:unit  across:field  0:number  mm:unit  to:keyword  point:function  along:field  holes_below:param+ref  hole_pitch:param+ref  across:field  0:number  mm:unit
+ 148 |     drive tilt:   turn(bolt, from: 0deg, to: 360deg)
+     = drive:keyword  tilt:plain  turn:function  bolt:member+ref  from:field  0:number  deg:unit  to:field  360:number  deg:unit
+ 149 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
+     = drive:keyword  height:plain  travel:function  bolt:member+ref  from:field  0:number  mm:unit  to:field  holes_below:param+ref  hole_pitch:param+ref  set_at:field  every:function  hole_pitch:param+ref
+ 154 | kind threaded_rod : fastener {
+     = kind:keyword  threaded_rod:type+decl  fastener:plain
+ 155 |   param diameter = 10mm
+     = param:keyword  diameter:param+decl  10:number  mm:unit
+ 156 |   param length   = 100mm
+     = param:keyword  length:param+decl  100:number  mm:unit
+ 159 | kind sliding_tenon : joint {
+     = kind:keyword  sliding_tenon:type+decl  joint:plain
+ 161 |   param length    = 25mm
+     = param:keyword  length:param+decl  25:number  mm:unit
+ 162 |   param thickness = piece.thickness / 2
+     = param:keyword  thickness:param+decl  piece:plain  thickness:plain  2:number
+ 163 |   param shoulder  = 10mm
+     = param:keyword  shoulder:param+decl  10:number  mm:unit
+ 165 |   param travel       = 40mm
+     = param:keyword  travel:param+decl  40:number  mm:unit
+ 166 |   param relief       = 2mm
+     = param:keyword  relief:param+decl  2:number  mm:unit
+ 167 |   param wall         = 6mm
+     = param:keyword  wall:param+decl  6:number  mm:unit
+ 168 |   param rod_diameter = 10mm
+     = param:keyword  rod_diameter:param+decl  10:number  mm:unit
+ 170 |   param cap = 40mm
+     = param:keyword  cap:param+decl  40:number  mm:unit
+ 172 |   param reach = piece.width / 2 - shoulder + travel / 2 + cap
+     = param:keyword  reach:param+decl  piece:plain  width:plain  2:number  shoulder:param+ref  travel:param+ref  2:number  cap:param+ref
+ 174 |   require tenon_thin : thickness <= piece.thickness / 2 "a tenon thicker than half the bar leaves its cheeks too thin"
+     = require:keyword  tenon_thin:require+decl  thickness:param+ref  piece:plain  thickness:plain  2:number  ":text  a tenon thicker than half the bar leaves its cheeks too thin:text  ":text
+ 176 |   insert:    [push(piece, along: length)]
+     = insert:field  push:function  piece:plain  along:field  length:word
+ 177 |   cut_first: into
+     = cut_first:field  into:plain
+ 178 |   adds:      extend(piece, by: length)
+     = adds:field  extend:function  piece:plain  by:field  length:word
+ 180 |   cut tenon: end(piece, facing: into) {
+     = cut:keyword  tenon:plain  end:function  piece:plain  facing:field  into:plain
+ 181 |     tenon(length: length, width: piece.width - 2 * shoulder, thickness: thickness)
+     = tenon:function  length:field  length:word  width:field  piece:plain  width:plain  2:number  shoulder:param+ref  thickness:field  thickness:word
+ 183 |   cut slot: crossing(into, piece) {
+     = cut:keyword  slot:plain  crossing:function  into:plain  piece:plain
+ 184 |     pocket(width: piece.width - 2 * shoulder + travel, thickness: thickness, depth: length + relief, wall: wall)
+     = pocket:function  width:field  piece:plain  width:plain  2:number  shoulder:param+ref  travel:param+ref  thickness:field  thickness:word  depth:field  length:param+ref  relief:param+ref  wall:field  wall:param+ref
+ 186 |   member rod : threaded_rod(diameter: rod_diameter, length: 2 * reach) {
+     = member:keyword  rod:member+decl  threaded_rod:type+ref  diameter:param+ref  rod_diameter:param+ref  length:param+ref  2:number  reach:param+ref
+ 187 |     on:    contact(piece, into)
+     = on:field  contact:function  piece:plain  into:plain
+ 188 |     shape: cylinder(diameter: rod_diameter, axis: along, along: -reach..reach, at: point(depth: length / 2))
+     = shape:field  cylinder:function  diameter:field  rod_diameter:param+ref  axis:field  along:word  along:field  reach:param+ref  reach:param+ref  at:field  point:function  depth:field  length:param+ref  2:number
+ 190 |   cut rod_hole: crossing(into, rod) { drill(diameter: rod_diameter + 1mm, depth: 2 * reach, wall: wall) }
+     = cut:keyword  rod_hole:plain  crossing:function  into:plain  rod:member+ref  drill:function  diameter:field  rod_diameter:param+ref  1:number  mm:unit  depth:field  2:number  reach:param+ref  wall:field  wall:param+ref
+ 191 |   cut insert_hole: crossing(piece, rod) { drill(diameter: rod_diameter, depth: through, wall: 4mm) }
+     = cut:keyword  insert_hole:plain  crossing:function  piece:plain  rod:member+ref  drill:function  diameter:field  rod_diameter:param+ref  depth:field  through:word  wall:field  4:number  mm:unit
+ 194 | kind t_handle : fitting {
+     = kind:keyword  t_handle:type+decl  fitting:plain
+ 195 |   roles {
+     = roles:keyword
+ 196 |     piece: Part
+     = piece:role+decl  Part:type
+ 199 |   param handle_length = 60mm
+     = param:keyword  handle_length:param+decl  60:number  mm:unit
+ 201 |   param handle_size = 20mm
+     = param:keyword  handle_size:param+decl  20:number  mm:unit
+ 203 |   mount {
+     = mount:keyword
+ 204 |     face:   top
+     = face:field  top:word
+ 205 |     across: open
+     = across:field  open:word
+ 206 |     along:  open
+     = along:field  open:word
+ 210 |   member handle {
+     = member:keyword  handle:member+decl
+ 211 |     with:  piece
+     = with:field  piece:role+ref
+ 212 |     shape: box(along: handle_length, across: handle_size, depth: -handle_size..0mm)
+     = shape:field  box:function  along:field  handle_length:param+ref  across:field  handle_size:param+ref  depth:field  handle_size:param+ref  0:number  mm:unit
+ 217 | component Frame {
+     = component:keyword  Frame:type+decl
+ 218 |   param stand_l : Part
+     = param:keyword  stand_l:param+decl  Part:type
+ 219 |   param stand_r : Part
+     = param:keyword  stand_r:param+decl  Part:type
+ 221 |   param lift         = 310mm
+     = param:keyword  lift:param+decl  310:number  mm:unit
+ 222 |   param frame_length = 1250mm
+     = param:keyword  frame_length:param+decl  1250:number  mm:unit
+ 223 |   param washer       = 3mm
+     = param:keyword  washer:param+decl  3:number  mm:unit
+ 224 |   param tension_gap  = 40mm
+     = param:keyword  tension_gap:param+decl  40:number  mm:unit
+ 225 |   param cap          = 40mm
+     = param:keyword  cap:param+decl  40:number  mm:unit
+ 227 |   part stile_l : beech_45 {
+     = part:keyword  stile_l:part+decl  beech_45:stock+ref
+ 228 |     length: frame_length
+     = length:field  frame_length:param+ref
+ 229 |     width:  70mm
+     = width:field  70:number  mm:unit
+ 230 |     note:   "The frame turns on the pivot bolts: the warp runs round it, so it can be warped quickly and the weaving turned down as it grows"
+     = note:field  ":text  The frame turns on the pivot bolts: the warp runs round it, so it can be warped quickly and the weaving turned down as it grows:text  ":text
+ 231 |     place {
+     = place:keyword
+ 232 |       orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+ 233 |       flush(stand_l.bottom, inset: lift)
+     = flush:function  stand_l:param+ref  bottom:plain  inset:field  lift:param+ref
+ 234 |       against(stand_l.right, gap: washer)
+     = against:function  stand_l:param+ref  right:plain  gap:field  washer:param+ref
+ 235 |       center(stand_l, deep)
+     = center:function  stand_l:param+ref  deep:word
+ 239 |   part stile_r : beech_45 {
+     = part:keyword  stile_r:part+decl  beech_45:stock+ref
+ 240 |     length: frame_length
+     = length:field  frame_length:param+ref
+ 241 |     width:  70mm
+     = width:field  70:number  mm:unit
+ 242 |     place {
+     = place:keyword
+ 243 |       orient(length: up, width: back)
+     = orient:function  length:field  up:word  width:field  back:word
+ 244 |       flush(stand_r.bottom, inset: lift)
+     = flush:function  stand_r:param+ref  bottom:plain  inset:field  lift:param+ref
+ 245 |       against(stand_r.left, gap: washer)
+     = against:function  stand_r:param+ref  left:plain  gap:field  washer:param+ref
+ 246 |       center(stand_r, deep)
+     = center:function  stand_r:param+ref  deep:word
+ 250 |   part top_beam : beech_25 {
+     = part:keyword  top_beam:part+decl  beech_25:stock+ref
+ 251 |     length: fit
+     = length:field  fit:keyword
+ 252 |     width:  120mm
+     = width:field  120:number  mm:unit
+ 253 |     place {
+     = place:keyword
+ 254 |       orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+ 255 |       flush(stile_l.top, inset: 230mm)
+     = flush:function  stile_l:part+ref  top:plain  inset:field  230:number  mm:unit
+ 256 |       center(from: stile_l.right, to: stile_r.left)
+     = center:function  from:field  stile_l:part+ref  right:plain  to:field  stile_r:part+ref  left:plain
+ 257 |       center(stile_l, deep)
+     = center:function  stile_l:part+ref  deep:word
+ 261 |   part bottom_beam : beech_25 {
+     = part:keyword  bottom_beam:part+decl  beech_25:stock+ref
+ 262 |     length: fit
+     = length:field  fit:keyword
+ 263 |     width:  120mm
+     = width:field  120:number  mm:unit
+ 264 |     place {
+     = place:keyword
+ 265 |       orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+ 266 |       flush(stile_l.bottom)
+     = flush:function  stile_l:part+ref  bottom:plain
+ 267 |       center(from: stile_l.right, to: stile_r.left)
+     = center:function  from:field  stile_l:part+ref  right:plain  to:field  stile_r:part+ref  left:plain
+ 268 |       center(stile_l, deep)
+     = center:function  stile_l:part+ref  deep:word
+ 272 |   part tension_bar : beech_45 {
+     = part:keyword  tension_bar:part+decl  beech_45:stock+ref
+ 273 |     length: fit
+     = length:field  fit:keyword
+ 274 |     width:  70mm
+     = width:field  70:number  mm:unit
+ 275 |     note:   "The warp passes over this bar; its tenons slide up and down in the slots in the frame sides, lifted by the tension screws"
+     = note:field  ":text  The warp passes over this bar; its tenons slide up and down in the slots in the frame sides, lifted by the tension screws:text  ":text
+ 276 |     place {
+     = place:keyword
+ 277 |       orient(length: right, width: up)
+     = orient:function  length:field  right:word  width:field  up:word
+ 278 |       flush(stile_l.top, inset: cap + tension_gap / 2 - 10mm)
+     = flush:function  stile_l:part+ref  top:plain  inset:field  cap:param+ref  tension_gap:param+ref  2:number  10:number  mm:unit
+ 279 |       center(from: stile_l.right, to: stile_r.left)
+     = center:function  from:field  stile_l:part+ref  right:plain  to:field  stile_r:part+ref  left:plain
+ 280 |       center(stile_l, deep)
+     = center:function  stile_l:part+ref  deep:word
+ 284 |   part shed_bracket_l : beech_25 {
+     = part:keyword  shed_bracket_l:part+decl  beech_25:stock+ref
+ 285 |     length: 80mm
+     = length:field  80:number  mm:unit
+ 286 |     width:  60mm
+     = width:field  60:number  mm:unit
+ 287 |     place {
+     = place:keyword
+ 288 |       orient(length: front, width: up)
+     = orient:function  length:field  front:word  width:field  up:word
+ 289 |       against(stile_l.front)
+     = against:function  stile_l:part+ref  front:plain
+ 290 |       flush(stile_l.left)
+     = flush:function  stile_l:part+ref  left:plain
+ 291 |       flush(stile_l.top, inset: 300mm)
+     = flush:function  stile_l:part+ref  top:plain  inset:field  300:number  mm:unit
+ 295 |   part shed_bracket_r : beech_25 {
+     = part:keyword  shed_bracket_r:part+decl  beech_25:stock+ref
+ 296 |     length: 80mm
+     = length:field  80:number  mm:unit
+ 297 |     width:  60mm
+     = width:field  60:number  mm:unit
+ 298 |     place {
+     = place:keyword
+ 299 |       orient(length: front, width: up)
+     = orient:function  length:field  front:word  width:field  up:word
+ 300 |       against(stile_r.front)
+     = against:function  stile_r:part+ref  front:plain
+ 301 |       flush(stile_r.right)
+     = flush:function  stile_r:part+ref  right:plain
+ 302 |       flush(stile_r.top, inset: 300mm)
+     = flush:function  stile_r:part+ref  top:plain  inset:field  300:number  mm:unit
+ 306 |   part shed_rod : beech_dowel_25 {
+     = part:keyword  shed_rod:part+decl  beech_dowel_25:stock+ref
+ 307 |     length: between(stand_l, stand_r) - 2 * washer
+     = length:field  between:function  stand_l:param+ref  stand_r:param+ref  2:number  washer:param+ref
+ 308 |     loose:  true
+     = loose:field  true:keyword
+ 309 |     note:   "Lifts out of the brackets; turn it to open the shed"
+     = note:field  ":text  Lifts out of the brackets; turn it to open the shed:text  ":text
+ 310 |     place {
+     = place:keyword
+ 311 |       orient(length: right)
+     = orient:function  length:field  right:word
+ 312 |       against(shed_bracket_l.top)
+     = against:function  shed_bracket_l:part+ref  top:plain
+ 313 |       center(from: stile_l.left, to: stile_r.right)
+     = center:function  from:field  stile_l:part+ref  left:plain  to:field  stile_r:part+ref  right:plain
+ 314 |       center(shed_bracket_l, deep)
+     = center:function  shed_bracket_l:part+ref  deep:word
+ 318 |   joint beam_tenons    : mortise_tenon([top_beam, bottom_beam], into: [stile_l, stile_r], length: 32mm, shoulder: 20mm)
+     = joint:keyword  beam_tenons:joint+decl  mortise_tenon:type+ref+std  top_beam:part+ref  bottom_beam:part+ref  into:field  stile_l:part+ref  stile_r:part+ref  length:param+ref+std  32:number  mm:unit  shoulder:param+ref+std  20:number  mm:unit
+ 319 |   joint bracket_dowels : dowel([shed_bracket_l, shed_bracket_r], into: [stile_l, stile_r])
+     = joint:keyword  bracket_dowels:joint+decl  dowel:type+ref+std  shed_bracket_l:part+ref  shed_bracket_r:part+ref  into:field  stile_l:part+ref  stile_r:part+ref
+ 320 |   joint tension_slides : sliding_tenon(tension_bar, into: [stile_l, stile_r], travel: tension_gap, cap: cap, glue: false)
+     = joint:keyword  tension_slides:joint+decl  sliding_tenon:type+ref  tension_bar:part+ref  into:field  stile_l:part+ref  stile_r:part+ref  travel:param+ref  tension_gap:param+ref  cap:param+ref  cap:param+ref  glue:field  false:keyword
+ 324 |   hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+     = hardware:keyword  pivot_l:hardware+decl  pivot_bolt:type+ref  stand_l:param+ref  into:role+ref  stile_l:part+ref  face:field  left:word  washer_thickness:param+ref  washer:param+ref
+ 325 |   hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+     = hardware:keyword  pivot_r:hardware+decl  pivot_bolt:type+ref  stand_r:param+ref  into:role+ref  stile_r:part+ref  face:field  right:word  washer_thickness:param+ref  washer:param+ref
+ 327 |   hardware tension_handle_l : t_handle(stile_l) {
+     = hardware:keyword  tension_handle_l:hardware+decl  t_handle:type+ref  stile_l:part+ref
+ 328 |     place {
+     = place:keyword
+ 329 |       flush(stile_l.right, inset: 25mm / 2 - 10mm)
+     = flush:function  stile_l:part+ref  right:plain  inset:field  25:number  mm:unit  2:number  10:number  mm:unit
+ 330 |       center(stile_l, deep)
+     = center:function  stile_l:part+ref  deep:word
+ 334 |   hardware tension_handle_r : t_handle(stile_r) {
+     = hardware:keyword  tension_handle_r:hardware+decl  t_handle:type+ref  stile_r:part+ref
+ 335 |     place {
+     = place:keyword
+ 336 |       flush(stile_r.left, inset: 25mm / 2 - 10mm)
+     = flush:function  stile_r:part+ref  left:plain  inset:field  25:number  mm:unit  2:number  10:number  mm:unit
+ 337 |       center(stile_r, deep)
+     = center:function  stile_r:part+ref  deep:word
+ 342 | assembly frame : Frame {
+     = assembly:keyword  frame:assembly+decl  Frame:type+ref
+ 343 |   stand_l:      upright_l
+     = stand_l:param+ref  upright_l:part+ref
+ 344 |   stand_r:      upright_r
+     = stand_r:param+ref  upright_r:part+ref
+ 345 |   lift:         frame_lift - foot_height
+     = lift:param+ref  frame_lift:param+ref  foot_height:let+ref
+ 346 |   frame_length: frame_height
+     = frame_length:param+ref  frame_height:param+ref
+ 347 |   washer:       washer
+     = washer:param+ref  washer:param+ref
+ 348 |   tension_gap:  warp_tension_gap
+     = tension_gap:param+ref  warp_tension_gap:param+ref
+ 349 |   cap:          tension_cap
+     = cap:param+ref  tension_cap:param+ref
+ 353 | scene weaving "Weaving" {
+     = scene:keyword  weaving:scene+decl  ":text  Weaving:text  ":text
+ 354 |   pose frame.tilt = 15deg
+     = pose:keyword  frame:assembly+ref  tilt:field  15:number  deg:unit
+ 355 |   pose frame.height = 100mm
+     = pose:keyword  frame:assembly+ref  height:field  100:number  mm:unit
+ 358 | scene warping "Winding the warp" {
+     = scene:keyword  warping:scene+decl  ":text  Winding the warp:text  ":text
+ 359 |   pose frame.tilt = 90deg
+     = pose:keyword  frame:assembly+ref  tilt:field  90:number  deg:unit
+ 362 | scene pivot_bolts "Pivot bolts (uprights hidden)" {
+     = scene:keyword  pivot_bolts:scene+decl  ":text  Pivot bolts (uprights hidden):text  ":text
+ 363 |   hide: [upright_l, upright_r]
+     = hide:field  upright_l:part+ref  upright_r:part+ref
+ 366 | scene pivot_section "Section through the pivots" {
+     = scene:keyword  pivot_section:scene+decl  ":text  Section through the pivots:text  ":text
+ 367 |   section: mid(upright_r, deep)
+     = section:field  mid:function  upright_r:part+ref  deep:word

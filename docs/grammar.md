@@ -121,6 +121,7 @@ grammar position only:
 | `mount` | at the start of an entry in a hardware `kind` body or a member's body, when not followed by `:` |
 | `shape` | at the start of an entry in a member's body, when followed by a name and `:` (`shape knuckle: box(...)`); `shape: ...` is a field |
 | `pivot`, `slot`, `rail`, `couple` | at the start of an entry in a `mechanism` block, when not followed by `:` |
+| `drive` | at the start of an entry in a `mechanism` block, when followed by a name and `:` (`drive tilt: turn(...)`); `drive: ...` is a field |
 | `from`, `along` | inside a `slot` (`from point(...) to point(...)`), and `along` in a `rail` (`along across`) and a `clamp` (`along depth`) |
 | `mark`, `cut` | at the start of an entry in a `recipe` body, when not followed by `:` |
 | `same` | as the whole content of an index: `drawer_bay[same]` |
@@ -1215,7 +1216,10 @@ term the part lies flat: `orient(length: right, width: back)`.
 5. Because of rules 2 to 4, positions are worked out directly in dependency
    order, without a solver, and every error points at one term.
 
-Rake and splay (angled legs) are out of scope for version 1.
+A part is never placed at an angle. A group of parts turns only as an
+assembly, on its hardware (see [Mechanisms](#mechanisms)), and a scene
+sets the angle. Angled joinery between parts (rake and splay) is out of
+scope.
 
 ### Hardware placement
 

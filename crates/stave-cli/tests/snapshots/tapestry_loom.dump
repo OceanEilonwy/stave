@@ -1,0 +1,171 @@
+Tapestry Loom
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (13)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+foot_l                       beech_45       700 x 90 x 45              0..45                0..90                0..700               back/up/right
+    cut pocket 50 x 15 depth 37 on width end: where upright_l meets it, local 315..385 x 55..90 x 0..45
+foot_r                       beech_45       700 x 90 x 45              1105..1150           0..90                0..700               back/up/left
+    cut pocket 50 x 15 depth 37 on width end: where upright_r meets it, local 315..385 x 55..90 x 0..45
+upright_l                    beech_45       1135 x 70 x 45             0..45                90..1190             315..385             up/back/right
+    drawn 1100 x 70 x 45, starting 35 x 0 x 0 into the cut size
+    cut tenon 35 x 50 x 15 on length start: end toward foot_l
+    cut pocket 80 x 8.333333 depth 34 on thickness end: where stretcher meets it, local 35..185 x 22.5..47.5 x 13..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_l's bolt meets it, local 1071..1079 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_l's bolt meets it, local 1021..1029 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_l's bolt meets it, local 971..979 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_l's bolt meets it, local 921..929 x 31..39 x 0..45
+upright_r                    beech_45       1135 x 70 x 45             1105..1150           90..1190             315..385             up/back/left
+    drawn 1100 x 70 x 45, starting 35 x 0 x 0 into the cut size
+    cut tenon 35 x 50 x 15 on length start: end toward foot_r
+    cut pocket 80 x 8.333333 depth 34 on thickness end: where stretcher meets it, local 35..185 x 22.5..47.5 x 13..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_r's bolt meets it, local 1071..1079 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_r's bolt meets it, local 1021..1029 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_r's bolt meets it, local 971..979 x 31..39 x 0..45
+    cut drill diameter 9 depth through on thickness start: where frame.pivot_r's bolt meets it, local 921..929 x 31..39 x 0..45
+stretcher                    beech_25       1124 x 150 x 25            45..1105             90..240              337.5..362.5         right/up/back
+    drawn 1060 x 150 x 25, starting 32 x 0 x 0 into the cut size
+    cut tenon 32 x 80 x 8.333333 on length start: end toward upright_l
+    cut tenon 32 x 80 x 8.333333 on length end: end toward upright_r
+frame.stile_l                beech_45       1250 x 70 x 45             48..93               400..1650            315..385             up/back/right
+    cut pocket 80 x 8.333333 depth 34 on thickness end: where frame.top_beam meets it, local 900..1020 x 22.5..47.5 x 13..45
+    cut pocket 80 x 8.333333 depth 34 on thickness end: where frame.bottom_beam meets it, local 0..120 x 22.5..47.5 x 13..45
+    cut drill diameter 8 depth 15 on width start: where frame.bracket_dowels's pin meets it, local 904.666667..912.666667 x 0..15 x 8.5..16.5
+    cut drill diameter 8 depth 15 on width start: where frame.bracket_dowels's pin meets it, local 927.333333..935.333333 x 0..15 x 8.5..16.5
+    cut pocket 90 x 22.5 depth 27 on thickness end: where frame.tension_bar meets it, local 1130..1200 x 12.5..57.5 x 20..45
+    cut drill diameter 11 depth 170 on length end: where frame.tension_slides's rod meets it, local 1080..1250 x 30..40 x 27.5..37.5
+    cut drill diameter 12 depth 25 on thickness start: where frame.pivot_l's bolt meets it, local 726..734 x 31..39 x 0..25
+frame.stile_r                beech_45       1250 x 70 x 45             1057..1102           400..1650            315..385             up/back/right
+    cut pocket 80 x 8.333333 depth 34 on thickness start: where frame.top_beam meets it, local 900..1020 x 22.5..47.5 x 0..32
+    cut pocket 80 x 8.333333 depth 34 on thickness start: where frame.bottom_beam meets it, local 0..120 x 22.5..47.5 x 0..32
+    cut drill diameter 8 depth 15 on width start: where frame.bracket_dowels's pin meets it, local 904.666667..912.666667 x 0..15 x 28.5..36.5
+    cut drill diameter 8 depth 15 on width start: where frame.bracket_dowels's pin meets it, local 927.333333..935.333333 x 0..15 x 28.5..36.5
+    cut pocket 90 x 22.5 depth 27 on thickness start: where frame.tension_bar meets it, local 1130..1200 x 12.5..57.5 x 0..25
+    cut drill diameter 11 depth 170 on length end: where frame.tension_slides's rod meets it, local 1080..1250 x 30..40 x 7.5..17.5
+    cut drill diameter 12 depth 25 on thickness end: where frame.pivot_r's bolt meets it, local 726..734 x 31..39 x 20..45
+frame.top_beam               beech_25       1028 x 120 x 25            93..1057             1300..1420           337.5..362.5         right/up/back
+    drawn 964 x 120 x 25, starting 32 x 0 x 0 into the cut size
+    cut tenon 32 x 80 x 8.333333 on length start: end toward frame.stile_l
+    cut tenon 32 x 80 x 8.333333 on length end: end toward frame.stile_r
+frame.bottom_beam            beech_25       1028 x 120 x 25            93..1057             400..520             337.5..362.5         right/up/back
+    drawn 964 x 120 x 25, starting 32 x 0 x 0 into the cut size
+    cut tenon 32 x 80 x 8.333333 on length start: end toward frame.stile_l
+    cut tenon 32 x 80 x 8.333333 on length end: end toward frame.stile_r
+frame.tension_bar            beech_45       1014 x 70 x 45             93..1057             1530..1600           327.5..372.5         right/up/back
+    drawn 964 x 70 x 45, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 50 x 22.5 on length start: end toward frame.stile_l
+    cut drill diameter 10 depth through on width start: where frame.tension_slides's rod meets it, local 7.5..17.5 x 0..70 x 17.5..27.5
+    cut tenon 25 x 50 x 22.5 on length end: end toward frame.stile_r
+    cut drill diameter 10 depth through on width start: where frame.tension_slides's rod meets it, local 996.5..1006.5 x 0..70 x 17.5..27.5
+frame.shed_bracket_l         beech_25       80 x 60 x 25               48..73               1290..1350           235..315             front/up/right
+    cut drill diameter 8 depth 15 on length start: where frame.bracket_dowels's pin meets it, local 0..15 x 14.666667..22.666667 x 8.5..16.5
+    cut drill diameter 8 depth 15 on length start: where frame.bracket_dowels's pin meets it, local 0..15 x 37.333333..45.333333 x 8.5..16.5
+frame.shed_bracket_r         beech_25       80 x 60 x 25               1077..1102           1290..1350           235..315             front/up/right
+    cut drill diameter 8 depth 15 on length start: where frame.bracket_dowels's pin meets it, local 0..15 x 14.666667..22.666667 x 8.5..16.5
+    cut drill diameter 8 depth 15 on length start: where frame.bracket_dowels's pin meets it, local 0..15 x 37.333333..45.333333 x 8.5..16.5
+frame.shed_rod               beech_dowel_25 1054 x 25 x 25             48..1102             1350..1375           262.5..287.5         right/back/up
+
+HARDWARE (4)
+frame.pivot_l                pivot_bolt       on upright_l (left face)
+    bolt           0..73                1126..1134           346..354            
+    washer         45..48               1115..1145           335..365            
+    knob           -30..0               1105..1155           325..375            
+    knob diameter 50, projection 30, bolt diameter 8, thread length 25, washer thickness 3, washer diameter 30, wall 6, height 1040, holes below 3, hole pitch 50
+frame.pivot_r                pivot_bolt       on upright_r (right face)
+    bolt           1077..1150           1126..1134           346..354            
+    washer         1102..1105           1115..1145           335..365            
+    knob           1150..1180           1105..1155           325..375            
+    knob diameter 50, projection 30, bolt diameter 8, thread length 25, washer thickness 3, washer diameter 30, wall 6, height 1040, holes below 3, hole pitch 50
+frame.tension_handle_l       t_handle         on frame.stile_l (top face)
+    handle         70.5..90.5           1650..1670           320..380            
+    handle length 60, handle size 20
+frame.tension_handle_r       t_handle         on frame.stile_r (top face)
+    handle         1059.5..1079.5       1650..1670           320..380            
+    handle length 60, handle size 20
+
+JOINTS (5)
+upright_tenons               mortise_tenon
+    piece: upright_l, into: foot_l (butt across up)
+        adds 35 to the length start of upright_l
+    piece: upright_r, into: foot_r (butt across up)
+        adds 35 to the length start of upright_r
+stretcher_tenons             mortise_tenon
+    piece: stretcher, into: upright_l (butt across across)
+        adds 32 to the length start of stretcher
+    piece: stretcher, into: upright_r (butt across across)
+        adds 32 to the length end of stretcher
+frame.beam_tenons            mortise_tenon
+    piece: frame.top_beam, into: frame.stile_l (butt across across)
+        adds 32 to the length start of frame.top_beam
+    piece: frame.top_beam, into: frame.stile_r (butt across across)
+        adds 32 to the length end of frame.top_beam
+    piece: frame.bottom_beam, into: frame.stile_l (butt across across)
+        adds 32 to the length start of frame.bottom_beam
+    piece: frame.bottom_beam, into: frame.stile_r (butt across across)
+        adds 32 to the length end of frame.bottom_beam
+frame.bracket_dowels         dowel
+    piece: frame.shed_bracket_l, into: frame.stile_l (butt across deep)
+        pin: 2 x dowel_pin (beech), moves with frame.shed_bracket_l
+            1 cylinder deep diameter 8, deep 300..330, centre up 1308.666667 x across 60.5
+            2 cylinder deep diameter 8, deep 300..330, centre up 1331.333333 x across 60.5
+    piece: frame.shed_bracket_r, into: frame.stile_r (butt across deep)
+        pin: 2 x dowel_pin (beech), moves with frame.shed_bracket_r
+            1 cylinder deep diameter 8, deep 300..330, centre up 1308.666667 x across 1089.5
+            2 cylinder deep diameter 8, deep 300..330, centre up 1331.333333 x across 1089.5
+frame.tension_slides         sliding_tenon, no glue
+    piece: frame.tension_bar, into: frame.stile_l (butt across across)
+        adds 25 to the length start of frame.tension_bar
+        rod: 1 x threaded_rod (steel), moves with frame.tension_bar
+            1 cylinder up diameter 10, up 1480..1650, centre across 80.5 x deep 350
+    piece: frame.tension_bar, into: frame.stile_r (butt across across)
+        adds 25 to the length end of frame.tension_bar
+        rod: 1 x threaded_rod (steel), moves with frame.tension_bar
+            1 cylinder up diameter 10, up 1480..1650, centre across 1069.5 x deep 350
+
+FASTENERS
+frame.bracket_dowels         4 x dowel_pin (8 x 30)
+frame.tension_slides         2 x threaded_rod (10 x 170)
+
+REGIONS (1)
+envelope                     0..1150              0..1650              0..700              
+
+ASSEMBLIES (1)
+frame                        Frame (8 parts): tilt: turns up to 360deg about the across line through (0, 1130, 350), free side up, swinging back; height: travels 150 toward the down, set at 0, 50, 100 and 150
+
+REQUIRES (28)
+upright_tenons.has_width                     holds
+upright_tenons.tenon_thin                    holds
+upright_tenons.mortise_fits                  holds
+upright_tenons.has_width                     holds
+upright_tenons.tenon_thin                    holds
+upright_tenons.mortise_fits                  holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.tenon_thin                  holds
+stretcher_tenons.mortise_fits                holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.tenon_thin                  holds
+stretcher_tenons.mortise_fits                holds
+frame.beam_tenons.has_width                  holds
+frame.beam_tenons.tenon_thin                 holds
+frame.beam_tenons.mortise_fits               holds
+frame.beam_tenons.has_width                  holds
+frame.beam_tenons.tenon_thin                 holds
+frame.beam_tenons.mortise_fits               holds
+frame.beam_tenons.has_width                  holds
+frame.beam_tenons.tenon_thin                 holds
+frame.beam_tenons.mortise_fits               holds
+frame.beam_tenons.has_width                  holds
+frame.beam_tenons.tenon_thin                 holds
+frame.beam_tenons.mortise_fits               holds
+frame.bracket_dowels.pin_fits_piece          holds
+frame.bracket_dowels.pin_fits_piece          holds
+frame.tension_slides.tenon_thin              holds
+frame.tension_slides.tenon_thin              holds
+
+SCENES (5)
+rest                         As built
+weaving                      Weaving: frame 15deg, frame 100 out
+warping                      Winding the warp: frame 90deg
+pivot_bolts                  Pivot bolts (uprights hidden)
+pivot_section                Section through the pivots

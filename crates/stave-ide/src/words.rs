@@ -3,7 +3,7 @@
 //! words (namespace 4), built-in functions, and the call heads fixed by
 //! position (namespace 3).
 
-use stave_schema::functions::Builtin;
+use stave_schema::functions::{Builtin, DRIVES, EVERY, MOUNT_FROM};
 use stave_schema::operations::Selector;
 use stave_schema::placement::{AssemblyStepKind, MadePartTerm, PlacementTerm, SpacingKind};
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
@@ -31,8 +31,9 @@ pub fn is_feature_word(word: &str) -> bool {
 /// `true` if `word` is the head of a call whose meaning is fixed by its
 /// position: a placement term, a spacing, a made part's term, an assembly
 /// step, a cut selector or operation, a recipe step or need, an edge
-/// profile's `edge` or `around`, a hardware kind's `point`, a part's
-/// `edge_band`.
+/// profile's `edge` or `around`, a hardware kind's `point` and its
+/// mount's `from`, a part's `edge_band`, a mechanism's drives (`turn`, `travel`) and the `every`
+/// of a drive's `set_at:`.
 pub fn is_fixed_call(word: &str) -> bool {
     PlacementTerm::from_word(word).is_some()
         || SpacingKind::from_word(word).is_some()
@@ -50,6 +51,9 @@ pub fn is_fixed_call(word: &str) -> bool {
         || word == stave_schema::operations::AROUND
         || word == stave_schema::functions::POINT
         || word == stave_schema::fields::EDGE_BAND
+        || DRIVES.contains(&word)
+        || word == EVERY
+        || word == MOUNT_FROM
 }
 
 /// A built-in function's signature: `overlay(left: Length, ...) -> Mount`.

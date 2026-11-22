@@ -422,6 +422,26 @@ pub const POINT: &str = "point";
 /// The named arguments of [`POINT`], each a length that defaults to `0mm`.
 pub const POINT_ARGUMENTS: [&str; 3] = ["along", "across", "depth"];
 
+/// A cylinder's `axis:` (`axis: along`): the direction of the kind's
+/// frame it lies along, one of [`POINT_ARGUMENTS`].
+pub const CYLINDER_AXIS: &str = "axis";
+
+/// `from(anchor, inset: d)`: a hardware kind's mount term that sets an
+/// axis from an anchor of its piece (grammar, "Hardware placement").
+pub const MOUNT_FROM: &str = "from";
+
+/// `turn(...)` and `travel(...)`: the two drives of a mechanism (grammar,
+/// "Mechanisms").
+pub const DRIVES: [&str; 2] = ["turn", "travel"];
+
+/// `every(d)` in a drive's `set_at:` (grammar, "Mechanisms", set
+/// positions).
+pub const EVERY: &str = "every";
+
+/// The mechanism field that names the direction its pins run (`pins:
+/// depth`); it takes one of the frame directions, [`POINT_ARGUMENTS`].
+pub const PINS: &str = "pins";
+
 /// A shape of a hardware kind's member (grammar, "Shapes"), written in the
 /// kind's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -468,7 +488,14 @@ impl ShapeFunction {
         match self {
             ShapeFunction::Box => &["along", "across", "depth"],
             ShapeFunction::Cylinder => &[
-                "diameter", "along", "across", "depth", "at", "axis", "tilt", "toward",
+                "diameter",
+                "along",
+                "across",
+                "depth",
+                "at",
+                CYLINDER_AXIS,
+                "tilt",
+                "toward",
             ],
             ShapeFunction::Prism => &["points", "along"],
             ShapeFunction::Bar => &["from", "to", "thickness", "along"],

@@ -189,12 +189,12 @@
       }
     },
     "contextual-entries": {
-      "comment": "Contextual words at the start of an entry, when not followed by `:` (grammar, \"Contextual words\"). `shape name:` is a named shape, `shape:` a field.",
+      "comment": "Contextual words at the start of an entry, when not followed by `:` (grammar, \"Contextual words\"). `shape name:` is a named shape and `drive name:` a named drive; `shape:` and `drive:` are fields, as are `pins:`, `loose:` and `set_at:`.",
       "patterns": [
         {
-          "match": "^\\s*(shape)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=:)",
+          "match": "^\\s*(shape|drive)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=:)",
           "captures": {
-            "1": { "name": "keyword.other.shape.stave" },
+            "1": { "name": "keyword.other.$1.stave" },
             "2": { "name": "variable.other.property.stave" }
           }
         },

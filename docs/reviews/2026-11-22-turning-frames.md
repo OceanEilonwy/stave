@@ -1,6 +1,33 @@
 # Turning frames: weaving angles, pivot bolts and set positions
 
-Status: **proposed**. Nothing here is built yet. This is the full design note; the one-page summary for the go/no-go is [`2026-11-22-turning-frames-decision.md`](2026-11-22-turning-frames-decision.md).
+Status: Phases A and B are **built**; Phase C (Change 6, running
+clearance) is still to do. This is the full design note as proposed; the
+one-page summary for the go/no-go is
+[`2026-11-22-turning-frames-decision.md`](2026-11-22-turning-frames-decision.md),
+and `docs/grammar.md` is the reference for what was built.
+
+**Where the built language differs from this note:**
+
+- **Drives may act on any members** the mechanism places, not only one
+  bolt: a drafting table's column travels and its board turns. Two
+  `turn` drives of one member are refused (a member moving in a plane
+  turns about one line), and so are two `travel` drives of one member
+  (it travels along its one rail or slot).
+- **A `stop:` belongs to a mechanism with one drive**; with two or more
+  it is `error[mechanism]`, and each drive's range ends at its `to:`.
+- **Set values written twice are one set position** (`set_at: [-100mm,
+  -100mm]` is one value), not an error.
+- **A `set_at:` value of the wrong unit** (a length in a turn's) is
+  `error[unit-mismatch]`, as in `from:` and `to:`.
+- **A clamp is checked at rest, at every scene's poses and at each set
+  value of each drive** (every other drive closed), never during a sweep.
+- **"Hang" reads "a member whose angle is known, pinned at a known
+  point"**: by a pivot on a placed member, or by a slot in a placed
+  member once its travel along the slot is known.
+- `pins:`, `set_at:` and `loose:` are fields, not new words; `drive` is
+  the contextual word (`drive tilt: ...`).
+- The loom has four heights, not seven (see "The loom, written with these
+  changes").
 
 A tapestry loom (`~/stavetest/tapestry_loom`) cannot be written. Its frame
 hangs between two uprights on a pivot bolt each side. It tilts back to a
@@ -452,119 +479,55 @@ and `try_patch` tools need in order to record a goal or a finish.
 
 ## The loom, written with these changes
 
-```
-kind pivot_bolt : fitting {
-  roles {
-    piece: Part     // the stand's upright
-    into:  Part     // the frame's stile
-  }
-  param knob_diameter = 50mm
-  param projection    = 30mm
-  param bolt_diameter = 8mm
-  param thread_length = 25mm
-  /// The steel washer the frame turns on, between the upright and the stile.
-  param washer_thickness = 3mm
-  param washer_diameter  = 30mm
-  param wall          = 6mm
-  /// Spare holes below the bolt, for setting the frame's height.
-  param holes_below   = 0
-  param hole_pitch    = 50mm
+The loom is [`examples/tapestry_loom`](../../examples/tapestry_loom/loom.stave),
+and it checks with no errors and no warnings. The frame is a `component
+Frame` taking the uprights as `Part` params, and the pivot is a
+`pivot_bolt` kind written in the example:
 
+```
   mount {
     face:   front
-    across: open
-    along:  open
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
   }
-
-  /// The bolt: through the upright, into a threaded insert in the stile.
   member bolt {
     with:  into
     loose: true
     shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
   }
-  /// The washer: the stile turns on it, steel on wood, clear of the upright.
-  member washer {
-    with:  bolt
-    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
-  }
-  /// The knob: tighten to hold the frame at an angle, loosen to turn it.
-  member knob {
-    with:  bolt
-    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
-  }
+  member washer { with: bolt  ... }   // steel, in the gap between upright and stile
+  member knob   { with: bolt  ... }
 
   clamp knob, bolt along depth
 
-  cut bolt_hole:   row(crossing(piece, bolt), pitch: hole_pitch, down: holes_below) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
-  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
-
   mechanism {
-    pins:  depth
-    slot bolt, piece from point(along: 0mm, across: 0mm)
-                     to   point(along: -(holes_below * hole_pitch), across: 0mm)
+    pins: depth
+    slot bolt, piece from point(along: 0mm, across: 0mm) to point(along: -(holes_below * hole_pitch), across: 0mm)
     drive tilt:   turn(bolt, from: 0deg, to: 360deg)
     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
   }
-}
-
-component Frame {
-  param stand_l : Part
-  param stand_r : Part
-  param middle : Anchor          // the plane the frame is mirrored about
-  param frame_height = 1250mm
-  param frame_drop   = 0mm      // how far the stile's top sits below the upright's
-  param washer       = 3mm
-
-  part stile_l : beech_45 {
-    length: frame_height
-    width:  70mm
-    place {
-      orient(length: up, width: back)
-      flush(stand_l.top, inset: frame_drop)
-      against(stand_l.right, gap: washer)   // was against(upright_l.right): rubs
-      center(stand_l, deep)
-    }
-  }
-  part stile_r = mirror(stile_l, about: middle)
-  // top_beam, bottom_beam, tension_bar, shed brackets: as in the current file.
-
-  hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left,  holes_below: 6, washer_thickness: washer) {
-    place {
-      center(stand_l, deep)
-      flush(stand_l.top, inset: 60mm)
-    }
-  }
-  hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, holes_below: 6, washer_thickness: washer) {
-    place {
-      center(stand_r, deep)
-      flush(stand_r.top, inset: 60mm)
-    }
-  }
-}
-
-assembly frame : Frame {
-  stand_l: upright_l
-  stand_r: upright_r
-  middle:  mid(envelope, across)
-}
-
-scene weaving "Weaving" {
-  pose frame.tilt   = 15deg
-  pose frame.height = 150mm
-}
-
-scene warping "Winding the warp" {
-  pose frame.tilt = 90deg
-}
 ```
 
-Stave would then check the frame turning all the way round at each of its
-seven heights, the frame sliding between heights with the bolts out, and
-the weaving pose. It would also check that each stile clears its upright
-by the running gap plus what the beech moves. With the old `against`
-placement, that check is the error in Change 6. It would cut the row of holes in each upright and put
-the bolts and knobs on the hardware list. The cut list and work cards
-don't change, because every part is still square in its own frame.
+The mount is placed from the upright, not `open`: nothing of the bolt
+rides on the upright, so there is nothing for `open` to take its place
+from. The stiles are placed `against(stand_l.right, gap: washer)`.
+`scene weaving` poses `frame.tilt = 15deg` and `frame.height = 100mm`;
+`scene warping` poses `frame.tilt = 90deg`.
+
+**What building it found.** The original file's frame doesn't clear its
+stand. Turned all the way round, the stile's lower end sweeps a circle
+of about 731mm radius about the bolt, so it reaches 399mm off the floor with
+the bolt in its top hole. The stretcher stood 240mm to 390mm up, and the
+original six spare holes, 50mm apart, lowered the frame 300mm: it hit
+the stretcher from the first hole down, and at the lowest heights the
+tension handles on the frame's top hit it too. The example moves the
+stretcher down to the feet (90mm to 240mm) and keeps three spare holes
+(four heights, 150mm of travel, about 9mm clear at the lowest). The
+`frame_lift` range starts at 400mm, not 300mm, and `frame_height` at
+1100mm, not 1000mm (shorter, the top beam is in the way of the bolts).
+`crates/stave-app/tests/tapestry_loom.rs` checks the loom, checks that a
+fourth spare hole hits the stretcher, and keeps the check under a fixed
+time.
 
 ## What changes where
 
