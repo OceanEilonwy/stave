@@ -20,10 +20,14 @@
 //! is one face cell. That
 //! cell is drawn as a square minus the circle (fans to its four corners),
 //! the hole's wall as an inward-facing cylinder, a bottom disc where it
-//! stops inside the part, and the opening as an outline circle. When other
-//! grid lines split the square (two holes that overlap, a cut edge across a
-//! hole), the face is drawn uncut there and the hole is not drawn; the
-//! solid itself is unaffected. A hole opens on every face its square
+//! stops inside the part, and the opening as an outline circle. Grid lines
+//! from cuts elsewhere on the board (a mortise in line with a row of holes)
+//! may split the square into several cells; when every cell of it is the
+//! same at each layer along the hole, all wood or all air, the hole is
+//! drawn over them as over one, its square's sides fanned through the
+//! grid points on them. When a cut edge does cross the square (two holes
+//! that overlap, a cut edge across a hole), the face is drawn uncut there
+//! and the hole is not drawn; the solid itself is unaffected. A hole opens on every face its square
 //! reaches through (a notch floor too), and its wall is drawn only where
 //! it passes through wood.
 //!
@@ -285,6 +289,34 @@ impl Grid {
     fn find(&self, axis: PartAxis, value: i64) -> Option<usize> {
         self.lines[axis].binary_search(&value).ok()
     }
+
+    /// Every layer along `axis` of the column of cells `u.1` by `v.1`
+    /// (cell ranges on the axes `u.0` and `v.0`, ends exclusive) is all
+    /// wood or all air.
+    fn uniform_column(
+        &self,
+        axis: PartAxis,
+        u: (PartAxis, (usize, usize)),
+        v: (PartAxis, (usize, usize)),
+    ) -> bool {
+        let (u_axis, (u0, u1)) = u;
+        let (v_axis, (v0, v1)) = v;
+        (0..self.cells(axis)).all(|k| {
+            let mut first: PerPartAxis<isize> = PerPartAxis::default();
+            first[axis] = signed(k);
+            first[u_axis] = signed(u0);
+            first[v_axis] = signed(v0);
+            let wood = self.is_wood(first);
+            (u0..u1).all(|i| {
+                (v0..v1).all(|j| {
+                    let mut cell = first;
+                    cell[u_axis] = signed(i);
+                    cell[v_axis] = signed(j);
+                    self.is_wood(cell) == wood
+                })
+            })
+        })
+    }
 }
 
 /// A grid index as a signed cell coordinate, so a neighbour one below the
@@ -379,7 +411,13 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: PerPartAxis<i64>)
         ) else {
             continue;
         };
-        if u1 != u0 + 1 || v1 != v0 + 1 {
+        // Grid lines from cuts elsewhere on the board may split its
+        // square into several cells. That is harmless when every cell of
+        // the square is the same as the others at each layer along the
+        // hole, all wood or all air: the hole is drawn over them as over
+        // one cell. Otherwise something cuts across it, and it is not drawn.
+        let (us, vs) = ((u0, u1), (v0, v1));
+        if u1 <= u0 || v1 <= v0 || !grid.uniform_column(a, (u_axis, us), (v_axis, vs)) {
             continue;
         }
         // Every plane across the hole within its range where its square
@@ -412,7 +450,19 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: PerPartAxis<i64>)
                     at[a] = p;
                     at[u_axis] = u0;
                     at[v_axis] = v0;
-                    openings.push((Opening { axis: a, at, high }, index));
+                    let mut end: PerPartAxis<usize> = PerPartAxis::default();
+                    end[a] = p;
+                    end[u_axis] = u1;
+                    end[v_axis] = v1;
+                    openings.push((
+                        Opening {
+                            axis: a,
+                            at,
+                            end,
+                            high,
+                        },
+                        index,
+                    ));
                 }
             }
         }
@@ -448,8 +498,8 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: PerPartAxis<i64>)
                         let is_opening = openings.iter().any(|(opening, _)| {
                             opening.axis == a
                                 && opening.at[a] == p
-                                && opening.at[u] == i
-                                && opening.at[v] == j
+                                && (opening.at[u]..opening.end[u]).contains(&i)
+                                && (opening.at[v]..opening.end[v]).contains(&j)
                         });
                         if face
                             && !is_opening
@@ -718,9 +768,12 @@ fn angle_of(step: u16) -> f32 {
 struct Opening {
     /// The face axis: the hole's own.
     axis: PartAxis,
-    /// The grid plane it opens on (along `axis`) and the cell of the
-    /// hole's square (along the two axes across it).
+    /// The grid plane it opens on (along `axis`) and the first cell of
+    /// the hole's square (along the two axes across it).
     at: PerPartAxis<usize>,
+    /// The cells of the hole's square end before these (along the two
+    /// axes across it; along `axis`, the plane again).
+    end: PerPartAxis<usize>,
     /// It faces toward the high end of `axis`.
     high: bool,
 }
@@ -785,12 +838,43 @@ fn opening(
             emit(builder, vec![a0, a1, corner]);
         }
     }
+    // Each side of the square, from the circle's point nearest it: a fan
+    // through every grid point on the side, which the neighbouring faces
+    // share, so there is no crack where grid lines split the square.
     for q in 0..4u16 {
         let at = usize::from(q * quarter);
         let before = corners.get(usize::from((q + 3) % 4));
         let after = corners.get(usize::from(q));
-        if let (Some(&point), Some(&b), Some(&c)) = (ring.get(at), before, after) {
-            emit(builder, vec![point, b, c]);
+        let (Some(&point), Some(&b), Some(&c)) = (ring.get(at), before, after) else {
+            continue;
+        };
+        // The side runs along v for q = 0 and 2, along u for 1 and 3.
+        let (side_axis, side) = if q % 2 == 0 {
+            (v, hole.square[1])
+        } else {
+            (u, hole.square[0])
+        };
+        let mut inner: Vec<i64> = grid.lines[side_axis]
+            .iter()
+            .copied()
+            .filter(|&line| line > side.0 && line < side.1)
+            .collect();
+        // From `before` to `after`: up the side for q = 0 and 3, down it
+        // for 1 and 2.
+        if q == 1 || q == 2 {
+            inner.reverse();
+        }
+        let mut path = vec![b];
+        path.extend(inner.into_iter().map(|line| {
+            let mut on_side = b;
+            on_side.set_along(side_axis, mm_nm(line));
+            on_side
+        }));
+        path.push(c);
+        for pair in path.windows(2) {
+            if let &[from, to] = pair {
+                emit(builder, vec![point, from, to]);
+            }
         }
     }
     for step in 0..segments() {
