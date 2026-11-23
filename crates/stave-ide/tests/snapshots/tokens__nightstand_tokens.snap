@@ -27,8 +27,8 @@ expression: "render_project(& examples().join(\"nightstand\"))"
      = param:keyword  drawer_height:param+decl  150:number  mm:unit  within:keyword  120:number  mm:unit  200:number  mm:unit
   24 |        param slide_length  = 350mm within [300mm, 350mm]
      = param:keyword  slide_length:param+decl  350:number  mm:unit  within:keyword  300:number  mm:unit  350:number  mm:unit
-  25 | locked param reveal        = 2mm                           // the gap round the inset drawer front
-     = locked:keyword  param:keyword  reveal:param+decl  2:number  mm:unit
+  25 | locked param reveal        = 2.5mm                         // the gap round the inset drawer front
+     = locked:keyword  param:keyword  reveal:param+decl  2.5:number  mm:unit
   26 | let overhang  = 15mm                                       // the top overhangs the front and both sides
      = let:keyword  overhang:let+decl  15:number  mm:unit
   27 | let toe_space = 60mm                                       // floor to the underside of the bottom shelf

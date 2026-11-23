@@ -649,7 +649,7 @@ fn the_nightstands_slide_shows_its_drawer_travelling_from_above() {
     let (opened, graph) = graph("examples/nightstand");
     let found = open_focus(&opened, &graph, "drawer.slides[left]", None);
     assert_eq!(row(&found, "Pulls out"), "350 mm");
-    assert_eq!(row(&found, "Closest to the side"), "2.0 mm");
+    assert_eq!(row(&found, "Closest to the side"), "2.5 mm");
     assert!(found.plan().is_some());
     let rest = graph.scenes.first().unwrap();
     let shut = found.frame(&graph, rest, 0.0, &Options::default());
@@ -668,7 +668,7 @@ fn the_nightstands_slide_shows_its_drawer_travelling_from_above() {
     let at = found.closest_progress().unwrap();
     let there = found.frame(&graph, rest, at, &Options::default());
     let line = gap_line(&there).unwrap();
-    assert!((line.from.distance(line.to) - 2.0).abs() < 0.05, "{line:?}");
+    assert!((line.from.distance(line.to) - 2.5).abs() < 0.05, "{line:?}");
     for frame in [&shut, &out] {
         if (at - 0.0).abs() > 0.01 && (at - 1.0).abs() > 0.01 {
             assert!(gap_line(frame).is_none());

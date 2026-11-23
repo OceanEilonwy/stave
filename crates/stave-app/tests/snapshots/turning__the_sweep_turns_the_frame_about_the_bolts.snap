@@ -8,4 +8,4 @@ error[motion]: frame.stile_l hits stretcher when frame is opened past 0.2deg
 159 | assembly frame : Frame {
     |          ^^^^^
     = note: the hinges open to 360deg
-    = help: leave at least 1mm between frame and stretcher
+    = help: leave at least 2.5mm between frame and stretcher

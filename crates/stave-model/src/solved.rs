@@ -764,6 +764,10 @@ pub struct ProjectInfo {
     pub rough_length: Length,
     /// `rough_width:`: extra across the grain for solid parts.
     pub rough_width: Length,
+    /// `running_gap:`: the least gap, beyond what the seasons close up,
+    /// between wooden bodies that move past each other (grammar, "Running
+    /// clearance"). Never negative.
+    pub running_gap: Length,
 }
 
 /// A tool the project lists.

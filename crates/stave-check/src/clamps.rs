@@ -33,6 +33,16 @@ use stave_model::solved::{
 use crate::names::length_text;
 use crate::{Checker, Contact, ContactItem, Item};
 
+/// A body in a clamp's solid stack at rest, with the two it lies between
+/// (the bearing member or the far part at the ends).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StackBody {
+    /// The body.
+    pub item: Item,
+    /// The bodies either side of it in the stack.
+    pub neighbours: [Item; 2],
+}
+
 /// One side of a gap in a clamp's stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
@@ -176,6 +186,62 @@ impl Checker<'_> {
     /// The first gap in a piece of hardware's stack, if it has a clamp and
     /// a gap: at rest, or with every body where `placements` puts it.
     fn clamp_gap(&self, hardware: &Hardware, placements: Option<&[Placement]>) -> Option<Gap> {
+        self.clamp_walk(hardware, placements)?.err()
+    }
+
+    /// The bodies in a piece of hardware's stack at rest, from the one
+    /// against the bearing member to the far part, each between its two
+    /// neighbours (the bearing member and the far part at the ends): `None`
+    /// when it has no clamp or its stack has a gap (grammar, "Running
+    /// clearance", a spacer).
+    pub(crate) fn clamp_stack(&self, hardware: &Hardware) -> Option<Vec<StackBody>> {
+        let sides = self.clamp_walk(hardware, None)?.ok()?;
+        let items: Vec<Option<Item>> = std::iter::once(None)
+            .chain(sides.iter().map(|side| match side {
+                Side::Body(item) => Some(*item),
+                Side::Bearing | Side::Far => None,
+            }))
+            .chain(std::iter::once(None))
+            .collect();
+        let clamp = hardware.clamp?;
+        let far = hardware
+            .members
+            .iter()
+            .find(|m| m.id.body == clamp.drawn)
+            .and_then(|m| match m.carrier {
+                BodyCarrier::Part(part) => Some(Item::Part(part)),
+                BodyCarrier::Region(_) | BodyCarrier::Link(_) => None,
+            })?;
+        let bearing = hardware
+            .members
+            .iter()
+            .find(|m| m.id.body == clamp.bearing)
+            .map(|m| Item::Member(m.id))?;
+        let named = |item: Option<Item>, end: Item| item.unwrap_or(end);
+        Some(
+            items
+                .windows(3)
+                .filter_map(|window| {
+                    let [before, Some(body), after] = window else {
+                        return None;
+                    };
+                    Some(StackBody {
+                        item: *body,
+                        neighbours: [named(*before, bearing), named(*after, far)],
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// The walk along a piece of hardware's stack: the bodies it passes,
+    /// in order, when it is solid, or the first gap. `None` when it has no
+    /// clamp, or nothing lies between its members.
+    fn clamp_walk(
+        &self,
+        hardware: &Hardware,
+        placements: Option<&[Placement]>,
+    ) -> Option<Result<Vec<Side>, Gap>> {
         let clamp = hardware.clamp?;
         let member = |body| hardware.members.iter().find(|m| m.id.body == body);
         let bearing = member(clamp.bearing)?;
@@ -209,7 +275,7 @@ impl Checker<'_> {
             (true, _) => (bearing_high, far_low),
             (false, true) => (negate(bearing_low)?, negate(far_high)?),
             // They overlap along the axis: nothing lies between them.
-            (false, false) => return None,
+            (false, false) => return Some(Ok(Vec::new())),
         };
         let mut filled = Vec::new();
         for body in &self.bodies {
@@ -260,7 +326,7 @@ impl Checker<'_> {
                 filled.push(Filled { stretch, side });
             }
         }
-        first_gap(start, end, &filled)
+        Some(walk(start, end, &filled))
     }
 
     /// The world boxes of the cuts a piece of hardware makes in a part:
@@ -409,13 +475,23 @@ fn negate(length: Length) -> Option<Length> {
 /// The first gap wider than the contact tolerance on the way up from
 /// `start` (the bearing member's end) to `end` (the far part's face),
 /// through the stretches some body fills; `None` when the stack is solid.
+#[cfg(test)]
 fn first_gap(start: Length, end: Length, filled: &[Filled]) -> Option<Gap> {
+    walk(start, end, filled).err()
+}
+
+/// The walk up from `start` (the bearing member's end) to `end` (the far
+/// part's face), through the stretches some body fills: the bodies it
+/// passes, in order, when the stack is solid, or the first gap wider than
+/// the contact tolerance.
+fn walk(start: Length, end: Length, filled: &[Filled]) -> Result<Vec<Side>, Gap> {
     let tolerance = CONTACT_TOLERANCE.nm();
     let mut reached = start;
     let mut near = Side::Bearing;
+    let mut passed = Vec::new();
     loop {
         if end.nm().saturating_sub(reached.nm()) <= tolerance {
-            return None;
+            return Ok(passed);
         }
         // The body that carries on furthest from what touches the stack
         // so far.
@@ -428,6 +504,9 @@ fn first_gap(start: Length, end: Length, filled: &[Filled]) -> Option<Gap> {
             Some(found) => {
                 reached = found.stretch.high;
                 near = found.side;
+                if !passed.contains(&found.side) && found.side != Side::Far {
+                    passed.push(found.side);
+                }
             }
             None => {
                 // The nearest body past the gap, or the far part.
@@ -439,7 +518,7 @@ fn first_gap(start: Length, end: Length, filled: &[Filled]) -> Option<Gap> {
                     Some(found) => (found.side, found.stretch.low),
                     None => (Side::Far, end),
                 };
-                return Some(Gap {
+                return Err(Gap {
                     near,
                     far,
                     width: Length::from_nm(at.nm().saturating_sub(reached.nm())),

@@ -1,7 +1,7 @@
 # Turning frames: decision
 
-Status: **go** (2026-11-22). Phases A and B are built; Phase C (running
-clearance) is still to do. The loom is
+Status: **go** (2026-11-22). Phases A, B and C are built (C, running
+clearance, on 2026-11-23). The loom is
 [`examples/tapestry_loom`](../../examples/tapestry_loom/loom.stave). The full design, with reasons, worked
 examples and the evidence, is in
 [`2026-11-22-turning-frames.md`](2026-11-22-turning-frames.md). Where the

@@ -10,6 +10,7 @@ param cabinet_depth
 param drawer_zone
 param slide_length
 param reveal
+param drawer_reveal
 let overhang
 require hanger_room
 require overall_height

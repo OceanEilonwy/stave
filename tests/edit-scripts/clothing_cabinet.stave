@@ -44,7 +44,7 @@ assembly divider : casework.Divider {
 
 assembly drawer[bottom, top] : casework.Drawer {
   opening:      drawer_bay[same]
-  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -2.5mm)
   front_stock:  oak_19
   box_stock:    maple_12
   bottom_stock: ply_6

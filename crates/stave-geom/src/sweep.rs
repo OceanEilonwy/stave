@@ -74,7 +74,7 @@ use stave_model::mechanism::MotionShape;
 
 /// The boxes of a solid's wood: its blocks and the boxes around its rods
 /// and prisms.
-fn wood_boxes(solid: &WorldSolid) -> impl Iterator<Item = WorldBox> + '_ {
+pub(crate) fn wood_boxes(solid: &WorldSolid) -> impl Iterator<Item = WorldBox> + '_ {
     solid
         .boxes()
         .iter()
@@ -86,7 +86,7 @@ fn wood_boxes(solid: &WorldSolid) -> impl Iterator<Item = WorldBox> + '_ {
 
 /// A fixed solid's boxes at its placement: exact when it only moved, the
 /// box around each turned box otherwise.
-fn placed_boxes(solid: &WorldSolid, placement: &Placement) -> Vec<WorldBox> {
+pub(crate) fn placed_boxes(solid: &WorldSolid, placement: &Placement) -> Vec<WorldBox> {
     wood_boxes(solid)
         .map(|b| match placement {
             Placement::Exact(offset) => translate_box(&b, *offset),
@@ -96,7 +96,7 @@ fn placed_boxes(solid: &WorldSolid, placement: &Placement) -> Vec<WorldBox> {
 }
 
 /// Overlap of two ranges, in nanometres (negative when apart).
-fn shared(a: &WorldBox, b: &WorldBox, axis: Axis) -> i64 {
+pub(crate) fn shared(a: &WorldBox, b: &WorldBox, axis: Axis) -> i64 {
     let low = a.min().get(axis).max(b.min().get(axis)).nm();
     let high = a.max().get(axis).min(b.max().get(axis)).nm();
     high.saturating_sub(low)
@@ -357,7 +357,14 @@ fn room_exit(
 /// The angles in `(0, limit]` at which the circle of radius `|p|` about the
 /// origin meets the segment `a..b`, measured from `p` counter-clockwise
 /// when `forward`, else from the meeting point to `p`.
-fn crossings(p: DVec2, a: DVec2, b: DVec2, forward: bool, limit: f64, out: &mut Vec<f64>) {
+pub(crate) fn crossings(
+    p: DVec2,
+    a: DVec2,
+    b: DVec2,
+    forward: bool,
+    limit: f64,
+    out: &mut Vec<f64>,
+) {
     let radius2 = p.length_squared();
     let d = b - a;
     let (qa, qb, qc) = (d.dot(d), 2.0 * a.dot(d), a.dot(a) - radius2);
@@ -597,18 +604,18 @@ impl Path {
     }
 
     /// The plane the mechanism moves in.
-    fn plane(&self) -> Plane {
+    pub(crate) fn plane(&self) -> Plane {
         Plane::of_mechanism(&self.mechanism)
     }
 
     /// How far the motion reaches from closed, in radians or nanometres.
-    fn limit(&self) -> f64 {
+    pub(crate) fn limit(&self) -> f64 {
         self.mechanism.limit()
     }
 
     /// Where a mover has moved its pieces in the plane, `amount` along the
     /// motion.
-    fn motion2(&self, mover: &Mover<'_>, amount: f64) -> Option<Motion2> {
+    pub(crate) fn motion2(&self, mover: &Mover<'_>, amount: f64) -> Option<Motion2> {
         let member = match mover {
             Mover::Fixed(_) => return Some(Motion2::STILL),
             Mover::Rigid(_) | Mover::Carried(..) => self.mechanism.moving(),
@@ -619,7 +626,7 @@ impl Path {
     }
 
     /// The fastest any corner of a piece can move per unit of the motion.
-    fn speed(&self, mover: &Mover<'_>, piece: &Piece) -> f64 {
+    pub(crate) fn speed(&self, mover: &Mover<'_>, piece: &Piece) -> f64 {
         let member = match mover {
             Mover::Fixed(_) => return 0.0,
             Mover::Rigid(_) | Mover::Carried(..) => self.mechanism.moving(),
@@ -635,7 +642,7 @@ impl Path {
     /// slot), the bodies start where [`MechanismPath::offset`] puts them,
     /// so a turn's line is taken back by that much, and everything else
     /// is placed back by it to meet them ([`Path::relative`]).
-    fn relative_shape(&self) -> MotionShape {
+    pub(crate) fn relative_shape(&self) -> MotionShape {
         match (self.mechanism.shape(), self.mechanism.offset()) {
             (MotionShape::Turn { line, opening }, Some(offset)) => MotionShape::Turn {
                 line: TurnLine {
@@ -652,7 +659,7 @@ impl Path {
 
     /// A fixed body's placement as the moving bodies at rest see it: moved
     /// back by where the held drives put them.
-    fn relative(&self, placement: &Placement) -> Placement {
+    pub(crate) fn relative(&self, placement: &Placement) -> Placement {
         match self.mechanism.offset() {
             Some(offset) if offset != Point::default() => match placement {
                 Placement::Exact(at) => Placement::Exact(at.minus(offset)),

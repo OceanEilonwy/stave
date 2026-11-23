@@ -78,7 +78,7 @@ fn uses_say_what_each_use_does() {
     );
     assert!(listed.contains(&("doors.stave:18".to_owned(), "door_r mirrors it".to_owned())));
     assert!(listed.contains(&(
-        "cabinet.stave:35".to_owned(),
+        "cabinet.stave:36".to_owned(),
         "scene all_open poses it".to_owned()
     )));
     assert_eq!(uses.count(), uses.uses.len() - 1);

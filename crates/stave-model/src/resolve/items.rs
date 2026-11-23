@@ -350,6 +350,7 @@ impl<'a> Resolver<'a> {
                 let kerf = length("kerf");
                 let rough_length = length("rough_length");
                 let rough_width = length("rough_width");
+                let running_gap = length("running_gap");
                 (
                     Some(ProjectDef {
                         title,
@@ -364,6 +365,7 @@ impl<'a> Resolver<'a> {
                         kerf,
                         rough_length,
                         rough_width,
+                        running_gap,
                         file,
                         span: item.span,
                     }),

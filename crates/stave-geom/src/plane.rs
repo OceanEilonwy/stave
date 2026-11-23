@@ -735,3 +735,89 @@ pub(crate) fn piece_depth(a: &Piece, b: &Piece) -> Option<(f64, DVec2)> {
     let tolerance = render::nm(CONTACT_TOLERANCE);
     Some(((depth + tolerance).min(a.shared(b)), normal))
 }
+
+/// A solid's wood as whole convex pieces on the plane, each element moved
+/// by `matrix`, neither shrunk nor cut by holes (grammar, "Running
+/// clearance": holes count as wood, so a distance between two such pieces
+/// is never more than the distance between the bodies).
+pub(crate) fn whole_pieces(plane: &Plane, solid: &WorldSolid, matrix: &DMat4) -> Vec<Piece> {
+    elements(solid)
+        .iter()
+        .filter_map(|element| {
+            let boxed;
+            let corners: &[DVec3] = match element {
+                Element::Box { region, .. } => {
+                    boxed = corners_of(region);
+                    &boxed
+                }
+                Element::Outline(corners) => corners,
+            };
+            let moved: Vec<DVec3> = corners
+                .iter()
+                .map(|c| matrix.transform_point3(*c))
+                .collect();
+            let flat = hull(moved.iter().map(|c| plane.project(*c)).collect());
+            if flat.len() < 3 {
+                return None;
+            }
+            let along = moved.iter().map(|c| plane.along(*c));
+            let low = along.clone().fold(f64::INFINITY, f64::min);
+            let high = along.fold(f64::NEG_INFINITY, f64::max);
+            Some(Piece {
+                corners: flat,
+                low,
+                high,
+                round: None,
+            })
+        })
+        .collect()
+}
+
+/// How far apart two convex polygons are along the edge normal that
+/// separates them most (the separating axis test's largest gap): positive
+/// when they are apart, zero when they touch, negative when they overlap
+/// (then by how far they would have to move apart along it), with that
+/// unit normal.
+pub(crate) fn separation(a: &[DVec2], b: &[DVec2]) -> (f64, DVec2) {
+    let mut best = (f64::NEG_INFINITY, DVec2::X);
+    for polygon in [a, b] {
+        for (from, to) in edges(polygon) {
+            let normal = (to - from).perp().normalize_or_zero();
+            if normal == DVec2::ZERO {
+                continue;
+            }
+            let (a_lo, a_hi) = shadow(a, normal);
+            let (b_lo, b_hi) = shadow(b, normal);
+            let gap = (b_lo - a_hi).max(a_lo - b_hi);
+            if gap > best.0 {
+                best = (gap, normal);
+            }
+        }
+    }
+    best
+}
+
+/// The distance between two convex polygons that don't overlap, with the
+/// unit direction between their nearest points (zero when they touch).
+pub(crate) fn nearest_direction(a: &[DVec2], b: &[DVec2]) -> (f64, DVec2) {
+    let mut best = (f64::INFINITY, DVec2::ZERO);
+    for (polygon, other) in [(a, b), (b, a)] {
+        for p in polygon {
+            for (from, to) in edges(other) {
+                let ab = to - from;
+                let length2 = ab.length_squared();
+                let t = if length2 > 0.0 {
+                    ((*p - from).dot(ab) / length2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let between = *p - (from + ab * t);
+                let distance = between.length();
+                if distance < best.0 {
+                    best = (distance, between.normalize_or_zero());
+                }
+            }
+        }
+    }
+    best
+}

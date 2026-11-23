@@ -245,7 +245,7 @@ fn a_door_that_hits_beside_its_hinge_edge_gets_the_overlay_that_clears() {
     assert_eq!(
         texts(&fixes),
         [
-            "patch \"Use left: 17mm\" { set Door.face = cover(opening, overlay(left: 17mm, right: 17.8mm), thickness: ply_18.thickness) }"
+            "patch \"Use left: 16mm\" { set Door.face = cover(opening, overlay(left: 16mm, right: 17.8mm), thickness: ply_18.thickness) }"
         ]
     );
 }
@@ -261,7 +261,7 @@ fn mirrored_doors_that_hit_each_other_get_the_overlay_that_clears() {
     assert_eq!(
         texts(&fixes),
         [
-            "patch \"Use right: 8.5mm\" { set door_l.mount = overlay(left: 16mm, right: 8.5mm, top: -2mm, bottom: 16mm) }"
+            "patch \"Use right: 8mm\" { set door_l.mount = overlay(left: 16mm, right: 8mm, top: -2mm, bottom: 16mm) }"
         ]
     );
 }
@@ -326,7 +326,7 @@ fn a_door_given_a_mount_gets_the_mount_that_clears() {
     );
     assert_eq!(
         texts(&fixes),
-        ["patch \"Use left: 17mm\" { set door.mount = overlay(left: 17mm, right: 17.8mm) }"]
+        ["patch \"Use left: 16mm\" { set door.mount = overlay(left: 16mm, right: 17.8mm) }"]
     );
 }
 
@@ -343,7 +343,7 @@ fn a_mirrored_door_that_hits_gets_its_sources_overlay_on_the_mirrored_edge() {
     );
     assert_eq!(
         texts(&fixes),
-        ["patch \"Use left: 17mm\" { set door_l.mount = overlay(left: 17mm, right: 8mm) }"]
+        ["patch \"Use left: 16mm\" { set door_l.mount = overlay(left: 16mm, right: 8mm) }"]
     );
 }
 
@@ -364,7 +364,7 @@ fn a_mirrored_door_with_its_overlay_in_the_component_gets_the_mirrored_edge() {
     assert_eq!(
         texts(&fixes),
         [
-            "patch \"Use left: 17mm\" { set Door.face = cover(opening, overlay(left: 17mm, right: 8mm), thickness: ply_18.thickness) }"
+            "patch \"Use left: 16mm\" { set Door.face = cover(opening, overlay(left: 16mm, right: 8mm), thickness: ply_18.thickness) }"
         ]
     );
 }

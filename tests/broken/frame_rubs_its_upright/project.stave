@@ -1,0 +1,157 @@
+// expect: error[motion] frame.stile_l rubs upright_l the whole way as frame turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons
+// A cheval mirror's frame turns on a pivot bolt through each upright,
+// with each stile flat against its upright and no washer between them.
+// The faces drag on each other the whole way round, and once the beech
+// swells with the seasons the frame doesn't turn at all.
+stave 1
+
+project "Frame rubs its upright" {
+  units: mm
+}
+
+region envelope = box(across: 700mm, up: 1600mm, deep: 400mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part upright_l : beech_45 {
+  length: 1500mm
+  width:  70mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part upright_r = mirror(upright_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(upright_l.bottom, inset: 100mm)
+    center(envelope, across)
+    center(upright_l, deep)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [upright_l, upright_r], length: 30mm)
+
+kind pivot_bolt : fitting {
+  roles {
+    piece: Part     // the upright the bolt turns in
+    into:  Part     // the frame's stile
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the stile, into a threaded insert.
+  param thread_length = 25mm
+  /// The steel washer the frame turns on, between the upright and the stile.
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
+  /// Wood left round the holes.
+  param wall = 6mm
+  /// How far the frame turns.
+  param turn = 360deg
+  /// How high up the upright the bolt goes through it.
+  param height = 850mm
+
+  // Nothing of the bolt rides on the upright, so the kind places it:
+  // across the middle of the upright's face, at its height.
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The bolt: through the upright, into a threaded insert in the stile.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  /// The knob: tighten to hold the frame at an angle, loosen to turn it.
+  member knob {
+    with:  bolt
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+
+  clamp knob, bolt along depth
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 2mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    pivot bolt, piece at point(along: 0mm, across: 0mm)
+    drive: turn(bolt, from: 0deg, to: turn)
+  }
+}
+
+component Frame {
+  param stand_l : Part
+  param stand_r : Part
+  param washer  = 0mm
+
+  part stile_l : beech_45 {
+    length: 1100mm
+    width:  50mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_l.bottom, inset: 300mm)
+      against(stand_l.right, gap: washer)
+      center(stand_l, deep)
+    }
+  }
+
+  part stile_r : beech_45 {
+    length: 1100mm
+    width:  50mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_r.bottom, inset: 300mm)
+      against(stand_r.left, gap: washer)
+      center(stand_r, deep)
+    }
+  }
+
+  part top_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.top)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  part bottom_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.bottom)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  joint rail_tenons : mortise_tenon([top_rail, bottom_rail], into: [stile_l, stile_r], length: 20mm)
+
+  // Each bolt written on its own, on the outside face of its upright:
+  // their pins lie on one line, so they turn the frame as one.
+  hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+  hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+}
+
+assembly frame : Frame {
+  stand_l: upright_l
+  stand_r: upright_r
+}

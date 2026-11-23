@@ -67,10 +67,13 @@ pub(crate) struct SweepStart {
 /// A body a sweep moves: its index, its solid where the assemblies inside
 /// the swept one hold it (moved, when they only moved it), and their
 /// placement when they turned it.
-struct Moving<'s> {
-    index: usize,
-    solid: Cow<'s, WorldSolid>,
-    held: Option<Placement>,
+pub(crate) struct Moving<'s> {
+    /// The body's index.
+    pub index: usize,
+    /// Its solid, moved where the assemblies inside the swept one hold it.
+    pub solid: Cow<'s, WorldSolid>,
+    /// Their placement, when they turned it.
+    pub held: Option<Placement>,
 }
 
 /// Every drive's pose for exact drive values: how far each is from its
@@ -89,7 +92,7 @@ fn pose_values(mechanism: &Mechanism, values: &[DriveValue]) -> Vec<PoseValue> {
 }
 
 /// An angle rounded down to a tenth of a degree: `87.3deg`.
-fn angle_text(angle: Angle) -> String {
+pub(crate) fn angle_text(angle: Angle) -> String {
     let tenth = 100_000;
     Angle::from_microdeg(angle.microdeg().div_euclid(tenth) * tenth).to_string()
 }
@@ -630,6 +633,7 @@ impl Checker<'_> {
     /// is read before each motion and each scene of it.
     pub(crate) fn sweeps(&mut self, stopped: &dyn Fn() -> bool) {
         let mut found = Vec::new();
+        let mut running = Vec::new();
         for assembly in self.design.assemblies() {
             if stopped() {
                 return;
@@ -657,6 +661,10 @@ impl Checker<'_> {
                 continue;
             }
             for drive in (0..mechanism.drives().len()).filter_map(DriveIndex::new) {
+                // What the drive's sweeps pass close to; dropped when one
+                // of them hits something, since the hit is the mistake.
+                let mut gaps = crate::running::DriveGaps::default();
+                let mut hit = false;
                 for start in self.sweep_starts(assembly.id, mechanism, drive) {
                     if stopped() {
                         return;
@@ -719,16 +727,86 @@ impl Checker<'_> {
                             })
                         })
                         .collect();
-                    if let Some(hit) = self.first_hit(assembly.id, &swept, &carried, &seen) {
-                        found.push((assembly.id, start, swept, hit));
+                    if let Some(first) = self.first_hit(assembly.id, &swept, &carried, &seen) {
+                        found.push((assembly.id, start, swept, first));
+                        hit = true;
                         break;
                     }
+                    for (moving, fixed, gap) in self.passing(assembly.id, &swept, &carried, &seen) {
+                        if !gaps.improves(moving, fixed, &gap) {
+                            continue;
+                        }
+                        gaps.add(crate::running::Passing {
+                            moving,
+                            fixed,
+                            gap,
+                            start: start.clone(),
+                            path: swept.clone(),
+                        });
+                    }
+                }
+                if !hit {
+                    running.push((assembly.id, gaps));
                 }
             }
         }
         for (assembly, start, path, (reach, a, b)) in found {
             self.report_sweep(assembly, &start, &path, reach, a, b);
         }
+        if !running.is_empty() {
+            let spacers = self.spacers();
+            for (assembly, gaps) in running {
+                self.report_running(assembly, gaps, &spacers);
+            }
+        }
+    }
+
+    /// The notes of a sweep's diagnostic: where the other drives are held,
+    /// the moving assemblies it is inside or carries where they are held
+    /// away from closed, and the scene it started from.
+    pub(crate) fn sweep_notes(
+        &self,
+        assembly: AssemblyId,
+        start: &SweepStart,
+        path: &Path,
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
+        if let Some(held) = self.held_note(assembly, path) {
+            notes.push(held);
+        }
+        let elsewhere: Vec<String> = start
+            .others
+            .iter()
+            .filter(|(_, values)| values.iter().any(|v| !matches!(v, PoseValue::Closed)))
+            .flat_map(|(other, values)| self.pose_conditions(*other, values))
+            .collect();
+        if !elsewhere.is_empty() {
+            notes.push(format!("while {}", crate::names::and_list(&elsewhere)));
+        }
+        if start.scene_index > 0
+            && let Some(scene) = self.design.scenes.get(start.scene_index)
+        {
+            notes.push(format!(
+                "with everything else as scene '{}' poses it",
+                scene.name
+            ));
+        }
+        notes
+    }
+
+    /// Where a sweep's diagnostic goes: the instance's line in the user's
+    /// file (its mount, when it has one), where the mistake almost always
+    /// is, or else the hardware that moves it.
+    pub(crate) fn sweep_place(
+        &self,
+        assembly: AssemblyId,
+    ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
+        self.instance_place(self.mirror_root(assembly))
+            .map(|p| (p.file, p.span))
+            .or_else(|| {
+                self.motion_hardware(assembly)
+                    .and_then(|hardware| self.hardware_place(hardware))
+            })
     }
 
     /// Where the moving assemblies an assembly is inside hold it, for one
@@ -798,7 +876,7 @@ impl Checker<'_> {
 
     /// How a moving body moves when `assembly` moves, from where the
     /// assemblies inside it hold it.
-    fn moving_mover<'p>(
+    pub(crate) fn moving_mover<'p>(
         &self,
         body: &Moving<'_>,
         assembly: AssemblyId,
@@ -918,7 +996,9 @@ impl Checker<'_> {
     /// the other item away from it across the door (toward the free side,
     /// or, for something beside the hinge edge, away from it) in steps of
     /// 0.5mm; said in the instance's own terms when it has a mount. `None`
-    /// when 20mm doesn't clear it. With the help, the change to the
+    /// when 20mm doesn't clear it. The gap leaves the running clearance
+    /// too, so the fix it gives doesn't bring a new problem (grammar,
+    /// "Running clearance"). With the help, the change to the
     /// front's overlay that clears it, when that is the edge between them.
     fn clearance(
         &self,
@@ -983,6 +1063,10 @@ impl Checker<'_> {
                 Mover::Fixed(Placement::Exact(moved)),
             )
             .is_none()
+                && self.runs_clear(
+                    (moving.item, &moving.solid, mover),
+                    (fixed.item, &fixed.solid, Placement::Exact(moved)),
+                )
         });
         let total = needed?;
         let total_text = length_text(Length::from_nm(total));
@@ -1140,7 +1224,7 @@ impl Checker<'_> {
     /// The motion a path sweeps, as a message names it: the assembly, or
     /// the assembly and the drive's name for one with several drives
     /// (`frame.tilt`).
-    fn motion_name(&self, assembly: AssemblyId, path: &Path) -> String {
+    pub(crate) fn motion_name(&self, assembly: AssemblyId, path: &Path) -> String {
         let name = self.assembly_name(assembly);
         let mechanism = path.mechanism();
         match mechanism
@@ -1257,37 +1341,8 @@ impl Checker<'_> {
                 return;
             }
         };
-        if let Some(held) = self.held_note(assembly, path) {
-            notes.push(held);
-        }
-        // The moving assemblies it is inside or carries, where they are
-        // held away from closed.
-        let elsewhere: Vec<String> = start
-            .others
-            .iter()
-            .filter(|(_, values)| values.iter().any(|v| !matches!(v, PoseValue::Closed)))
-            .flat_map(|(other, values)| self.pose_conditions(*other, values))
-            .collect();
-        if !elsewhere.is_empty() {
-            notes.push(format!("while {}", crate::names::and_list(&elsewhere)));
-        }
-        if scene_index > 0
-            && let Some(scene) = self.design.scenes.get(scene_index)
-        {
-            notes.push(format!(
-                "with everything else as scene '{}' poses it",
-                scene.name
-            ));
-        }
-        // The instance's line in the user's file (its mount, when it has
-        // one), where the mistake almost always is.
-        let place = self
-            .instance_place(self.mirror_root(assembly))
-            .map(|p| (p.file, p.span))
-            .or_else(|| {
-                self.motion_hardware(assembly)
-                    .and_then(|hardware| self.hardware_place(hardware))
-            });
+        notes.extend(self.sweep_notes(assembly, start, path));
+        let place = self.sweep_place(assembly);
         self.next_contact = Some(self.sweep_contact(assembly, scene_index, path, reach, a, b));
         self.report(
             Severity::Error,

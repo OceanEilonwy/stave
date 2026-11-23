@@ -9,5 +9,5 @@ error[motion]: door_l.panel hits door_r.panel when door_l is opened past 0.1deg
    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the hinges open to 110deg
    = note: the same line also causes: door_r.panel hits door_l.panel when door_r is opened past 0.1deg
-   = help: leave at least 1mm between door_l and door_r: make its right overlay 0.5mm smaller (the mirrored door follows)
-   = fix: patch "Use right: 8.5mm" { set door_l.mount = overlay(left: 16mm, right: 8.5mm, top: -2mm, bottom: 16mm) }
+   = help: leave at least 2mm between door_l and door_r: make its right overlay 1mm smaller (the mirrored door follows)
+   = fix: patch "Use right: 8mm" { set door_l.mount = overlay(left: 16mm, right: 8mm, top: -2mm, bottom: 16mm) }

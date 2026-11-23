@@ -1187,7 +1187,7 @@ component Flap {
     width:  100mm
     place {
       orient(length: up, width: right)
-      against(base.top)
+      against(base.top, gap: 2mm)
       against(hinge_side.right)
       flush(base.front)
     }
@@ -1233,7 +1233,7 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
         (right.min.thickness, right.max.thickness),
         (mm("0"), mm("1.5"))
     );
-    assert_eq!((right.min.length, right.max.length), (mm("20"), mm("60")));
+    assert_eq!((right.min.length, right.max.length), (mm("22"), mm("62")));
     let mirrored = design
         .hardware()
         .iter()

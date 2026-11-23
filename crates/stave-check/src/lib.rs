@@ -87,6 +87,7 @@ mod instance;
 mod models;
 mod motion;
 mod names;
+mod running;
 mod sequence;
 mod tiers;
 mod walls;

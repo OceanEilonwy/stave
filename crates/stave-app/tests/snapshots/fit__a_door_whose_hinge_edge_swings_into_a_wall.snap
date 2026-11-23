@@ -8,5 +8,5 @@ error[motion]: door.panel hits wall when door is opened past 0.6deg
 83 | assembly door : Door {
    |          ^^^^
    = note: the hinges open to 110deg
-   = help: leave at least 1mm between door and wall
-   = fix: patch "Use left: 17mm" { set Door.face = cover(opening, overlay(left: 17mm, right: 17.8mm), thickness: ply_18.thickness) }
+   = help: leave at least 2mm between door and wall
+   = fix: patch "Use left: 16mm" { set Door.face = cover(opening, overlay(left: 16mm, right: 17.8mm), thickness: ply_18.thickness) }

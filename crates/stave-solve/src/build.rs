@@ -2631,6 +2631,7 @@ impl Solver<'_> {
             kerf: allowances.kerf,
             rough_length: allowances.rough_length,
             rough_width: allowances.rough_width,
+            running_gap: self.running_gap()?,
         })
     }
 }

@@ -1,7 +1,7 @@
 # Turning frames: weaving angles, pivot bolts and set positions
 
-Status: Phases A and B are **built**; Phase C (Change 6, running
-clearance) is still to do. This is the full design note as proposed; the
+Status: Phases A, B and C are **built** (C, Change 6, running clearance,
+on 2026-11-23). This is the full design note as proposed; the
 one-page summary for the go/no-go is
 [`2026-11-22-turning-frames-decision.md`](2026-11-22-turning-frames-decision.md),
 and `docs/grammar.md` is the reference for what was built.
@@ -28,6 +28,15 @@ and `docs/grammar.md` is the reference for what was built.
   the contextual word (`drive tilt: ...`).
 - The loom has four heights, not seven (see "The loom, written with these
   changes").
+- **Running clearance** counts a gap within the 0.05mm contact tolerance
+  as touching (`error[motion]` even where nothing swells), says `as
+  drawer starts to slide` for a gap least as the motion leaves closed,
+  and asks the two to bear on steel only when they touch. A wooden
+  spacer that moves is `it wears as it turns on upright_l`. The rule
+  found real faults in five examples: solid oak and cherry drawer fronts
+  with a 1.5mm or 2mm reveal close up more than that with the seasons
+  (the chest of drawers, the three clothing cabinets and the
+  nightstand); their reveals were widened.
 
 A tapestry loom (`~/stavetest/tapestry_loom`) cannot be written. Its frame
 hangs between two uprights on a pivot bolt each side. It tilts back to a

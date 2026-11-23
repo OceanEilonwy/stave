@@ -63,8 +63,8 @@ expression: "render_project(& examples().join(\"chest_of_drawers\"))"
      = assembly:keyword  drawer:assembly+decl  4:number  casework:module+ref+std  Drawer:type+ref+std
   49 |   opening:      drawer_bay[same]
      = opening:param+ref+std  drawer_bay:region+ref  same:keyword
-  50 |   mount:        overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
-     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  1.5:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  0.75:number  mm:unit
+  50 |   mount:        overlay(left: 18mm, right: 18mm, top: -3mm, bottom: 8mm, meeting: -2.5mm)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  3:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  2.5:number  mm:unit
   51 |   front_stock:  oak_19
      = front_stock:param+ref+std  oak_19:stock+ref
   52 |   box_stock:    maple_12

@@ -253,7 +253,7 @@ patch "Add a drawer" {
   add import "std:casework" in "carcass.stave"
   add assembly drawer_2 : casework.Drawer {
     opening:      door_bay[left]
-    mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -reveal / 2)
+    mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -drawer_reveal / 2)
     front_stock:  oak_19
     box_stock:    maple_12
     bottom_stock: ply_6

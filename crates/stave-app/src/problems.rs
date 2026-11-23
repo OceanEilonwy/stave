@@ -77,7 +77,7 @@ impl Category {
     /// The category of a diagnostic code.
     pub fn of(code: Code) -> Category {
         match code {
-            Code::Motion => Category::Motion,
+            Code::Motion | Code::Clearance => Category::Motion,
             Code::Overlap => Category::Overlap,
             Code::NoContact | Code::LoosePart => Category::NoContact,
             Code::Adjust => Category::Adjust,

@@ -35,25 +35,27 @@ expression: "render_project(& examples().join(\"clothing_cabinet\"))"
      = param:keyword  slide_length:param+decl  500:number  mm:unit  within:keyword  350:number  mm:unit  400:number  mm:unit  450:number  mm:unit  500:number  mm:unit
   25 | locked param reveal         = 1.5mm                           // gap between neighbouring fronts
      = locked:keyword  param:keyword  reveal:param+decl  1.5:number  mm:unit
-  27 | let overhang = 20mm
+  26 | locked param drawer_reveal  = 5mm                             // gap between the drawer fronts: oak fronts this tall close up over 3mm with the seasons
+     = locked:keyword  param:keyword  drawer_reveal:param+decl  5:number  mm:unit
+  28 | let overhang = 20mm
      = let:keyword  overhang:let+decl  20:number  mm:unit
-  30 | require hanger_room    : cabinet_depth - back.thickness >= 540mm "room for coat hangers"
+  31 | require hanger_room    : cabinet_depth - back.thickness >= 540mm "room for coat hangers"
      = require:keyword  hanger_room:require+decl  cabinet_depth:param+ref  back:part+ref  thickness:plain  540:number  mm:unit  ":text  room for coat hangers:text  ":text
-  31 | require overall_height : extent([base, side_l, top], up) == cabinet_height "overall height matches cabinet_height"
+  32 | require overall_height : extent([base, side_l, top], up) == cabinet_height "overall height matches cabinet_height"
      = require:keyword  overall_height:require+decl  extent:function  base:part+ref  side_l:part+ref  top:part+ref  up:word  cabinet_height:param+ref  ":text  overall height matches cabinet_height:text  ":text
-  34 | scene all_open "All open" {
+  35 | scene all_open "All open" {
      = scene:keyword  all_open:scene+decl  ":text  All open:text  ":text
-  35 |   pose door_l = open
+  36 |   pose door_l = open
      = pose:keyword  door_l:assembly+ref  open:word
-  36 |   pose door_r = open
+  37 |   pose door_r = open
      = pose:keyword  door_r:assembly+ref  open:word
-  37 |   pose drawer[top] = open
+  38 |   pose drawer[top] = open
      = pose:keyword  drawer:assembly+ref  top:label+ref  open:word
-  40 | scene drawer_bench "Top drawer on the bench" {
+  41 | scene drawer_bench "Top drawer on the bench" {
      = scene:keyword  drawer_bench:scene+decl  ":text  Top drawer on the bench:text  ":text
-  41 |   show:    drawer[top]
+  42 |   show:    drawer[top]
      = show:field  drawer:assembly+ref  top:label+ref
-  42 |   explode: true
+  43 |   explode: true
      = explode:field  true:keyword
 == carcass.stave ==
    1 | stave 1
@@ -248,8 +250,8 @@ expression: "render_project(& examples().join(\"clothing_cabinet\"))"
      = assembly:keyword  drawer:assembly+decl  bottom:label+decl  top:label+decl  casework:module+ref+std  Drawer:type+ref+std
   10 |   opening:      drawer_bay[same]         // drawer[bottom] gets drawer_bay[bottom], and so on
      = opening:param+ref+std  drawer_bay:region+ref  same:keyword
-  11 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -reveal / 2)
-     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  reveal:param+ref  2:number
+  11 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -drawer_reveal / 2)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  drawer_reveal:param+ref  2:number
   12 |   front_stock:  oak_19
      = front_stock:param+ref+std  oak_19:stock+ref
   13 |   box_stock:    maple_12

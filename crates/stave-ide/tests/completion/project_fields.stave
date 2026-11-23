@@ -4,4 +4,4 @@ project "Shelf" {
   goal: "A shelf"
   $0
 }
-// expect: finish, units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width
+// expect: finish, units, resolution, style, tools, methods, boards, kerf, rough_length, rough_width, running_gap

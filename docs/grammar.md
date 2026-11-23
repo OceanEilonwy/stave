@@ -778,6 +778,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | `kerf` | `Length` | no (default `3mm`) | the wood the saw turns to dust at each cut; the cut list leaves it between parts when it works out how many boards to buy. 0mm or more. A stock's own `kerf:` overrides it; see [Cut list](#cut-list) |
 | `rough_length` | `Length` | no (default `0mm`) | how much longer than its cut size, along the grain, each part of `solid` stock is first cut, before it is milled to size (for snipe, checks and squaring the ends). The cut list shows the rough size, and `max_length` is checked against it. 0mm or more. A stock's own `rough_length:` overrides it |
 | `rough_width` | `Length` | no (default `0mm`) | how much wider than its cut size, across the grain, each part of `solid` stock is first cut, before it is jointed and planed to width. 0mm or more. A stock's own `rough_width:` overrides it |
+| `running_gap` | `Length` | no (default `1mm`) | the least gap, beyond what the wood moves with the seasons, between wooden parts that move past each other; see [Running clearance](#running-clearance). 0mm or more: a negative one is `error[out-of-range]` at the field (`'running_gap' must be 0mm or more, found -1mm`), with the help `write the least gap to leave between wooden parts that move past each other, 0mm or more, such as 1mm` |
 
 ### `library "Title" { }`
 
@@ -3280,6 +3281,113 @@ the model to one file: when the file's SHA-256 differs, that is
 looked at before its pin is updated. A `sha256:` that is not 64
 hexadecimal digits is `error[type-mismatch]`.
 
+#### Running clearance
+
+Wood that moves past wood needs a gap, or it binds. A frame that turns on
+a pivot bolt with its stile flat against the upright drags face to face
+the whole way round, and once the beech swells with the seasons it
+doesn't turn at all. Nothing is written to ask for the gap: Stave works it
+out from what it already knows, which bodies move past each other and how
+much solid wood swells across its grain (see [Grain and wood
+movement](#grain-and-wood-movement)).
+
+Every sweep that [Scenes](#scenes) makes (motions are made one at a time:
+from rest, from each scene's poses, at each set value of the other
+drives, nested assemblies alike) measures every **wooden** body the
+motion moves against every wooden body that moves differently. A wooden
+body is a part, or a joint's member made of wood (a dowel pin, whose
+fastener kind has a `species:`). A hardware member is never wood (see
+[One collision model](#one-collision-model)), so it may touch what moves
+past it as before: steel is where a design puts a bearing surface (a
+washer, a slide, a hinge's knuckle), and a kind's `require` can ask for
+its own gap, as `slide.clearance` does. Bodies that move together are not
+measured, and at rest nothing is: a gap matters only to things that
+move.
+
+- **The gap** is the least distance between the two bodies over the
+  sweep, leaving out **seating**: a closest approach at an end of the
+  swept range (closed, `to`, or a `stop`) where the gap opens as the
+  motion leaves it. A door shutting onto its stop, an overlay door
+  resting on the carcass front and a drawer front against the cabinet
+  are seated, not rubbing. A face that stays against another as the
+  motion leaves the end (a stile on its upright) is rubbing. Each body is
+  measured as its wood in the sweeps' terms, a part as its boxes with
+  its square cuts out and its holes counted as wood, so the gap can only
+  come out smaller than it is, never larger; it is rounded down to the
+  nanometre. A slide's travel and a turn about one fixed line are
+  measured exactly, every closest approach found in closed form; a
+  linkage, and a body an inner assembly holds turned, by conservative
+  advancement, stepping by how far the two are apart while that is more
+  than the gap that matters and by no more than 0.1mm of movement
+  within it, each closest approach then narrowed to well under a
+  micrometre. Two bodies that already overlap where the motion starts
+  (a round shape in its hole) are left to the overlap checks.
+- **The swell** is how far the two can close up with the seasons along
+  the line of that closest approach. For each of the two that is a solid
+  board (a part of `solid` stock that is not turned) whose grain runs
+  across that line, it is half the board's size along the line divided
+  by its stock's `max_held_width`, times 1mm. A sheet, a turned part, a
+  joint's member, or a board whose grain runs along the line adds
+  nothing. The two amounts add. For each board the line is taken as
+  whichever of its length, width and thickness lies nearest its
+  direction. The swell is worked out exactly and rounded once, to the
+  nanometre: two beech boards 45mm thick side by side, with the default
+  `max_held_width` of 80mm, close up 22.5mm ÷ 80mm × 1mm = 0.28125mm
+  each, 0.5625mm together.
+- **The running gap** is the project's `running_gap:`, 1mm unless it
+  says.
+
+| Gap | Result |
+|---|---|
+| *gap* ≤ *swell*, or within the 0.05mm contact tolerance | `error[motion]`: it binds |
+| *swell* < *gap* < *swell* + *running gap* | `warning[clearance]`: it is tight |
+| otherwise | clean |
+
+```
+error[motion]: frame.stile_l rubs upright_l the whole way as frame.tilt turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons
+   = help: leave at least 1.563mm between them (0.563mm for the seasons and a running gap of 1mm), and let them bear on steel, such as a washer, rather than on each other
+warning[clearance]: frame.stile_l passes 1.2mm from upright_l the whole way as frame.tilt turns; leave 1.563mm (0.563mm for the seasons and a running gap of 1mm)
+   = help: move them at least 1.563mm apart, or write a smaller running_gap: in the project if this fit is meant to be close
+error[motion]: drawer[0].front rubs drawer[1].front as drawer[0] starts to slide: the gap is 1.5mm, and the white_oak closes up to 3.58mm with the seasons
+   = help: leave at least 4.58mm between them (3.58mm for the seasons and a running gap of 1mm)
+```
+
+The message says `the whole way` when the gap stays within half a
+micrometre of its least over the whole range; `as <drive> starts to
+turn` (or `slide`) when it is least as the motion leaves closed and then
+opens; and otherwise where it is least: `at 35.2deg` (rounded down to a
+tenth of a degree) or `at 120mm`. A turning drive `turns`, a travel
+`slides`. The help asks the two to bear on steel only when they touch. The wood named is the species of the boards that swell
+(`the beech and the pine close up to ...` for two); with no swell the
+error's message ends at the gap (`the gap is 0mm`) and the brackets in
+the help and the warning leave the seasons out (`a running gap of 1mm`).
+Each pair is reported once for each drive, with the least gap any of its
+sweeps finds, at the place a motion that hits is reported, and with the
+same notes: where the other drives are held (`with frame.height held at
+150mm`), the moving assemblies it is inside or carries (`while ...`) and
+the scene (`with everything else as scene 'weaving' poses it`). A drive
+whose sweep hits something is not measured: the hit is the mistake. The
+gap the help of such a hit asks for (`leave at least 2mm between door
+and wall`, found in steps of 0.5mm) leaves this running clearance too,
+so its fix brings no new warning.
+
+**A spacer is a bearing, not a rub.** A **spacer** is a body in a
+[clamp](#clamps)'s stack, at rest, that touches nothing but its two
+neighbours in the stack and the clamp's own members: a washer member, or
+a wooden disc made as a part (a part the kind drills, through a `spacer`
+role). A sliding contact with a spacer has no air gap to close and no
+broad faces to drag, so it is not measured as rubbing. A spacer that
+moves past another wooden body within the 0.05mm contact tolerance and
+is wood (a part) is `warning[clearance]` at the spacer, once for each
+spacer and drive: `spacer_l is wood: it wears as frame.stile_l turns on
+it; a steel or nylon washer lasts longer` (`it wears as it turns on
+upright_l` when the spacer is the one that moves), with the help `make
+spacer_l a washer member of its hardware instead of a part`. A spacer
+that comes no closer than the contact tolerance to what moves past it is
+measured like any other wood. A spacer that is a
+member is never wood, so it is clean. Two parts touching directly are
+still the error above, because neither is a spacer.
+
 #### Shapes
 
 A hinge, slide, pull, support or fitting kind is made of **members**, each written `member
@@ -4137,7 +4245,9 @@ scene drawer_bench "Top drawer on the bench" {
   checked against the other only at the values the design names. To have
   "tilted at the lowest height" checked, write that scene. A sweep that
   hits is reported once for each drive, naming it (`` frame.tilt ``) and,
-  in a note, where the other drives are held. A door on cup
+  in a note, where the other drives are held. Each sweep also measures
+  how close wood comes to wood (see [Running
+  clearance](#running-clearance)). A door on cup
   hinges follows its linkage (it turns and moves at once); a door on butt
   hinges turns about its pin (see [How a mechanism is
   solved](#how-a-mechanism-is-solved), fast paths).
@@ -4685,14 +4795,15 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> leaves <2mm> of wood at <place>; it needs <6mm>` (or `runs <1mm> past <place>; it needs <6mm> of wood there`) for a cut's own `wall:` (see [Walls](#walls)), `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut), or for a [row of holes](#rows-of-holes) `<hardware>: its row of <pin hole>s runs off <part>: hole <16> <up> is past its <end>`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
-| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly> moves <two> ways; write <assembly>.<drive> or <assembly>.<drive>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
+| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; for [running clearance](#running-clearance) `<a> rubs <b> the whole way as <frame.tilt> turns: the gap is <0mm>, and the <beech> closes up to <0.563mm> with the seasons` (`at <35.2deg> as ...` where it is closest, `as <drawer> starts to slide`, `slides` for a travel); `<assembly> moves <two> ways; write <assembly>.<drive> or <assembly>.<drive>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
+| 5 | `clearance` | a warning, for [running clearance](#running-clearance): `<a> passes <1.2mm> from <b> the whole way as <frame.tilt> turns; leave <1.563mm> (<0.563mm> for the seasons and a running gap of <1mm>)` (`at <35.2deg> as ...` where it is closest, `as <drawer> starts to slide`), or for a wooden spacer `<spacer_l> is wood: it wears as <stile_l> turns on it; a steel or nylon washer lasts longer` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |
 | 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`, `unnamed-cut`, `loose-part`, `grain`.
+`model-mismatch`, `unnamed-cut`, `loose-part`, `grain`, `clearance`.
 
 A stock with no `max_length` is the one `missing-field` that is a warning
 (see [`stock`](#stock-name--)): the design can still be checked and built.

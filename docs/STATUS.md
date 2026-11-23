@@ -91,7 +91,13 @@ a line and a concrete help line for every problem:
    `examples/tapestry_loom` turns its frame all the way round at each of
    four heights. Hardware that draws parts together (`clamp`) must have
    a solid stack between them (`no-contact`), at rest, at every pose and
-   at every set position.
+   at every set position. Wood moving past wood needs room to swell
+   (running clearance): every sweep measures the least gap between the
+   wooden bodies it moves and those that stay put, leaving out seating;
+   a gap the seasons would close (worked out from each board's size and
+   its stock's `max_held_width`) is `motion`, one inside the project's
+   `running_gap` (default 1mm) beyond that is `warning[clearance]`, and a
+   wooden spacer in a clamp's stack wears (`warning[clearance]`).
 6. **Requires** at the current values (over whole ranges: not yet).
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
@@ -562,10 +568,13 @@ guide, and the design is
   rods leave angled cuts in (more wood than there is). Turned and rotated
   steps are checked by dense sampling (1mm, 0.4mm of travel), not exactly.
 - **Motion**: the rule that an assembly's hinges share one pivot
-  (`motion`) is not checked. Wood moving past wood with too little room
-  for it to swell (running clearance, Phase C of
-  `docs/reviews/2026-11-22-turning-frames-decision.md`) is not checked
-  yet.
+  (`motion`) is not checked. Running clearance measures a slide and a
+  turn about one fixed line exactly; a linkage, and a body an inner
+  assembly holds turned, by stepping (0.1mm of movement within the gap
+  that matters). Each body is measured as its boxes with holes counted
+  as wood, so a gap is never found larger than it is. The swell is
+  measured along the body's own axis nearest the line of the closest
+  approach.
   A cup hinge moves on the mechanism its kind declares; `std` has the 110°
   full-overlay `euro_hinge` and a 165° `wide_hinge_165` with placeholder
   pins; half-overlay and inset hinges need their own kinds, not written

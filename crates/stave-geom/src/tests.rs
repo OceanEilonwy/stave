@@ -479,6 +479,7 @@ fn design_of_all(parts: Vec<Part>) -> SolvedDesign {
             kerf: Length::from_mm(3),
             rough_length: Length::ZERO,
             rough_width: Length::ZERO,
+            running_gap: Length::from_mm(1),
         },
         parts,
         hardware: Vec::new(),

@@ -8,7 +8,7 @@ import "./hardware" as hw
 
 assembly drawer[bottom, top] : casework.Drawer {
   opening:      drawer_bay[same]         // drawer[bottom] gets drawer_bay[bottom], and so on
-  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -reveal / 2)
+  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -drawer_reveal / 2)
   front_stock:  oak_19
   box_stock:    maple_12
   bottom_stock: ply_6

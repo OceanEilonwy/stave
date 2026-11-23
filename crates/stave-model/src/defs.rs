@@ -2409,6 +2409,8 @@ pub struct ProjectDef {
     pub rough_length: Option<RExpr>,
     /// `rough_width:` (grammar, "Cut list").
     pub rough_width: Option<RExpr>,
+    /// `running_gap:` (grammar, "Running clearance").
+    pub running_gap: Option<RExpr>,
     /// The file it is in.
     pub file: FileId,
     /// The whole item.

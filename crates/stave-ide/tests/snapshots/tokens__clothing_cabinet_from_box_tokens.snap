@@ -77,8 +77,8 @@ expression: "render_project(& examples().join(\"clothing_cabinet_from_box\"))"
      = assembly:keyword  drawer:assembly+decl  bottom:label+decl  top:label+decl  casework:module+ref+std  Drawer:type+ref+std
   59 |   opening:      drawer_bay[same]
      = opening:param+ref+std  drawer_bay:region+ref  same:keyword
-  60 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
-     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  0.75:number  mm:unit
+  60 |   mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -2.5mm)
+     = mount:param+ref+std  overlay:function  left:field  18:number  mm:unit  right:field  18:number  mm:unit  top:field  8:number  mm:unit  bottom:field  8:number  mm:unit  meeting:field  2.5:number  mm:unit
   61 |   front_stock:  oak_19
      = front_stock:param+ref+std  oak_19:stock+ref
   62 |   box_stock:    maple_12
