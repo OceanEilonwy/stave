@@ -14,6 +14,10 @@
 //! parts touching, each is an error, with the swell the appendix works
 //! out by hand: 0.563mm for two 45mm beech parts, 0.375mm for two 30mm
 //! ash legs. The sawhorse doesn't move, so nothing is asked of it.
+//!
+//! The glider's arms turn beside its posts too, but as drawn the seat
+//! bolts' heads sit in that gap, so closing it is an overlap; the tests
+//! of an arm against its post sink those heads into the arms first.
 
 mod common;
 
@@ -168,6 +172,173 @@ fn a_seat_swinging_inside_its_hanger_is_measured_against_the_arms() {
         ),
         "{}",
         first.message
+    );
+}
+
+/// The glider with the hanger's `post_gap` (between each arm and its
+/// post, and the thickness of the washer there) set to `gap`.
+fn with_post_gap(text: &str, gap: &str) -> String {
+    changed(
+        text,
+        "  stand_r: post_r\n}",
+        &format!("  stand_r: post_r\n  post_gap: {gap}\n}}"),
+    )
+}
+
+/// The glider with the seat bolts' heads sunk into the arms: a copy of
+/// `pivot_bolt` whose knob sits in a counterbore in the face instead of
+/// standing off it, used for the seat bolts. Nothing then sits between
+/// an arm and its post, so the gap there can close.
+fn with_seat_heads_sunk(text: &str) -> String {
+    let start = text.find("kind pivot_bolt : fitting {").expect("the kind");
+    let end = start + text[start..].find("\n}\n").expect("its end") + 3;
+    let kind = &text[start..end];
+    let sunk = changed(
+        &changed(
+            &changed(kind, "kind pivot_bolt", "kind sunk_pivot_bolt"),
+            "cylinder(diameter: knob_diameter, depth: -projection..0mm)",
+            "cylinder(diameter: knob_diameter, depth: 0mm..projection)",
+        ),
+        "  cut bolt_hole:",
+        "  cut head_recess: crossing(piece, knob) { drill(diameter: knob_diameter + 1mm, depth: projection, wall: wall) }\n  cut bolt_hole:",
+    );
+    let text = format!("{}{sunk}\n{}", &text[..end], &text[end..]);
+    let text = changed(&text, ": pivot_bolt(arm_l,", ": sunk_pivot_bolt(arm_l,");
+    changed(&text, ": pivot_bolt(arm_r,", ": sunk_pivot_bolt(arm_r,")
+}
+
+#[test]
+fn the_seat_bolts_heads_keep_each_arm_off_its_post() {
+    // As drawn, the seat bolts' heads stand 2mm proud of the arms, in the
+    // gap between each arm and its post: closing that gap drives them
+    // into the posts, which is an overlap, before anything turns.
+    let opened = open(&with_post_gap(&fixture("running", "glider"), "0mm"));
+    assert_eq!(
+        codes(&opened),
+        vec![(Severity::Error, Code::Overlap)],
+        "{}",
+        rendered(&opened)
+    );
+    let first = opened.diagnostics.first().expect("an error");
+    assert!(
+        first
+            .notes
+            .iter()
+            .any(|note| note == "hanger.seat.seat_l's knob goes into post_l, 2mm deep at most"),
+        "{}",
+        rendered(&opened)
+    );
+}
+
+#[test]
+fn seat_bolts_sunk_into_the_arms_check_clean() {
+    // The counterbored heads still bear on the arms, so each seat bolt's
+    // stack is solid, and the 3mm washers still keep the wood apart.
+    let sunk = with_seat_heads_sunk(&fixture("running", "glider"));
+    let opened = open(&sunk);
+    assert!(opened.diagnostics.is_empty(), "{}", rendered(&opened));
+    // The sunk heads still clamp: a washer too thin for the seat's gap
+    // leaves air in each seat bolt's stack.
+    assert_eq!(sunk.matches("washer_thickness: washer,").count(), 2);
+    let thin = sunk.replace(
+        "washer_thickness: washer,",
+        "washer_thickness: washer - 1mm,",
+    );
+    let opened = open(&thin);
+    let gaps: Vec<_> = opened
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == Code::NoContact)
+        .collect();
+    assert_eq!(gaps.len(), 2, "{}", rendered(&opened));
+    for (gap, side) in gaps.iter().zip(["l", "r"]) {
+        assert_eq!(
+            gap.message,
+            format!(
+                "hanger.seat.seat_{side} draws hanger.seat.seat_rail_{side} toward hanger.seat.seat_{side}'s washer, but they are 1mm apart with nothing between"
+            )
+        );
+    }
+}
+
+#[test]
+fn an_arm_touching_its_post_binds() {
+    let text = with_post_gap(&with_seat_heads_sunk(&fixture("running", "glider")), "0mm");
+    let opened = open(&text);
+    assert_eq!(
+        codes(&opened),
+        vec![(Severity::Error, Code::Motion)],
+        "{}",
+        rendered(&opened)
+    );
+    let first = opened.diagnostics.first().expect("an error");
+    assert_eq!(
+        first.message,
+        "hanger.arm_l rubs post_l the whole way as hanger turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons"
+    );
+    assert!(
+        first.notes.iter().any(|note| note
+            == "the same line also causes: hanger.arm_r rubs post_r the whole way as hanger turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons"),
+        "{}",
+        rendered(&opened)
+    );
+    insta::assert_snapshot!(rendered(&opened));
+}
+
+#[test]
+fn an_arm_close_to_its_post_is_tight() {
+    let text = with_post_gap(
+        &with_seat_heads_sunk(&fixture("running", "glider")),
+        "1.2mm",
+    );
+    let opened = open(&text);
+    assert_eq!(
+        codes(&opened),
+        vec![(Severity::Warning, Code::Clearance)],
+        "{}",
+        rendered(&opened)
+    );
+    let first = opened.diagnostics.first().expect("a warning");
+    assert_eq!(
+        first.message,
+        "hanger.arm_l passes 1.2mm from post_l the whole way as hanger turns; leave 1.563mm (0.563mm for the seasons and a running gap of 1mm)"
+    );
+}
+
+#[test]
+fn every_arm_touching_both_its_post_and_its_seat_rail_binds_at_both() {
+    // Each arm turns beside its post and its seat rail beside it: with
+    // both gaps closed, both places rub, each reported.
+    let text = with_post_gap(
+        &touching(&with_seat_heads_sunk(&fixture("running", "glider"))),
+        "0mm",
+    );
+    let opened = open(&text);
+    assert_eq!(
+        codes(&opened),
+        vec![
+            (Severity::Error, Code::Motion),
+            (Severity::Error, Code::Motion)
+        ],
+        "{}",
+        rendered(&opened)
+    );
+    let messages: Vec<_> = opened
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("hanger.arm_l rubs post_l the whole way as hanger turns")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.starts_with(
+            "hanger.seat.seat_rail_l rubs hanger.arm_l the whole way as hanger.seat turns"
+        )),
+        "{messages:?}"
     );
 }
 

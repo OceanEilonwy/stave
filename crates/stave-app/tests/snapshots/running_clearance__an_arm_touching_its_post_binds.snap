@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/running_clearance.rs
+expression: rendered(&opened)
+---
+error[motion]: hanger.arm_l rubs post_l the whole way as hanger turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons
+   --> /project/project.stave:247:10
+    |
+247 | assembly hanger : Hanger {
+    |          ^^^^^^
+    = note: the same line also causes: hanger.arm_r rubs post_r the whole way as hanger turns: the gap is 0mm, and the beech closes up to 0.563mm with the seasons
+    = help: leave at least 1.563mm between them (0.563mm for the seasons and a running gap of 1mm), and let them bear on steel, such as a washer, rather than on each other

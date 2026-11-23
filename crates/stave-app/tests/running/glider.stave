@@ -150,7 +150,7 @@ component Seat {
 component Hanger {
   param stand_l : Part
   param stand_r : Part
-  // The seat bolts' heads sit in this gap, so it stays open.
+  // The seat bolts' heads sit in this gap, so it stays open (tests sink them).
   param post_gap = 3mm
 
   part arm_l : beech_45 {
