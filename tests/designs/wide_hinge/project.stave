@@ -45,7 +45,7 @@ component Door {
   param opening    : Region
   param hinge_side : Part
 
-  region face = cover(opening, overlay(left: 17.5mm, right: 17.5mm), thickness: ply_18.thickness)
+  region face = cover(opening, overlay(left: 16mm, right: 16mm, bottom: -2mm), thickness: ply_18.thickness)
 
   part panel : ply_18 {
     length: face.up

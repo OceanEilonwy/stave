@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[motion]: frame.height can't be set at 200mm: it sets at 0mm, 100mm and 300mm
+   --> /project/project.stave:177:3
+    |
+177 |   pose frame.height = 200mm
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: pose frame.height at 100mm or 300mm

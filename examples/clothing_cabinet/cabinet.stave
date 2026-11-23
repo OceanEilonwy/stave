@@ -23,6 +23,7 @@ project "Clothing cabinet" {
        param drawer_zone    = 500mm within 300mm..600mm       // height of the drawer section
        param slide_length   = 500mm within [350mm, 400mm, 450mm, 500mm]
 locked param reveal         = 1.5mm                           // gap between neighbouring fronts
+locked param drawer_reveal  = 5mm                             // gap between the drawer fronts: oak fronts this tall close up over 3mm with the seasons
 
 let overhang = 20mm
 

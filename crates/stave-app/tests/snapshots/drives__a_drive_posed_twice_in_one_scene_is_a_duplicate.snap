@@ -1,0 +1,14 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[duplicate-name]: frame.tilt is posed twice in scene 'tilted'
+   --> /project/project.stave:171:3
+    |
+171 |   pose frame.tilt = 30deg
+    |   ^^^^^^^^^^^^^^^^^^^^^^^
+   ::: /project/project.stave:170:3
+    |
+170 |   pose frame.tilt = 15deg
+    |   ----------------------- first posed here
+    = help: pose each motion once in a scene; remove one of them

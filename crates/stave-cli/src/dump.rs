@@ -13,7 +13,8 @@ use stave_lang::units::Length;
 use stave_model::Model;
 use stave_model::defs::KindDef;
 use stave_model::mechanism::{
-    DriveValue, FramePoint, Mechanism, MechanismEntry, MemberIndex, MotionShape,
+    DriveIndex, DriveValue, FramePoint, Mechanism, MechanismDrive, MechanismEntry, MemberIndex,
+    MotionShape, NamedDrive,
 };
 use stave_model::solved::{
     Body, BodyCarrier, BodyOwner, BodyRef, Contact, CutKind, CutPlace, Depth, End, EntryName,
@@ -305,9 +306,64 @@ fn frame_point(point: FramePoint) -> String {
 
 /// An assembly's motion, from its mechanism: a turn about one pin and a
 /// travel along one rail in world terms, anything else as its plane and
-/// entries.
+/// entries. One for each drive of a mechanism with several, named, each
+/// with the others closed. A drive with set positions ends with them,
+/// measured from closed as a pose is: `set at 0, 50, 100 and 150`.
 fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
-    match mechanism.shape() {
+    if mechanism.drives().len() <= 1 {
+        let named = mechanism.drives().first();
+        let words = drive_motion(design, mechanism, mechanism.shape(), &named.drive);
+        return with_set_positions(words, named);
+    }
+    let closed = mechanism.closed();
+    mechanism
+        .drives()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, named)| {
+            let shape = mechanism.shape_of(DriveIndex::new(index)?, &closed);
+            let words = drive_motion(design, mechanism, shape, &named.drive);
+            let words = with_set_positions(words, named);
+            Some(match &named.name {
+                Some(name) => format!("{name}: {words}"),
+                None => words,
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// A drive's motion followed by its set positions, when it has them:
+/// each as the amount a pose names, how far from closed (`0`, `50`), a
+/// length in millimetres without the unit and an angle with its own.
+fn with_set_positions(words: String, named: &NamedDrive) -> String {
+    if named.set_at.is_none() {
+        return words;
+    }
+    let values: Vec<String> = named
+        .set_values()
+        .filter_map(|value| named.drive.amount_of(value))
+        .map(|amount| match amount {
+            DriveValue::Turn(angle) => angle.to_string(),
+            DriveValue::Travel(length) => mm(length),
+        })
+        .collect();
+    let listed = match values.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => return words,
+    };
+    format!("{words}, set at {listed}")
+}
+
+/// One drive's motion of a mechanism, of the shape it has.
+fn drive_motion(
+    design: &SolvedDesign,
+    mechanism: &Mechanism,
+    shape: MotionShape,
+    drive: &MechanismDrive,
+) -> String {
+    match shape {
         MotionShape::Travel { toward, travel } => {
             format!("travels {} toward the {}", mm(travel), toward.word())
         }
@@ -380,7 +436,7 @@ fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
                     } => format!("couple {} to {}: {ratio}", member(follower), member(leader)),
                 })
                 .collect();
-            let reach = match mechanism.drive().extent() {
+            let reach = match drive.extent() {
                 DriveValue::Turn(angle) => format!("turns up to {angle}"),
                 DriveValue::Travel(length) => format!("travels up to {}", mm(length)),
             };

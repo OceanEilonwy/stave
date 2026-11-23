@@ -255,7 +255,7 @@ fn a_door_that_hits_the_wall_is_refused_with_its_fix_and_the_fix_makes_it_fit() 
     assert!(events.contains(&EditEvent::Committed), "{events:?}");
     let text = std::fs::read_to_string(folder.join("cabinet.stave")).unwrap();
     assert!(text.contains("assembly door : Door {"), "{text}");
-    assert!(text.contains("mount:      overlay(left: 17"), "{text}");
+    assert!(text.contains("mount:      overlay(left: 16mm"), "{text}");
     assert_eq!(errors(&folder), "");
 }
 
@@ -591,7 +591,7 @@ fn a_chosen_candidate_repeats_into_an_array_filling_its_space() {
     for (setting, value) in [
         (
             "mount",
-            "overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)",
+            "overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -2.5mm)",
         ),
         ("front_stock", "oak_19"),
         ("box_stock", "maple_12"),

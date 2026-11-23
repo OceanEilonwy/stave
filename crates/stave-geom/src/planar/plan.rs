@@ -227,6 +227,18 @@ pub(super) enum Step {
     Couple { from: Body, to: Body, factor: f64 },
     /// `body`'s angle is known and it is pinned to `known` at `pin`.
     Hang { body: Body, known: Body, pin: DVec2 },
+    /// `body`'s angle and its travel along its slot in `guide` are known:
+    /// its pin, at `from` when closed, is at `from + unit * travel` in
+    /// `guide` (a pivot bolt raised in its slot and turned).
+    HangInSlot {
+        body: Body,
+        guide: Body,
+        from: DVec2,
+        /// The unit direction a positive travel runs, in `guide`.
+        unit: DVec2,
+        /// Its slot's other end, for the slot-end check.
+        to: DVec2,
+    },
     /// `runner`'s travel is known; it runs along `guide`, which doesn't
     /// turn, in the unit `direction`.
     Rail {
@@ -248,14 +260,37 @@ pub struct Mechanism {
     member_bodies: Vec<Body>,
     body_names: Vec<MemberName>,
     held: Vec<bool>,
+    /// Never empty; each acts on a free body.
+    drives: Vec<Drive>,
+    /// The body each drive acts on, by drive.
+    drive_bodies: Vec<Body>,
+    /// The drive run through its range, and its place in `drives`.
     drive: Drive,
-    drive_body: Body,
+    swept: usize,
+    /// Every drive's value past its `from` (radians or nanometres) while
+    /// the swept one runs; the swept one's is not read.
+    held_values: Vec<f64>,
     steps: Vec<Step>,
 }
 
 impl Mechanism {
     /// Checks a declaration and orders its steps (see the module docs).
     pub fn new(declaration: Declaration, drive: Drive) -> Result<Mechanism, MechanismError> {
+        Mechanism::with_drives(declaration, vec![drive])
+    }
+
+    /// Checks a declaration with any number of drives and orders its steps:
+    /// one freedom for each drive, each drive acting on a free member, no
+    /// member turned by two drives or moved by two. The first drive is the one run
+    /// through its range, with the others at their `from`, until
+    /// [`Mechanism::sweeping`] chooses another.
+    pub fn with_drives(
+        declaration: Declaration,
+        drives: Vec<Drive>,
+    ) -> Result<Mechanism, MechanismError> {
+        let Some(&drive) = drives.first() else {
+            return Err(MechanismError::NoSuchDrive);
+        };
         let Declaration {
             members,
             constraints,
@@ -377,29 +412,68 @@ impl Mechanism {
             .checked_mul(3)
             .and_then(|all| all.checked_sub(taken))
             .ok_or(MechanismError::Overflow)?;
-        if found != 1 {
-            return Err(MechanismError::Freedom { found });
-        }
-
-        // The drive.
-        let drive_body = body(drive.member())?;
-        if is(&held, drive_body) {
-            return Err(MechanismError::DriveHeld {
-                member: name(drive.member())?,
+        let wanted = i64::try_from(drives.len()).map_err(|_| MechanismError::Overflow)?;
+        if found != wanted {
+            return Err(if drives.len() == 1 {
+                MechanismError::Freedom { found }
+            } else {
+                MechanismError::DriveFreedom {
+                    found,
+                    drives: drives.len(),
+                }
             });
         }
-        if drive.from() == drive.to() {
-            return Err(MechanismError::EmptyRange { at: drive.from() });
+        // The drives: each on a free body, no body turned twice or moved
+        // twice.
+        let mut drive_bodies = Vec::with_capacity(drives.len());
+        for (index, each) in drives.iter().enumerate() {
+            let driven = body(each.member())?;
+            if is(&held, driven) {
+                return Err(MechanismError::DriveHeld {
+                    member: name(each.member())?,
+                });
+            }
+            let turns = matches!(each, Drive::Turn { .. });
+            let twice = drives.iter().take(index).any(|earlier| {
+                matches!(earlier, Drive::Turn { .. }) == turns
+                    && body(earlier.member()).ok() == Some(driven)
+            });
+            if twice {
+                let member = name(each.member())?;
+                return Err(if turns {
+                    MechanismError::TwoTurns { member }
+                } else {
+                    MechanismError::TwoTravels { member }
+                });
+            }
+            drive_bodies.push(driven);
+        }
+        if let Some(empty) = drives.iter().find(|d| d.from() == d.to()) {
+            return Err(MechanismError::EmptyRange { at: empty.from() });
         }
         let runs_on_rail = |b: Body| {
             entries
                 .iter()
                 .any(|entry| matches!(entry, Entry::Rail { runner, .. } if *runner == b))
         };
-        if matches!(drive, Drive::Travel { .. }) && !runs_on_rail(drive_body) {
-            return Err(MechanismError::TravelWithoutRail {
-                member: name(drive.member())?,
-            });
+        // A travelling drive runs its member along a rail, or along a slot
+        // straight along one of the plane's directions (grammar,
+        // "Mechanisms", a travel along a slot).
+        let runs_in_slot = |b: Body| {
+            entries.iter().any(|entry| {
+                matches!(entry, Entry::Slot { pin, from, to, .. }
+                    if *pin == b && (from.across == to.across || from.depth == to.depth))
+            })
+        };
+        for (each, driven) in drives.iter().zip(&drive_bodies) {
+            if matches!(each, Drive::Travel { .. })
+                && !runs_on_rail(*driven)
+                && !runs_in_slot(*driven)
+            {
+                return Err(MechanismError::TravelWithoutRail {
+                    member: name(each.member())?,
+                });
+            }
         }
         for entry in &entries {
             if let Entry::Couple {
@@ -419,22 +493,75 @@ impl Mechanism {
             }
         }
 
-        let mut planner = Planner::new(&entries, &held, &body_names, drive, drive_body);
+        let mut planner = Planner::new(&entries, &held, &body_names, &drives, drive, &drive_bodies);
         let steps = planner.plan()?;
+        let held_values = vec![0.0; drives.len()];
         Ok(Mechanism {
             names,
             member_bodies,
             body_names,
             held,
+            drives,
             drive,
-            drive_body,
+            drive_bodies,
+            swept: 0,
+            held_values,
             steps,
         })
     }
 
-    /// The drive and its range.
+    /// The same mechanism with drive `swept` run through its range and
+    /// every other drive held at `held` (one exact value for each drive,
+    /// absolute; the swept one's is not read). A drive past the list, or
+    /// held values of the wrong number or kind, are
+    /// [`MechanismError::NoSuchDrive`].
+    pub fn sweeping(&self, swept: usize, held: &[DriveValue]) -> Result<Mechanism, MechanismError> {
+        if swept >= self.drives.len() || held.len() != self.drives.len() {
+            return Err(MechanismError::NoSuchDrive);
+        }
+        let held_values = self
+            .drives
+            .iter()
+            .zip(held)
+            .map(|(drive, value)| relative_to(*drive, *value))
+            .collect::<Option<Vec<f64>>>()
+            .ok_or(MechanismError::NoSuchDrive)?;
+        let drive = *self.drives.get(swept).ok_or(MechanismError::NoSuchDrive)?;
+        Ok(Mechanism {
+            drive,
+            swept,
+            held_values,
+            ..self.clone()
+        })
+    }
+
+    /// The drive run through its range.
     pub fn drive(&self) -> Drive {
         self.drive
+    }
+
+    /// Every drive, in order.
+    pub fn drives(&self) -> &[Drive] {
+        &self.drives
+    }
+
+    /// Every drive's value past its `from` (radians or nanometres), with
+    /// the swept one at `relative`.
+    pub(super) fn relatives(&self, relative: f64) -> Vec<f64> {
+        self.held_values
+            .iter()
+            .enumerate()
+            .map(|(index, held)| if index == self.swept { relative } else { *held })
+            .collect()
+    }
+
+    /// `true` when every held drive is at its `from`: the swept drive's
+    /// `from` is then the closed pose.
+    pub(super) fn held_closed(&self) -> bool {
+        self.held_values
+            .iter()
+            .enumerate()
+            .all(|(index, held)| index == self.swept || *held == 0.0)
     }
 
     /// The members' names, in the order declared.
@@ -461,8 +588,14 @@ impl Mechanism {
         is(&self.held, body)
     }
 
-    pub(super) fn drive_body(&self) -> Body {
-        self.drive_body
+    /// The body each drive acts on, by drive.
+    pub(super) fn drive_bodies(&self) -> &[Body] {
+        &self.drive_bodies
+    }
+
+    /// The index of the drive run through its range.
+    pub(super) fn swept(&self) -> usize {
+        self.swept
     }
 
     pub(super) fn steps(&self) -> &[Step] {
@@ -472,7 +605,7 @@ impl Mechanism {
     /// The drive's start and end as exact integers (micro-degrees or
     /// nanometres).
     pub(super) fn range_units(&self) -> (i64, i64) {
-        match self.drive {
+        match self.drive() {
             Drive::Turn { from, to, .. } => (from.microdeg(), to.microdeg()),
             Drive::Travel { from, to, .. } => (from.nm(), to.nm()),
         }
@@ -480,10 +613,24 @@ impl Mechanism {
 
     /// A drive value from exact integer units.
     pub(super) fn value_of_units(&self, units: i64) -> DriveValue {
-        match self.drive {
+        match self.drive() {
             Drive::Turn { .. } => DriveValue::Turn(stave_lang::units::Angle::from_microdeg(units)),
             Drive::Travel { .. } => DriveValue::Travel(Length::from_nm(units)),
         }
+    }
+}
+
+/// An exact value of a drive as radians or nanometres past its `from`;
+/// `None` for a value of the other kind.
+fn relative_to(drive: Drive, value: DriveValue) -> Option<f64> {
+    let from = super::DriveAmount::of(drive.from()).value();
+    match (drive, value) {
+        (Drive::Turn { .. }, DriveValue::Turn(_))
+        | (Drive::Travel { .. }, DriveValue::Travel(_)) => {
+            Some(super::DriveAmount::of(value).value() - from)
+        }
+        (Drive::Turn { .. }, DriveValue::Travel(_))
+        | (Drive::Travel { .. }, DriveValue::Turn(_)) => None,
     }
 }
 
@@ -517,8 +664,9 @@ enum Shape {
 struct Planner<'a> {
     entries: &'a [Entry],
     names: &'a [MemberName],
+    drives: &'a [Drive],
     drive: Drive,
-    drive_body: Body,
+    drive_bodies: &'a [Body],
     used: Vec<bool>,
     placed: Vec<bool>,
     angle_known: Vec<bool>,
@@ -531,15 +679,17 @@ impl<'a> Planner<'a> {
         entries: &'a [Entry],
         held: &'a [bool],
         names: &'a [MemberName],
+        drives: &'a [Drive],
         drive: Drive,
-        drive_body: Body,
+        drive_bodies: &'a [Body],
     ) -> Planner<'a> {
         let count = held.len();
         Planner {
             entries,
             names,
+            drives,
             drive,
-            drive_body,
+            drive_bodies,
             used: vec![false; entries.len()],
             placed: held.to_vec(),
             angle_known: vec![false; count],
@@ -556,9 +706,11 @@ impl<'a> Planner<'a> {
     }
 
     fn plan(&mut self) -> Result<Vec<Step>, MechanismError> {
-        match self.drive {
-            Drive::Turn { .. } => set(&mut self.angle_known, self.drive_body),
-            Drive::Travel { .. } => set(&mut self.travel_known, self.drive_body),
+        for (drive, driven) in self.drives.iter().zip(self.drive_bodies) {
+            match drive {
+                Drive::Turn { .. } => set(&mut self.angle_known, *driven),
+                Drive::Travel { .. } => set(&mut self.travel_known, *driven),
+            }
         }
         let mut steps = Vec::new();
         while self.placed.iter().any(|placed| !placed) {
@@ -658,26 +810,63 @@ impl<'a> Planner<'a> {
         Ok(None)
     }
 
-    /// A member whose angle is known, pinned to a placed member.
+    /// A member whose angle is known, pinned at a known point: by a pivot
+    /// on a placed member, or by a slot in a placed member when its travel
+    /// along the slot is known.
     fn hang(&mut self) -> Option<Step> {
         for (index, entry) in self.entries.iter().enumerate() {
             if self.is_used(index) {
                 continue;
             }
-            let Entry::Pivot { first, second, at } = *entry else {
-                continue;
-            };
-            for (body, known) in [(first, second), (second, first)] {
-                if !is(&self.placed, body) && is(&self.angle_known, body) && is(&self.placed, known)
-                {
-                    set(&mut self.placed, body);
-                    self.use_entries(&[Some(index)]);
-                    return Some(Step::Hang {
-                        body,
-                        known,
-                        pin: float(at),
-                    });
+            match *entry {
+                Entry::Pivot { first, second, at } => {
+                    for (body, known) in [(first, second), (second, first)] {
+                        if !is(&self.placed, body)
+                            && is(&self.angle_known, body)
+                            && is(&self.placed, known)
+                        {
+                            set(&mut self.placed, body);
+                            self.use_entries(&[Some(index)]);
+                            return Some(Step::Hang {
+                                body,
+                                known,
+                                pin: float(at),
+                            });
+                        }
+                    }
                 }
+                Entry::Slot {
+                    pin,
+                    guide,
+                    from,
+                    to,
+                } => {
+                    // A positive travel runs the way the slot's frame
+                    // direction does (as a rail along that word).
+                    let unit = if from.depth == to.depth {
+                        DVec2::X
+                    } else if from.across == to.across {
+                        DVec2::Y
+                    } else {
+                        continue;
+                    };
+                    if !is(&self.placed, pin)
+                        && is(&self.angle_known, pin)
+                        && is(&self.travel_known, pin)
+                        && is(&self.placed, guide)
+                    {
+                        set(&mut self.placed, pin);
+                        self.use_entries(&[Some(index)]);
+                        return Some(Step::HangInSlot {
+                            body: pin,
+                            guide,
+                            from: float(from),
+                            unit,
+                            to: float(to),
+                        });
+                    }
+                }
+                Entry::Rail { .. } | Entry::Couple { .. } => {}
             }
         }
         None

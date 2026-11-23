@@ -1,0 +1,190 @@
+// A porch glider (docs/reviews/2026-11-22-turning-frames.md, appendix):
+// the hanger arms swing from the posts on a pivot bolt each, and the seat
+// swings on the arms on a pivot bolt each, inside the hanger. Each arm
+// turns beside its post, and each seat rail beside its arm: two places on
+// each arm where wood moves past wood (grammar, "Running clearance"). As
+// written a 3mm steel washer on each bolt keeps them apart, more than
+// the 0.563mm two 45mm beech parts close up with the seasons and a
+// running gap of 1mm.
+stave 1
+
+project "Porch Glider" {
+  goal: "A seat that swings on hanger arms, each bolted to a post at the top and to the seat at the bottom"
+}
+
+region envelope = box(across: 900mm, up: 800mm, deep: 500mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part post_l : beech_45 {
+  length: 700mm
+  width:  90mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part post_r = mirror(post_l, about: mid(envelope, across))
+
+part top_rail : beech_25 {
+  length: fit
+  width:  40mm
+  place {
+    orient(length: right, width: up)
+    flush(post_l.top)
+    center(envelope, across)
+    center(post_l, deep)
+  }
+}
+
+joint top_rail_tenons : mortise_tenon(top_rail, into: [post_l, post_r], length: 30mm)
+
+kind pivot_bolt : fitting {
+  roles {
+    piece: Part     // the upright the bolt turns in
+    into:  Part     // the frame's stile
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 24mm
+  /// How far the knob stands off the face.
+  param projection = 8mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the stile, into a threaded insert.
+  param thread_length = 25mm
+  /// The steel washer the frame turns on, between the upright and the stile.
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
+  /// Wood left round the holes.
+  param wall = 6mm
+  /// How far the frame turns.
+  param turn = 20deg
+  /// How high up the upright the bolt goes through it.
+  param height = 850mm
+
+  // Nothing of the bolt rides on the upright, so the kind places it:
+  // across the middle of the upright's face, at its height.
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The bolt: through the upright, into a threaded insert in the stile.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  /// The washer: the stile turns on it, steel on wood, clear of the upright.
+  member washer {
+    with:  bolt
+    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
+  }
+  /// The knob: tighten to hold the frame at an angle, loosen to turn it.
+  member knob {
+    with:  bolt
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+
+  clamp knob, bolt along depth
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 2mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    pivot bolt, piece at point(along: 0mm, across: 0mm)
+    drive: turn(bolt, from: 0deg, to: turn)
+  }
+}
+
+component Seat {
+  param arm_l  : Part
+  param arm_r  : Part
+  param washer = 3mm
+
+  part seat_rail_l : beech_45 {
+    length: 400mm
+    width:  70mm
+    place {
+      orient(length: back, width: up)
+      flush(arm_l.bottom)
+      against(arm_l.right, gap: washer)
+      center(arm_l, deep)
+    }
+  }
+
+  part seat_rail_r : beech_45 {
+    length: 400mm
+    width:  70mm
+    place {
+      orient(length: back, width: up)
+      flush(arm_r.bottom)
+      against(arm_r.left, gap: washer)
+      center(arm_r, deep)
+    }
+  }
+
+  part seat_cross_rail : beech_25 {
+    length: fit
+    width:  70mm
+    place {
+      orient(length: right, width: up)
+      flush(seat_rail_l.bottom)
+      center(from: seat_rail_l.right, to: seat_rail_r.left)
+      flush(seat_rail_l.back)
+    }
+  }
+
+  joint seat_tenons : mortise_tenon(seat_cross_rail, into: [seat_rail_l, seat_rail_r], length: 30mm)
+
+  // A low, small head: it sits in the gap between the arm and the post.
+  hardware seat_l : pivot_bolt(arm_l, into: seat_rail_l, face: left, washer_thickness: washer, height: 35mm, knob_diameter: 16mm, projection: 2mm)
+  hardware seat_r : pivot_bolt(arm_r, into: seat_rail_r, face: right, washer_thickness: washer, height: 35mm, knob_diameter: 16mm, projection: 2mm)
+}
+
+component Hanger {
+  param stand_l : Part
+  param stand_r : Part
+  // The seat bolts' heads sit in this gap, so it stays open.
+  param post_gap = 3mm
+
+  part arm_l : beech_45 {
+    length: 400mm
+    width:  70mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_l.top, inset: 50mm)
+      against(stand_l.right, gap: post_gap)
+      center(stand_l, deep)
+    }
+  }
+
+  part arm_r : beech_45 {
+    length: 400mm
+    width:  70mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_r.top, inset: 50mm)
+      against(stand_r.left, gap: post_gap)
+      center(stand_r, deep)
+    }
+  }
+
+  hardware hang_l : pivot_bolt(stand_l, into: arm_l, face: left, washer_thickness: post_gap, height: 610mm)
+  hardware hang_r : pivot_bolt(stand_r, into: arm_r, face: right, washer_thickness: post_gap, height: 610mm)
+
+  assembly seat : Seat {
+    arm_l: arm_l
+    arm_r: arm_r
+  }
+}
+
+assembly hanger : Hanger {
+  stand_l: post_l
+  stand_r: post_r
+}

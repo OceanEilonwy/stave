@@ -86,6 +86,7 @@ use stave_app::session::{
     SourceLocation, View,
 };
 use stave_app::view::{self, Highlight};
+use stave_model::mechanism::DriveIndex;
 use stave_model::solved::AssemblyId;
 use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
 use update::editing::EditingInput;
@@ -434,10 +435,12 @@ struct KeptFocus {
     playing: bool,
 }
 
-/// What the floating motion bar opens.
+/// What the floating motion bar opens: one drive of the selection's
+/// assembly (one slider each).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Opening {
     assembly: AssemblyId,
+    drive: DriveIndex,
     /// Radians or millimetres.
     amount: f32,
     turns: bool,
@@ -507,11 +510,14 @@ struct State {
     /// The drag offset already applied.
     drag_applied: (f64, f64),
     problem: Option<ShownProblem>,
-    opening: Option<Opening>,
+    /// The selection's drives the motion bar opens, in order: empty when
+    /// it shows nothing.
+    opening: Vec<Opening>,
     /// Every door or drawer people moved with the motion bar, and how far
-    /// (radians or millimetres): each stays where it was left when the
-    /// selection moves on, until the reset button puts them all back.
-    moved: BTreeMap<AssemblyId, f32>,
+    /// (radians or millimetres), drive by drive: each stays where it was
+    /// left when the selection moves on, until the reset button puts them
+    /// all back.
+    moved: BTreeMap<(AssemblyId, DriveIndex), f32>,
     /// The motion bar shows (it was last told to show something).
     motion_shown: bool,
     focus: Option<FocusState>,
@@ -839,7 +845,7 @@ impl Component for Window {
                 render_queued: false,
                 drag_applied: (0.0, 0.0),
                 problem: None,
-                opening: None,
+                opening: Vec::new(),
                 moved: BTreeMap::new(),
                 motion_shown: false,
                 focus: None,

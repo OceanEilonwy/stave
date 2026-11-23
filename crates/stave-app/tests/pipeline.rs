@@ -77,6 +77,7 @@ fn every_example_and_standard_module_checks_clean() {
             "side_table_from_box",
             "stool",
             "tapered_table",
+            "tapestry_loom",
             "wall_shelf",
         ],
         "every example project solves with no diagnostics"
@@ -388,15 +389,16 @@ fn the_clothing_cabinet_is_where_the_design_says() {
         part(design, "door_l.stile[hinge]").cuts.len()
     );
 
-    // Drawers: fronts in the drawer bays with overlays 18/8 and a 1.5 gap
-    // between them; boxes 220 tall, 12.7 in from the opening for slides.
+    // Drawers: fronts in the drawer bays with overlays 18/8 and a 5mm gap
+    // between them (room for the oak to swell); boxes 220 tall, 12.7 in
+    // from the opening for slides.
     assert_eq!(
         extent(part(design, "drawer[bottom].front")),
-        ranges([("1", "899"), ("11", "268.25"), ("-19", "0")])
+        ranges([("1", "899"), ("11", "266.5"), ("-19", "0")])
     );
     assert_eq!(
         extent(part(design, "drawer[top].front")),
-        ranges([("1", "899"), ("269.75", "527"), ("-19", "0")])
+        ranges([("1", "899"), ("271.5", "527"), ("-19", "0")])
     );
     assert_eq!(
         extent(part(design, "drawer[bottom].side[left]")),

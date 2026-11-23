@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/running_clearance.rs
+expression: rendered(&opened)
+---
+warning[clearance]: spacer_l is wood: it wears as frame.stile_l turns on it; a steel or nylon washer lasts longer
+   --> /project/project.stave:102:6
+    |
+102 | part spacer_l : beech_dowel_32 {
+    |      ^^^^^^^^
+    = help: make spacer_l a washer member of its hardware instead of a part
+
+warning[clearance]: spacer_r is wood: it wears as frame.stile_r turns on it; a steel or nylon washer lasts longer
+   --> /project/project.stave:112:6
+    |
+112 | part spacer_r = mirror(spacer_l, about: mid(envelope, across))
+    |      ^^^^^^^^
+    = help: make spacer_r a washer member of its hardware instead of a part

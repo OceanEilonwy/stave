@@ -11,15 +11,18 @@ use std::collections::BTreeMap;
 use stave_lang::ast::{self, BaseKind, ExprKind, Span};
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, Label};
-use stave_schema::functions::{POINT, POINT_ARGUMENTS, ShapeFunction};
+use stave_schema::functions::{
+    CYLINDER_AXIS, DRIVES, EVERY, PINS, POINT, POINT_ARGUMENTS, ShapeFunction,
+};
 use stave_schema::words::WordSet;
 
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
-    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, CylinderTilt,
-    DriveDef, FrameAxis, KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr, RExprKind,
-    RangeDef, RoleDef, RoleIndex, ShapeDef, StopDef,
+    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ClampDef, ConstraintDef, CouplingDef,
+    CylinderTilt, DriveDef, EntryPair, EntrySide, FrameAxis, KindPoint, LayoutDef, MechanismDef,
+    NamedDriveDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, SetAtDef, ShapeDef,
+    StopDef,
 };
 use crate::nonempty::NonEmpty;
 use crate::types::Ty;
@@ -38,8 +41,8 @@ struct Layout {
 /// The named arguments of a call, by name.
 type Arguments<'a> = BTreeMap<&'a str, &'a ast::Arg>;
 
-/// `turn` and `travel`: the two drives.
-const DRIVES: [&str; 2] = ["turn", "travel"];
+/// `set_at:`, a drive's set positions.
+const SET_AT: &str = "set_at";
 
 /// A `with:` before the list of bodies is final.
 #[derive(Clone, Copy)]
@@ -94,6 +97,7 @@ impl Resolver<'_> {
             let mut mount = Vec::new();
             let mut mount_span: Option<Span> = None;
             let mut layout = Layout::default();
+            let mut loose: Option<RExpr> = None;
             let item = self.member_item(cx, joint, member);
             for entry in &body.entries {
                 match entry {
@@ -142,6 +146,17 @@ impl Resolver<'_> {
                         mount_span = Some(block.span);
                         mount = self.member_mount(cx, roles, block);
                     }
+                    ast::MemberEntry::Field(field) if !joint && field.key.as_str() == "loose" => {
+                        if let Some(first) = loose.as_ref().map(|value| value.span) {
+                            self.duplicate("loose", field.key.span(), first, cx);
+                            continue;
+                        }
+                        loose = Some(self.value(
+                            cx,
+                            &field.value,
+                            &Expect::ty(Ty::Bool).named("loose"),
+                        ));
+                    }
                     ast::MemberEntry::Field(field) if field.key.as_str() == "with" => {
                         if let Some(first) = with_span {
                             self.duplicate("with", field.key.span(), first, cx);
@@ -171,8 +186,8 @@ impl Resolver<'_> {
                                 cx.file,
                                 field.key.span(),
                                 key,
-                                ["with", "shape", "mount"],
-                                "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
+                                ["with", "shape", "mount", "loose"],
+                                "a member's body holds its shapes (shape: box(...)), what carries it (with: ...), its own mount { } and loose: true when it lifts out",
                             );
                         }
                     }
@@ -247,6 +262,7 @@ impl Resolver<'_> {
                     item,
                     shapes,
                     mount,
+                    loose,
                 },
                 rides_on,
             ));
@@ -648,7 +664,7 @@ impl Resolver<'_> {
                 })
             }
             ShapeFunction::Cylinder => {
-                let axis = match found.get("axis") {
+                let axis = match found.get(CYLINDER_AXIS) {
                     None => FrameAxis::Depth,
                     Some(arg) => {
                         #[expect(
@@ -762,26 +778,62 @@ impl Resolver<'_> {
         }
     }
 
-    /// A kind's `mechanism { }`, over its bodies.
+    /// A kind's `mechanism { }`, over its roles and bodies.
     pub(super) fn lower_mechanism(
         &mut self,
         cx: &Cx,
         kind: &str,
+        roles: &[RoleDef],
         bodies: &[BodyDef],
         block: &ast::MechanismBlock,
     ) -> Option<MechanismDef> {
         let mut constraints = Vec::new();
         let mut couplings = Vec::new();
-        let mut drive: Option<DriveDef> = None;
+        let mut drives: Vec<NamedDriveDef> = Vec::new();
+        let mut drives_written = 0usize;
+        let mut drive_names: BTreeMap<&str, Span> = BTreeMap::new();
+        let mut unnamed_drives: Vec<Span> = Vec::new();
         let mut stop: Option<(&ast::Expr, &ast::StringLit, Span)> = None;
         let mut pin_diameter: Option<RExpr> = None;
         let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
         let mut ok = true;
+        // The direction the pins run (grammar, "Mechanisms", the plane):
+        // the first `pins:` written, or the default, which a rail along
+        // `along` turns to `across`.
+        let written = block.entries.iter().find_map(|entry| match entry {
+            ast::MechanismEntry::Field(field) if field.key.as_str() == PINS => Some(field),
+            ast::MechanismEntry::Field(_)
+            | ast::MechanismEntry::Pivot { .. }
+            | ast::MechanismEntry::Slot { .. }
+            | ast::MechanismEntry::Rail { .. }
+            | ast::MechanismEntry::Couple { .. }
+            | ast::MechanismEntry::Drive { .. }
+            | ast::MechanismEntry::Stop { .. } => None,
+        });
+        let pins_written = match written {
+            Some(field) => match self.pins(cx, field) {
+                Some(axis) => Some(axis),
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+            None => None,
+        };
+        let rail_along = block.entries.iter().any(|entry| {
+            matches!(entry, ast::MechanismEntry::Rail { along, .. }
+                if FrameAxis::from_word(along.as_str()) == Some(FrameAxis::Along))
+        });
+        let pins = pins_written.unwrap_or(if rail_along {
+            FrameAxis::Across
+        } else {
+            FrameAxis::Along
+        });
         for entry in &block.entries {
             match entry {
                 ast::MechanismEntry::Pivot { members, at, span } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "pivot");
-                    let at = self.point(cx, at, "at");
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "pivot");
+                    let at = self.mechanism_point(cx, at, "at", pins);
                     match (pair, at) {
                         (Some(bodies), Some(at)) => constraints.push(ConstraintDef::Pivot {
                             bodies,
@@ -797,9 +849,9 @@ impl Resolver<'_> {
                     to,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "slot");
-                    let from = self.point(cx, from, "from");
-                    let to = self.point(cx, to, "to");
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "slot");
+                    let from = self.mechanism_point(cx, from, "from", pins);
+                    let to = self.mechanism_point(cx, to, "to", pins);
                     match (pair, from, to) {
                         (Some(bodies), Some(from), Some(to)) => {
                             constraints.push(ConstraintDef::Slot {
@@ -817,8 +869,8 @@ impl Resolver<'_> {
                     along,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "rail");
-                    let axis = FrameAxis::from_word(along.as_str());
+                    let pair = self.entry_pair(cx, kind, roles, bodies, members, "rail");
+                    let mut axis = FrameAxis::from_word(along.as_str());
                     if axis.is_none() {
                         self.error_help(
                             Code::TypeMismatch,
@@ -827,6 +879,23 @@ impl Resolver<'_> {
                             along.span(),
                             "write rail a, b along along (or across, or depth)",
                         );
+                    }
+                    // Left out, rails along `along` and `across` are
+                    // reported where the plane is chosen.
+                    if let Some(written) = pins_written
+                        && axis == Some(written)
+                    {
+                        let word = written.word();
+                        self.error_help(
+                            Code::Mechanism,
+                            format!(
+                                "this mechanism's pins run along '{word}', so a rail can't run along '{word}'"
+                            ),
+                            cx.file,
+                            along.span(),
+                            "run the rail along one of the two directions the members move in, or change 'pins'",
+                        );
+                        axis = None;
                     }
                     match (pair, axis) {
                         (Some(bodies), Some(along)) => constraints.push(ConstraintDef::Rail {
@@ -843,7 +912,7 @@ impl Resolver<'_> {
                     ratio,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, [member, to], "couple");
+                    let pair = self.member_pair(cx, kind, bodies, [member, to], "couple");
                     let ratio = self.value(cx, ratio, &Expect::ty(Ty::Ratio).named("couple"));
                     match pair {
                         Some([body, to]) => couplings.push(CouplingDef {
@@ -855,13 +924,41 @@ impl Resolver<'_> {
                         None => ok = false,
                     }
                 }
-                ast::MechanismEntry::Drive { key, value, span } => {
-                    if let Some(first) = seen.insert("drive", key.span()) {
-                        self.duplicate("drive", key.span(), first, cx);
-                        continue;
+                ast::MechanismEntry::Drive {
+                    key,
+                    name,
+                    value,
+                    span,
+                } => {
+                    drives_written += 1;
+                    match name {
+                        Some(name) => {
+                            if let Some(first) = drive_names.insert(name.as_str(), name.span()) {
+                                self.report(
+                                    Diagnostic::error(
+                                        Code::DuplicateName,
+                                        format!("two drives are called '{name}'"),
+                                        Label::new(cx.file, name.span()),
+                                    )
+                                    .with_label(Label::with_message(
+                                        cx.file,
+                                        first,
+                                        "first written here",
+                                    ))
+                                    .with_help("give each drive its own name"),
+                                );
+                                ok = false;
+                                continue;
+                            }
+                        }
+                        None => unnamed_drives.push(key.span()),
                     }
                     match self.drive(cx, kind, bodies, value, *span) {
-                        Some(lowered) => drive = Some(lowered),
+                        Some((lowered, set_at)) => drives.push(NamedDriveDef {
+                            name: name.as_ref().map(|name| name.as_str().to_owned()),
+                            drive: lowered,
+                            set_at,
+                        }),
                         None => ok = false,
                     }
                 }
@@ -879,6 +976,13 @@ impl Resolver<'_> {
                 }
                 ast::MechanismEntry::Field(field) => {
                     let key = field.key.as_str();
+                    if key == PINS {
+                        // Read before the entries; a second is reported.
+                        if let Some(first) = seen.insert(PINS, field.key.span()) {
+                            self.duplicate(key, field.key.span(), first, cx);
+                        }
+                        continue;
+                    }
                     if key != "pin_diameter" {
                         self.unknown(
                             Code::UnknownField,
@@ -886,8 +990,8 @@ impl Resolver<'_> {
                             cx.file,
                             field.key.span(),
                             key,
-                            ["drive", "stop", "pin_diameter"],
-                            "a mechanism holds pivot, slot, rail and couple entries, drive:, stop: and pin_diameter:",
+                            ["drive", "stop", "pin_diameter", PINS],
+                            "a mechanism holds pivot, slot, rail and couple entries, drive:, stop:, pin_diameter: and pins:",
                         );
                         ok = false;
                         continue;
@@ -900,10 +1004,77 @@ impl Resolver<'_> {
                 }
             }
         }
-        if drive.is_none() && seen.contains_key("drive") {
-            // Written, but it didn't lower (reported).
+        if drives.len() != drives_written {
+            // Written, but one didn't lower (reported).
             return None;
         }
+        // With more than one drive, each is named, no member is turned by
+        // two of them or moved by two, and nothing stops them.
+        if drives.len() > 1 {
+            let count = drives.len();
+            for at in &unnamed_drives {
+                self.error_help(
+                    Code::Mechanism,
+                    format!("this mechanism has {count} drives, so each needs a name"),
+                    cx.file,
+                    *at,
+                    "write drive <name>: ..., such as drive tilt: turn(...)",
+                );
+                ok = false;
+            }
+            let label = |drive: &NamedDriveDef| match &drive.name {
+                Some(name) => format!("`{name}`"),
+                None => "the drive".to_owned(),
+            };
+            let member = |body: BodyId| {
+                bodies
+                    .get(body.index())
+                    .map(|b| b.name.as_str().to_owned())
+                    .unwrap_or_default()
+            };
+            for (index, other) in drives.iter().enumerate() {
+                let earlier = drives.get(..index).unwrap_or_default().iter().find(|d| {
+                    d.drive.turns() == other.drive.turns() && d.drive.body() == other.drive.body()
+                });
+                let Some(earlier) = earlier else {
+                    continue;
+                };
+                let (message, help) = if other.drive.turns() {
+                    (
+                        format!(
+                            "{} and {} both turn `{}`: a member moving in a plane turns about one line",
+                            label(earlier),
+                            label(other),
+                            member(other.drive.body())
+                        ),
+                        "turn another member with one of them, such as one pinned to this one",
+                    )
+                } else {
+                    (
+                        format!(
+                            "{} and {} both move `{}`: a member travels along one line, its rail or slot",
+                            label(earlier),
+                            label(other),
+                            member(other.drive.body())
+                        ),
+                        "move another member with one of them, such as one on a rail along this one",
+                    )
+                };
+                self.error_help(Code::Mechanism, message, cx.file, other.drive.span(), help);
+                ok = false;
+            }
+            if let Some((_, _, span)) = stop.take() {
+                self.error_help(
+                    Code::Mechanism,
+                    "a stop belongs to a mechanism with one drive",
+                    cx.file,
+                    span,
+                    "end each drive's range with its to: instead",
+                );
+                ok = false;
+            }
+        }
+        let drive = drives.first().map(|named| &named.drive);
         // A mechanism without a drive follows the hardware that drives its
         // assembly (a lid stay); its stop is an angle or a length, as that
         // drive's values are.
@@ -923,10 +1094,70 @@ impl Resolver<'_> {
             span: block.span,
             constraints,
             couplings,
-            drive,
+            drives,
             stop,
             pin_diameter,
+            pins: pins_written,
         })
+    }
+
+    /// The direction a mechanism's `pins:` names: one of the three frame
+    /// words. `None` (reported) for anything else.
+    fn pins(&mut self, cx: &Cx, field: &ast::Field) -> Option<FrameAxis> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only a bare word means anything here, and every other expression is the error case"
+        )]
+        let axis = match &field.value.kind {
+            ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
+            _ => None,
+        };
+        if axis.is_none() {
+            self.error_help(
+                Code::TypeMismatch,
+                "'pins' needs along, across or depth",
+                cx.file,
+                field.value.span,
+                "write pins: depth for a pin that runs into the mount face, or leave it out for along",
+            );
+        }
+        axis
+    }
+
+    /// A `point(...)` of a pivot or a slot: written in the two directions
+    /// of the plane, never on the pins' own (`error[mechanism]`).
+    fn mechanism_point(
+        &mut self,
+        cx: &Cx,
+        expr: &ast::Expr,
+        what: &str,
+        pins: FrameAxis,
+    ) -> Option<KindPoint> {
+        if let ExprKind::Call { args, .. } = &expr.kind
+            && let Some(arg) = args
+                .iter()
+                .find(|arg| arg.name.as_ref().is_some_and(|n| n.as_str() == pins.word()))
+        {
+            let [first, second] = pins.plane();
+            self.error_help(
+                Code::Mechanism,
+                format!(
+                    "this mechanism's pins run along '{}', so a point is given by '{}' and '{}'",
+                    pins.word(),
+                    first.word(),
+                    second.word()
+                ),
+                cx.file,
+                arg.span,
+                format!(
+                    "remove '{}:' from the point; every pin is parallel to '{}', so the point is anywhere along it",
+                    pins.word(),
+                    pins.word()
+                ),
+            );
+            return None;
+        }
+        self.point(cx, expr, what)
     }
 
     /// The body a mechanism entry names.
@@ -951,6 +1182,101 @@ impl Resolver<'_> {
             format!("a mechanism names members with a body declared in kind '{kind}'"),
         );
         None
+    }
+
+    /// A hardware kind's one `clamp` (grammar, "Clamps"): two different
+    /// members with a body, an axis of the frame, and the second member
+    /// moving with a role that is a part. Any `clamp` after the first is
+    /// `error[duplicate-name]`; one that doesn't lower is reported and left
+    /// out.
+    pub(super) fn lower_clamps(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        roles: &[RoleDef],
+        bodies: &[BodyDef],
+        clamps: &[&ast::Clamp],
+    ) -> Option<ClampDef> {
+        let (first, rest) = clamps.split_first()?;
+        for again in rest {
+            self.report(
+                Diagnostic::error(
+                    Code::DuplicateName,
+                    "'clamp' is declared twice",
+                    Label::new(cx.file, again.span),
+                )
+                .with_label(Label::with_message(cx.file, first.span, "first written here"))
+                .with_help(
+                    "a kind draws parts together in one place; hardware that draws in two places is two pieces of hardware, each with its own call",
+                ),
+            );
+        }
+        let clamp = first;
+        let named = |this: &mut Self, ident: &ast::Ident| -> Option<BodyId> {
+            let word = ident.as_str();
+            if let Some(index) = bodies.iter().position(|body| body.name.as_str() == word) {
+                return BodyId::new(index);
+            }
+            this.unknown(
+                Code::UnknownName,
+                format!("unknown name '{word}'"),
+                cx.file,
+                ident.span(),
+                word,
+                bodies.iter().map(|body| body.name.as_str()),
+                format!("a clamp names members with a body declared in kind '{kind}'"),
+            );
+            None
+        };
+        let [bearing_name, drawn_name] = &clamp.members;
+        let bearing = named(self, bearing_name);
+        let drawn = named(self, drawn_name);
+        let axis = FrameAxis::from_word(clamp.axis.as_str());
+        if axis.is_none() {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "a clamp draws along along, across or depth, found '{}'",
+                    clamp.axis
+                ),
+                cx.file,
+                clamp.axis.span(),
+                "write clamp a, b along depth (or along, or across)",
+            );
+        }
+        let (Some(bearing), Some(drawn), Some(axis)) = (bearing, drawn, axis) else {
+            return None;
+        };
+        if bearing == drawn {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("'{drawn_name}' is named twice in one clamp"),
+                cx.file,
+                drawn_name.span(),
+                "a clamp draws one member toward another: name two different members",
+            );
+            return None;
+        }
+        if !moves_with_a_part(roles, bodies, drawn) {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "clamp {bearing_name}, {drawn_name}: '{drawn_name}' moves with no part, so there is nothing for it to draw"
+                ),
+                cx.file,
+                drawn_name.span(),
+                format!(
+                    "give '{drawn_name}' with: a role that is a Part, or a member that moves with one"
+                ),
+            );
+            return None;
+        }
+        Some(ClampDef {
+            bearing,
+            drawn,
+            axis,
+            span: clamp.span,
+        })
     }
 
     /// A hardware kind's `adjust` entries (grammar, "Adjustment"): each
@@ -1094,7 +1420,86 @@ impl Resolver<'_> {
     }
 
     /// The two different bodies of a mechanism entry.
-    fn pair(
+    /// The two names of a pivot, slot or rail: a member, then a member or
+    /// a role of the kind that is a `Part` (grammar, "Mechanisms", a role
+    /// in an entry).
+    fn entry_pair(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        roles: &[RoleDef],
+        bodies: &[BodyDef],
+        members: &[ast::Ident; 2],
+        entry: &str,
+    ) -> Option<EntryPair> {
+        let [a, b] = members;
+        let first = self.body(cx, kind, bodies, a);
+        let word = b.as_str();
+        let second = match bodies.iter().position(|body| body.name.as_str() == word) {
+            Some(index) => BodyId::new(index).map(EntrySide::Member),
+            None => match roles.iter().position(|role| role.name == word) {
+                Some(index) => self.entry_role(cx, roles, index, b),
+                None => {
+                    self.unknown(
+                        Code::UnknownName,
+                        format!("unknown name '{word}'"),
+                        cx.file,
+                        b.span(),
+                        word,
+                        bodies
+                            .iter()
+                            .map(|body| body.name.as_str())
+                            .chain(roles.iter().map(|role| role.name.as_str())),
+                        format!(
+                            "a {entry} names a member with a body declared in kind '{kind}', then a member or one of its roles"
+                        ),
+                    );
+                    None
+                }
+            },
+        };
+        let (member, other) = (first?, second?);
+        if other == EntrySide::Member(member) {
+            self.error_help(
+                Code::DuplicateName,
+                format!("'{a}' is named twice in one {entry}"),
+                cx.file,
+                b.span(),
+                format!("a {entry} joins two different members"),
+            );
+            return None;
+        }
+        Some(EntryPair { member, other })
+    }
+
+    /// A role named as the second name of an entry: one part.
+    fn entry_role(
+        &mut self,
+        cx: &Cx,
+        roles: &[RoleDef],
+        index: usize,
+        ident: &ast::Ident,
+    ) -> Option<EntrySide> {
+        let role = roles.get(index)?;
+        let what = match role.ty {
+            stave_schema::kinds::RoleType::Part => {
+                return RoleIndex::new(index).map(EntrySide::Role);
+            }
+            stave_schema::kinds::RoleType::Region => "a region",
+            stave_schema::kinds::RoleType::Parts => "a list of parts",
+        };
+        self.error_help(
+            Code::Mechanism,
+            format!("a pin turns in one part; '{ident}' is {what}"),
+            cx.file,
+            ident.span(),
+            "name a role that is a Part, or a member of the kind",
+        );
+        None
+    }
+
+    /// The two members of a couple.
+    fn member_pair(
         &mut self,
         cx: &Cx,
         kind: &str,
@@ -1119,7 +1524,8 @@ impl Resolver<'_> {
         Some([first, second])
     }
 
-    /// `turn(m, from:, to:)` or `travel(m, from:, to:)`.
+    /// `turn(m, from:, to:)` or `travel(m, from:, to:)`, with its
+    /// `set_at:` when written.
     fn drive(
         &mut self,
         cx: &Cx,
@@ -1127,7 +1533,7 @@ impl Resolver<'_> {
         bodies: &[BodyDef],
         value: &ast::Expr,
         span: Span,
-    ) -> Option<DriveDef> {
+    ) -> Option<(DriveDef, Option<SetAtDef>)> {
         #[expect(
             clippy::wildcard_enum_match_arm,
             reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
@@ -1182,7 +1588,7 @@ impl Resolver<'_> {
             }
         };
         let named: Vec<ast::Arg> = named.into_iter().cloned().collect();
-        let found = self.arguments(cx, function, &named, &["from", "to"])?;
+        let found = self.arguments(cx, function, &named, &["from", "to", SET_AT])?;
         let from = self.required(cx, function, &found, "from", value.span);
         let to = self.required(cx, function, &found, "to", value.span);
         let (body, from, to) = (member?, from?, to?);
@@ -1191,9 +1597,13 @@ impl Resolver<'_> {
         } else {
             Ty::Length
         };
+        let set_at = match found.get(SET_AT) {
+            Some(arg) => Some(self.set_at(cx, &arg.value, &ty)?),
+            None => None,
+        };
         let from = self.value(cx, from, &Expect::ty(ty.clone()).named("from"));
         let to = self.value(cx, to, &Expect::ty(ty).named("to"));
-        Some(if function == "turn" {
+        let drive = if function == "turn" {
             DriveDef::Turn {
                 body,
                 from,
@@ -1207,7 +1617,82 @@ impl Resolver<'_> {
                 to,
                 span,
             }
-        })
+        };
+        Some((drive, set_at))
+    }
+
+    /// `set_at: [a, b, ...]` or `set_at: every(d)`, each value of the
+    /// drive's type `ty`. `None` (reported) for anything else, or a list
+    /// with nothing in it.
+    fn set_at(&mut self, cx: &Cx, value: &ast::Expr, ty: &Ty) -> Option<SetAtDef> {
+        let example = if *ty == Ty::Angle {
+            "set_at: [0deg, 15deg, 30deg] or set_at: every(15deg)"
+        } else {
+            "set_at: [0mm, 50mm, 100mm] or set_at: every(50mm)"
+        };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
+        match &value.kind {
+            ExprKind::List(items) => {
+                let values: Vec<RExpr> = items
+                    .iter()
+                    .map(|item| self.value(cx, item, &Expect::ty(ty.clone()).named(SET_AT)))
+                    .collect();
+                let Some(values) = NonEmpty::new(values) else {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "set_at: needs at least one value",
+                        cx.file,
+                        value.span,
+                        format!("list the values the drive can be locked at: {example}"),
+                    );
+                    return None;
+                };
+                Some(SetAtDef::List {
+                    values,
+                    span: value.span,
+                })
+            }
+            ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Name(head) if head.as_str() == EVERY) =>
+            {
+                let [step] = args.as_slice() else {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "every(...) needs one value: how far apart the set positions are",
+                        cx.file,
+                        value.span,
+                        format!("write {example}"),
+                    );
+                    return None;
+                };
+                if step.name.is_some() {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "every(...) takes its step without a name",
+                        cx.file,
+                        step.span,
+                        format!("write {example}"),
+                    );
+                    return None;
+                }
+                Some(SetAtDef::Every {
+                    step: self.value(cx, &step.value, &Expect::ty(ty.clone()).named(EVERY)),
+                    span: value.span,
+                })
+            }
+            _ => {
+                self.error_help(
+                    Code::TypeMismatch,
+                    "set_at: needs a list of values or every(...)",
+                    cx.file,
+                    value.span,
+                    format!("write {example}"),
+                );
+                None
+            }
+        }
     }
 }
 
@@ -1236,4 +1721,24 @@ fn argument_list(names: &[&str]) -> String {
         .map(|name| format!("{name}:"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Whether a member moves with a role that is a part: its `with:` names
+/// one, or a member that does, followed member by member. A loop of
+/// members riding on each other (reported where members are lowered)
+/// moves with nothing.
+fn moves_with_a_part(roles: &[RoleDef], bodies: &[BodyDef], body: BodyId) -> bool {
+    let mut current = body;
+    for _ in 0..=bodies.len() {
+        match bodies.get(current.index()).map(|body| &body.with) {
+            Some(Carrier::Role(role)) => {
+                return roles
+                    .get(role.index())
+                    .is_some_and(|role| role.ty == stave_schema::kinds::RoleType::Part);
+            }
+            Some(Carrier::Body(next)) => current = *next,
+            Some(Carrier::Mechanism | Carrier::Contact(_)) | None => return false,
+        }
+    }
+    false
 }

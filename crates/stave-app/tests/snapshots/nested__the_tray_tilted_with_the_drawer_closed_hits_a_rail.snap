@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/nested.rs
+expression: rendered(&opened)
+---
+error[motion]: drawer.tray.tray_side_l hits back_rail when drawer.tray is opened past 81deg
+   --> /project/project.stave:252:12
+    |
+252 |   assembly tray : Tray {
+    |            ^^^^
+    = note: the hinges open to 90deg
+    = help: open drawer.tray no further than 81deg (give its hardware's kind a smaller range), or move back_rail out of its way

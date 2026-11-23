@@ -106,6 +106,44 @@ impl Solver<'_> {
         })
     }
 
+    /// The project's `running_gap:` (grammar, "Running clearance"), or its
+    /// default of 1mm: 0mm or more, or `error[out-of-range]` at the field.
+    pub(crate) fn running_gap(&mut self) -> Solved<Length> {
+        let default = Length::from_nm(stave_schema::fields::DEFAULT_RUNNING_GAP_NM);
+        let Some(project) = self.model.defs.project(self.model.root) else {
+            return Err(Fault::Internal("the project's declaration").into());
+        };
+        let Some(expr) = &project.running_gap else {
+            return Ok(default);
+        };
+        let root = self
+            .model
+            .module_instance(self.model.root)
+            .ok_or(Fault::Internal("the project's own items"))?;
+        let env = Env {
+            ctx: Ctx {
+                instance: root,
+                element: None,
+            },
+            file: project.file,
+            kind: None,
+            array: None,
+        };
+        let value = self.eval_length(expr, &env)?;
+        if value < ExactLength::ZERO {
+            return Err(self.out_of_range_once(
+                env.file,
+                expr.span,
+                format!(
+                    "'running_gap' must be 0mm or more, found {}",
+                    format_length(value)
+                ),
+                "write the least gap to leave between wooden parts that move past each other, 0mm or more, such as 1mm",
+            ));
+        }
+        round_length(value)
+    }
+
     /// A stock's allowances: its own `kerf:`, `rough_length:`,
     /// `rough_width:` and `sold:`, or the project's where it doesn't say.
     /// A sheet's or a dowel's rough allowances are zero: they are cut

@@ -47,6 +47,7 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
         | ast::KindEntry::Mount(_)
         | ast::KindEntry::Mechanism(_)
         | ast::KindEntry::Adjust(_)
+        | ast::KindEntry::Clamp(_)
         | ast::KindEntry::Field(_) => None,
     });
     match (syntax.base.value, declared) {
@@ -101,6 +102,7 @@ pub(crate) fn kind_params(syntax: &ast::Kind) -> Vec<&ast::Param> {
             | ast::KindEntry::Mount(_)
             | ast::KindEntry::Mechanism(_)
             | ast::KindEntry::Adjust(_)
+            | ast::KindEntry::Clamp(_)
             | ast::KindEntry::Field(_) => None,
         })
         .collect()
@@ -122,6 +124,7 @@ pub(crate) fn made_parts(syntax: &ast::Kind) -> Vec<&ast::MadePart> {
             | ast::KindEntry::Mount(_)
             | ast::KindEntry::Mechanism(_)
             | ast::KindEntry::Adjust(_)
+            | ast::KindEntry::Clamp(_)
             | ast::KindEntry::Field(_) => None,
         })
         .collect()
@@ -214,6 +217,7 @@ impl Resolver<'_> {
         let mut mounts: Vec<&ast::MountBlock> = Vec::new();
         let mut hardware_cuts: Vec<&ast::Cut> = Vec::new();
         let mut adjusts: Vec<&ast::Adjust> = Vec::new();
+        let mut clamps: Vec<&ast::Clamp> = Vec::new();
         let mut hardware_uses = JointKindDef::default();
         let mut joint_cuts: Vec<&ast::Cut> = Vec::new();
         self.check_cut_names(&cx, &syntax.body.entries);
@@ -231,6 +235,7 @@ impl Resolver<'_> {
                 | ast::KindEntry::Mount(_)
                 | ast::KindEntry::Mechanism(_)
                 | ast::KindEntry::Adjust(_)
+                | ast::KindEntry::Clamp(_)
                 | ast::KindEntry::Field(_) => None,
             })
             .collect();
@@ -263,6 +268,19 @@ impl Resolver<'_> {
                             cx.file,
                             adjust.span,
                             "only slide, hinge and pull kinds have members that are set on each other",
+                        );
+                    }
+                }
+                ast::KindEntry::Clamp(clamp) => {
+                    if mounted {
+                        clamps.push(clamp);
+                    } else {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("a {} kind has no field 'clamp'", base_kind.word()),
+                            cx.file,
+                            clamp.span,
+                            "only slide, hinge, pull, support and fitting kinds have members that draw parts together",
                         );
                     }
                 }
@@ -434,7 +452,8 @@ impl Resolver<'_> {
                     | ast::KindEntry::Cut(_)
                     | ast::KindEntry::Mount(_)
                     | ast::KindEntry::Mechanism(_)
-                    | ast::KindEntry::Adjust(_) => false,
+                    | ast::KindEntry::Adjust(_)
+                    | ast::KindEntry::Clamp(_) => false,
                 });
                 let written = kind_fields.iter().any(|f| f.name == spec.name)
                     || params.iter().any(|p| p.decl.name == spec.name)
@@ -492,7 +511,14 @@ impl Resolver<'_> {
                 }
             }
         }
-        let mechanism = self.kind_mechanism(&cx, syntax, base_kind, bodies.as_deref(), &mechanisms);
+        let mechanism = self.kind_mechanism(
+            &cx,
+            syntax,
+            base_kind,
+            &roles,
+            bodies.as_deref(),
+            &mechanisms,
+        );
         let hardware = if mounted {
             self.hardware_kind(
                 &cx,
@@ -502,6 +528,7 @@ impl Resolver<'_> {
                 &mounts,
                 &hardware_cuts,
                 &adjusts,
+                &clamps,
                 hardware_uses.uses,
             )
         } else {
@@ -547,7 +574,7 @@ impl Resolver<'_> {
     }
 
     /// A slide, hinge or pull kind's roles, `mount { }`, cuts, `adjust`
-    /// entries and `uses:`.
+    /// entries, `clamp` and `uses:`.
     /// `None` (reported) when one of them is missing or doesn't lower.
     #[allow(clippy::too_many_arguments)]
     fn hardware_kind(
@@ -559,6 +586,7 @@ impl Resolver<'_> {
         mounts: &[&ast::MountBlock],
         cuts: &[&ast::Cut],
         adjusts: &[&ast::Adjust],
+        clamps: &[&ast::Clamp],
         uses: Vec<UseDef>,
     ) -> Option<HardwareKindDef> {
         let what = format!("kind '{}'", syntax.name.as_str());
@@ -613,11 +641,13 @@ impl Resolver<'_> {
             }
         }
         let adjusts = self.lower_adjusts(cx, syntax.name.as_str(), bodies, adjusts);
+        let clamp = self.lower_clamps(cx, syntax.name.as_str(), roles, bodies, clamps);
         Some(HardwareKindDef {
             mount: mount?,
             cuts: lowered,
             uses,
             adjusts,
+            clamp,
         })
     }
 
@@ -628,6 +658,7 @@ impl Resolver<'_> {
         cx: &Cx,
         syntax: &ast::Kind,
         base_kind: BaseKind,
+        roles: &[RoleDef],
         bodies: Option<&[crate::defs::BodyDef]>,
         mechanisms: &[&ast::MechanismBlock],
     ) -> Option<crate::defs::MechanismDef> {
@@ -657,7 +688,7 @@ impl Resolver<'_> {
             );
             return None;
         }
-        self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
+        self.lower_mechanism(cx, syntax.name.as_str(), roles, bodies?, first)
     }
 
     /// A kind's `member` entries: each named once; only a slide, hinge or

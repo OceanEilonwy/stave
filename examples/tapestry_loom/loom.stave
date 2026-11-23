@@ -1,0 +1,368 @@
+stave 1
+
+// A tapestry loom: a frame that turns on a pivot bolt each side of a
+// stand, so the warp can be wound round it and the weaving turned down
+// as it grows. The frame tilts to any angle, all the way round, and is
+// set higher or lower by moving the bolts from one hole to another in
+// the row drilled down each upright. A steel washer on each bolt fills
+// the gap between the upright and the frame, so the frame turns on steel
+// and never rubs the stand.
+
+project "Tapestry Loom" {
+  goal:  "A floor-standing tapestry loom whose frame tilts, turns all the way round and is set at one of four heights"
+  units: mm
+}
+
+// ---- parameters ----
+// The frame turns all the way round, so its lower end sweeps a circle
+// about the pivots: lower it (frame_lift) and it hits the stretcher at
+// its lowest height. Shorter than 1100mm, its top beam is in the way of
+// the pivot bolts.
+param overall_width    = 1150mm
+param overall_height   = 1650mm
+param overall_depth    = 700mm
+param frame_lift       = 400mm within 400mm..500mm    // floor to the bottom of the frame, at its highest
+param frame_height     = 1250mm within 1100mm..1250mm
+param warp_tension_gap = 40mm within 10mm..80mm
+param washer           = 3mm within 2mm..6mm          // the gap between the stand and the frame
+param tension_cap      = 40mm within 30mm..60mm
+let foot_height = 90mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+// ---- stock ----
+stock beech_45       { species: beech, form: solid, thickness: 45mm, max_width: 200mm, max_length: 2400mm }
+stock beech_25       { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+stock beech_dowel_25 { species: beech, form: dowel, diameter: 25mm }
+
+// ---- the stand ----
+part foot_l : beech_45 {
+  length: overall_depth
+  width:  foot_height
+  note:   "Shape the underside with a relief so the foot stands on its two ends"
+  place {
+    orient(length: back, width: up)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part foot_r = mirror(foot_l, about: mid(envelope, across))
+
+part upright_l : beech_45 {
+  length: 1100mm
+  width:  70mm
+  note:   "Drill the row of height holes after the stand is glued up"
+  place {
+    orient(length: up, width: back)
+    against(foot_l.top)
+    flush(foot_l.left)
+    center(foot_l, deep)
+  }
+}
+
+part upright_r = mirror(upright_l, about: mid(envelope, across))
+
+// Low down, just above the feet: the frame's lower end passes over it
+// when the frame is turned round at its lowest height.
+part stretcher : beech_25 {
+  length: fit
+  width:  150mm
+  place {
+    orient(length: right, width: up)
+    flush(upright_l.bottom)
+    center(envelope, across)
+    center(upright_l, deep)
+  }
+}
+
+joint upright_tenons   : mortise_tenon([upright_l, upright_r], into: [foot_l, foot_r], length: 35mm)
+joint stretcher_tenons : mortise_tenon(stretcher, into: [upright_l, upright_r], length: 32mm, shoulder: 35mm)
+
+// ---- the pivot bolt ----
+kind pivot_bolt : fitting {
+  roles {
+    piece: Part     // the stand's upright, which the bolt turns in
+    into:  Part     // the frame's stile
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt the frame turns on.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the frame, into a threaded insert.
+  param thread_length = 25mm
+  /// The steel washer the frame turns on, between the upright and the stile.
+  param washer_thickness = 3mm
+  param washer_diameter  = 30mm
+  /// Wood left round the bolt holes and the threaded insert.
+  param wall = 6mm
+  /// How high up the upright the bolt goes through it, at its highest.
+  param height = 1040mm
+  /// Spare holes below the bolt, for setting the frame lower. Any more
+  /// and the frame's lower end hits the stretcher as it turns round.
+  param holes_below = 3
+  /// Centre to centre distance between the height holes.
+  param hole_pitch = 50mm
+
+  // Nothing of the bolt rides on the upright, so the kind places it:
+  // across the middle of the upright's face, at its height.
+  mount {
+    face:   front
+    across: center(piece)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The bolt: through the upright, across the washer and into a threaded
+  /// insert in the stile. Pulled out to move the frame to another hole.
+  member bolt {
+    with:  into
+    loose: true
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + washer_thickness + thread_length)
+  }
+  /// The washer: the stile turns on it, steel on wood, clear of the upright.
+  member washer {
+    with:  bolt
+    shape: cylinder(diameter: washer_diameter, depth: piece.thickness..piece.thickness + washer_thickness)
+  }
+  /// The knob: tighten to hold the frame at an angle, loosen to turn it.
+  member knob {
+    with:  bolt
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+
+  clamp knob, bolt along depth
+
+  // The row of holes the bolt is set in, drilled through the upright: the
+  // one it is in and the spare ones below it.
+  cut bolt_hole: row(crossing(piece, bolt), pitch: hole_pitch, down: holes_below) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  // The frame turns all the way round on the bolt, and the bolt moves
+  // down the line of holes and is set in each.
+  mechanism {
+    pins: depth
+    slot bolt, piece from point(along: 0mm, across: 0mm) to point(along: -(holes_below * hole_pitch), across: 0mm)
+    drive tilt:   turn(bolt, from: 0deg, to: 360deg)
+    drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: every(hole_pitch))
+  }
+}
+
+// ---- the tension bar ----
+kind threaded_rod : fastener {
+  param diameter = 10mm
+  param length   = 100mm
+}
+
+kind sliding_tenon : joint {
+  /// Length of the tenon on each end of the bar.
+  param length    = 25mm
+  param thickness = piece.thickness / 2
+  param shoulder  = 10mm
+  /// How far the bar can slide in its slot, half of it up and half down from where it is drawn.
+  param travel       = 40mm
+  param relief       = 2mm
+  param wall         = 6mm
+  param rod_diameter = 10mm
+  /// Wood left above the slot, at the top of the frame side, that the rod turns in.
+  param cap = 40mm
+  /// From the middle of the bar to the top of the frame side: half the rod's length.
+  param reach = piece.width / 2 - shoulder + travel / 2 + cap
+
+  require tenon_thin : thickness <= piece.thickness / 2 "a tenon thicker than half the bar leaves its cheeks too thin"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into
+  adds:      extend(piece, by: length)
+
+  cut tenon: end(piece, facing: into) {
+    tenon(length: length, width: piece.width - 2 * shoulder, thickness: thickness)
+  }
+  cut slot: crossing(into, piece) {
+    pocket(width: piece.width - 2 * shoulder + travel, thickness: thickness, depth: length + relief, wall: wall)
+  }
+  member rod : threaded_rod(diameter: rod_diameter, length: 2 * reach) {
+    on:    contact(piece, into)
+    shape: cylinder(diameter: rod_diameter, axis: along, along: -reach..reach, at: point(depth: length / 2))
+  }
+  cut rod_hole: crossing(into, rod) { drill(diameter: rod_diameter + 1mm, depth: 2 * reach, wall: wall) }
+  cut insert_hole: crossing(piece, rod) { drill(diameter: rod_diameter, depth: through, wall: 4mm) }
+}
+
+kind t_handle : fitting {
+  roles {
+    piece: Part
+  }
+  /// Length of the handle.
+  param handle_length = 60mm
+  /// Width and height of the handle.
+  param handle_size = 20mm
+
+  mount {
+    face:   top
+    across: open
+    along:  open
+  }
+
+  /// The handle: turned by hand to wind the tension rod up or down.
+  member handle {
+    with:  piece
+    shape: box(along: handle_length, across: handle_size, depth: -handle_size..0mm)
+  }
+}
+
+// ---- the frame ----
+component Frame {
+  param stand_l : Part
+  param stand_r : Part
+  /// From the bottom of the uprights to the bottom of the frame, at its highest.
+  param lift         = 310mm
+  param frame_length = 1250mm
+  param washer       = 3mm
+  param tension_gap  = 40mm
+  param cap          = 40mm
+
+  part stile_l : beech_45 {
+    length: frame_length
+    width:  70mm
+    note:   "The frame turns on the pivot bolts: the warp runs round it, so it can be warped quickly and the weaving turned down as it grows"
+    place {
+      orient(length: up, width: back)
+      flush(stand_l.bottom, inset: lift)
+      against(stand_l.right, gap: washer)
+      center(stand_l, deep)
+    }
+  }
+
+  part stile_r : beech_45 {
+    length: frame_length
+    width:  70mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_r.bottom, inset: lift)
+      against(stand_r.left, gap: washer)
+      center(stand_r, deep)
+    }
+  }
+
+  part top_beam : beech_25 {
+    length: fit
+    width:  120mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.top, inset: 230mm)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  part bottom_beam : beech_25 {
+    length: fit
+    width:  120mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.bottom)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  part tension_bar : beech_45 {
+    length: fit
+    width:  70mm
+    note:   "The warp passes over this bar; its tenons slide up and down in the slots in the frame sides, lifted by the tension screws"
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.top, inset: cap + tension_gap / 2 - 10mm)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  part shed_bracket_l : beech_25 {
+    length: 80mm
+    width:  60mm
+    place {
+      orient(length: front, width: up)
+      against(stile_l.front)
+      flush(stile_l.left)
+      flush(stile_l.top, inset: 300mm)
+    }
+  }
+
+  part shed_bracket_r : beech_25 {
+    length: 80mm
+    width:  60mm
+    place {
+      orient(length: front, width: up)
+      against(stile_r.front)
+      flush(stile_r.right)
+      flush(stile_r.top, inset: 300mm)
+    }
+  }
+
+  part shed_rod : beech_dowel_25 {
+    length: between(stand_l, stand_r) - 2 * washer
+    loose:  true
+    note:   "Lifts out of the brackets; turn it to open the shed"
+    place {
+      orient(length: right)
+      against(shed_bracket_l.top)
+      center(from: stile_l.left, to: stile_r.right)
+      center(shed_bracket_l, deep)
+    }
+  }
+
+  joint beam_tenons    : mortise_tenon([top_beam, bottom_beam], into: [stile_l, stile_r], length: 32mm, shoulder: 20mm)
+  joint bracket_dowels : dowel([shed_bracket_l, shed_bracket_r], into: [stile_l, stile_r])
+  joint tension_slides : sliding_tenon(tension_bar, into: [stile_l, stile_r], travel: tension_gap, cap: cap, glue: false)
+
+  // Each bolt written on its own, on the outside face of its upright:
+  // their pins lie on one line, so they turn the frame as one.
+  hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+  hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+
+  hardware tension_handle_l : t_handle(stile_l) {
+    place {
+      flush(stile_l.right, inset: 25mm / 2 - 10mm)
+      center(stile_l, deep)
+    }
+  }
+
+  hardware tension_handle_r : t_handle(stile_r) {
+    place {
+      flush(stile_r.left, inset: 25mm / 2 - 10mm)
+      center(stile_r, deep)
+    }
+  }
+}
+
+assembly frame : Frame {
+  stand_l:      upright_l
+  stand_r:      upright_r
+  lift:         frame_lift - foot_height
+  frame_length: frame_height
+  washer:       washer
+  tension_gap:  warp_tension_gap
+  cap:          tension_cap
+}
+
+// ---- scenes ----
+scene weaving "Weaving" {
+  pose frame.tilt = 15deg
+  pose frame.height = 100mm
+}
+
+scene warping "Winding the warp" {
+  pose frame.tilt = 90deg
+}
+
+scene pivot_bolts "Pivot bolts (uprights hidden)" {
+  hide: [upright_l, upright_r]
+}
+
+scene pivot_section "Section through the pivots" {
+  section: mid(upright_r, deep)
+}

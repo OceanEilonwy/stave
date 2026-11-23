@@ -251,6 +251,13 @@ fn a_joint_member_needs_on_and_has_no_with_or_mount() {
         ))),
         vec!["unknown-field: member 'peg' has no field 'with'"]
     );
+    // Only a hardware member lifts out (grammar, "Shapes", a loose member).
+    assert_eq!(
+        diagnostics(&open(&kind(
+            "    on: contact(piece, into)\n    loose: true"
+        ))),
+        vec!["unknown-field: member 'peg' has no field 'loose'"]
+    );
     assert_eq!(
         diagnostics(&open(&kind("    on: contact(piece, into)\n    spaced: 3"))),
         vec!["type-mismatch: 'spaced' needs a spacing, found a count"]

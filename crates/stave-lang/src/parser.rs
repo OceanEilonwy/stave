@@ -1805,6 +1805,14 @@ impl<'t> Parser<'t> {
                 p.value(name, at)
             });
         }
+        if self.at_entry_word("clamp") {
+            return self.node(CLAMP, |p| {
+                p.bump();
+                p.member_pair()?;
+                p.expect_word("along")?;
+                p.root_name()
+            });
+        }
         if self.at_entry_word("roles") {
             return self.node(ROLES, |p| {
                 p.bump();
@@ -1936,6 +1944,16 @@ impl<'t> Parser<'t> {
                 let at = p.span(0).to(p.span(1));
                 p.root_name()?;
                 p.expect(COLON, "':'")?;
+                p.value(name, at)
+            });
+        }
+        if self.at_word("drive") && self.nth(1) == IDENT && self.nth(2) == COLON {
+            return self.node(DRIVE, |p| {
+                p.bump();
+                let name = p.nth_text(0);
+                let at = p.span(0).to(p.span(1));
+                p.wrap(NAME);
+                p.bump();
                 p.value(name, at)
             });
         }
@@ -2073,7 +2091,7 @@ impl<'t> Parser<'t> {
             KW_SET => self.node(SET_OP, |p| {
                 p.bump();
                 let start = p.span(0);
-                p.path()?;
+                p.set_target()?;
                 let target = p.previous_path_text(start);
                 let at = start.to(p.span(0));
                 p.expect(EQ, "'='")?;
@@ -2081,7 +2099,7 @@ impl<'t> Parser<'t> {
             }),
             IDENT if self.at_word("unset") => self.node(UNSET_OP, |p| {
                 p.bump();
-                p.path()
+                p.set_target()
             }),
             KW_REMOVE => self.node(REMOVE_OP, |p| {
                 p.bump();
@@ -2121,6 +2139,27 @@ impl<'t> Parser<'t> {
                 "'rename'",
             ])),
         }
+    }
+
+    /// What a `set` or `unset` addresses: a `path`, or `project.NAME` /
+    /// `library.NAME`, one field of the module's own declaration.
+    fn set_target(&mut self) -> PResult {
+        if !matches!(self.current(), KW_PROJECT | KW_LIBRARY) {
+            return self.path();
+        }
+        self.node(DECLARATION_FIELD, |p| {
+            let keyword = p.nth_text(0).to_owned();
+            p.bump();
+            if !p.eat(DOT) {
+                return Err(p.expected_with_help(
+                    &["'.'"],
+                    Some(&format!(
+                        "name a field of the {keyword} block: {keyword}.goal"
+                    )),
+                ));
+            }
+            p.any_name()
+        })
     }
 
     /// A string naming a file or a module source.

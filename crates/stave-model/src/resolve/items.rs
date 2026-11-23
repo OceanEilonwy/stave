@@ -312,6 +312,9 @@ impl<'a> Resolver<'a> {
                 let goal = found
                     .get("goal")
                     .and_then(|f| self.plain_text(&cx, &f.value, "goal"));
+                let finish = found
+                    .get("finish")
+                    .and_then(|f| self.plain_text(&cx, &f.value, "finish"));
                 let style = found
                     .get("style")
                     .and_then(|f| self.plain_text(&cx, &f.value, "style"));
@@ -347,10 +350,12 @@ impl<'a> Resolver<'a> {
                 let kerf = length("kerf");
                 let rough_length = length("rough_length");
                 let rough_width = length("rough_width");
+                let running_gap = length("running_gap");
                 (
                     Some(ProjectDef {
                         title,
                         goal,
+                        finish,
                         units,
                         resolution,
                         style,
@@ -360,6 +365,7 @@ impl<'a> Resolver<'a> {
                         kerf,
                         rough_length,
                         rough_width,
+                        running_gap,
                         file,
                         span: item.span,
                     }),
@@ -1646,6 +1652,37 @@ impl<'a> Resolver<'a> {
         value
     }
 
+    /// A pose's target: an assembly, or an assembly and the name of one of
+    /// its drives (`frame.tilt`, grammar "Scenes"). The last name is a
+    /// drive when what comes before it is an assembly and the name is no
+    /// item of its component (a drive's name never is: see "Mechanisms",
+    /// drives); the solver checks that the assembly has that drive.
+    fn pose_target(&mut self, cx: &Cx, path: &ast::Path) -> (RExpr, Option<(String, Span)>) {
+        if let Some((ast::PathSegment::Member(last), rest)) = path.segments.split_last() {
+            let reported = self.diagnostics.len();
+            let prefix = ast::Path {
+                root: path.root.clone(),
+                segments: rest.to_vec(),
+                span: path.root.span(),
+            };
+            let base = self.value(cx, &path_expr(&prefix), &Expect::any().named("pose"));
+            if let Ty::Assembly(component) = base.ty {
+                let item = self
+                    .component_names
+                    .get(component.index())
+                    .is_some_and(|names| names.contains_key(last.as_str()));
+                if !item && !self.broken_in_component(component, last.as_str()) {
+                    return (base, Some((last.as_str().to_owned(), last.span())));
+                }
+            }
+            // Read again as a whole, as any other path: what reading its
+            // first part found is found again.
+            self.diagnostics.truncate(reported);
+        }
+        let target = self.value(cx, &path_expr(path), &Expect::any().named("pose"));
+        (target, None)
+    }
+
     pub(super) fn lower_scene(
         &mut self,
         cx: &Cx,
@@ -1672,8 +1709,7 @@ impl<'a> Resolver<'a> {
                 span,
             } = entry
             {
-                let target_expr = path_expr(target);
-                let target = self.value(cx, &target_expr, &Expect::any().named("pose"));
+                let (target, drive) = self.pose_target(cx, target);
                 if !matches!(target.ty, Ty::Assembly(_) | Ty::Unknown) {
                     self.error_help(
                         Code::TypeMismatch,
@@ -1704,6 +1740,7 @@ impl<'a> Resolver<'a> {
                 }
                 poses.push(PoseDef {
                     target,
+                    drive,
                     value,
                     span: *span,
                 });

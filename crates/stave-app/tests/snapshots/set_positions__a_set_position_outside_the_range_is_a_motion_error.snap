@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/set_positions.rs
+expression: rendered(&opened)
+---
+error[motion]: pivot_bolt's drive height can't be set at -350mm: it runs from 0mm to -300mm
+   --> /project/project.stave:110:84
+    |
+110 |     drive height: travel(bolt, from: 0mm, to: -(holes_below * hole_pitch), set_at: [0mm, -350mm])
+    |                                                                                    ^^^^^^^^^^^^^
+    = help: set it only at values from its from: to its to:

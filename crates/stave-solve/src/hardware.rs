@@ -290,6 +290,9 @@ pub(crate) struct PlacedMember {
     pub name: String,
     pub carrier: MemberCarrier,
     pub shapes: Vec<WorldShape>,
+    /// Meant to lift out (grammar, "Shapes"): checked where it is set,
+    /// never swept.
+    pub loose: bool,
 }
 
 /// A member with a body, placed at rest.
@@ -427,6 +430,8 @@ pub(crate) struct Placed {
     pub settings: Vec<AdjustSetting>,
     /// Whether its kind's rules hold where it is placed.
     pub rules: Rules,
+    /// Its kind's `clamp`, along the world axis its frame gives it.
+    pub clamp: Option<stave_model::solved::Clamp>,
 }
 
 /// Where a piece of hardware sits at rest, before its cuts and motion.
@@ -634,7 +639,8 @@ impl Solver<'_> {
             }
             None => (None, None),
         };
-        let members = self.placed_members(kind, &roles, &bodies, &frame)?;
+        let loose = self.loose_members(&binding, kind)?;
+        let members = self.placed_members(kind, &roles, &bodies, &frame, &loose)?;
         // The kind's rules where it is placed: its adjustments and requires.
         let (settings, rules) = self.hardware_rules(
             Call {
@@ -663,6 +669,16 @@ impl Solver<'_> {
         } else {
             rules
         };
+        // The clamp's frame axis as a world axis; the stack it draws
+        // together is checked once every part is placed (stave-check).
+        let clamp = hardware_kind
+            .clamp
+            .as_ref()
+            .map(|clamp| stave_model::solved::Clamp {
+                bearing: clamp.bearing,
+                drawn: clamp.drawn,
+                axis: frame.direction(clamp.axis).axis(),
+            });
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name,
@@ -679,6 +695,7 @@ impl Solver<'_> {
             members,
             settings,
             rules,
+            clamp,
         })
     }
 
@@ -963,13 +980,55 @@ impl Solver<'_> {
         })
     }
 
-    /// Every member with a body at rest in the world, with what moves it.
+    /// Which of a kind's members are loose, by member (grammar,
+    /// "Shapes"): its own `loose:` says so, or it rides on a loose
+    /// member.
+    fn loose_members(&mut self, binding: &Binding, kind: &KindDef) -> Solved<Vec<bool>> {
+        let own = self.in_kind(binding, kind, |solver, env| {
+            let mut own = Vec::with_capacity(kind.bodies.len());
+            for body in &kind.bodies {
+                let loose = match &body.loose {
+                    Some(expr) => {
+                        let Value::Bool(loose) = solver.eval(expr, env)? else {
+                            // Typed a Bool when it was lowered.
+                            return Err(Fault::Earlier.into());
+                        };
+                        loose
+                    }
+                    None => false,
+                };
+                own.push(loose);
+            }
+            Ok(own)
+        })?;
+        Ok((0..kind.bodies.len())
+            .map(|index| {
+                let mut current = index;
+                // A member rides on at most every other member.
+                for _ in 0..=kind.bodies.len() {
+                    if own.get(current).copied().unwrap_or(false) {
+                        return true;
+                    }
+                    match kind.bodies.get(current).map(|body| &body.with) {
+                        Some(Carrier::Body(other)) => current = other.index(),
+                        Some(Carrier::Role(_) | Carrier::Mechanism | Carrier::Contact(_))
+                        | None => return false,
+                    }
+                }
+                false
+            })
+            .collect())
+    }
+
+    /// Every member with a body at rest in the world, with what moves it
+    /// and whether it is loose (`loose`, by member of the kind).
     fn placed_members(
         &mut self,
         kind: &KindDef,
         roles: &[(String, RoleBound)],
         bodies: &[PlacedBody],
         frame: &Frame,
+        loose: &[bool],
     ) -> Solved<Vec<PlacedMember>> {
         let mut members = Vec::with_capacity(bodies.len());
         for placed in bodies {
@@ -1001,6 +1060,7 @@ impl Solver<'_> {
                 name: body.name.as_str().to_owned(),
                 carrier,
                 shapes,
+                loose: loose.get(placed.body.index()).copied().unwrap_or(false),
             });
         }
         Ok(members)

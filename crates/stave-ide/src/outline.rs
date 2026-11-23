@@ -70,6 +70,7 @@ fn is_outlined_block(kind: SyntaxKind) -> bool {
             | SyntaxKind::SHAPE
             | SyntaxKind::MOUNT
             | SyntaxKind::ADJUST
+            | SyntaxKind::CLAMP
     )
 }
 

@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[unknown-name]: `frame` has no drive `tlt`
+   --> /project/project.stave:170:14
+    |
+170 |   pose frame.tlt = 15deg
+    |              ^^^
+    = help: its drives are frame.tilt and frame.height

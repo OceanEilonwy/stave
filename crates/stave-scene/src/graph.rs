@@ -11,7 +11,7 @@ use crate::cache::MeshCache;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::MotionShape;
-use stave_model::mechanism::{DriveValue, MemberIndex};
+use stave_model::mechanism::{DriveIndex, DriveValue, MemberIndex};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, BodyRef, HardwareId, PairMember, Part, PartId, PoseValue,
     RegionId, SceneId, SceneItem, SolvedDesign, StepMotion, WorldBox,
@@ -149,13 +149,36 @@ pub struct MemberFollower {
 }
 
 impl MemberFollower {
-    /// The member's transform with its assembly opened by `amount`
-    /// (radians or millimetres).
-    fn transform(&self, amount: f32) -> Mat4 {
-        self.path
-            .matrix(self.member, solver_amount(&self.path, amount))
-            .map_or(Mat4::IDENTITY, render::transform)
+    /// The member's transform with its assembly's drives opened by
+    /// `amounts` (radians or millimetres, one for each drive).
+    fn transform(&self, amounts: &[f32]) -> Mat4 {
+        let matrix = if self.path.drives().len() <= 1 {
+            let amount = amounts.first().copied().unwrap_or(0.0);
+            self.path
+                .matrix(self.member, solver_amount(&self.path, amount))
+        } else {
+            self.path
+                .matrix_at(self.member, &solver_amounts(&self.path, amounts))
+        };
+        matrix.map_or(Mat4::IDENTITY, render::transform)
     }
+}
+
+/// Render amounts (radians or millimetres, one for each drive) as the
+/// solver's (radians or nanometres).
+fn solver_amounts(path: &MechanismPath, amounts: &[f32]) -> Vec<f64> {
+    path.drives()
+        .iter()
+        .enumerate()
+        .map(|(index, named)| {
+            let amount = f64::from(amounts.get(index).copied().unwrap_or(0.0));
+            if named.drive.turns() {
+                amount
+            } else {
+                amount * 1_000_000.0
+            }
+        })
+        .collect()
 }
 
 /// A render amount (radians or millimetres) as the solver's (radians or
@@ -187,11 +210,57 @@ enum AssemblyMove {
     },
     /// Posed by the solver (a cup hinge's linkage).
     General { path: Arc<MechanismPath> },
+    /// An assembly with several drives (grammar, "Mechanisms", drives):
+    /// each drive's own motion with the others closed, and the solver for
+    /// any two set at once.
+    Drives {
+        path: Arc<MechanismPath>,
+        /// Each drive's motion with every other drive closed.
+        each: Vec<AssemblyMove>,
+    },
+    /// One drive of several, with the others closed, posed by the solver.
+    Drive {
+        path: Arc<MechanismPath>,
+        drive: DriveIndex,
+        range: MotionRange,
+    },
 }
 
 impl AssemblyMove {
     fn of_path(path: &Arc<MechanismPath>) -> AssemblyMove {
-        match path.shape() {
+        if path.drives().len() > 1 {
+            let mechanism = path.model();
+            let closed = mechanism.closed();
+            let each = (0..path.drives().len())
+                .filter_map(DriveIndex::new)
+                .map(|drive| {
+                    let range = match path.drives().get(drive.index()).map(|d| d.drive.extent()) {
+                        Some(DriveValue::Turn(full)) => MotionRange::Swing { full },
+                        Some(DriveValue::Travel(full)) => MotionRange::Slide { full },
+                        None => MotionRange::Swing { full: Angle::ZERO },
+                    };
+                    AssemblyMove::of_shape(mechanism.shape_of(drive, &closed)).unwrap_or(
+                        AssemblyMove::Drive {
+                            path: Arc::clone(path),
+                            drive,
+                            range,
+                        },
+                    )
+                })
+                .collect();
+            return AssemblyMove::Drives {
+                path: Arc::clone(path),
+                each,
+            };
+        }
+        AssemblyMove::of_shape(path.shape()).unwrap_or(AssemblyMove::General {
+            path: Arc::clone(path),
+        })
+    }
+
+    /// The exact motion of a shape; `None` for one posed by the solver.
+    fn of_shape(shape: MotionShape) -> Option<AssemblyMove> {
+        match shape {
             MotionShape::Turn {
                 line: pivot,
                 opening,
@@ -200,50 +269,107 @@ impl AssemblyMove {
                 // the swing side.
                 let free = render::direction(pivot.free_side);
                 let swing = render::direction(pivot.swing_toward);
-                AssemblyMove::Turn {
+                Some(AssemblyMove::Turn {
                     through: render::point(pivot.through),
                     axis: free.cross(swing).normalize_or(render::axis(pivot.axis)),
                     opening,
-                }
+                })
             }
-            MotionShape::Travel { toward, travel } => AssemblyMove::Travel {
+            MotionShape::Travel { toward, travel } => Some(AssemblyMove::Travel {
                 toward: render::direction(toward),
                 travel,
-            },
-            MotionShape::General => AssemblyMove::General {
-                path: Arc::clone(path),
-            },
+            }),
+            MotionShape::General => None,
         }
     }
 
-    /// How far this motion goes, exact.
-    fn range(&self) -> MotionRange {
+    /// The drives of this motion: one for most, each with its name.
+    fn drive_count(&self) -> usize {
         match self {
-            AssemblyMove::Turn { opening, .. } => MotionRange::Swing { full: *opening },
-            AssemblyMove::Travel { travel, .. } => MotionRange::Slide { full: *travel },
-            AssemblyMove::General { path } => match path.extent() {
-                DriveValue::Turn(full) => MotionRange::Swing { full },
-                DriveValue::Travel(full) => MotionRange::Slide { full },
-            },
+            AssemblyMove::Drives { each, .. } => each.len(),
+            AssemblyMove::Turn { .. }
+            | AssemblyMove::Travel { .. }
+            | AssemblyMove::General { .. }
+            | AssemblyMove::Drive { .. } => 1,
         }
     }
 
-    /// The amount a pose value means for this motion (radians or mm).
+    /// How far its first drive goes, exact.
+    fn range(&self) -> MotionRange {
+        self.range_of(DriveIndex::FIRST)
+            .unwrap_or(MotionRange::Swing { full: Angle::ZERO })
+    }
+
+    /// How far one of its drives goes, exact; `None` for a drive it
+    /// doesn't have.
+    fn range_of(&self, drive: DriveIndex) -> Option<MotionRange> {
+        match self {
+            AssemblyMove::Drives { each, .. } => {
+                each.get(drive.index())?.range_of(DriveIndex::FIRST)
+            }
+            AssemblyMove::Turn { opening, .. } if drive == DriveIndex::FIRST => {
+                Some(MotionRange::Swing { full: *opening })
+            }
+            AssemblyMove::Travel { travel, .. } if drive == DriveIndex::FIRST => {
+                Some(MotionRange::Slide { full: *travel })
+            }
+            AssemblyMove::General { path } if drive == DriveIndex::FIRST => {
+                Some(match path.extent() {
+                    DriveValue::Turn(full) => MotionRange::Swing { full },
+                    DriveValue::Travel(full) => MotionRange::Slide { full },
+                })
+            }
+            AssemblyMove::Drive { range, .. } if drive == DriveIndex::FIRST => Some(*range),
+            AssemblyMove::Turn { .. }
+            | AssemblyMove::Travel { .. }
+            | AssemblyMove::General { .. }
+            | AssemblyMove::Drive { .. } => None,
+        }
+    }
+
+    /// The amount a pose value means for its first drive (radians or mm).
     fn amount(&self, value: PoseValue) -> f32 {
         self.range().amount(value)
     }
 
-    fn transform(&self, amount: f32) -> Mat4 {
+    /// Where it moves its assembly with each drive at an amount (radians
+    /// or millimetres, one for each drive; a drive left out is closed).
+    fn transform(&self, amounts: &[f32]) -> Mat4 {
+        let first = amounts.first().copied().unwrap_or(0.0);
         match self {
             AssemblyMove::Turn { through, axis, .. } => {
                 Mat4::from_translation(*through)
-                    * Mat4::from_quat(Quat::from_axis_angle(*axis, amount))
+                    * Mat4::from_quat(Quat::from_axis_angle(*axis, first))
                     * Mat4::from_translation(-*through)
             }
             AssemblyMove::General { path, .. } => path
-                .matrix(path.moving(), solver_amount(path, amount))
+                .matrix(path.moving(), solver_amount(path, first))
                 .map_or(Mat4::IDENTITY, render::transform),
-            AssemblyMove::Travel { toward, .. } => Mat4::from_translation(*toward * amount),
+            AssemblyMove::Travel { toward, .. } => Mat4::from_translation(*toward * first),
+            AssemblyMove::Drive { path, drive, .. } => {
+                let mut each = vec![0.0; path.drives().len()];
+                if let Some(slot) = each.get_mut(drive.index()) {
+                    *slot = first;
+                }
+                path.matrix_at(path.moving(), &solver_amounts(path, &each))
+                    .map_or(Mat4::IDENTITY, render::transform)
+            }
+            AssemblyMove::Drives { path, each } => {
+                let away: Vec<usize> = (0..each.len())
+                    .filter(|index| amounts.get(*index).is_some_and(|amount| *amount != 0.0))
+                    .collect();
+                match away.as_slice() {
+                    [] => Mat4::IDENTITY,
+                    // One drive away from closed: its own motion.
+                    [only] => match (each.get(*only), amounts.get(*only)) {
+                        (Some(motion), Some(amount)) => motion.transform(&[*amount]),
+                        _ => Mat4::IDENTITY,
+                    },
+                    _ => path
+                        .matrix_at(path.moving(), &solver_amounts(path, amounts))
+                        .map_or(Mat4::IDENTITY, render::transform),
+                }
+            }
         }
     }
 }
@@ -257,8 +383,8 @@ pub struct SceneEntry {
     pub name: String,
     /// Its title, or the name when it has none.
     pub title: String,
-    /// Motion amounts per assembly (radians or millimetres).
-    moves: Vec<(AssemblyId, f32)>,
+    /// Motion amounts per drive of each assembly (radians or millimetres).
+    moves: Vec<(AssemblyId, DriveIndex, f32)>,
     show: Option<Vec<SceneItem>>,
     hide: Vec<SceneItem>,
     /// The scene asks for the parts to be pulled apart (not drawn yet).
@@ -328,6 +454,9 @@ pub struct SceneGraph {
     pub scenes: Vec<SceneEntry>,
     /// Each assembly's motion, by [`AssemblyId`].
     motions: Vec<Option<AssemblyMove>>,
+    /// Each assembly's drives' set positions, by [`AssemblyId`] and then
+    /// drive, as amounts from closed: empty for a continuous drive.
+    sets: Vec<Vec<Vec<PoseValue>>>,
     /// Per node: how far its assembly moves out in an exploded view, the
     /// first stage (millimetres, render frame).
     explode_assembly: Vec<Vec3>,
@@ -375,6 +504,41 @@ pub struct Highlight {
     pub nodes: Vec<NodeId>,
     /// The shared volumes, in the render frame, already posed.
     pub volumes: Vec<Aabb>,
+}
+
+/// One drive of an assembly's motion, for a slider: which, its name in
+/// its kind (none for the one unnamed drive), and its range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriveRange {
+    /// Which drive.
+    pub drive: DriveIndex,
+    /// Its name (`tilt`), when its kind names it.
+    pub name: Option<String>,
+    /// How far it goes.
+    pub range: MotionRange,
+    /// The amounts from closed it is set at, in order (grammar,
+    /// "Mechanisms", set positions); empty for a continuous drive, set
+    /// anywhere.
+    pub set_at: Vec<PoseValue>,
+}
+
+impl DriveRange {
+    /// A slider's render amount (radians or millimetres) moved to the
+    /// nearest set position, for a drive with them; as it is otherwise.
+    pub fn snapped(&self, amount: f32) -> f32 {
+        snapped(self.range, &self.set_at, amount)
+    }
+}
+
+/// A render amount (radians or millimetres) of a drive with range
+/// `range` moved to the nearest of its set positions `set_at` (amounts
+/// from closed); as it is when it has none.
+pub fn snapped(range: MotionRange, set_at: &[PoseValue], amount: f32) -> f32 {
+    set_at
+        .iter()
+        .map(|value| range.amount(*value))
+        .min_by(|a, b| (a - amount).abs().total_cmp(&(b - amount).abs()))
+        .unwrap_or(amount)
 }
 
 /// The range of an assembly's motion, for a slider: exact, with its unit
@@ -762,6 +926,36 @@ impl SceneGraph {
             .iter()
             .map(|path| path.as_ref().map(AssemblyMove::of_path))
             .collect();
+        // Each drive's set positions, as amounts from closed (grammar,
+        // "Mechanisms", set positions): empty for a continuous drive.
+        let sets: Vec<Vec<Vec<PoseValue>>> = paths
+            .iter()
+            .map(|path| {
+                path.as_ref()
+                    .map(|path| {
+                        path.drives()
+                            .iter()
+                            .map(|named| {
+                                named
+                                    .set_values()
+                                    .filter_map(|value| match named.drive.amount_of(value)? {
+                                        DriveValue::Turn(angle) => Some(PoseValue::Angle(angle)),
+                                        DriveValue::Travel(length) => {
+                                            Some(PoseValue::Travel(length))
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let set_of = |assembly: AssemblyId, drive: DriveIndex| -> &[PoseValue] {
+            sets.get(assembly.index())
+                .and_then(|drives| drives.get(drive.index()))
+                .map_or(&[], Vec::as_slice)
+        };
         let scenes = design
             .scenes
             .iter()
@@ -772,9 +966,25 @@ impl SceneGraph {
                 moves: scene
                     .poses
                     .iter()
-                    .filter_map(|pose| {
-                        let motion = motions.get(pose.assembly.index())?.as_ref()?;
-                        Some((pose.assembly, motion.amount(pose.value)))
+                    .flat_map(|pose| {
+                        let motion = motions.get(pose.assembly.index()).and_then(Option::as_ref);
+                        let drives: Vec<DriveIndex> = match (motion, pose.drive) {
+                            (None, _) => Vec::new(),
+                            (Some(_), Some(drive)) => vec![drive],
+                            (Some(motion), None) => (0..motion.drive_count())
+                                .filter_map(DriveIndex::new)
+                                .collect(),
+                        };
+                        drives.into_iter().filter_map(move |drive| {
+                            let range = motion?.range_of(drive)?;
+                            // Open is the furthest set position of a
+                            // drive with them.
+                            let value = match (pose.value, set_of(pose.assembly, drive).last()) {
+                                (PoseValue::Open, Some(furthest)) => *furthest,
+                                (value, _) => value,
+                            };
+                            Some((pose.assembly, drive, range.amount(value)))
+                        })
                     })
                     .collect(),
                 show: scene.show.clone(),
@@ -821,6 +1031,7 @@ impl SceneGraph {
             nodes,
             scenes,
             motions,
+            sets,
             explode_assembly,
             explode_part,
             drawn,
@@ -829,17 +1040,75 @@ impl SceneGraph {
         }
     }
 
-    /// The range of an assembly's motion; `None` when it has none.
+    /// The range of an assembly's motion (its first drive's, for one with
+    /// several); `None` when it has none.
     pub fn motion_range(&self, assembly: AssemblyId) -> Option<MotionRange> {
         let motion = self.motions.get(assembly.index())?.as_ref()?;
         Some(motion.range())
+    }
+
+    /// Every drive of an assembly's motion, in order, with its name (none
+    /// for the one unnamed drive) and range: one slider each. Empty when it
+    /// doesn't move.
+    pub fn drives(&self, assembly: AssemblyId) -> Vec<DriveRange> {
+        let Some(motion) = self.motions.get(assembly.index()).and_then(Option::as_ref) else {
+            return Vec::new();
+        };
+        let names: Vec<Option<String>> = match motion {
+            AssemblyMove::Drives { path, .. } => path
+                .drives()
+                .iter()
+                .map(|named| named.name.clone())
+                .collect(),
+            AssemblyMove::Turn { .. }
+            | AssemblyMove::Travel { .. }
+            | AssemblyMove::General { .. }
+            | AssemblyMove::Drive { .. } => vec![None],
+        };
+        names
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, name)| {
+                let drive = DriveIndex::new(index)?;
+                Some(DriveRange {
+                    drive,
+                    name,
+                    range: motion.range_of(drive)?,
+                    set_at: self
+                        .sets
+                        .get(assembly.index())
+                        .and_then(|drives| drives.get(index))
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    /// The range of one drive of an assembly's motion.
+    pub fn drive_range(&self, assembly: AssemblyId, drive: DriveIndex) -> Option<MotionRange> {
+        self.motions
+            .get(assembly.index())?
+            .as_ref()?
+            .range_of(drive)
+    }
+
+    /// The amount (radians or millimetres) a pose value means for one
+    /// drive of an assembly's motion.
+    pub fn drive_amount(
+        &self,
+        assembly: AssemblyId,
+        drive: DriveIndex,
+        value: PoseValue,
+    ) -> Option<f32> {
+        Some(self.drive_range(assembly, drive)?.amount(value))
     }
 
     /// Where an assembly's motion moves it at an amount (radians or
     /// millimetres), from rest; `None` when it doesn't move.
     pub fn motion_transform(&self, assembly: AssemblyId, amount: f32) -> Option<Mat4> {
         let motion = self.motions.get(assembly.index())?.as_ref()?;
-        Some(motion.transform(amount))
+        Some(motion.transform(&[amount]))
     }
 
     /// The amount (radians or millimetres) a pose value means for an
@@ -961,12 +1230,43 @@ impl SceneGraph {
         overrides: &[(AssemblyId, f32)],
         explode: f32,
     ) -> Posed {
-        let amount = |assembly: AssemblyId| {
-            overrides
-                .iter()
-                .chain(&scene.moves)
-                .find(|(id, _)| *id == assembly)
-                .map(|(_, amount)| *amount)
+        let overrides: Vec<(AssemblyId, DriveIndex, f32)> = overrides
+            .iter()
+            .map(|(assembly, amount)| (*assembly, DriveIndex::FIRST, *amount))
+            .collect();
+        self.pose_with_drives(scene, &overrides, explode)
+    }
+
+    /// [`SceneGraph::pose_with`] with the overrides set drive by drive:
+    /// one slider for each drive of an assembly (grammar, "Mechanisms",
+    /// drives). An override wins over the scene for its drive; the
+    /// assembly's other drives stay where the scene poses them.
+    pub fn pose_with_drives(
+        &self,
+        scene: &SceneEntry,
+        overrides: &[(AssemblyId, DriveIndex, f32)],
+        explode: f32,
+    ) -> Posed {
+        // Every drive's amount of an assembly, when anything sets one.
+        let amounts = |assembly: AssemblyId| -> Option<Vec<f32>> {
+            let count = self
+                .motions
+                .get(assembly.index())
+                .and_then(Option::as_ref)
+                .map_or(1, AssemblyMove::drive_count);
+            let mut set = false;
+            let values = (0..count)
+                .map(|index| {
+                    let found = overrides
+                        .iter()
+                        .chain(&scene.moves)
+                        .find(|(id, drive, _)| *id == assembly && drive.index() == index)
+                        .map(|(_, _, amount)| *amount);
+                    set |= found.is_some();
+                    found.unwrap_or(0.0)
+                })
+                .collect();
+            set.then_some(values)
         };
         // A joint's member goes with the part that carries it.
         let matches = |node: &Node, item: &SceneItem| match *item {
@@ -983,14 +1283,14 @@ impl SceneGraph {
             let mut transform = Mat4::IDENTITY;
             for assembly in &node.assemblies {
                 let motion = self.motions.get(assembly.index()).and_then(Option::as_ref);
-                if let (Some(motion), Some(amount)) = (motion, amount(*assembly)) {
-                    transform *= motion.transform(amount);
+                if let (Some(motion), Some(amounts)) = (motion, amounts(*assembly)) {
+                    transform *= motion.transform(&amounts);
                 }
             }
             if let Some(follower) = &node.follows
-                && let Some(amount) = amount(follower.assembly)
+                && let Some(amounts) = amounts(follower.assembly)
             {
-                transform *= follower.transform(amount);
+                transform *= follower.transform(&amounts);
             }
             transform = Mat4::from_translation(self.staged_offset(index, explode)) * transform;
             let shown = scene
@@ -1013,8 +1313,8 @@ impl SceneGraph {
             let mut transform = Mat4::IDENTITY;
             for assembly in &region.assemblies {
                 let motion = self.motions.get(assembly.index()).and_then(Option::as_ref);
-                if let (Some(motion), Some(amount)) = (motion, amount(*assembly)) {
-                    transform *= motion.transform(amount);
+                if let (Some(motion), Some(amounts)) = (motion, amounts(*assembly)) {
+                    transform *= motion.transform(&amounts);
                 }
             }
             let offset = self

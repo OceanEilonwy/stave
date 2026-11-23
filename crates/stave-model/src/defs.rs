@@ -1171,6 +1171,10 @@ pub struct SceneDef {
 pub struct PoseDef {
     /// The assembly.
     pub target: RExpr,
+    /// The drive it names after the assembly (`tilt` in `pose
+    /// frame.tilt = ...`), with where it is written; `None` for the
+    /// assembly alone.
+    pub drive: Option<(String, Span)>,
     /// `open`, `closed`, an angle or a length.
     pub value: RExpr,
     /// The whole entry.
@@ -1390,7 +1394,7 @@ impl BodyId {
 }
 
 /// A role of a kind: its index among [`KindDef::roles`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct RoleIndex(u32);
 
 impl RoleIndex {
@@ -1452,6 +1456,9 @@ pub struct BodyDef {
     /// Its own `mount { }`: the frame axes it is placed on from an anchor
     /// instead of from the kind's origin, each at most once.
     pub mount: Vec<MemberPlacement>,
+    /// `loose:`, when written: `true` for a member meant to lift out,
+    /// checked wherever it is set and never swept (grammar, "Shapes").
+    pub loose: Option<RExpr>,
 }
 
 /// One entry of a member's `mount { }`: `depth: from(face(on, toward:
@@ -1506,6 +1513,25 @@ pub struct HardwareKindDef {
     pub uses: Vec<UseDef>,
     /// Its `adjust` entries, in source order.
     pub adjusts: Vec<AdjustDef>,
+    /// Its one `clamp`, when it has one.
+    pub clamp: Option<ClampDef>,
+}
+
+/// `clamp a, b along axis` (grammar, "Clamps"): tightening draws member
+/// `bearing` and member `drawn` toward each other along `axis` of the
+/// kind's frame. They are two different members with a body, and
+/// `drawn` moves with a role that is a part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClampDef {
+    /// The member that bears on what lies between them (`a`).
+    pub bearing: BodyId,
+    /// The member drawn toward it (`b`), and with it the part it moves
+    /// with.
+    pub drawn: BodyId,
+    /// The frame axis.
+    pub axis: FrameAxis,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// `adjust a on b: axis within d` (grammar, "Adjustment"): member `body`
@@ -1849,6 +1875,18 @@ impl FrameAxis {
     pub fn from_word(word: &str) -> Option<FrameAxis> {
         FrameAxis::ALL.into_iter().find(|axis| axis.word() == word)
     }
+
+    /// The two directions of the plane a mechanism moves in when its pins
+    /// run along this one, in the order a positive turn carries the first
+    /// toward the second: cyclically along, across, depth (grammar, "How a
+    /// mechanism is solved").
+    pub fn plane(self) -> [FrameAxis; 2] {
+        match self {
+            FrameAxis::Along => [FrameAxis::Across, FrameAxis::Depth],
+            FrameAxis::Across => [FrameAxis::Depth, FrameAxis::Along],
+            FrameAxis::Depth => [FrameAxis::Along, FrameAxis::Across],
+        }
+    }
 }
 
 /// `mechanism { ... }`: how a hardware kind's bodies move.
@@ -1860,13 +1898,39 @@ pub struct MechanismDef {
     pub constraints: Vec<ConstraintDef>,
     /// Its couplings, in source order.
     pub couplings: Vec<CouplingDef>,
-    /// Its one input; `None` for a mechanism that follows the hardware
-    /// that drives its assembly (a lid stay).
-    pub drive: Option<DriveDef>,
-    /// What stops the drive, when the kind says.
+    /// Its inputs, in source order: none for a mechanism that follows the
+    /// hardware that drives its assembly (a lid stay), one for most kinds,
+    /// two (a turn and a travel of one member, each named) for a pin that
+    /// turns in a slot (grammar, "Mechanisms", drives).
+    pub drives: Vec<NamedDriveDef>,
+    /// What stops the drive, when the kind says (only with one drive).
     pub stop: Option<StopDef>,
     /// How thick every pin is, when the kind says.
     pub pin_diameter: Option<RExpr>,
+    /// The frame direction every pin is parallel to, when the kind writes
+    /// `pins:`; `None` for the default (grammar, "Mechanisms", the plane).
+    pub pins: Option<FrameAxis>,
+}
+
+/// The second name of a pivot, slot or rail: a member with a body, or a
+/// role of the kind that is a `Part` (grammar, "Mechanisms", a role in an
+/// entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EntrySide {
+    /// A member with a body.
+    Member(BodyId),
+    /// A role's part, held or moving as the role is.
+    Role(RoleIndex),
+}
+
+/// The two names of a pivot, slot or rail: a member, then a member or a
+/// role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntryPair {
+    /// The first name: always a member, the side the mechanism places.
+    pub member: BodyId,
+    /// The second name.
+    pub other: EntrySide,
 }
 
 /// A pivot, slot or rail between two bodies.
@@ -1875,7 +1939,7 @@ pub enum ConstraintDef {
     /// `pivot a, b at point(...)`
     Pivot {
         /// The two bodies on the pin.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// Where the pin is.
         at: Box<KindPoint>,
         /// The whole entry.
@@ -1884,7 +1948,7 @@ pub enum ConstraintDef {
     /// `slot a, b from point(...) to point(...)`
     Slot {
         /// The body with the pin, then the body with the slot.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// One end of the slot.
         from: Box<KindPoint>,
         /// The other end.
@@ -1895,7 +1959,7 @@ pub enum ConstraintDef {
     /// `rail a, b along <word>`
     Rail {
         /// The body that runs, then the body it runs along.
-        bodies: [BodyId; 2],
+        bodies: EntryPair,
         /// The direction it runs.
         along: FrameAxis,
         /// The whole entry.
@@ -1914,6 +1978,47 @@ pub struct CouplingDef {
     pub ratio: RExpr,
     /// The whole entry.
     pub span: Span,
+}
+
+/// One drive of a mechanism with its name, when written: `drive tilt:
+/// turn(...)`, or `drive: turn(...)` with none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedDriveDef {
+    /// The name, when written.
+    pub name: Option<String>,
+    /// The drive.
+    pub drive: DriveDef,
+    /// Its `set_at:`, when written: the values it can be locked at.
+    pub set_at: Option<SetAtDef>,
+}
+
+/// `set_at:` of a drive (grammar, "Mechanisms", set positions): the
+/// values it can be locked at, in the drive's own values.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetAtDef {
+    /// `set_at: [a, b, ...]`: never empty.
+    List {
+        /// The values, as written.
+        values: NonEmpty<RExpr>,
+        /// The whole value.
+        span: Span,
+    },
+    /// `set_at: every(d)`: every `d` from `from` toward `to`.
+    Every {
+        /// How far apart the set positions are.
+        step: RExpr,
+        /// The whole value.
+        span: Span,
+    },
+}
+
+impl SetAtDef {
+    /// The whole value.
+    pub fn span(&self) -> Span {
+        match self {
+            SetAtDef::List { span, .. } | SetAtDef::Every { span, .. } => *span,
+        }
+    }
 }
 
 /// `drive: turn(...)` or `drive: travel(...)`
@@ -1955,6 +2060,14 @@ impl DriveDef {
     pub fn span(&self) -> Span {
         match self {
             DriveDef::Turn { span, .. } | DriveDef::Travel { span, .. } => *span,
+        }
+    }
+
+    /// `true` for a turn.
+    pub fn turns(&self) -> bool {
+        match self {
+            DriveDef::Turn { .. } => true,
+            DriveDef::Travel { .. } => false,
         }
     }
 }
@@ -2276,6 +2389,8 @@ pub struct ProjectDef {
     pub title: String,
     /// `goal:`
     pub goal: Option<String>,
+    /// `finish:`: the finish, in words.
+    pub finish: Option<String>,
     /// `units:`
     pub units: OutputUnit,
     /// `resolution:`
@@ -2294,6 +2409,8 @@ pub struct ProjectDef {
     pub rough_length: Option<RExpr>,
     /// `rough_width:` (grammar, "Cut list").
     pub rough_width: Option<RExpr>,
+    /// `running_gap:` (grammar, "Running clearance").
+    pub running_gap: Option<RExpr>,
     /// The file it is in.
     pub file: FileId,
     /// The whole item.

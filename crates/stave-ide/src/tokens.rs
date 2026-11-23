@@ -14,6 +14,8 @@ use stave_lang::{FileId, SyntaxKind, SyntaxToken};
 
 use crate::index::{Index, SymbolKind, UseKind};
 use crate::words;
+use stave_schema::functions::{CYLINDER_AXIS, PINS, POINT_ARGUMENTS};
+use stave_schema::kinds::JOINT_DEFAULT_ROLES;
 
 /// How a run of source text is coloured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -318,9 +320,13 @@ pub(crate) fn names_nothing(token: &SyntaxToken) -> bool {
     let Some(parent) = token.parent() else {
         return false;
     };
+    if is_default_joint_role(token) {
+        return false;
+    }
     match parent.kind() {
         SyntaxKind::NAME_REF => {
             !(words::is_enum_word(text)
+                || is_frame_direction(token)
                 || words::is_feature_word(text)
                 || words::is_fixed_call(text)
                 || words::builtin_signature(text).is_some()
@@ -335,6 +341,67 @@ pub(crate) fn names_nothing(token: &SyntaxToken) -> bool {
         }),
         _ => false,
     }
+}
+
+/// `true` for a direction of a hardware kind's frame (`along`, `across`,
+/// `depth`) written as the whole value of a mechanism's `pins:` (`pins:
+/// depth`) or of a cylinder's `axis:` (`axis: along`): a word of the
+/// kind's frame, not a name.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the two holders it needs"
+)]
+fn is_frame_direction(token: &SyntaxToken) -> bool {
+    if !POINT_ARGUMENTS.contains(&token.text()) {
+        return false;
+    }
+    let Some(holder) = token.parent().and_then(|value| value.parent()) else {
+        return false;
+    };
+    let key = holder
+        .children()
+        .find(|child| child.kind() == SyntaxKind::NAME)
+        .map(|name| name.text().to_string());
+    match holder.kind() {
+        // A field of the mechanism's block.
+        SyntaxKind::FIELD => {
+            key.as_deref() == Some(PINS)
+                && holder
+                    .ancestors()
+                    .skip(1)
+                    .take(2)
+                    .any(|node| node.kind() == SyntaxKind::MECHANISM)
+        }
+        SyntaxKind::ARG => key.as_deref() == Some(CYLINDER_AXIS),
+        _ => false,
+    }
+}
+
+/// `true` for `piece` or `into` inside a joint kind with no `roles { }`
+/// block, which has them as its default roles (grammar, "Kinds").
+fn is_default_joint_role(token: &SyntaxToken) -> bool {
+    let text = token.text();
+    if !JOINT_DEFAULT_ROLES.iter().any(|role| role.name == text) {
+        return false;
+    }
+    let Some(kind) = token
+        .parent_ancestors()
+        .find(|node| node.kind() == SyntaxKind::KIND)
+    else {
+        return false;
+    };
+    // The base after `kind name :` is the kind's second name.
+    let is_joint = kind
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::NAME)
+        .flat_map(|name| name.children_with_tokens())
+        .any(|element| element.kind() == SyntaxKind::KW_JOINT);
+    let has_roles = kind
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::BLOCK)
+        .flat_map(|block| block.children())
+        .any(|entry| entry.kind() == SyntaxKind::ROLES);
+    is_joint && !has_roles
 }
 
 /// The class of a token that names no symbol.
@@ -394,7 +461,10 @@ fn classify(token: &SyntaxToken) -> TokenClass {
                 && parent.prev_sibling().is_none();
             if called && (words::builtin_signature(text).is_some() || words::is_fixed_call(text)) {
                 TokenClass::Function
-            } else if words::is_enum_word(text) || words::is_feature_word(text) {
+            } else if words::is_enum_word(text)
+                || is_frame_direction(token)
+                || words::is_feature_word(text)
+            {
                 TokenClass::EnumWord
             } else {
                 TokenClass::Plain

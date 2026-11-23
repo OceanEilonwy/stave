@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/turning.rs
+expression: rendered(&opened)
+---
+error[motion]: frame.stile_l hits stretcher when frame is opened past 0.2deg
+   --> /project/project.stave:159:10
+    |
+159 | assembly frame : Frame {
+    |          ^^^^^
+    = note: the hinges open to 360deg
+    = help: leave at least 2.5mm between frame and stretcher

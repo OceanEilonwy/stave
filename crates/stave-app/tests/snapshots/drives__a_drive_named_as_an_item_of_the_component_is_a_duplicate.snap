@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[duplicate-name]: `height` is a drive of frame.pivot_l's kind and an item of frame
+   --> /project/project.stave:160:22
+    |
+160 |   hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: height)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: pose frame.height would name both; pivot_bolt calls one of its drives `height`
+    = help: rename the item, or name the drive another way in its kind

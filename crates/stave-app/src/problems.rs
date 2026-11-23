@@ -77,7 +77,7 @@ impl Category {
     /// The category of a diagnostic code.
     pub fn of(code: Code) -> Category {
         match code {
-            Code::Motion => Category::Motion,
+            Code::Motion | Code::Clearance => Category::Motion,
             Code::Overlap => Category::Overlap,
             Code::NoContact | Code::LoosePart => Category::NoContact,
             Code::Adjust => Category::Adjust,
@@ -1143,7 +1143,7 @@ fn specific_title(
             let turns = checked
                 .scene
                 .as_ref()
-                .and_then(|graph| graph.motion_range(motion.assembly))
+                .and_then(|graph| graph.drive_range(motion.assembly, motion.drive))
                 .is_none_or(|range| range.turns());
             let template = if turns {
                 tr("{name} hits {things} as it opens")
@@ -1174,7 +1174,7 @@ fn specific_title(
 fn motion_card(checked: &Checked, contact: &Contact) -> Option<MotionCard> {
     let motion = contact.motion?;
     let (design, graph) = checked.drawable()?;
-    let range = graph.motion_range(motion.assembly)?;
+    let range = graph.drive_range(motion.assembly, motion.drive)?;
     let name = design.assembly(motion.assembly)?.name.clone();
     let (travel, closed, contact_at, full) = match range {
         MotionRange::Swing { full } => {

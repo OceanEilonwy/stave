@@ -312,6 +312,10 @@ codes! {
     CutSize = "cut-size", layer 4;
     /// `<a> hits <b> when <assembly> is <open>`
     Motion = "motion", layer 5;
+    /// Warning: wood that moves past wood with less than the running gap
+    /// beyond what the seasons close up, or a wooden spacer that wears
+    /// (grammar, "Running clearance").
+    Clearance = "clearance", layer 5;
     /// `'<name>' fails: <message>`
     Require = "require", layer 6;
     /// `'<name>' does not hold for every allowed value: <message>`

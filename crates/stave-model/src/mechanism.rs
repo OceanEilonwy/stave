@@ -10,8 +10,8 @@
 //! counted wrong unrepresentable: every member it names is declared, a
 //! carried member rides on one declared before it, the entries join two
 //! different rigid pieces that aren't both held, the members add up to
-//! exactly one freedom, and the drive moves a free member through a range
-//! that isn't one value. Which order of closed-form steps places the
+//! exactly one freedom for each drive, and every drive moves the same free
+//! member through a range that isn't one value. Which order of closed-form steps places the
 //! members, and where they are at a drive value, are worked out at the
 //! geometry boundary (`stave-geom`), which needs square roots.
 //!
@@ -24,9 +24,11 @@ use serde::Serialize;
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length, Rational};
 
-use crate::defs::BodyId;
+use crate::defs::{BodyId, RoleIndex};
 use crate::ids::HardwareId;
+use crate::nonempty::NonEmpty;
 use crate::solved::Point;
+use crate::solved::PoseValue;
 
 /// The plane a mechanism moves in: across a world axis (the pins' axis),
 /// with an origin and the world directions of its two coordinates.
@@ -178,15 +180,42 @@ pub enum Holding {
     Carried(MemberIndex),
 }
 
+/// What a member of a mechanism is: one of its kind's members with a
+/// body, or the part of a role named in an entry (grammar, "Mechanisms",
+/// a role in an entry), which the design places and which has no shape of
+/// its own here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(untagged)]
+pub enum MemberBody {
+    /// One of the kind's members with a body.
+    Body(BodyId),
+    /// The part a role of the kind binds.
+    Role {
+        /// Which role.
+        role: RoleIndex,
+    },
+}
+
+impl MemberBody {
+    /// The kind's member, when it is one.
+    pub fn body(self) -> Option<BodyId> {
+        match self {
+            MemberBody::Body(body) => Some(body),
+            MemberBody::Role { .. } => None,
+        }
+    }
+}
+
 /// A member of a mechanism: which member of which piece of hardware, and
 /// how it is held.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MechanismMember {
     /// The piece of hardware it belongs to (for several alike, the first).
     pub hardware: HardwareId,
-    /// Which of its kind's members.
-    pub body: BodyId,
-    /// The member's name in its kind, for messages: `cup`, `inner_link`.
+    /// Which of its kind's members, or which role's part.
+    pub body: MemberBody,
+    /// The member's name in its kind, for messages: `cup`, `inner_link`;
+    /// a role's name for a role's part (`piece`).
     pub name: String,
     /// How it is held.
     pub holding: Holding,
@@ -370,6 +399,180 @@ impl MechanismDrive {
     }
 }
 
+/// A drive of a mechanism, by its place in [`Mechanism::drives`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct DriveIndex(u32);
+
+impl DriveIndex {
+    /// The first drive: the only one of most mechanisms.
+    pub const FIRST: DriveIndex = DriveIndex(0);
+
+    /// The drive at `index`; `None` past `u32`.
+    pub fn new(index: usize) -> Option<DriveIndex> {
+        u32::try_from(index).ok().map(DriveIndex)
+    }
+
+    /// Its place in the list (from zero).
+    pub fn index(self) -> usize {
+        // A u32 always fits a usize on the platforms Stave builds for;
+        // saturate rather than cast.
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
+impl MechanismDrive {
+    /// How far a value of this drive lies from its `from`, toward its
+    /// `to` (negative behind `from`), in micro-degrees or nanometres;
+    /// `None` for a value of the other kind.
+    pub fn signed_amount(&self, value: DriveValue) -> Option<i64> {
+        let toward = |from: i64, to: i64, at: i64| {
+            if to >= from {
+                at.saturating_sub(from)
+            } else {
+                from.saturating_sub(at)
+            }
+        };
+        match (*self, value) {
+            (MechanismDrive::Turn { from, to, .. }, DriveValue::Turn(at)) => {
+                Some(toward(from.microdeg(), to.microdeg(), at.microdeg()))
+            }
+            (MechanismDrive::Travel { from, to, .. }, DriveValue::Travel(at)) => {
+                Some(toward(from.nm(), to.nm(), at.nm()))
+            }
+            (MechanismDrive::Turn { .. }, DriveValue::Travel(_))
+            | (MechanismDrive::Travel { .. }, DriveValue::Turn(_)) => None,
+        }
+    }
+
+    /// Whether a value lies in its range, from `from` to `to`, ends
+    /// included.
+    pub fn reaches(&self, value: DriveValue) -> bool {
+        let extent = match self.extent() {
+            DriveValue::Turn(angle) => angle.microdeg(),
+            DriveValue::Travel(length) => length.nm(),
+        };
+        self.signed_amount(value)
+            .is_some_and(|amount| (0..=extent).contains(&amount))
+    }
+
+    /// A value as the amount a pose names: how far from `from` toward
+    /// `to` (an angle for a turn, a length for a travel); `None` for a
+    /// value of the other kind.
+    pub fn amount_of(&self, value: DriveValue) -> Option<DriveValue> {
+        let amount = self.signed_amount(value)?;
+        Some(match self {
+            MechanismDrive::Turn { .. } => DriveValue::Turn(Angle::from_microdeg(amount)),
+            MechanismDrive::Travel { .. } => DriveValue::Travel(Length::from_nm(amount)),
+        })
+    }
+}
+
+/// The values a drive can be locked at (grammar, "Mechanisms", set
+/// positions): drive values of its own kind, each once, in order from
+/// its `from` toward its `to`, its `from` always among them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct SetPositions {
+    values: Vec<DriveValue>,
+    every: Option<DriveValue>,
+}
+
+impl SetPositions {
+    /// The set positions of `drive`: `values` in any order, repeats
+    /// allowed, with its `from` added, and the step of `every(d)` when
+    /// they were written so. `None` when a value or the step is the
+    /// other kind of value.
+    pub fn new(
+        drive: &MechanismDrive,
+        values: Vec<DriveValue>,
+        every: Option<DriveValue>,
+    ) -> Option<SetPositions> {
+        let same = |value: &DriveValue| drive.signed_amount(*value).is_some();
+        if !values.iter().all(same) || !every.iter().all(same) {
+            return None;
+        }
+        let mut values = values;
+        values.push(drive.from());
+        values.sort_by_key(|value| drive.signed_amount(*value));
+        values.dedup();
+        Some(SetPositions { values, every })
+    }
+
+    /// Every set value, from `from` toward `to`: never empty.
+    pub fn values(&self) -> &[DriveValue] {
+        &self.values
+    }
+
+    /// The step of `every(d)`, when they were written so; `None` for a
+    /// list.
+    pub fn every(&self) -> Option<DriveValue> {
+        self.every
+    }
+}
+
+/// A drive with its name in its kind, when it has one (grammar,
+/// "Mechanisms", drives): `tilt` in `drive tilt: turn(...)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct NamedDrive {
+    /// The name; `None` for the one unnamed drive of a mechanism.
+    pub name: Option<String>,
+    /// The drive and its range.
+    pub drive: MechanismDrive,
+    /// The values it can be locked at; `None` for a continuous drive,
+    /// set anywhere in its range.
+    pub set_at: Option<SetPositions>,
+}
+
+impl NamedDrive {
+    /// An unnamed, continuous drive.
+    pub fn unnamed(drive: MechanismDrive) -> NamedDrive {
+        NamedDrive {
+            name: None,
+            drive,
+            set_at: None,
+        }
+    }
+
+    /// Its set values within its range, from `from` toward `to`; empty
+    /// for a continuous drive.
+    pub fn set_values(&self) -> impl Iterator<Item = DriveValue> + '_ {
+        self.set_at
+            .iter()
+            .flat_map(|set| set.values().iter().copied())
+            .filter(|value| self.drive.reaches(*value))
+    }
+
+    /// Whether it can be locked at a value: any value in its range of a
+    /// continuous drive, one of its set values otherwise.
+    pub fn sets_at(&self, value: DriveValue) -> bool {
+        match &self.set_at {
+            None => self.drive.reaches(value),
+            Some(_) => self.set_values().any(|set| set == value),
+        }
+    }
+
+    /// Where `open` puts it: the far end of its range, or for a drive
+    /// with set positions the furthest of them within its range.
+    pub fn open(&self) -> DriveValue {
+        match &self.set_at {
+            None => self.drive.to(),
+            Some(_) => self.set_values().last().unwrap_or(self.drive.from()),
+        }
+    }
+
+    /// The set values nearest a value, one either side of it (toward
+    /// `from`, toward `to`), when there are; both `None` for a
+    /// continuous drive.
+    pub fn nearest_set(&self, value: DriveValue) -> (Option<DriveValue>, Option<DriveValue>) {
+        let Some(at) = self.drive.signed_amount(value) else {
+            return (None, None);
+        };
+        let amount = |set: &DriveValue| self.drive.signed_amount(*set).unwrap_or(0);
+        let below = self.set_values().filter(|set| amount(set) < at).last();
+        let above = self.set_values().find(|set| amount(set) > at);
+        (below, above)
+    }
+}
+
 /// What stops a mechanism's drive, with the kind's words for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MechanismStop {
@@ -420,10 +623,42 @@ pub enum MechanismError {
         /// How many it has.
         found: i64,
     },
-    /// The drive moves a member that isn't free.
-    #[error("the drive moves `{member}`, which the mechanism doesn't place")]
+    /// The members of a mechanism with several drives don't add up to one
+    /// freedom for each.
+    #[error("the mechanism has {found} freedoms; it needs exactly {drives}, one for each drive")]
+    DriveFreedom {
+        /// How many it has.
+        found: i64,
+        /// How many drives it has.
+        drives: usize,
+    },
+    /// No drives.
+    #[error("a mechanism with a motion has at least one drive")]
+    NoDrives,
+    /// Two turning drives of one member: a member moving in a plane turns
+    /// about one line.
+    #[error("two drives turn `{member}`, but a member moving in a plane turns about one line")]
+    TwoTurns {
+        /// The member.
+        member: String,
+    },
+    /// Two travelling drives of one member: it travels along its one rail
+    /// or slot.
+    #[error("two drives move `{member}`, but a member travels along one line")]
+    TwoTravels {
+        /// The member.
+        member: String,
+    },
+    /// A drive moves a member that is held (or rides on one).
+    #[error("the drive moves `{member}`, which is held")]
     DriveNotFree {
         /// The driven member.
+        member: String,
+    },
+    /// The member the assembly moves with isn't one the mechanism places.
+    #[error("the assembly moves with `{member}`, which the mechanism doesn't place")]
+    MovingNotFree {
+        /// The member.
         member: String,
     },
     /// A drive whose range is one value.
@@ -440,7 +675,11 @@ pub struct Mechanism {
     frame: MechanismFrame,
     members: Vec<MechanismMember>,
     entries: Vec<MechanismEntry>,
-    drive: MechanismDrive,
+    /// Each acts on a member the mechanism places.
+    drives: NonEmpty<NamedDrive>,
+    /// The member the assembly moves with: the one `with:` its moving
+    /// part.
+    moving: MemberIndex,
     stop: Option<MechanismStop>,
     hardware: Vec<HardwareId>,
 }
@@ -458,6 +697,33 @@ impl Mechanism {
         members: Vec<MechanismMember>,
         entries: Vec<MechanismEntry>,
         drive: MechanismDrive,
+        stop: Option<MechanismStop>,
+        hardware: Vec<HardwareId>,
+    ) -> Result<Mechanism, MechanismError> {
+        let moving = drive.member();
+        Mechanism::with_drives(
+            frame,
+            members,
+            entries,
+            vec![NamedDrive::unnamed(drive)],
+            moving,
+            stop,
+            hardware,
+        )
+    }
+
+    /// A mechanism with any number of drives (grammar, "Mechanisms",
+    /// drives), checked as [`Mechanism::new`] checks one: the members
+    /// leave exactly one freedom for each drive, every drive acts on a
+    /// member the mechanism places (no member turned by two drives or
+    /// moved by two), through a range that isn't one value, and the
+    /// assembly moves with `moving`, which the mechanism places.
+    pub fn with_drives(
+        frame: MechanismFrame,
+        members: Vec<MechanismMember>,
+        entries: Vec<MechanismEntry>,
+        drives: Vec<NamedDrive>,
+        moving: MemberIndex,
         stop: Option<MechanismStop>,
         hardware: Vec<HardwareId>,
     ) -> Result<Mechanism, MechanismError> {
@@ -534,23 +800,72 @@ impl Mechanism {
             .and_then(|free| free.checked_mul(3))
             .and_then(|all| all.checked_sub(taken))
             .ok_or(MechanismError::Overflow)?;
-        if found != 1 {
-            return Err(MechanismError::Freedom { found });
-        }
-        let driven = drive.member();
-        if members.get(driven.index()).map(|member| member.holding) != Some(Holding::Free) {
-            return Err(MechanismError::DriveNotFree {
-                member: name(driven)?,
+        let Some(drives) = NonEmpty::new(drives) else {
+            return Err(MechanismError::NoDrives);
+        };
+        let wanted = i64::try_from(drives.len()).map_err(|_| MechanismError::Overflow)?;
+        if found != wanted {
+            return Err(if drives.len() == 1 {
+                MechanismError::Freedom { found }
+            } else {
+                MechanismError::DriveFreedom {
+                    found,
+                    drives: drives.len(),
+                }
             });
         }
-        if drive.from() == drive.to() {
+        let free = |piece: usize| {
+            members
+                .get(piece)
+                .is_some_and(|member| member.holding == Holding::Free)
+        };
+        // Each drive acts on a piece the mechanism places; no piece is
+        // turned by two drives, or moved by two.
+        let mut turned: Vec<usize> = Vec::new();
+        let mut travelled: Vec<usize> = Vec::new();
+        for named in drives.iter() {
+            let member = named.drive.member();
+            let piece = piece_of(member)?;
+            if !free(piece) {
+                return Err(MechanismError::DriveNotFree {
+                    member: name(member)?,
+                });
+            }
+            let seen = if named.drive.turns() {
+                &mut turned
+            } else {
+                &mut travelled
+            };
+            if seen.contains(&piece) {
+                return Err(if named.drive.turns() {
+                    MechanismError::TwoTurns {
+                        member: name(member)?,
+                    }
+                } else {
+                    MechanismError::TwoTravels {
+                        member: name(member)?,
+                    }
+                });
+            }
+            seen.push(piece);
+        }
+        if !free(piece_of(moving)?) {
+            return Err(MechanismError::MovingNotFree {
+                member: name(moving)?,
+            });
+        }
+        if drives
+            .iter()
+            .any(|named| named.drive.from() == named.drive.to())
+        {
             return Err(MechanismError::EmptyRange);
         }
         Ok(Mechanism {
             frame,
             members,
             entries,
-            drive,
+            drives,
+            moving,
             stop,
             hardware,
         })
@@ -571,9 +886,73 @@ impl Mechanism {
         &self.entries
     }
 
-    /// Its drive and range.
+    /// Its first drive and range: the only one of most mechanisms (see
+    /// [`Mechanism::drives`]).
     pub fn drive(&self) -> &MechanismDrive {
-        &self.drive
+        &self.drives.first().drive
+    }
+
+    /// Every drive, in the kind's order: never empty, each acting on a
+    /// member the mechanism places.
+    pub fn drives(&self) -> &NonEmpty<NamedDrive> {
+        &self.drives
+    }
+
+    /// A drive by its place.
+    pub fn drive_at(&self, drive: DriveIndex) -> Option<&NamedDrive> {
+        self.drives.get(drive.index())
+    }
+
+    /// The drive with a name.
+    pub fn drive_named(&self, name: &str) -> Option<DriveIndex> {
+        self.drives
+            .iter()
+            .position(|named| named.name.as_deref() == Some(name))
+            .and_then(DriveIndex::new)
+    }
+
+    /// Every drive at its `from`: the closed pose.
+    pub fn closed(&self) -> Vec<DriveValue> {
+        self.drives.iter().map(|named| named.drive.from()).collect()
+    }
+
+    /// The exact value a scene's pose value means for one drive: its
+    /// `from` for `closed`, its `to` for `open` (the furthest set value,
+    /// for a drive with set positions), and an amount measured
+    /// from its `from` toward its `to` otherwise; a value of the other
+    /// kind is its `from`. `None` for a drive it doesn't have.
+    pub fn value_of(&self, drive: DriveIndex, pose: PoseValue) -> Option<DriveValue> {
+        let named = self.drives.get(drive.index())?;
+        let drive = named.drive;
+        Some(match pose {
+            PoseValue::Closed => drive.from(),
+            PoseValue::Open => named.open(),
+            PoseValue::Angle(angle) => drive
+                .value_at(DriveValue::Turn(angle))
+                .unwrap_or(drive.from()),
+            PoseValue::Travel(length) => drive
+                .value_at(DriveValue::Travel(length))
+                .unwrap_or(drive.from()),
+        })
+    }
+
+    /// The exact values of every drive for a pose value of each (in
+    /// order; `closed` for any left out), as [`Mechanism::value_of`].
+    pub fn values_of(&self, poses: &[PoseValue]) -> Vec<DriveValue> {
+        self.drives
+            .iter()
+            .enumerate()
+            .map(|(index, named)| {
+                DriveIndex::new(index)
+                    .and_then(|drive| {
+                        self.value_of(
+                            drive,
+                            poses.get(index).copied().unwrap_or(PoseValue::Closed),
+                        )
+                    })
+                    .unwrap_or(named.drive.from())
+            })
+            .collect()
     }
 
     /// What stops it, when a kind says.
@@ -587,9 +966,10 @@ impl Mechanism {
         &self.hardware
     }
 
-    /// The member the assembly moves with: the driven one.
+    /// The member the assembly moves with: the one `with:` its moving
+    /// part.
     pub fn moving(&self) -> MemberIndex {
-        self.drive.member()
+        self.moving
     }
 
     /// The rigid piece a member is part of: the held or free member it
@@ -630,15 +1010,17 @@ impl Mechanism {
                 .collect(),
             hardware: self.hardware.iter().map(|h| rebind(*h)).collect(),
             entries: self.entries.clone(),
-            drive: self.drive,
+            drives: self.drives.clone(),
+            moving: self.moving,
             stop: self.stop.clone(),
         }
     }
 
-    /// The same mechanism with a narrower range: `to` moved to `to`. `None`
-    /// when `to` is the other kind of value or would leave an empty range.
+    /// The same mechanism with its first drive's range narrower: `to`
+    /// moved to `to`. `None` when `to` is the other kind of value or would
+    /// leave an empty range.
     pub fn with_to(&self, to: DriveValue) -> Option<Mechanism> {
-        let drive = match (self.drive, to) {
+        let drive = match (*self.drive(), to) {
             (MechanismDrive::Turn { member, from, .. }, DriveValue::Turn(to)) => {
                 MechanismDrive::Turn { member, from, to }
             }
@@ -648,94 +1030,322 @@ impl Mechanism {
             (MechanismDrive::Turn { .. }, DriveValue::Travel(_))
             | (MechanismDrive::Travel { .. }, DriveValue::Turn(_)) => return None,
         };
-        (drive.from() != drive.to()).then(|| Mechanism {
-            drive,
+        if drive.from() == drive.to() {
+            return None;
+        }
+        let mut drives = self.drives.clone();
+        drives.first_mut().drive = drive;
+        Some(Mechanism {
+            drives,
             ..self.clone()
         })
     }
 
-    /// The exact shape of its motion: a turn about one fixed pin, a travel
-    /// along one rail, or neither.
+    /// The exact shape of its first drive's motion, every other drive at
+    /// its `from`: a turn about one fixed pin, a travel along one rail, or
+    /// neither.
     pub fn shape(&self) -> MotionShape {
-        let moving = self.moving();
-        let held = |index: MemberIndex| {
-            self.members
-                .get(self.piece_of(index).index())
-                .is_some_and(|member| member.holding == Holding::Held)
-        };
-        let joins_held = |[a, b]: [MemberIndex; 2]| {
-            let (pa, pb) = (self.piece_of(a), self.piece_of(b));
-            (pa == moving && held(b)) || (pb == moving && held(a))
-        };
-        let frame = self.frame;
-        for entry in &self.entries {
-            match (*entry, self.drive) {
-                (
-                    MechanismEntry::Pivot { first, second, at },
-                    MechanismDrive::Turn { from, to, .. },
-                ) if joins_held([first, second]) => {
-                    let through = stepped(
-                        stepped(frame.origin(), frame.across(), at.across),
-                        frame.depth(),
-                        at.depth,
-                    );
-                    let opening = to.microdeg().saturating_sub(from.microdeg());
-                    let swing_toward = if opening >= 0 {
-                        frame.depth()
-                    } else {
-                        frame.depth().opposite()
-                    };
-                    return MotionShape::Turn {
-                        line: TurnLine {
-                            axis: frame.axis(),
-                            through,
-                            free_side: frame.across(),
-                            swing_toward,
-                        },
-                        opening: Angle::from_microdeg(opening.saturating_abs()),
-                    };
+        self.shape_of(DriveIndex::FIRST, &self.closed())
+    }
+
+    /// A frame point in the world, with the mechanism closed.
+    fn world(&self, at: FramePoint) -> Point {
+        stepped(
+            stepped(self.frame.origin(), self.frame.across(), at.across),
+            self.frame.depth(),
+            at.depth,
+        )
+    }
+
+    /// The world direction of a frame direction along one of the plane's
+    /// two directions; `None` for a slanted one.
+    fn world_direction(&self, direction: FrameDirection) -> Option<Direction> {
+        match (direction.across().nm(), direction.depth().nm()) {
+            (a, 0) if a > 0 => Some(self.frame.across()),
+            (a, 0) if a < 0 => Some(self.frame.across().opposite()),
+            (0, d) if d > 0 => Some(self.frame.depth()),
+            (0, d) if d < 0 => Some(self.frame.depth().opposite()),
+            _ => None,
+        }
+    }
+
+    /// Where each rigid piece has moved from the closed pose, as one world
+    /// translation, when the drives are at `values` (one for each drive,
+    /// absolute) and nothing turns: by member, `Some` for each piece that
+    /// a chain of entries places by translation alone from the held
+    /// members (a pivot or slot pin whose turn is closed, a rail whose
+    /// runner's travel is known), with how it was placed. `None` when a
+    /// turning drive is away from its `from` (by other than whole turns):
+    /// then something turns.
+    fn translations(&self, values: &[DriveValue]) -> Option<Vec<Option<(Point, Placed)>>> {
+        let count = self.members.len();
+        let mut placed: Vec<Option<(Point, Placed)>> = self
+            .members
+            .iter()
+            .map(|member| {
+                (member.holding == Holding::Held).then_some((Point::default(), Placed::Held))
+            })
+            .collect();
+        // A piece whose angle is known to be closed: held, turned by a
+        // drive at its `from`, or on a rail along such a piece.
+        let mut square: Vec<bool> = placed.iter().map(Option::is_some).collect();
+        let mut travel: Vec<Option<Length>> = vec![None; count];
+        for (index, named) in self.drives.iter().enumerate() {
+            let value = values.get(index).copied().unwrap_or(named.drive.from());
+            let piece = self.piece_of(named.drive.member()).index();
+            match (named.drive, value) {
+                (MechanismDrive::Turn { from, .. }, DriveValue::Turn(angle)) => {
+                    let turned = angle.microdeg().saturating_sub(from.microdeg());
+                    if turned.rem_euclid(Angle::from_deg(360).microdeg()) != 0 {
+                        return None;
+                    }
+                    if let Some(slot) = square.get_mut(piece) {
+                        *slot = true;
+                    }
                 }
-                (
-                    MechanismEntry::Rail {
-                        runner,
-                        guide,
-                        direction,
-                    },
-                    MechanismDrive::Travel { from, to, .. },
-                ) if joins_held([runner, guide]) => {
-                    let along = match (direction.across().nm(), direction.depth().nm()) {
-                        (a, 0) if a > 0 => frame.across(),
-                        (a, 0) if a < 0 => frame.across().opposite(),
-                        (0, d) if d > 0 => frame.depth(),
-                        (0, d) if d < 0 => frame.depth().opposite(),
-                        _ => return MotionShape::General,
-                    };
-                    let travel = to.nm().saturating_sub(from.nm());
-                    // The runner's travel is measured along the rail's
-                    // direction in the guide; the guide is held, so that is
-                    // the world's.
-                    let runner_moves = self.piece_of(runner) == moving;
-                    let toward = if (travel >= 0) == runner_moves {
-                        along
-                    } else {
-                        along.opposite()
-                    };
-                    return MotionShape::Travel {
-                        toward,
-                        travel: Length::from_nm(travel.saturating_abs()),
-                    };
+                (MechanismDrive::Travel { from, .. }, DriveValue::Travel(length)) => {
+                    if let Some(slot) = travel.get_mut(piece) {
+                        *slot = Some(Length::from_nm(length.nm().saturating_sub(from.nm())));
+                    }
                 }
-                _ => {}
+                (MechanismDrive::Turn { .. }, DriveValue::Travel(_))
+                | (MechanismDrive::Travel { .. }, DriveValue::Turn(_)) => return None,
             }
         }
-        MotionShape::General
+        let is_square = |square: &[bool], piece: usize| square.get(piece).copied().unwrap_or(false);
+        let known = |placed: &[Option<(Point, Placed)>], square: &[bool], piece: usize| {
+            placed
+                .get(piece)
+                .copied()
+                .flatten()
+                .filter(|_| is_square(square, piece))
+                .map(|(offset, _)| offset)
+        };
+        let open = |placed: &[Option<(Point, Placed)>], piece: usize| {
+            placed.get(piece).is_some_and(Option::is_none)
+        };
+        loop {
+            let mut changed = false;
+            for entry in &self.entries {
+                let [a, b] = entry.members().map(|m| self.piece_of(m).index());
+                let found = match *entry {
+                    MechanismEntry::Pivot { at, .. } => {
+                        [(a, b), (b, a)].into_iter().find_map(|(body, other)| {
+                            let offset = known(&placed, &square, other)?;
+                            (open(&placed, body) && is_square(&square, body)).then_some((
+                                body,
+                                offset,
+                                Placed::Pin(at),
+                            ))
+                        })
+                    }
+                    MechanismEntry::Slot { from, to, .. } => {
+                        // A positive travel runs the way the slot's frame
+                        // direction does.
+                        let along = if from.depth == to.depth {
+                            Some(self.frame.across())
+                        } else if from.across == to.across {
+                            Some(self.frame.depth())
+                        } else {
+                            None
+                        };
+                        match (
+                            along,
+                            known(&placed, &square, b),
+                            travel.get(a).copied().flatten(),
+                        ) {
+                            (Some(along), Some(offset), Some(by))
+                                if open(&placed, a) && is_square(&square, a) =>
+                            {
+                                Some((a, stepped(offset, along, by), Placed::Pin(from)))
+                            }
+                            _ => None,
+                        }
+                    }
+                    MechanismEntry::Rail { direction, .. } => {
+                        match (
+                            self.world_direction(direction),
+                            known(&placed, &square, b),
+                            travel.get(a).copied().flatten(),
+                        ) {
+                            (Some(along), Some(offset), Some(by)) if open(&placed, a) => {
+                                // The runner's travel is measured against
+                                // the held members: along the rail it is
+                                // exactly that far from closed.
+                                let signed = if along.is_positive() {
+                                    by
+                                } else {
+                                    Length::from_nm(by.nm().saturating_neg())
+                                };
+                                if let Some(slot) = square.get_mut(a) {
+                                    *slot = true;
+                                }
+                                Some((a, offset.with(along.axis(), signed), Placed::Rail))
+                            }
+                            _ => None,
+                        }
+                    }
+                    MechanismEntry::Couple { .. } => None,
+                };
+                if let Some((body, offset, how)) = found
+                    && let Some(slot) = placed.get_mut(body)
+                {
+                    *slot = Some((offset, how));
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Some(placed)
+    }
+
+    /// Where the member the assembly moves with has been moved, as one
+    /// world offset, when the drives are at `values` (one for each drive,
+    /// absolute): `Some` only when that is a translation (every turning
+    /// drive at its `from`, or whole turns from it, and the moving member
+    /// placed by a chain of rails, slots and pins from the held members),
+    /// `None` when it turns the member or isn't exact. Zero with every
+    /// drive closed. A value of the other kind counts as its drive's
+    /// `from`.
+    pub fn offset_at(&self, values: &[DriveValue]) -> Option<Point> {
+        let full = Angle::from_deg(360).microdeg();
+        let values: Vec<DriveValue> = self
+            .drives
+            .iter()
+            .enumerate()
+            .map(
+                |(index, named)| match (named.drive, values.get(index).copied()) {
+                    (MechanismDrive::Turn { .. }, Some(value @ DriveValue::Turn(_)))
+                    | (MechanismDrive::Travel { .. }, Some(value @ DriveValue::Travel(_))) => value,
+                    (MechanismDrive::Turn { .. } | MechanismDrive::Travel { .. }, _) => {
+                        named.drive.from()
+                    }
+                },
+            )
+            .collect();
+        let closed =
+            self.drives
+                .iter()
+                .zip(&values)
+                .all(|(named, value)| match (named.drive, *value) {
+                    (MechanismDrive::Turn { from, .. }, DriveValue::Turn(angle)) => {
+                        angle
+                            .microdeg()
+                            .saturating_sub(from.microdeg())
+                            .rem_euclid(full)
+                            == 0
+                    }
+                    (MechanismDrive::Travel { from, .. }, DriveValue::Travel(length)) => {
+                        length == from
+                    }
+                    (MechanismDrive::Turn { .. }, DriveValue::Travel(_))
+                    | (MechanismDrive::Travel { .. }, DriveValue::Turn(_)) => true,
+                });
+        if closed {
+            return Some(Point::default());
+        }
+        let placed = self.translations(&values)?;
+        placed
+            .get(self.piece_of(self.moving).index())
+            .copied()
+            .flatten()
+            .map(|(offset, _)| offset)
+    }
+
+    /// The exact shape of one drive's motion with every other drive held
+    /// at `held` (one value for each drive, absolute; the swept drive's
+    /// own is ignored): a turn about one fixed line, a travel along one
+    /// fixed direction, or neither, chosen by the mechanism's entries and
+    /// never by a kind. The shape is where the motion is in the world: a
+    /// turn's line is through the pin where the held drives have put it.
+    /// Both are exact only while the held turns are at their `from`; the
+    /// moving bodies then start where [`Mechanism::offset_at`] puts them.
+    ///
+    /// A turn is exact when it turns the member the assembly moves with,
+    /// pinned (by a pivot, or a slot whose travel is held) to a piece the
+    /// held drives place; a travel is exact when it carries the moving
+    /// member straight along one world direction (a slide, or a column on
+    /// a rail carrying what is pinned to it).
+    pub fn shape_of(&self, drive: DriveIndex, held: &[DriveValue]) -> MotionShape {
+        let Some(swept) = self.drives.get(drive.index()).map(|named| named.drive) else {
+            return MotionShape::General;
+        };
+        // The other drives, as they are held, with the swept one at `at`.
+        let with_swept = |at: DriveValue| -> Vec<DriveValue> {
+            self.drives
+                .iter()
+                .enumerate()
+                .map(|(index, named)| {
+                    if index == drive.index() {
+                        at
+                    } else {
+                        held.get(index).copied().unwrap_or(named.drive.from())
+                    }
+                })
+                .collect()
+        };
+        let Some(start) = self.translations(&with_swept(swept.from())) else {
+            return MotionShape::General;
+        };
+        let moving = self.piece_of(self.moving).index();
+        let Some((offset, how)) = start.get(moving).copied().flatten() else {
+            return MotionShape::General;
+        };
+        match swept {
+            MechanismDrive::Turn { member, from, to } => {
+                let Placed::Pin(at) = how else {
+                    return MotionShape::General;
+                };
+                if self.piece_of(member).index() != moving {
+                    return MotionShape::General;
+                }
+                let opening = to.microdeg().saturating_sub(from.microdeg());
+                let swing_toward = if opening >= 0 {
+                    self.frame.depth()
+                } else {
+                    self.frame.depth().opposite()
+                };
+                MotionShape::Turn {
+                    line: TurnLine {
+                        axis: self.frame.axis(),
+                        through: self.world(at).plus(offset),
+                        free_side: self.frame.across(),
+                        swing_toward,
+                    },
+                    opening: Angle::from_microdeg(opening.saturating_abs()),
+                }
+            }
+            MechanismDrive::Travel { .. } => {
+                let Some((end, _)) = self
+                    .translations(&with_swept(swept.to()))
+                    .and_then(|placed| placed.get(moving).copied().flatten())
+                else {
+                    return MotionShape::General;
+                };
+                let moved = end.minus(offset);
+                let away: Vec<Axis> = Axis::ALL
+                    .into_iter()
+                    .filter(|axis| moved.get(*axis) != Length::ZERO)
+                    .collect();
+                let [axis] = away.as_slice() else {
+                    return MotionShape::General;
+                };
+                let by = moved.get(*axis).nm();
+                MotionShape::Travel {
+                    toward: Direction::along(*axis, by > 0),
+                    travel: Length::from_nm(by.saturating_abs()),
+                }
+            }
+        }
     }
 
     /// For a turning drive: the frame's first direction (from a hinge's
     /// edge toward the middle of the door) and the way it turns as the
     /// drive opens; `None` for a travelling drive.
     pub fn swing(&self) -> Option<(Direction, Direction)> {
-        match self.drive {
+        match *self.drive() {
             MechanismDrive::Turn { from, to, .. } => {
                 let toward = if to.microdeg() >= from.microdeg() {
                     self.frame.depth()
@@ -794,6 +1404,19 @@ pub enum MotionShape {
     General,
 }
 
+/// How a piece was placed by translation alone (see
+/// [`Mechanism::offset_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placed {
+    /// It is held.
+    Held,
+    /// By a pin at this point (closed) on a placed piece: a pivot, or a
+    /// slot whose travel is known.
+    Pin(FramePoint),
+    /// On a rail along a placed piece.
+    Rail,
+}
+
 /// `point` moved `amount` along a world direction, saturating.
 fn stepped(point: Point, direction: Direction, amount: Length) -> Point {
     let signed = if direction.is_positive() {
@@ -826,7 +1449,7 @@ mod tests {
     fn member(name: &str, holding: Holding) -> MechanismMember {
         MechanismMember {
             hardware: HardwareId::from_usize(0),
-            body: BodyId::new(0).unwrap(),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
             name: name.to_owned(),
             holding,
         }

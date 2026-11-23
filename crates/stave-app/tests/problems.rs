@@ -170,12 +170,12 @@ fn a_motion_problem_has_its_details_and_its_card() {
     assert!(
         details
             .text
-            .contains("= help: leave at least 1mm between door and wall\n")
+            .contains("= help: leave at least 2mm between door and wall\n")
     );
     assert_eq!(details.fixes.len(), 1);
     assert_eq!(
         details.fixes[0].text,
-        "Leave at least 1mm between door and wall"
+        "Leave at least 2mm between door and wall"
     );
     assert_eq!(details.fixes[0].location, details.location);
     let card = details.motion.expect("a motion card");

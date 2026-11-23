@@ -109,6 +109,26 @@ kind euro_hinge : hinge {
   cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
 //^^^ keyword.other.cut.stave
 //                                                                     ^^^^^^^ constant.language.enum.stave
+  member bolt {
+    loose: true
+//  ^^^^^ variable.other.property.stave
+  }
+  clamp knob, bolt along depth
+//^^^^^ keyword.other.clamp.stave
+  mechanism {
+//^^^^^^^^^ keyword.other.mechanism.stave
+    pins: depth
+//  ^^^^ variable.other.property.stave
+    drive tilt: turn(bolt, from: 0deg, to: 360deg)
+//  ^^^^^ keyword.other.drive.stave
+//        ^^^^ variable.other.property.stave
+    drive height: travel(bolt, from: 0mm, to: -150mm, set_at: every(50mm))
+//  ^^^^^ keyword.other.drive.stave
+//                                                    ^^^^^^ variable.other.property.stave
+//                                                            ^^^^^ entity.name.function.call.stave
+    drive: turn(arm, from: 0deg, to: 110deg)
+//  ^^^^^ variable.other.property.stave
+  }
 }
 
 component Lid {

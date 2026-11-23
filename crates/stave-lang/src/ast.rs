@@ -682,7 +682,8 @@ impl KindBody {
             | KindEntry::Cut(_)
             | KindEntry::Mount(_)
             | KindEntry::Mechanism(_)
-            | KindEntry::Adjust(_) => None,
+            | KindEntry::Adjust(_)
+            | KindEntry::Clamp(_) => None,
         })
     }
 }
@@ -719,6 +720,8 @@ pub enum KindEntry {
     Mechanism(MechanismBlock),
     /// `adjust arm on plate: across within 2mm`
     Adjust(Adjust),
+    /// `clamp knob, bolt along depth`
+    Clamp(Clamp),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
 }
@@ -735,6 +738,19 @@ pub struct Adjust {
     pub axis: Ident,
     /// How far either way.
     pub within: Expr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `clamp a, b along axis`: tightening draws member `a` and member `b`
+/// toward each other along one axis of the kind's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clamp {
+    /// The member that bears on what lies between them, then the member
+    /// it draws toward it.
+    pub members: [Ident; 2],
+    /// The frame axis, as written (`depth`).
+    pub axis: Ident,
     /// The whole entry.
     pub span: Span,
 }
@@ -848,10 +864,13 @@ pub enum MechanismEntry {
         /// The whole entry.
         span: Span,
     },
-    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`
+    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`, or a
+    /// named drive, `drive tilt: turn(...)`.
     Drive {
         /// The `drive` word.
         key: Name,
+        /// The drive's name, when written (`tilt` in `drive tilt: ...`).
+        name: Option<Name>,
         /// The call.
         value: Expr,
         /// The whole entry.
@@ -1559,6 +1578,64 @@ pub struct Path {
     pub segments: Vec<PathSegment>,
     /// The whole path.
     pub span: Span,
+}
+
+/// What a patch's `set` or `unset` addresses (grammar, "Patches").
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetTarget {
+    /// A path from an item or a module: `shelf.width`, `side_l.place.deep`.
+    Path(Path),
+    /// A field, or the title, of the module's own declaration:
+    /// `project.goal`, `library.about`.
+    Declaration(DeclarationField),
+}
+
+impl SetTarget {
+    /// The whole target as written.
+    pub fn span(&self) -> Span {
+        match self {
+            SetTarget::Path(path) => path.span,
+            SetTarget::Declaration(field) => field.span,
+        }
+    }
+}
+
+/// `project.goal`, `library.about`: one field of the module's `project` or
+/// `library` block. The field `title` names the block's title.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclarationField {
+    /// Which block.
+    pub declaration: DeclarationKeyword,
+    /// The field, or `title`.
+    pub field: Name,
+    /// The whole target.
+    pub span: Span,
+}
+
+/// The two declarations that make a folder a module; a module has at most
+/// one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeclarationKeyword {
+    /// `project "Title" { }`
+    Project,
+    /// `library "Title" { }`
+    Library,
+}
+
+impl DeclarationKeyword {
+    /// The keyword as written.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            DeclarationKeyword::Project => "project",
+            DeclarationKeyword::Library => "library",
+        }
+    }
+}
+
+impl fmt::Display for DeclarationKeyword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.keyword())
+    }
 }
 
 /// One step of a [`Path`].
@@ -2360,18 +2437,18 @@ pub enum PatchOpKind {
         /// The new item.
         item: Box<Item>,
     },
-    /// `set cabinet_width = 950mm`, `set side_l.place.deep = flush(base.back)`.
-    /// Adds the value if it isn't there yet.
+    /// `set cabinet_width = 950mm`, `set side_l.place.deep = flush(base.back)`,
+    /// `set project.goal = "..."`. Adds the value if it isn't there yet.
     Set {
         /// What to set.
-        target: Path,
+        target: SetTarget,
         /// The new value.
         value: Expr,
     },
     /// `unset drawer.pull_kind`: removes a field, argument or placement term.
     Unset {
         /// What to remove.
-        target: Path,
+        target: SetTarget,
     },
     /// `remove joint shoe_shelf_dados`, `remove part casework.Drawer.back`
     Remove {

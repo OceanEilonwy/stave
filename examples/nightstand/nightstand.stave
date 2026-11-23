@@ -22,7 +22,7 @@ project "Nightstand" {
        param stand_depth   = 400mm within 380mm..450mm
        param drawer_height = 150mm within 120mm..200mm     // the drawer opening, top to divider
        param slide_length  = 350mm within [300mm, 350mm]
-locked param reveal        = 2mm                           // the gap round the inset drawer front
+locked param reveal        = 2.5mm                         // the gap round the inset drawer front
 let overhang  = 15mm                                       // the top overhangs the front and both sides
 let toe_space = 60mm                                       // floor to the underside of the bottom shelf
 

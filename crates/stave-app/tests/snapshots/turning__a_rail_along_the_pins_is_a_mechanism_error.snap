@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/turning.rs
+expression: rendered(&opened)
+---
+error[mechanism]: this mechanism's pins run along 'depth', so a rail can't run along 'depth'
+  --> /project/project.stave:97:28
+   |
+97 |     rail bolt, piece along depth
+   |                            ^^^^^
+   = help: run the rail along one of the two directions the members move in, or change 'pins'

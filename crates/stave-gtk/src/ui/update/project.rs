@@ -659,7 +659,7 @@ impl Window {
                     playing: focus.playing,
                 });
                 state.problem = None;
-                state.opening = None;
+                state.opening.clear();
                 state.moved.clear();
             }
             state.posed.is_none()
@@ -1078,7 +1078,7 @@ impl Window {
             state.focus = None;
             state.focus_kept = None;
             state.problem = None;
-            state.opening = None;
+            state.opening.clear();
             state.moved.clear();
         }
         self.watch();

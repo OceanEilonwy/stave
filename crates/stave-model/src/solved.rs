@@ -111,6 +111,35 @@ impl Point {
         }
         self
     }
+
+    /// The point moved by `by` (an offset), saturating.
+    pub fn plus(self, by: Point) -> Self {
+        let mut moved = self;
+        for axis in Axis::ALL {
+            moved = moved.with(
+                axis,
+                Length::from_nm(self.get(axis).nm().saturating_add(by.get(axis).nm())),
+            );
+        }
+        moved
+    }
+
+    /// The offset the other way, saturating.
+    pub fn negated(self) -> Self {
+        Point::default().minus(self)
+    }
+
+    /// The point moved back by `by`, saturating.
+    pub fn minus(self, by: Point) -> Self {
+        let mut moved = self;
+        for axis in Axis::ALL {
+            moved = moved.with(
+                axis,
+                Length::from_nm(self.get(axis).nm().saturating_sub(by.get(axis).nm())),
+            );
+        }
+        moved
+    }
 }
 
 /// An axis-aligned box in world coordinates. `min <= max` on every axis.
@@ -715,6 +744,9 @@ pub struct ProjectInfo {
     pub title: String,
     /// `goal:`
     pub goal: Option<String>,
+    /// `finish:`: the finish, in words, for the cover and the last step of
+    /// the build plan.
+    pub finish: Option<String>,
     /// `units:`
     #[serde(serialize_with = "serialize_word")]
     pub units: OutputUnit,
@@ -732,6 +764,10 @@ pub struct ProjectInfo {
     pub rough_length: Length,
     /// `rough_width:`: extra across the grain for solid parts.
     pub rough_width: Length,
+    /// `running_gap:`: the least gap, beyond what the seasons close up,
+    /// between wooden bodies that move past each other (grammar, "Running
+    /// clearance"). Never negative.
+    pub running_gap: Length,
 }
 
 /// A tool the project lists.
@@ -1869,6 +1905,23 @@ pub struct Hardware {
     pub settings: Vec<Setting>,
     /// Whether its kind's rules hold where it is placed.
     pub rules: Rules,
+    /// Its kind's `clamp`, when it has one, along a world axis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clamp: Option<Clamp>,
+}
+
+/// A piece of hardware's `clamp` (grammar, "Clamps"): tightening draws
+/// member `bearing` and member `drawn` toward each other along `axis`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Clamp {
+    /// The member that bears on what lies between them, among its kind's
+    /// members with a body.
+    pub bearing: BodyId,
+    /// The member drawn toward it, which moves with a part.
+    pub drawn: BodyId,
+    /// The world axis its kind's frame axis runs along here.
+    #[serde(serialize_with = "serialize_axis")]
+    pub axis: Axis,
 }
 
 /// What a member with a body belongs to: a piece of hardware, or one pair
@@ -2073,6 +2126,10 @@ pub struct Body {
     /// How many copies its shapes are (a joint's member laid out `count:`
     /// times); at least 1, and the shapes divide evenly among them.
     copies: u32,
+    /// `loose: true` in its kind, or riding on a loose member: meant to
+    /// lift out, so it is checked wherever it is set and never swept
+    /// (grammar, "Shapes").
+    pub loose: bool,
 }
 
 impl Body {
@@ -2091,7 +2148,13 @@ impl Body {
             item: None,
             shapes,
             copies: 1,
+            loose: false,
         })
+    }
+
+    /// The same member, loose or not.
+    pub fn with_loose(self, loose: bool) -> Body {
+        Body { loose, ..self }
     }
 
     /// The same member laid out `copies` times, its shapes in copy order
@@ -2489,8 +2552,51 @@ pub enum PoseValue {
 pub struct ScenePose {
     /// The assembly.
     pub assembly: AssemblyId,
+    /// The drive it sets (`frame.tilt`); `None` for every drive of the
+    /// assembly: its one drive, or `open` and `closed` for all of them.
+    pub drive: Option<crate::mechanism::DriveIndex>,
     /// Its motion value.
     pub value: PoseValue,
+}
+
+impl ScenePose {
+    /// The value this pose gives `drive` of its assembly, if it sets it.
+    pub fn value_for(&self, drive: crate::mechanism::DriveIndex) -> Option<PoseValue> {
+        match self.drive {
+            Some(set) if set != drive => None,
+            Some(_) | None => Some(self.value),
+        }
+    }
+}
+
+impl Scene {
+    /// The value this scene poses one drive of an assembly at, if it does.
+    pub fn pose_of(
+        &self,
+        assembly: AssemblyId,
+        drive: crate::mechanism::DriveIndex,
+    ) -> Option<PoseValue> {
+        self.poses
+            .iter()
+            .filter(|pose| pose.assembly == assembly)
+            .find_map(|pose| pose.value_for(drive))
+    }
+
+    /// The values this scene poses every drive of an assembly with
+    /// `drives` drives at (`closed` where it doesn't), and whether it poses
+    /// the assembly at all.
+    pub fn poses_of(&self, assembly: AssemblyId, drives: usize) -> (Vec<PoseValue>, bool) {
+        let mut posed = false;
+        let values = (0..drives)
+            .map(|index| {
+                let found = crate::mechanism::DriveIndex::new(index)
+                    .and_then(|drive| self.pose_of(assembly, drive));
+                posed |= found.is_some();
+                found.unwrap_or(PoseValue::Closed)
+            })
+            .collect();
+        (values, posed)
+    }
 }
 
 /// Something a scene shows or hides.

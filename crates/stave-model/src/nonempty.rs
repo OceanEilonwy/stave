@@ -35,6 +35,11 @@ impl<T> NonEmpty<T> {
         &self.head
     }
 
+    /// The first element, to change.
+    pub fn first_mut(&mut self) -> &mut T {
+        &mut self.head
+    }
+
     /// The elements in order.
     pub fn iter(&self) -> std::iter::Chain<std::iter::Once<&T>, std::slice::Iter<'_, T>> {
         std::iter::once(&self.head).chain(self.tail.iter())

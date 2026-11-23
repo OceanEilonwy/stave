@@ -166,6 +166,10 @@ pub(crate) struct Solver<'m> {
     /// Hardware kinds whose mechanism has been reported (a kind's mechanism
     /// is checked for each piece of hardware, and reported once).
     pub(crate) reported_mechanisms: std::collections::BTreeSet<stave_model::ids::KindId>,
+    /// Drive names already reported as clashing with an item of the
+    /// component the hardware is declared in.
+    pub(crate) reported_drive_names:
+        std::collections::BTreeSet<(stave_model::ids::ComponentId, String)>,
     /// What the rules of hardware kinds found (layer 4), in the order the
     /// hardware was placed: reported only when no earlier layer found an
     /// error.
@@ -198,6 +202,7 @@ impl<'m> Solver<'m> {
             skipped: false,
             overruns: Vec::new(),
             reported_mechanisms: std::collections::BTreeSet::new(),
+            reported_drive_names: std::collections::BTreeSet::new(),
             deferred: Vec::new(),
             boards: std::collections::BTreeMap::new(),
         }

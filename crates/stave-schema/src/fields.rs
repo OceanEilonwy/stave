@@ -162,6 +162,7 @@ const RECIPE: ValueType = Type(TypeName::Recipe);
 /// `project "Title" { }`
 pub const PROJECT: &[FieldSpec] = &[
     field("goal", Type(TypeName::Text), Optional, false),
+    field("finish", Type(TypeName::Text), Optional, false),
     field("units", Words(WordSet::OutputUnit), Optional, false),
     field("resolution", Type(TypeName::Length), Optional, false),
     field("style", Type(TypeName::Text), Optional, false),
@@ -171,6 +172,7 @@ pub const PROJECT: &[FieldSpec] = &[
     field("kerf", Type(TypeName::Length), Optional, false),
     field("rough_length", Type(TypeName::Length), Optional, false),
     field("rough_width", Type(TypeName::Length), Optional, false),
+    field("running_gap", Type(TypeName::Length), Optional, false),
 ];
 
 /// `library "Title" { }`
@@ -256,6 +258,11 @@ pub const PART: &[FieldSpec] = &[
 
 /// The default `kerf:` of a project, in nanometres (3mm).
 pub const DEFAULT_KERF_NM: i64 = 3_000_000;
+
+/// The default `running_gap:` of a project, in nanometres (1mm): the least
+/// gap, beyond what the wood moves with the seasons, between wooden parts
+/// that move past each other (grammar, "Running clearance").
+pub const DEFAULT_RUNNING_GAP_NM: i64 = 1_000_000;
 
 /// The default `max_held_width:` of a `solid` stock, in nanometres (80mm):
 /// about the width across the grain over which a season's movement in

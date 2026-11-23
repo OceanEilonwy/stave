@@ -36,7 +36,7 @@ add
 
 select region divider.below
 choose casework.Drawer
-set mount = overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+set mount = overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -2.5mm)
 set front_stock = oak_19
 set box_stock = maple_12
 set bottom_stock = ply_6

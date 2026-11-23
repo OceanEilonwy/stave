@@ -1,0 +1,169 @@
+// A cross slide (grammar, "Mechanisms", drives may act on any members):
+// a frame between two side panels, carried on each side by a steel
+// carriage that runs up the panel's face on a rail (the `x` drive moves
+// the carriage), the frame's slide plate running back and forth along the
+// carriage on a rail of its own (the `y` drive moves the plate). Two
+// members, each moved by its own drive, in two directions: the frame
+// moves with the plate, which the solver places on the carriage from both
+// drives. A rail joins the panels at the top, at the back.
+stave 1
+
+project "Cross Slide" {
+  goal: "A frame that slides up and back between two panels"
+}
+
+region envelope = box(across: 700mm, up: 1600mm, deep: 300mm)
+
+stock beech_45 { species: beech, form: solid, thickness: 45mm, max_width: 400mm, max_length: 2400mm }
+stock beech_25 { species: beech, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part panel_l : beech_45 {
+  length: 1500mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part panel_r = mirror(panel_l, about: mid(envelope, across))
+
+part stretcher : beech_25 {
+  length: fit
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    flush(panel_l.bottom)
+    center(envelope, across)
+    center(panel_l, deep)
+  }
+}
+
+// The rail across the top of the panels, at their back.
+part stop_rail : beech_25 {
+  length: fit
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    flush(panel_l.top)
+    center(envelope, across)
+    flush(panel_l.back, inset: 10mm)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [panel_l, panel_r], length: 30mm)
+joint stop_tenons      : mortise_tenon(stop_rail, into: [panel_l, panel_r], length: 30mm)
+
+kind cross_slide : fitting {
+  roles {
+    piece: Part     // the panel the carriage runs up
+    into:  Part     // the frame's stile
+  }
+  /// The steel carriage between the panel and the stile.
+  param carriage_size = 40mm
+  param gap           = 3mm
+  /// Diameter of the slide plate's stud.
+  param stud_diameter = 8mm
+  /// How far the stud goes into the stile, into a threaded insert.
+  param thread_length = 25mm
+  /// Wood left round the holes.
+  param wall = 6mm
+  /// How high up the panel the carriage sits, at its lowest.
+  param height = 650mm
+  /// How far the carriage runs up, and the plate back.
+  param x_travel = 250mm
+  param y_travel = 250mm
+
+  mount {
+    face:   front
+    across: from(edge(piece, flush_with: into), inset: 25mm)
+    along:  from(end(piece, toward: down), inset: height)
+  }
+
+  /// The carriage: a steel plate in the gap, running up the panel's face.
+  member carriage {
+    shape: box(along: carriage_size, across: carriage_size, depth: piece.thickness..piece.thickness + gap)
+  }
+  /// The slide plate's stud: into a threaded insert in the stile.
+  member stud {
+    with:  into
+    shape: cylinder(diameter: stud_diameter, depth: piece.thickness + gap..piece.thickness + gap + thread_length)
+  }
+
+  cut insert_hole: crossing(into, stud) { drill(diameter: stud_diameter + 4mm, depth: thread_length, wall: wall) }
+
+  mechanism {
+    pins: depth
+    rail carriage, piece along along
+    rail stud, carriage along across
+    drive x: travel(carriage, from: 0mm, to: x_travel)
+    drive y: travel(stud, from: 0mm, to: y_travel)
+  }
+}
+
+component Frame {
+  param stand_l : Part
+  param stand_r : Part
+  param gap     = 3mm
+
+  part stile_l : beech_45 {
+    length: 800mm
+    width:  50mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_l.bottom, inset: 450mm - 25mm)
+      against(stand_l.right, gap: gap)
+      flush(stand_l.front)
+    }
+  }
+
+  part stile_r : beech_45 {
+    length: 800mm
+    width:  50mm
+    place {
+      orient(length: up, width: back)
+      flush(stand_r.bottom, inset: 450mm - 25mm)
+      against(stand_r.left, gap: gap)
+      flush(stand_r.front)
+    }
+  }
+
+  part top_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.top)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  part bottom_rail : beech_25 {
+    length: fit
+    width:  60mm
+    place {
+      orient(length: right, width: up)
+      flush(stile_l.bottom)
+      center(from: stile_l.right, to: stile_r.left)
+      center(stile_l, deep)
+    }
+  }
+
+  joint rail_tenons : mortise_tenon([top_rail, bottom_rail], into: [stile_l, stile_r], length: 20mm)
+
+  hardware slide_l : cross_slide(stand_l, into: stile_l, face: left, gap: gap)
+  hardware slide_r : cross_slide(stand_r, into: stile_r, face: right, gap: gap)
+}
+
+assembly frame : Frame {
+  stand_l: panel_l
+  stand_r: panel_r
+}
+
+scene working "Up a little and back a little" {
+  pose frame.x = 100mm
+  pose frame.y = 100mm
+}

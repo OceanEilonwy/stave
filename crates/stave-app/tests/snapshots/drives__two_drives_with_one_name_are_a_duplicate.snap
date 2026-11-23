@@ -1,0 +1,14 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[duplicate-name]: two drives are called 'tilt'
+   --> /project/project.stave:103:11
+    |
+103 |     drive tilt: travel(bolt, from: 0mm, to: -drop)
+    |           ^^^^
+   ::: /project/project.stave:102:11
+    |
+102 |     drive tilt:   turn(bolt, from: 0deg, to: turn)
+    |           ---- first written here
+    = help: give each drive its own name

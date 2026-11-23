@@ -264,6 +264,8 @@ syntax_kinds! {
     MOUNT,
     /// `adjust a on b: axis within d` in a hardware kind
     ADJUST,
+    /// `clamp a, b along axis` in a hardware kind
+    CLAMP,
     /// `pivot a, b at point(...)` in a mechanism
     PIVOT,
     /// `slot a, b from point(...) to point(...)` in a mechanism
@@ -274,6 +276,8 @@ syntax_kinds! {
     COUPLE,
     /// `stop: value "message"` in a mechanism
     STOP,
+    /// `drive name: call` in a mechanism (a named drive; `drive: call` is a field)
+    DRIVE,
     /// `mark { steps }` or `cut { steps }` in a recipe
     STEP_BLOCK,
     /// `at station: value` in a profile
@@ -306,6 +310,9 @@ syntax_kinds! {
     REF,
     /// `side_l.place.deep`, `drawer[top]`
     PATH,
+    /// `project.goal`, `library.about`: a patch's `set` or `unset` of a
+    /// field of the module's own declaration.
+    DECLARATION_FIELD,
     /// `[*]`, `[same]`, `[top]`, `[0]`
     INDEX,
     /// `rabbet(back, into: side_l)`: a kind and its arguments.

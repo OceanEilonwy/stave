@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/running_clearance.rs
+expression: rendered(&opened)
+---
+error[motion]: legs.inner_leg_l rubs outer_leg_l the whole way as legs turns: the gap is 0mm, and the ash closes up to 0.375mm with the seasons
+   --> /project/project.stave:159:10
+    |
+159 | assembly legs : Legs {
+    |          ^^^^
+    = note: the same line also causes: legs.inner_leg_r rubs outer_leg_r the whole way as legs turns: the gap is 0mm, and the ash closes up to 0.375mm with the seasons
+    = help: leave at least 1.375mm between them (0.375mm for the seasons and a running gap of 1mm), and let them bear on steel, such as a washer, rather than on each other

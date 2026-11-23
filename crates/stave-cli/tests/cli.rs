@@ -208,6 +208,14 @@ fn dump_of_the_spliced_designs_matches_their_snapshots() {
     folder_dump_matches_its_snapshot("tests/designs/spliced_beam", "spliced_beam");
 }
 
+/// The loom's frame (grammar, "Mechanisms"): two named drives, the tilt
+/// set anywhere and the height at each of its set positions, listed as a
+/// pose names them.
+#[test]
+fn dump_of_the_tapestry_loom_matches_its_snapshot() {
+    dump_matches_its_snapshot("tapestry_loom");
+}
+
 #[test]
 fn dump_of_the_box_matches_its_snapshot() {
     dump_matches_its_snapshot("box");

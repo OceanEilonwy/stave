@@ -47,7 +47,7 @@ region drawer_bay[4] = split(back.in_front, up, shares: [5, 4, 3, 2])
 
 assembly drawer[4] : casework.Drawer {
   opening:      drawer_bay[same]
-  mount:        overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+  mount:        overlay(left: 18mm, right: 18mm, top: -3mm, bottom: 8mm, meeting: -2.5mm)
   front_stock:  oak_19
   box_stock:    maple_12
   bottom_stock: ply_6

@@ -31,10 +31,10 @@ divider                      cherry_19      428 x 394 x 19             19..431  
     drawn 412 x 394 x 19, starting 8 x 0 x 0 into the cut size
 back                         ply_6          521 x 430 x 6              19..431              60..581              394..400             up/right/back
     drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
-drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
-    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 42.7..45.7 x 73..76 x 6..19
-    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 362.3..365.3 x 73..76 x 6..19
-    cut drill diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 202..206 x 71..75 x 0..19
+drawer.front                 cherry_19      407 x 145 x 19             21.5..428.5          433.5..578.5         0..19                right/up/back
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 42.2..45.2 x 72.5..75.5 x 6..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 361.8..364.8 x 72.5..75.5 x 6..19
+    cut drill diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 201.5..205.5 x 70.5..74.5 x 0..19
 drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
     cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
     cut notch depth 6 on thickness end: where drawer.back meets it, local 338..350 x 0..123 x 6..12
@@ -126,7 +126,7 @@ REGIONS (4)
 inside                       19..431              79..581              0..394              
 bay[shelf]                   19..431              79..412              0..394              
 bay[drawer]                  19..431              431..581             0..394              
-drawer.face                  21..429              433..579             0..19               
+drawer.face                  21.5..428.5          433.5..578.5         0..19               
 
 ASSEMBLIES (1)
 drawer                       Drawer (6 parts): travels 350 toward the front

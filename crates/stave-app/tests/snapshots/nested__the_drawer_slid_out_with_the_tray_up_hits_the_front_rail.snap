@@ -1,0 +1,13 @@
+---
+source: crates/stave-app/tests/nested.rs
+expression: rendered(&opened)
+---
+error[motion]: drawer.tray.tray_side_l hits front_rail when drawer is pulled out past 250.05mm
+   --> /project/project.stave:246:10
+    |
+246 | assembly drawer : Drawer {
+    |          ^^^^^^
+    = note: the slides travel 300mm
+    = note: while drawer.tray is open 90deg
+    = note: with everything else as scene 'tilted' poses it
+    = help: move front_rail out of the way of drawer

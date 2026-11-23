@@ -7,6 +7,7 @@
 use stave_lang::Code;
 use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::{Direction, Face};
+use stave_schema::functions::MOUNT_FROM;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
 
@@ -375,8 +376,8 @@ impl Resolver<'_> {
             return None;
         };
         match callee_word(callee) {
-            Some("from") => {
-                let parsed = self.split_args(cx, "from", args, &["inset"], 1);
+            Some(MOUNT_FROM) => {
+                let parsed = self.split_args(cx, MOUNT_FROM, args, &["inset"], 1);
                 let Some(anchor) = parsed.positional.first() else {
                     self.missing_argument(cx, "from", "an anchor", expr.span);
                     return None;

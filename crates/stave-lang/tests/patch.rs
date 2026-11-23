@@ -880,6 +880,201 @@ fn a_value_that_breaks_the_file_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// The project and library blocks
+// ---------------------------------------------------------------------------
+
+const PROJECT: &str = "\
+stave 1
+
+project \"Wall shelf\" {
+  goal:  \"A pine shelf\"   // for the hall
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+";
+
+#[test]
+fn set_a_project_field_replaces_it_and_keeps_its_comment() {
+    let text = applied(
+        PROJECT,
+        "set project.goal = \"A pine shelf on two brackets\"",
+    );
+    assert_eq!(
+        text,
+        PROJECT.replace(
+            "goal:  \"A pine shelf\"   // for the hall",
+            "goal:  \"A pine shelf on two brackets\"   // for the hall"
+        )
+    );
+}
+
+#[test]
+fn set_a_project_field_that_is_not_written_adds_it() {
+    let text = applied(
+        PROJECT,
+        "set project.finish = \"Danish oil, three coats\"\nset project.units = in",
+    );
+    assert!(
+        text.contains(
+            "project \"Wall shelf\" {\n  goal:   \"A pine shelf\"  // for the hall\n  units:  in\n  finish: \"Danish oil, three coats\"\n}\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn set_the_project_title() {
+    let text = applied(PROJECT, "set project.title = \"Hall shelf\"");
+    assert_eq!(
+        text,
+        PROJECT.replace("project \"Wall shelf\"", "project \"Hall shelf\"")
+    );
+}
+
+#[test]
+fn a_project_needs_a_title() {
+    for value in ["\"\"", "\"   \"", "shelf", "3mm"] {
+        assert_eq!(
+            apply(PROJECT, &format!("set project.title = {value}")).unwrap_err(),
+            PatchErrorKind::NeedsTitle(ast::DeclarationKeyword::Project),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        apply(PROJECT, "unset project.title").unwrap_err(),
+        PatchErrorKind::NeedsTitle(ast::DeclarationKeyword::Project)
+    );
+}
+
+#[test]
+fn unset_a_project_field_and_one_not_written() {
+    let text = applied(PROJECT, "unset project.units");
+    assert_eq!(text, PROJECT.replace("  units: mm\n", ""));
+    assert_eq!(
+        apply(PROJECT, "unset project.finish").unwrap_err(),
+        PatchErrorKind::NotSet("project.finish".to_owned())
+    );
+}
+
+#[test]
+fn a_field_the_project_does_not_have_is_written_for_the_check_to_refuse() {
+    // The patcher doesn't know the field tables; the check that follows
+    // every patch reports `unknown-field`, as in the file.
+    let text = applied(PROJECT, "set project.colour = \"red\"");
+    assert!(text.contains("  colour: \"red\"\n}"), "{text}");
+}
+
+#[test]
+fn a_project_path_names_one_field() {
+    for ops in [
+        "set project.goal.text = \"x\"",
+        "set project = \"x\"",
+        "unset project[0]",
+    ] {
+        let text = patch_text(ops);
+        let mut sources = SourceMap::new();
+        let file = sources.add("change.stave", &text).unwrap();
+        assert!(parse_patch_file(file, &text).has_errors(), "{ops}");
+    }
+}
+
+#[test]
+fn project_is_a_keyword_so_no_item_can_take_its_name() {
+    let text = "stave 1\n\npart project : pine_19 { length: 1mm }\n";
+    assert!(parse(text).has_errors());
+}
+
+#[test]
+fn a_module_without_the_block_refuses_its_paths() {
+    assert_eq!(
+        apply(CABINET, "set project.goal = \"x\"").unwrap_err(),
+        PatchErrorKind::NoDeclaration(ast::DeclarationKeyword::Project)
+    );
+    assert_eq!(
+        apply(PROJECT, "set library.about = \"x\"").unwrap_err(),
+        PatchErrorKind::NoDeclaration(ast::DeclarationKeyword::Library)
+    );
+    assert_eq!(
+        apply(CABINET, "replace project \"Cabinet\" { goal: \"x\" }").unwrap_err(),
+        PatchErrorKind::NoDeclaration(ast::DeclarationKeyword::Project)
+    );
+}
+
+#[test]
+fn set_and_unset_library_fields() {
+    let library = "stave 1\n\nlibrary \"Shop jigs\" {\n  about: \"jigs\"\n}\n";
+    let text = applied(
+        library,
+        "set library.license = \"CC0\"\nset library.title = \"Jigs\"",
+    );
+    assert_eq!(
+        text,
+        "stave 1\n\nlibrary \"Jigs\" {\n  about:   \"jigs\"\n  license: \"CC0\"\n}\n"
+    );
+    let text = applied(library, "unset library.about");
+    assert_eq!(text, "stave 1\n\nlibrary \"Shop jigs\" {\n}\n");
+    assert_eq!(
+        apply(library, "set library.title = \"\"").unwrap_err(),
+        PatchErrorKind::NeedsTitle(ast::DeclarationKeyword::Library)
+    );
+}
+
+#[test]
+fn a_library_without_a_body_gets_one_for_its_first_field() {
+    let text = applied(
+        "stave 1\n\nlibrary \"Shop jigs\"\n",
+        "set library.about = \"jigs\"",
+    );
+    assert_eq!(
+        text,
+        "stave 1\n\nlibrary \"Shop jigs\" { about: \"jigs\" }\n"
+    );
+    assert_eq!(
+        apply("stave 1\n\nlibrary \"Shop jigs\"\n", "unset library.about").unwrap_err(),
+        PatchErrorKind::NotSet("library.about".to_owned())
+    );
+}
+
+#[test]
+fn replace_the_project_block_whole_with_its_new_title() {
+    let text = applied(
+        PROJECT,
+        "replace project \"Hall shelf\" {\n  goal:   \"A shelf\"\n  finish: \"Wax\"\n}",
+    );
+    assert_eq!(
+        text,
+        "stave 1\n\nproject \"Hall shelf\" {\n  goal:   \"A shelf\"\n  finish: \"Wax\"\n}\n\nstock pine_19 { species: pine, form: solid, thickness: 19mm }\n"
+    );
+}
+
+#[test]
+fn a_project_path_reaches_the_file_that_holds_the_project() {
+    let first = parse("stave 1\n\nstock pine_19 { species: pine, form: solid, thickness: 19mm }\n");
+    let second = parse("stave 1\n\nproject \"Shelf\" {\n  goal: \"A shelf\"\n}\n");
+    let patch = parse_patch(&patch_text("set project.finish = \"Wax\""));
+    let target = PatchTarget::new(vec![
+        ModuleFile {
+            name: "a.stave",
+            parse: &first,
+        },
+        ModuleFile {
+            name: "b.stave",
+            parse: &second,
+        },
+    ]);
+    let changed = apply_patch(&target, &patch).unwrap();
+    let [only] = changed.as_slice() else {
+        panic!("{changed:?}");
+    };
+    assert_eq!(only.name, "b.stave");
+    assert_eq!(
+        only.text,
+        "stave 1\n\nproject \"Shelf\" {\n  goal:   \"A shelf\"\n  finish: \"Wax\"\n}\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
 

@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/running_clearance.rs
+expression: rendered(&opened)
+---
+warning[clearance]: frame.stile_l passes 1.2mm from upright_l the whole way as frame turns; leave 1.563mm (0.563mm for the seasons and a running gap of 1mm)
+   --> /project/project.stave:159:10
+    |
+159 | assembly frame : Frame {
+    |          ^^^^^
+    = note: the same line also causes: frame.stile_r passes 1.2mm from upright_r the whole way as frame turns; leave 1.563mm (0.563mm for the seasons and a running gap of 1mm)
+    = help: move them at least 1.563mm apart, or write a smaller running_gap: in the project if this fit is meant to be close

@@ -31,8 +31,12 @@
 //! A solid turned by a hinge is no longer axis-aligned. When both solids
 //! turn about one world axis (or only move), [`overlaps_placed`] tests
 //! their pieces in the plane across it, each part's boxes less the holes
-//! whose axis lies in that plane ([`crate::plane`], grammar, "Sweeps see
-//! cuts"). Otherwise it tests oriented boxes with the separating axis
+//! whose axis lies in that plane, and a piece inside a round hole along
+//! the axis clear of the wood the hole is drilled in ([`crate::plane`],
+//! grammar, "Sweeps see cuts"). A round shape a turn leaves along a world
+//! axis (turned about its own axis's direction: a pivot bolt) is still a
+//! round shape, tested exactly against a solid that isn't turned.
+//! Otherwise it tests oriented boxes with the separating axis
 //! test: each block, rod and prism (as the box around it) of one solid
 //! against those of the other. Angled cuts, and holes in the second case,
 //! are left out there, which only ever finds more wood than there is.
@@ -40,8 +44,8 @@
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
-use stave_model::mechanism::MemberIndex;
 use stave_model::mechanism::TurnLine;
+use stave_model::mechanism::{DriveIndex, DriveValue, MemberIndex};
 use stave_model::solved::{Body, MemberShape, Part, Point, Pose, PoseValue, WorldBox};
 
 use crate::axes::AlongWorld;
@@ -55,6 +59,9 @@ use crate::solid::{Rod, Solid, across};
 
 /// Surfaces this close touch; anything deeper overlaps (0.05mm).
 pub const CONTACT_TOLERANCE: Length = Length::from_nm(50_000);
+
+/// A whole turn, in micro-degrees.
+const FULL_TURN: i64 = 360 * stave_lang::units::MICRODEG_PER_DEG;
 
 /// A cylinder along a world axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +337,13 @@ impl WorldSolid {
             prisms: vec![prism],
             ..WorldSolid::default()
         }
+    }
+
+    /// The same solid with a round shape added to it, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_rod(mut self, rod: WorldRod) -> WorldSolid {
+        self.rods.push(rod);
+        self
     }
 
     /// The same solid with a hole drilled in it, for tests.
@@ -1469,72 +1483,230 @@ impl Placement {
         chain: &[(&MechanismPath, PoseValue)],
         member: Option<MemberIndex>,
     ) -> Placement {
-        let mut offset = Point::default();
-        let mut matrix = DMat4::IDENTITY;
-        let mut turned = false;
+        let mut placed = Placed::default();
         let last = chain.len().saturating_sub(1);
         for (index, (path, value)) in chain.iter().enumerate() {
             let member = member.filter(|_| index == last);
-            match (member, path.shape()) {
-                (None, MotionShape::Travel { toward, travel }) => {
-                    let amount = match *value {
-                        PoseValue::Open => travel,
-                        PoseValue::Travel(length) => length,
-                        PoseValue::Closed | PoseValue::Angle(_) => Length::ZERO,
-                    };
-                    let step = direction_offset(toward, amount);
-                    for axis in Axis::ALL {
-                        offset = offset.with(
-                            axis,
-                            Length::from_nm(
-                                offset.get(axis).nm().saturating_add(step.get(axis).nm()),
-                            ),
-                        );
-                    }
-                    matrix *= DMat4::from_translation(point_vector(step));
-                }
-                (
-                    None,
-                    MotionShape::Turn {
-                        line: pivot,
-                        opening,
-                    },
-                ) => {
-                    let angle = match *value {
-                        PoseValue::Open => opening,
-                        PoseValue::Angle(angle) => angle,
-                        PoseValue::Closed | PoseValue::Travel(_) => continue,
-                    };
-                    if angle.microdeg() == 0 {
-                        continue;
-                    }
-                    turned = true;
-                    matrix *= turn_about(&pivot, angle);
-                }
-                (Some(_), _) | (None, MotionShape::General) => {
-                    let amount = path.amount(*value);
-                    if amount == 0.0 {
-                        continue;
-                    }
-                    let moved = path.matrix(member.unwrap_or_else(|| path.moving()), amount);
-                    if let Some(moved) = moved {
-                        turned = true;
-                        matrix *= moved;
-                    }
-                }
+            placed.swept(path, *value, member);
+        }
+        placed.placement()
+    }
+
+    /// The placement after a chain of assembly mechanisms, outermost first,
+    /// each with every one of its drives at a pose value (one for each
+    /// drive, in order; a scene's poses all applied together, grammar
+    /// "Scenes"). With `member`, the body is that member of the last
+    /// mechanism. A mechanism with one drive is placed as
+    /// [`Placement::of_mechanisms`] places it; with several, a translation
+    /// (every turn closed) stays exact, one drive away from closed with an
+    /// exact shape is turned or moved as it, and anything else is posed by
+    /// the solver.
+    pub fn of_poses(
+        chain: &[(&MechanismPath, &[PoseValue])],
+        member: Option<MemberIndex>,
+    ) -> Placement {
+        let mut placed = Placed::default();
+        let last = chain.len().saturating_sub(1);
+        for (index, (path, values)) in chain.iter().enumerate() {
+            let member = member.filter(|_| index == last);
+            if path.drives().len() <= 1 {
+                let value = values.first().copied().unwrap_or(PoseValue::Closed);
+                placed.swept(path, value, member);
+            } else {
+                placed.all(path, values, member);
             }
         }
-        if turned {
-            Placement::Turned(matrix)
-        } else {
-            Placement::Exact(offset)
-        }
+        placed.placement()
     }
 
     pub(crate) fn matrix(&self) -> DMat4 {
         match self {
             Placement::Exact(offset) => DMat4::from_translation(point_vector(*offset)),
             Placement::Turned(matrix) => *matrix,
+        }
+    }
+
+    /// This placement after `inner`: a body placed by `inner` first, then
+    /// moved as this placement moves it (a tray tilted in a drawer, then
+    /// the drawer pulled out). Exact when both are.
+    pub fn after(&self, inner: &Placement) -> Placement {
+        match (self, inner) {
+            (Placement::Exact(outer), Placement::Exact(inner)) => {
+                Placement::Exact(outer.plus(*inner))
+            }
+            (Placement::Exact(_) | Placement::Turned(_), _) => {
+                Placement::Turned(self.matrix() * inner.matrix())
+            }
+        }
+    }
+
+    /// This placement as seen from a frame that `base` has moved: what is
+    /// left of it once `base` is taken back. Exact when both are.
+    pub fn seen_from(&self, base: &Placement) -> Placement {
+        match (base, self) {
+            (Placement::Exact(base), Placement::Exact(own)) => Placement::Exact(own.minus(*base)),
+            (Placement::Exact(_) | Placement::Turned(_), _) => {
+                Placement::Turned(base.matrix().inverse() * self.matrix())
+            }
+        }
+    }
+}
+
+/// A placement being built along a chain of mechanisms: an exact offset
+/// while nothing has turned, and the matrix of the whole chain.
+#[derive(Debug, Clone, Copy)]
+struct Placed {
+    offset: Point,
+    matrix: DMat4,
+    turned: bool,
+}
+
+impl Default for Placed {
+    fn default() -> Placed {
+        Placed {
+            offset: Point::default(),
+            matrix: DMat4::IDENTITY,
+            turned: false,
+        }
+    }
+}
+
+impl Placed {
+    /// Moved exactly by `by`.
+    fn moved(&mut self, by: Point) {
+        self.offset = self.offset.plus(by);
+        self.matrix *= DMat4::from_translation(point_vector(by));
+    }
+
+    /// Moved by a matrix: no longer exact.
+    fn turned_by(&mut self, matrix: DMat4) {
+        self.turned = true;
+        self.matrix *= matrix;
+    }
+
+    fn placement(self) -> Placement {
+        if self.turned {
+            Placement::Turned(self.matrix)
+        } else {
+            Placement::Exact(self.offset)
+        }
+    }
+
+    /// One mechanism with its swept drive at `value` and every other drive
+    /// where the path holds it.
+    fn swept(&mut self, path: &MechanismPath, value: PoseValue, member: Option<MemberIndex>) {
+        let held = path.offset().unwrap_or_default();
+        // Where `open` puts the swept drive: the furthest set value of a
+        // drive with set positions.
+        let open = path
+            .drives()
+            .get(path.swept().index())
+            .and_then(|named| named.drive.amount_of(named.open()));
+        match (member, path.shape()) {
+            (None, MotionShape::Travel { toward, travel }) => {
+                let amount = match value {
+                    PoseValue::Open => match open {
+                        Some(DriveValue::Travel(length)) => length,
+                        Some(DriveValue::Turn(_)) | None => travel,
+                    },
+                    PoseValue::Travel(length) => length,
+                    PoseValue::Closed | PoseValue::Angle(_) => Length::ZERO,
+                };
+                self.moved(direction_offset(toward, amount).plus(held));
+            }
+            (
+                None,
+                MotionShape::Turn {
+                    line: pivot,
+                    opening,
+                },
+            ) => {
+                let angle = match value {
+                    PoseValue::Open => match open {
+                        Some(DriveValue::Turn(angle)) => angle,
+                        Some(DriveValue::Travel(_)) | None => opening,
+                    },
+                    PoseValue::Angle(angle) => angle,
+                    PoseValue::Closed | PoseValue::Travel(_) => Angle::ZERO,
+                };
+                // A turn about one line comes back to where it began
+                // every whole turn: a pose at 360deg is the closed
+                // pose (grammar, "Mechanisms").
+                let angle = Angle::from_microdeg(angle.microdeg().rem_euclid(FULL_TURN));
+                if angle.microdeg() == 0 {
+                    if held != Point::default() {
+                        self.moved(held);
+                    }
+                    return;
+                }
+                // Turned about the line where the held drives put it, after
+                // they moved it there.
+                self.turned_by(
+                    turn_about(&pivot, angle) * DMat4::from_translation(point_vector(held)),
+                );
+            }
+            (Some(_), _) | (None, MotionShape::General) => {
+                let amount = path.amount(value);
+                if amount == 0.0 && path.held_closed() {
+                    return;
+                }
+                if let Some(moved) = path.matrix(member.unwrap_or_else(|| path.moving()), amount) {
+                    self.turned_by(moved);
+                }
+            }
+        }
+    }
+
+    /// One mechanism with every drive at a pose value.
+    fn all(&mut self, path: &MechanismPath, values: &[PoseValue], member: Option<MemberIndex>) {
+        let mechanism = path.model();
+        let exact = mechanism.values_of(values);
+        if member.is_none() {
+            if let Some(by) = mechanism.offset_at(&exact) {
+                if by != Point::default() {
+                    self.moved(by);
+                }
+                return;
+            }
+            // One drive away from closed, with an exact shape.
+            let closed = mechanism.closed();
+            let away: Vec<usize> = (0..exact.len())
+                .filter(|index| exact.get(*index) != closed.get(*index))
+                .collect();
+            if let [only] = away.as_slice()
+                && let Some(drive) = DriveIndex::new(*only)
+                && let MotionShape::Turn { line, .. } = mechanism.shape_of(drive, &closed)
+                && let (Some(DriveValue::Turn(at)), Some(DriveValue::Turn(from))) =
+                    (exact.get(*only).copied(), closed.get(*only).copied())
+            {
+                let turned = at
+                    .microdeg()
+                    .saturating_sub(from.microdeg())
+                    .saturating_abs();
+                let angle = Angle::from_microdeg(turned.rem_euclid(FULL_TURN));
+                if angle.microdeg() != 0 {
+                    self.turned_by(turn_about(&line, angle));
+                }
+                return;
+            }
+        }
+        let amounts: Vec<f64> = (0..exact.len())
+            .filter_map(DriveIndex::new)
+            .map(|drive| {
+                path.amount_of(
+                    drive,
+                    values
+                        .get(drive.index())
+                        .copied()
+                        .unwrap_or(PoseValue::Closed),
+                )
+            })
+            .collect();
+        if amounts.iter().all(|amount| *amount == 0.0) {
+            return;
+        }
+        if let Some(moved) = path.matrix_at(member.unwrap_or_else(|| path.moving()), &amounts) {
+            self.turned_by(moved);
         }
     }
 }
@@ -1700,7 +1872,12 @@ fn overlaps_in_plane(
     let plane = crate::plane::Plane::across(axis);
     let [first, second] = axis.others();
     let mut found = Vec::new();
-    for (p, q) in crate::plane::piece_pairs(&plane, a, ma, b, mb) {
+    for crate::plane::Pair {
+        first: p,
+        second: q,
+        ..
+    } in crate::plane::piece_pairs(&plane, a, ma, b, mb, crate::plane::Bores::Still)
+    {
         let Some((depth, normal)) = crate::plane::piece_depth(&p, &q) else {
             continue;
         };
@@ -1745,8 +1922,98 @@ fn overlaps_in_plane(
     found
 }
 
+/// A round shape moved by `matrix` when its axis still runs along a world
+/// axis (a turn about a line along its own axis, which a pivot bolt's
+/// is): the same round shape there, its place rounded to the nanometre.
+/// `None` when the move leaves it at a slant.
+fn moved_rod(rod: &WorldRod, matrix: &DMat4) -> Option<WorldRod> {
+    let [first, second] = rod.axis.others();
+    let end = |at: Length| {
+        matrix.transform_point3(point_vector(
+            Point::default()
+                .with(rod.axis, at)
+                .with(first, rod.centre[0])
+                .with(second, rod.centre[1]),
+        ))
+    };
+    let (start, finish) = (end(rod.start), end(rod.end));
+    let axis = nearest_axis(finish - start);
+    let [one, two] = axis.others();
+    let on = |v: DVec3, along: Axis| -> f64 {
+        let mut probe = DVec3::ZERO;
+        probe.set_along_world(along, 1.0);
+        v.dot(probe)
+    };
+    // Still along a world axis: the ends share their place across it.
+    let level = |along: Axis| (on(start, along) - on(finish, along)).abs() < 1.0;
+    if !level(one) || !level(two) {
+        return None;
+    }
+    let (a, b) = (on(start, axis), on(finish, axis));
+    Some(WorldRod {
+        axis,
+        centre: [
+            render::length_from_nm(on(start, one).round())?,
+            render::length_from_nm(on(start, two).round())?,
+        ],
+        diameter: rod.diameter,
+        start: render::length_from_nm(a.min(b).round())?,
+        end: render::length_from_nm(a.max(b).round())?,
+    })
+}
+
+/// A solid moved by `matrix`, split into the round shapes it leaves along
+/// a world axis (moved, exact) and everything else (unmoved, to move by
+/// `matrix`); `None` when it leaves none so.
+fn split_round(solid: &WorldSolid, matrix: &DMat4) -> Option<(WorldSolid, WorldSolid)> {
+    let mut moved = Vec::new();
+    let mut rest = Vec::new();
+    for rod in &solid.rods {
+        match moved_rod(rod, matrix) {
+            Some(rod) => moved.push(rod),
+            None => rest.push(*rod),
+        }
+    }
+    if moved.is_empty() {
+        return None;
+    }
+    Some((
+        WorldSolid {
+            rods: moved,
+            ..WorldSolid::default()
+        },
+        WorldSolid {
+            rods: rest,
+            ..solid.clone()
+        },
+    ))
+}
+
+impl WorldSolid {
+    /// The same solid without its round shapes whose axis lies on `line`,
+    /// to the nanometre: turning about their own axis, they sweep only
+    /// themselves (grammar, "Sweeps see cuts"). `None` when it has none.
+    pub(crate) fn without_rods_on(&self, line: &TurnLine) -> Option<WorldSolid> {
+        let [first, second] = line.axis.others();
+        let on = |rod: &WorldRod| {
+            rod.axis == line.axis
+                && rod.centre == [line.through.get(first), line.through.get(second)]
+        };
+        if !self.rods.iter().any(on) {
+            return None;
+        }
+        Some(WorldSolid {
+            rods: self.rods.iter().filter(|rod| !on(rod)).copied().collect(),
+            ..self.clone()
+        })
+    }
+}
+
 /// Every place where wood of `a` goes into wood of `b` when each is moved
-/// by its placement. Exact when neither is turned.
+/// by its placement. Exact when neither is turned, and for a round shape
+/// a turn leaves along a world axis (one turned about its own axis's
+/// direction) against a solid that isn't turned: grammar, "Sweeps see
+/// cuts", a round shape turning about its own axis.
 pub fn overlaps_placed(
     a: &WorldSolid,
     a_placement: &Placement,
@@ -1755,6 +2022,22 @@ pub fn overlaps_placed(
 ) -> Vec<Overlap> {
     if let (Placement::Exact(da), Placement::Exact(db)) = (a_placement, b_placement) {
         return overlaps(&a.translated(*da), &b.translated(*db));
+    }
+    // A round shape a turn leaves along a world axis is still a round
+    // shape: it is tested exactly, the rest as below.
+    if let (Placement::Turned(matrix), Placement::Exact(db)) = (a_placement, b_placement)
+        && let Some((round, rest)) = split_round(a, matrix)
+    {
+        let mut found = overlaps(&round, &b.translated(*db));
+        found.extend(overlaps_placed(&rest, a_placement, b, b_placement));
+        return found;
+    }
+    if let (Placement::Exact(da), Placement::Turned(matrix)) = (a_placement, b_placement)
+        && let Some((round, rest)) = split_round(b, matrix)
+    {
+        let mut found = overlaps(&a.translated(*da), &round);
+        found.extend(overlaps_placed(a, a_placement, &rest, b_placement));
+        return found;
     }
     let (ma, mb) = (a_placement.matrix(), b_placement.matrix());
     if let Some(axis) = common_turn_axis(&ma, &mb) {
@@ -1815,6 +2098,91 @@ mod tests {
             boxes: vec![WorldBox::new(a, b)],
             ..WorldSolid::default()
         }
+    }
+
+    /// A round shape along `across`, centred on `up` and `deep` 0.
+    fn across_rod(diameter: i64, start: i64, end: i64) -> WorldRod {
+        WorldRod {
+            axis: Axis::Across,
+            centre: [mm(0), mm(0)],
+            diameter: mm(diameter),
+            start: mm(start),
+            end: mm(end),
+        }
+    }
+
+    /// Turned `degrees` about the line along `across` through the origin.
+    fn turned_about_across(degrees: i64) -> Placement {
+        let line = TurnLine {
+            axis: Axis::Across,
+            through: point(0, 0, 0),
+            free_side: Direction::Up,
+            swing_toward: Direction::Back,
+        };
+        Placement::Turned(turn_about(&line, Angle::from_deg(degrees)))
+    }
+
+    #[test]
+    fn a_round_shape_turned_about_its_own_axis_stays_in_its_hole() {
+        // A bolt 8mm across through a 9mm hole in an upright, turned 15deg
+        // about its own axis: it is where it was, clear of the upright
+        // (grammar, "Sweeps see cuts").
+        let bolt = WorldSolid::default().with_rod(across_rod(8, -10, 60));
+        let upright = block(point(0, -50, -35), point(45, 50, 35)).with_hole(across_rod(9, 0, 45));
+        for degrees in [15, 90, 200] {
+            let found = overlaps_placed(
+                &bolt,
+                &turned_about_across(degrees),
+                &upright,
+                &Placement::REST,
+            );
+            assert!(found.is_empty(), "{degrees}deg: {found:?}");
+            // Either way round.
+            assert!(
+                overlaps_placed(
+                    &upright,
+                    &Placement::REST,
+                    &bolt,
+                    &turned_about_across(degrees)
+                )
+                .is_empty()
+            );
+        }
+        // Without the hole it is in the wood.
+        let solid = block(point(0, -50, -35), point(45, 50, 35));
+        assert!(
+            !overlaps_placed(&bolt, &turned_about_across(15), &solid, &Placement::REST).is_empty()
+        );
+        // A round shape off the line is turned to where the turn puts it,
+        // still exactly round: 20mm up, a quarter turn puts it 20mm back.
+        let off = WorldSolid::default().with_rod(WorldRod {
+            centre: [mm(20), mm(0)],
+            ..across_rod(8, -10, 60)
+        });
+        let moved = moved_rod(&off.rods[0], &turned_about_across(90).matrix()).unwrap();
+        assert_eq!(moved.centre, [mm(0), mm(20)]);
+        assert_eq!((moved.start, moved.end), (mm(-10), mm(60)));
+    }
+
+    #[test]
+    fn a_piece_inside_a_round_hole_along_the_axis_is_clear_at_a_pose() {
+        // A square peg 5mm on a side in a 9mm hole, turned 30deg about the
+        // hole's axis: the hole is taken out as itself, so it is clear.
+        let peg = block(point(-10, -2, -2), point(60, 3, 3));
+        let upright = block(point(0, -50, -35), point(45, 50, 35)).with_hole(across_rod(9, 0, 45));
+        assert!(
+            overlaps_placed(&peg, &turned_about_across(30), &upright, &Placement::REST).is_empty()
+        );
+        // A peg too big for the hole goes into the wood.
+        let big = block(point(-10, -4, -4), point(60, 4, 4));
+        assert!(
+            !overlaps_placed(&big, &turned_about_across(30), &upright, &Placement::REST).is_empty()
+        );
+        // A hole that stops short of where the peg is: wood there.
+        let blind = block(point(0, -50, -35), point(45, 50, 35)).with_hole(across_rod(9, 0, 20));
+        assert!(
+            !overlaps_placed(&peg, &turned_about_across(30), &blind, &Placement::REST).is_empty()
+        );
     }
 
     #[test]
@@ -1938,7 +2306,7 @@ mod tests {
     fn a_turned_door_hits_what_is_in_its_way() {
         use stave_model::mechanism::{
             FramePoint, Holding, Mechanism, MechanismDrive, MechanismEntry, MechanismFrame,
-            MechanismMember,
+            MechanismMember, MemberBody,
         };
         use stave_model::solved::{BodyId, HardwareId};
         // A door 500mm wide hinged at its left edge, swinging out toward
@@ -1948,7 +2316,7 @@ mod tests {
         let post = block(point(5, 0, -150), point(15, 700, -100));
         let member = |name: &str, holding| MechanismMember {
             hardware: HardwareId::from_usize(0),
-            body: BodyId::new(0).unwrap(),
+            body: MemberBody::Body(BodyId::new(0).unwrap()),
             name: name.to_owned(),
             holding,
         };

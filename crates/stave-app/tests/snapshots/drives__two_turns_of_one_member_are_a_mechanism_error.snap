@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/drives.rs
+expression: rendered(&opened)
+---
+error[mechanism]: `tilt` and `swing` both turn `bolt`: a member moving in a plane turns about one line
+   --> /project/project.stave:103:5
+    |
+103 |     drive swing: turn(bolt, from: 0deg, to: 90deg)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: turn another member with one of them, such as one pinned to this one

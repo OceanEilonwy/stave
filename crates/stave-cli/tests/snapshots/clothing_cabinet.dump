@@ -99,11 +99,11 @@ door_l.rail[top]             oak_19         348.25 x 60 x 19           61..389.2
     cut notch depth 10 on width start: where door_l.panel meets it, local 2..346.25 x 0..8 x 6.5..12.5
 door_l.panel                 oak_6          1045.5 x 344.25 x 6        61..389.25           590..1619.5          -12.5..-6.5          up/right/back
     drawn 1029.5 x 328.25 x 6, starting 8 x 8 x 0 into the cut size
-drawer[bottom].front         oak_19         898 x 257.25 x 19          1..899               11..268.25           -19..0               right/up/back
+drawer[bottom].front         oak_19         898 x 255.5 x 19           1..899               11..266.5            -19..0               right/up/back
     cut drill diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 62.7..65.7 x 131.5..134.5 x 6..19
     cut drill diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 832.3..835.3 x 131.5..134.5 x 6..19
-    cut drill diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 367..371 x 126.625..130.625 x 0..19
-    cut drill diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 527..531 x 126.625..130.625 x 0..19
+    cut drill diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 367..371 x 125.75..129.75 x 0..19
+    cut drill diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 527..531 x 125.75..129.75 x 0..19
 drawer[bottom].side[left]    maple_12       500 x 220 x 12             31.7..43.7           34..254              0..500               back/up/right
     cut notch depth 6 on thickness end: where drawer[bottom].sub_front meets it, local 0..12 x 0..220 x 6..12
     cut notch depth 6 on thickness end: where drawer[bottom].back meets it, local 488..500 x 0..220 x 6..12
@@ -122,11 +122,11 @@ drawer[bottom].back          maple_12       824.6 x 220 x 12           43.7..856
     cut notch depth 6 on thickness start: where drawer[bottom].bottom meets it, local 0..824.6 x 10..16 x 0..6
 drawer[bottom].bottom        ply_6          824.6 x 488 x 6            43.7..856.3          44..50               12..488              right/back/up
     drawn 812.6 x 476 x 6, starting 6 x 6 x 0 into the cut size
-drawer[top].front            oak_19         898 x 257.25 x 19          1..899               269.75..527          -19..0               right/up/back
-    cut drill diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 62.7..65.7 x 122.75..125.75 x 6..19
-    cut drill diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 832.3..835.3 x 122.75..125.75 x 6..19
-    cut drill diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 367..371 x 126.625..130.625 x 0..19
-    cut drill diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 527..531 x 126.625..130.625 x 0..19
+drawer[top].front            oak_19         898 x 255.5 x 19           1..899               271.5..527           -19..0               right/up/back
+    cut drill diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 62.7..65.7 x 121..124 x 6..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 832.3..835.3 x 121..124 x 6..19
+    cut drill diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 367..371 x 125.75..129.75 x 0..19
+    cut drill diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 527..531 x 125.75..129.75 x 0..19
 drawer[top].side[left]       maple_12       500 x 220 x 12             31.7..43.7           284..504             0..500               back/up/right
     cut notch depth 6 on thickness end: where drawer[top].sub_front meets it, local 0..12 x 0..220 x 6..12
     cut notch depth 6 on thickness end: where drawer[top].back meets it, local 488..500 x 0..220 x 6..12
@@ -195,8 +195,8 @@ drawer[bottom].slides[right] side_mount_slide on drawer[bottom].side[right] (rig
     cabinet member 874.65..881          121.5..166.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[bottom].pull          hw.bar_pull_160  on drawer[bottom].front (front face)
-    bar            354..546             133.625..145.625     -54..-19            
-    screws         368..532             137.625..141.625     -19..0              
+    bar            354..546             132.75..144.75       -54..-19            
+    screws         368..532             136.75..140.75       -19..0              
     centres 160, screw diameter 4
 drawer[top].slides[left]     side_mount_slide on drawer[top].side[left] (left face)
     drawer member  25.35..31.7          371.5..416.5         0..500              
@@ -207,8 +207,8 @@ drawer[top].slides[right]    side_mount_slide on drawer[top].side[right] (right 
     cabinet member 874.65..881          371.5..416.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[top].pull             hw.bar_pull_160  on drawer[top].front (front face)
-    bar            354..546             392.375..404.375     -54..-19            
-    screws         368..532             396.375..400.375     -19..0              
+    bar            354..546             393.25..405.25       -54..-19            
+    screws         368..532             397.25..401.25       -19..0              
     centres 160, screw diameter 4
 door_r.hinges[lower]         euro_hinge       on door_r.stile[hinge] (back face)
     cup            859..894             630..665             -12.8..0            
@@ -380,8 +380,8 @@ drawer_bay[top]              19..881              269..519             0..554
 door_bay[left]               19..450              538..1681            0..554              
 door_bay[right]              450..881             538..1681            0..554              
 door_l.door                  1..449.25            530..1679.5          -19..0              
-drawer[bottom].face          1..899               11..268.25           -19..0              
-drawer[top].face             1..899               269.75..527          -19..0              
+drawer[bottom].face          1..899               11..266.5            -19..0              
+drawer[top].face             1..899               271.5..527           -19..0              
 door_r.door                  450.75..899          530..1679.5          -19..0              
 
 ASSEMBLIES (4)

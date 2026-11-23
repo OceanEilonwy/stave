@@ -9,8 +9,12 @@
 //! axis lies in the plane (a cup's bore) is taken out of each box it
 //! crosses as its narrowest chord over the range, along the axis, that the
 //! other piece shares with it, so no more is taken than the hole takes.
-//! Other holes and angled cuts are left as wood: more wood than there is,
-//! never less. Everything here is `f64` nanometres from exact inputs,
+//! A round hole along the axis keeps a piece inside it clear of the
+//! blocks it is drilled in ([`Bores`]): at one pose, and all the way round
+//! a turn about the plane's origin, which is exact for a hole on the line
+//! the body turns about. Other holes and angled cuts are left as wood:
+//! more wood than there is, never less. Everything here is `f64`
+//! nanometres from exact inputs,
 //! converted in [`render`](crate::render).
 
 use glam::{DMat4, DVec2, DVec3};
@@ -87,6 +91,10 @@ pub(crate) struct Piece {
     pub corners: Vec<DVec2>,
     pub low: f64,
     pub high: f64,
+    /// For the box around a rod that runs along the axis: the circle the
+    /// rod is on the plane, its centre and its radius (shrunk as the
+    /// corners are). `None` for anything else.
+    pub round: Option<(DVec2, f64)>,
 }
 
 impl Piece {
@@ -109,8 +117,71 @@ impl Piece {
             corners: self.corners.iter().map(|c| motion.apply(*c)).collect(),
             low: self.low,
             high: self.high,
+            round: self
+                .round
+                .map(|(centre, radius)| (motion.apply(centre), radius)),
         }
     }
+
+    /// The farthest the piece reaches from a point of the plane: its
+    /// circle's, when it is round, else its farthest corner's.
+    fn reach_about(&self, centre: DVec2) -> f64 {
+        match self.round {
+            Some((own, radius)) => (own - centre).length() + radius,
+            None => self.radius_about(centre),
+        }
+    }
+}
+
+/// A round hole along the plane's axis that a piece of the other solid
+/// starts inside (grammar, "Sweeps see cuts"): the room a cut made for it.
+/// It is clear of the block the hole is drilled in only while it stays in
+/// the hole; once out of it, in the block, it hits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Room {
+    /// The hole's centre on the plane, where its solid starts.
+    pub centre: DVec2,
+    /// The radius a piece may reach inside it, the contact tolerance
+    /// included.
+    pub radius: f64,
+    /// `true` when the hole is in the second piece's solid (the first
+    /// piece starts inside it), `false` when in the first's.
+    pub in_second: bool,
+}
+
+impl Room {
+    /// Whether the piece of the other solid is still inside the hole,
+    /// with the hole moved as its piece is.
+    pub fn holds(
+        &self,
+        first: &Piece,
+        second: &Piece,
+        first_motion: Motion2,
+        second_motion: Motion2,
+    ) -> bool {
+        let (piece, hole_motion) = if self.in_second {
+            (first.moved(first_motion), second_motion)
+        } else {
+            (second.moved(second_motion), first_motion)
+        };
+        piece.reach_about(hole_motion.apply(self.centre)) <= self.radius
+    }
+
+    /// How far the piece of the other solid can still move before it
+    /// leaves the hole, with both where they start (negative once out).
+    pub fn clearance(&self, first: &Piece, second: &Piece) -> f64 {
+        let piece = if self.in_second { first } else { second };
+        self.radius - piece.reach_about(self.centre)
+    }
+}
+
+/// A pair of pieces of two solids, with the room one starts inside, if
+/// any (see [`Room`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Pair {
+    pub first: Piece,
+    pub second: Piece,
+    pub room: Option<Room>,
 }
 
 /// A rigid motion in the plane: turn about the plane's origin, then move.
@@ -139,18 +210,46 @@ impl Motion2 {
 /// world.
 #[derive(Debug, Clone)]
 enum Element {
-    Box(WorldBox),
+    /// A box; `block` when it is one of the solid's blocks, which its
+    /// holes are drilled in (not the box around a rod or a slant), and
+    /// `rod` for the box around a rod.
+    Box {
+        region: WorldBox,
+        block: bool,
+        rod: Option<WorldRod>,
+    },
     Outline(Vec<DVec3>),
 }
 
+impl Element {
+    /// One of the solid's blocks, which its holes are drilled in.
+    fn is_block(&self) -> bool {
+        match self {
+            Element::Box { block, .. } => *block,
+            Element::Outline(_) => false,
+        }
+    }
+}
+
 fn elements(solid: &WorldSolid) -> Vec<Element> {
+    let boxed = |block: bool| {
+        move |region: WorldBox| Element::Box {
+            region,
+            block,
+            rod: None,
+        }
+    };
     solid
         .boxes()
         .iter()
         .copied()
-        .chain(solid.rods().iter().map(WorldRod::bounds))
-        .chain(solid.slant_bounds())
-        .map(Element::Box)
+        .map(boxed(true))
+        .chain(solid.rods().iter().map(|rod| Element::Box {
+            region: rod.bounds(),
+            block: false,
+            rod: Some(*rod),
+        }))
+        .chain(solid.slant_bounds().map(boxed(false)))
         .chain(
             solid
                 .prisms()
@@ -158,6 +257,91 @@ fn elements(solid: &WorldSolid) -> Vec<Element> {
                 .map(|prism| Element::Outline(prism.corners_3d())),
         )
         .collect()
+}
+
+/// What a round hole along the plane's axis takes out of the pairs of
+/// pieces (grammar, "Sweeps see cuts").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bores {
+    /// Nothing: the pieces will move some other way (a linkage), so such
+    /// a hole is left as wood.
+    Wood,
+    /// The pieces stay where they are (a check at one pose): a piece
+    /// inside a hole of the other solid is clear of the blocks the hole
+    /// is drilled in.
+    Still,
+    /// One solid turns about the line through the plane's origin: a
+    /// piece that stays inside a hole of the other solid all the way
+    /// round is clear of the blocks the hole is drilled in. Exact for a
+    /// hole on the line (taken out as itself); for one off it by `e`,
+    /// only the round hole `e` narrower that every turn keeps covered is.
+    Turning,
+}
+
+/// A round hole along the plane's axis, on the plane: its centre and
+/// radius there and its range along the axis.
+#[derive(Debug, Clone, Copy)]
+struct Bore {
+    centre: DVec2,
+    radius: f64,
+    low: f64,
+    high: f64,
+}
+
+/// The holes of a solid moved by `matrix` that run along the plane's axis.
+fn bores(plane: &Plane, solid: &WorldSolid, matrix: &DMat4) -> Vec<Bore> {
+    let axis = point_vector(Point::default().with(plane.axis, Length::from_nm(1)));
+    solid
+        .holes()
+        .iter()
+        .filter_map(|hole| {
+            let [first, second] = hole.axis.others();
+            let end = |at: Length| {
+                matrix.transform_point3(point_vector(
+                    Point::default()
+                        .with(hole.axis, at)
+                        .with(first, hole.centre[0])
+                        .with(second, hole.centre[1]),
+                ))
+            };
+            let (start, finish) = (end(hole.start), end(hole.end));
+            let direction = (finish - start).normalize_or_zero();
+            // Only a hole along the axis is round on the plane.
+            if direction.cross(axis).length() > 1e-9 {
+                return None;
+            }
+            let (a, b) = (plane.along(start), plane.along(finish));
+            Some(Bore {
+                centre: plane.project(start),
+                radius: render::nm(hole.diameter) / 2.0,
+                low: a.min(b),
+                high: a.max(b),
+            })
+        })
+        .collect()
+}
+
+/// The first of `bores` that `piece` lies inside over the range along
+/// the axis it shares with `block` (a block of the solid they are drilled
+/// in), at one pose or all the way round a turn as `rule` says, with the
+/// radius a piece may reach in it. Touching the hole's side, within the
+/// contact tolerance, is inside; a round piece (the box around a rod
+/// along the axis) is its circle.
+fn inside(piece: &Piece, block: &Piece, bores: &[Bore], rule: Bores) -> Option<(Bore, f64)> {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let (low, high) = (piece.low.max(block.low), piece.high.min(block.high));
+    bores.iter().copied().find_map(|bore| {
+        let along = low >= bore.low - tolerance && high <= bore.high + tolerance;
+        // The piece's corners are shrunk by half the tolerance.
+        let room = bore.radius + tolerance / 2.0;
+        let within = along
+            && match rule {
+                Bores::Wood => false,
+                Bores::Still => piece.reach_about(bore.centre) <= room,
+                Bores::Turning => piece.reach_about(DVec2::ZERO) + bore.centre.length() <= room,
+            };
+        within.then_some((bore, room))
+    })
 }
 
 /// The eight corners of a box, world nanometres.
@@ -248,8 +432,15 @@ fn cut_by_holes(
     pieces
 }
 
-/// A convex piece of world corners moved by `matrix`, on the plane.
-fn piece(plane: &Plane, corners: &[DVec3], matrix: &DMat4) -> Option<Piece> {
+/// A convex piece of world corners moved by `matrix`, on the plane; round
+/// when it is the box around `rod` and the move leaves the rod along the
+/// axis.
+fn piece(
+    plane: &Plane,
+    corners: &[DVec3],
+    matrix: &DMat4,
+    rod: Option<&WorldRod>,
+) -> Option<Piece> {
     let moved: Vec<DVec3> = corners
         .iter()
         .map(|c| matrix.transform_point3(*c))
@@ -258,10 +449,29 @@ fn piece(plane: &Plane, corners: &[DVec3], matrix: &DMat4) -> Option<Piece> {
     let along = moved.iter().map(|c| plane.along(*c));
     let low = along.clone().fold(f64::INFINITY, f64::min);
     let high = along.fold(f64::NEG_INFINITY, f64::max);
+    let inset = render::nm(CONTACT_TOLERANCE) / 2.0;
+    let round = rod.and_then(|rod| {
+        let axis = point_vector(Point::default().with(plane.axis, Length::from_nm(1)));
+        let own = point_vector(Point::default().with(rod.axis, Length::from_nm(1)));
+        if matrix.transform_vector3(own).cross(axis).length() > 1e-9 {
+            return None;
+        }
+        let [first, second] = rod.axis.others();
+        let centre = point_vector(
+            Point::default()
+                .with(first, rod.centre[0])
+                .with(second, rod.centre[1]),
+        );
+        Some((
+            plane.project(matrix.transform_point3(centre)),
+            render::nm(rod.diameter) / 2.0 - inset,
+        ))
+    });
     Some(Piece {
-        corners: shrink(&flat, render::nm(CONTACT_TOLERANCE) / 2.0)?,
+        corners: shrink(&flat, inset)?,
         low,
         high,
+        round,
     })
 }
 
@@ -269,7 +479,7 @@ fn piece(plane: &Plane, corners: &[DVec3], matrix: &DMat4) -> Option<Piece> {
 fn element_range(plane: &Plane, element: &Element, matrix: &DMat4) -> (f64, f64) {
     let boxed;
     let corners: &[DVec3] = match element {
-        Element::Box(region) => {
+        Element::Box { region, .. } => {
             boxed = corners_of(region);
             &boxed
         }
@@ -293,32 +503,38 @@ fn element_pieces(
     range: (f64, f64),
 ) -> Vec<Piece> {
     match element {
-        Element::Box(region) => {
+        Element::Box { region, rod, .. } => {
             // The range in the solid's own place: a motion in the plane
             // only shifts what lies along the axis.
             let shift = plane.along(matrix.transform_point3(DVec3::ZERO));
             let own = (range.0 - shift, range.1 - shift);
             cut_by_holes(*region, holes, plane.axis, own)
                 .iter()
-                .filter_map(|part| piece(plane, &corners_of(part), matrix))
+                .filter_map(|part| piece(plane, &corners_of(part), matrix, rod.as_ref()))
                 .collect()
         }
-        Element::Outline(corners) => piece(plane, corners, matrix).into_iter().collect(),
+        Element::Outline(corners) => piece(plane, corners, matrix, None).into_iter().collect(),
     }
 }
 
 /// Every pair of pieces of `a` (moved by `ma`) and `b` (moved by `mb`) that
 /// share more than the contact tolerance along the axis, each solid's
-/// boxes less its holes over the range the other piece covers.
+/// boxes less its holes over the range the other piece covers, and
+/// without the pairs of a piece and a block that a round hole along the
+/// axis, drilled in the block, keeps apart as `rule` says. A pair whose
+/// piece starts inside such a hole but isn't kept apart by it carries the
+/// hole as its [`Room`].
 pub(crate) fn piece_pairs(
     plane: &Plane,
     a: &WorldSolid,
     ma: &DMat4,
     b: &WorldSolid,
     mb: &DMat4,
-) -> Vec<(Piece, Piece)> {
+    rule: Bores,
+) -> Vec<Pair> {
     let tolerance = render::nm(CONTACT_TOLERANCE);
     let (ea, eb) = (elements(a), elements(b));
+    let (bores_a, bores_b) = (bores(plane, a, ma), bores(plane, b, mb));
     let mut out = Vec::new();
     for x in &ea {
         let rx = element_range(plane, x, ma);
@@ -332,9 +548,41 @@ pub(crate) fn piece_pairs(
             let py = element_pieces(plane, y, b.holes(), mb, shared);
             for p in &px {
                 for q in &py {
-                    if p.shared(q) > tolerance {
-                        out.push((p.clone(), q.clone()));
+                    if p.shared(q) <= tolerance
+                        || (y.is_block() && inside(p, q, &bores_b, rule).is_some())
+                        || (x.is_block() && inside(q, p, &bores_a, rule).is_some())
+                    {
+                        continue;
                     }
+                    // Inside a hole where it starts, but not kept apart
+                    // by it all the motion long: the hole is its room.
+                    let room_in = |piece: &Piece, block: &Piece, bores: &[Bore]| {
+                        inside(piece, block, bores, Bores::Still)
+                            .map(|(bore, radius)| (bore.centre, radius))
+                    };
+                    let room = if y.is_block() {
+                        room_in(p, q, &bores_b).map(|(centre, radius)| Room {
+                            centre,
+                            radius,
+                            in_second: true,
+                        })
+                    } else {
+                        None
+                    }
+                    .or_else(|| {
+                        x.is_block().then(|| room_in(q, p, &bores_a)).flatten().map(
+                            |(centre, radius)| Room {
+                                centre,
+                                radius,
+                                in_second: false,
+                            },
+                        )
+                    });
+                    out.push(Pair {
+                        first: p.clone(),
+                        second: q.clone(),
+                        room,
+                    });
                 }
             }
         }
@@ -486,4 +734,90 @@ pub(crate) fn piece_depth(a: &Piece, b: &Piece) -> Option<(f64, DVec2)> {
     let (depth, normal) = overlap_depth(&a.corners, &b.corners);
     let tolerance = render::nm(CONTACT_TOLERANCE);
     Some(((depth + tolerance).min(a.shared(b)), normal))
+}
+
+/// A solid's wood as whole convex pieces on the plane, each element moved
+/// by `matrix`, neither shrunk nor cut by holes (grammar, "Running
+/// clearance": holes count as wood, so a distance between two such pieces
+/// is never more than the distance between the bodies).
+pub(crate) fn whole_pieces(plane: &Plane, solid: &WorldSolid, matrix: &DMat4) -> Vec<Piece> {
+    elements(solid)
+        .iter()
+        .filter_map(|element| {
+            let boxed;
+            let corners: &[DVec3] = match element {
+                Element::Box { region, .. } => {
+                    boxed = corners_of(region);
+                    &boxed
+                }
+                Element::Outline(corners) => corners,
+            };
+            let moved: Vec<DVec3> = corners
+                .iter()
+                .map(|c| matrix.transform_point3(*c))
+                .collect();
+            let flat = hull(moved.iter().map(|c| plane.project(*c)).collect());
+            if flat.len() < 3 {
+                return None;
+            }
+            let along = moved.iter().map(|c| plane.along(*c));
+            let low = along.clone().fold(f64::INFINITY, f64::min);
+            let high = along.fold(f64::NEG_INFINITY, f64::max);
+            Some(Piece {
+                corners: flat,
+                low,
+                high,
+                round: None,
+            })
+        })
+        .collect()
+}
+
+/// How far apart two convex polygons are along the edge normal that
+/// separates them most (the separating axis test's largest gap): positive
+/// when they are apart, zero when they touch, negative when they overlap
+/// (then by how far they would have to move apart along it), with that
+/// unit normal.
+pub(crate) fn separation(a: &[DVec2], b: &[DVec2]) -> (f64, DVec2) {
+    let mut best = (f64::NEG_INFINITY, DVec2::X);
+    for polygon in [a, b] {
+        for (from, to) in edges(polygon) {
+            let normal = (to - from).perp().normalize_or_zero();
+            if normal == DVec2::ZERO {
+                continue;
+            }
+            let (a_lo, a_hi) = shadow(a, normal);
+            let (b_lo, b_hi) = shadow(b, normal);
+            let gap = (b_lo - a_hi).max(a_lo - b_hi);
+            if gap > best.0 {
+                best = (gap, normal);
+            }
+        }
+    }
+    best
+}
+
+/// The distance between two convex polygons that don't overlap, with the
+/// unit direction between their nearest points (zero when they touch).
+pub(crate) fn nearest_direction(a: &[DVec2], b: &[DVec2]) -> (f64, DVec2) {
+    let mut best = (f64::INFINITY, DVec2::ZERO);
+    for (polygon, other) in [(a, b), (b, a)] {
+        for p in polygon {
+            for (from, to) in edges(other) {
+                let ab = to - from;
+                let length2 = ab.length_squared();
+                let t = if length2 > 0.0 {
+                    ((*p - from).dot(ab) / length2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let between = *p - (from + ab * t);
+                let distance = between.length();
+                if distance < best.0 {
+                    best = (distance, between.normalize_or_zero());
+                }
+            }
+        }
+    }
+    best
 }

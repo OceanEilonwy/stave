@@ -19,6 +19,9 @@
 //!    at least one of its counterparts over an area, after every cut; a
 //!    part that touches only along an edge or at a corner (an offset half
 //!    lap whose notches don't meet) is reported as such.
+//!    **Clamps** (`error[no-contact]`, [`clamps`]): hardware whose kind
+//!    has a `clamp` draws two parts together, so what lies between them
+//!    along the clamp, at rest, must be solid.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
 //!    `gap` that runs past its `to` anchor. Hardware whose kind's
 //!    `require` or `adjust` failed where the solver placed it
@@ -75,6 +78,7 @@
 #![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 #![warn(missing_docs)]
 
+mod clamps;
 mod explain;
 mod fixes;
 mod grain;
@@ -83,6 +87,7 @@ mod instance;
 mod models;
 mod motion;
 mod names;
+mod running;
 mod sequence;
 mod tiers;
 mod walls;
@@ -125,6 +130,9 @@ pub enum ContactItem {
 pub struct ContactMotion {
     /// The assembly that moves.
     pub assembly: AssemblyId,
+    /// Which of its drives moves (the first, for an assembly with one);
+    /// the others are where [`Contact::scene`] poses them, or closed.
+    pub drive: stave_model::mechanism::DriveIndex,
     /// Where it first touches: an angle or a distance.
     pub at: PoseValue,
     /// A little further (2deg or 2mm, within its travel), where the
@@ -225,19 +233,21 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     stop.check()?;
     let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
     checker.given = fast.map(|fast| fast.made.clone().into_iter());
-    let steps: [fn(&mut Checker<'m>); 12] = [
+    let steps: [fn(&mut Checker<'m>); 14] = [
         Checker::misfits,
         Checker::misshapen,
         Checker::not_supported,
         Checker::cut_sizes,
         Checker::mechanisms,
         Checker::contact,
+        Checker::clamps,
         Checker::overruns,
         Checker::rest,
         Checker::walls,
         Checker::edge_contacts,
         Checker::joint_motions,
         Checker::scenes,
+        Checker::set_positions,
     ];
     for step in steps {
         stop.check()?;
@@ -347,6 +357,9 @@ struct Body {
     /// For a member its assembly's mechanism places (a link): that
     /// assembly, and which member of its mechanism.
     link: Option<(AssemblyId, MemberIndex)>,
+    /// A loose member (grammar, "Shapes"): checked wherever it is set,
+    /// never swept.
+    loose: bool,
 }
 
 struct Checker<'a> {
@@ -422,6 +435,7 @@ impl<'a> Checker<'a> {
                     bounds,
                     chain: chain_of(part.assembly),
                     link: None,
+                    loose: false,
                 });
             }
         }
@@ -445,6 +459,7 @@ impl<'a> Checker<'a> {
                         bounds,
                         chain: chain_of(assembly),
                         link,
+                        loose: member.loose,
                     });
                 }
             }
@@ -466,6 +481,7 @@ impl<'a> Checker<'a> {
                             bounds,
                             chain: chain_of(assembly),
                             link: None,
+                            loose: false,
                         });
                     }
                 }
@@ -1120,25 +1136,37 @@ impl<'a> Checker<'a> {
         let Some(scene) = self.design.scenes.get(scene_index) else {
             return (Vec::new(), Vec::new());
         };
-        let pose_of = |assembly: AssemblyId| {
-            scene
-                .poses
-                .iter()
-                .find(|pose| pose.assembly == assembly)
-                .map(|pose| pose.value)
-                .filter(|value| !matches!(value, PoseValue::Closed))
+        // Every drive of an assembly as the scene poses it.
+        self.moves_with(&|assembly: AssemblyId| {
+            let drives = self.path(assembly)?.mechanism().drives().len();
+            let (values, _) = scene.poses_of(assembly, drives);
+            Some(values)
+        })
+    }
+
+    /// Per body: the poses that move it (outermost first), with the link
+    /// it is when its own assembly's linkage turns it, and its placement,
+    /// with every assembly that moves at the poses `poses_of` gives it
+    /// (`None`, or every drive closed, for one that stays shut).
+    fn moves_with(
+        &self,
+        poses_of: &dyn Fn(AssemblyId) -> Option<Vec<PoseValue>>,
+    ) -> (Vec<Moves>, Vec<Placement>) {
+        let poses_of = |assembly: AssemblyId| {
+            poses_of(assembly).filter(|values| {
+                values
+                    .iter()
+                    .any(|value| !matches!(value, PoseValue::Closed))
+            })
         };
         let moves: Vec<Moves> = self
             .bodies
             .iter()
             .map(|body| {
-                let steps: Vec<(AssemblyId, PoseValue)> = body
+                let steps: Vec<(AssemblyId, Vec<PoseValue>)> = body
                     .chain
                     .iter()
-                    .filter_map(|assembly| {
-                        let value = pose_of(*assembly)?;
-                        self.path(*assembly).map(|_| (*assembly, value))
-                    })
+                    .filter_map(|assembly| Some((*assembly, poses_of(*assembly)?)))
                     .collect();
                 // A link is turned by its own assembly's linkage only when
                 // that assembly is the innermost one posed.
@@ -1155,11 +1183,11 @@ impl<'a> Checker<'a> {
                 let chain: Vec<_> = moves
                     .steps
                     .iter()
-                    .filter_map(|(assembly, value)| {
-                        Some((self.path(*assembly)?.mechanism(), *value))
+                    .filter_map(|(assembly, values)| {
+                        Some((self.path(*assembly)?.mechanism(), values.as_slice()))
                     })
                     .collect();
-                Placement::of_mechanisms(&chain, moves.link)
+                Placement::of_poses(&chain, moves.link)
             })
             .collect();
         (moves, placements)
@@ -1218,6 +1246,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// What a scene's poses of an assembly say, for a message: `door_l is
+    /// open 90deg`, or one line for each drive away from closed of an
+    /// assembly with several (`frame.tilt is open 15deg`).
+    fn pose_conditions(&self, assembly: AssemblyId, values: &[PoseValue]) -> Vec<String> {
+        let name = self.assembly_name(assembly);
+        let drives = self
+            .path(assembly)
+            .map(|path| path.mechanism().drives().to_vec())
+            .unwrap_or_default();
+        if drives.len() <= 1 {
+            return values
+                .first()
+                .map(|value| vec![format!("{name} is {}", pose_text(*value))])
+                .unwrap_or_default();
+        }
+        drives
+            .iter()
+            .zip(values)
+            .filter(|(_, value)| !matches!(value, PoseValue::Closed))
+            .map(|(named, value)| match &named.name {
+                Some(drive) => format!("{name}.{drive} is {}", pose_text(*value)),
+                None => format!("{name} is {}", pose_text(*value)),
+            })
+            .collect()
+    }
+
     fn assembly_name(&self, assembly: AssemblyId) -> String {
         self.design
             .assemblies()
@@ -1231,16 +1285,14 @@ impl<'a> Checker<'a> {
         scene_index: usize,
         a: Item,
         b: Item,
-        moved: &[(AssemblyId, PoseValue)],
-        other_moves: &[(AssemblyId, PoseValue)],
+        moved: &[(AssemblyId, Vec<PoseValue>)],
+        other_moves: &[(AssemblyId, Vec<PoseValue>)],
         found: &[Overlap],
     ) {
-        let describe = |moves: &[(AssemblyId, PoseValue)]| -> Vec<String> {
+        let describe = |moves: &[(AssemblyId, Vec<PoseValue>)]| -> Vec<String> {
             moves
                 .iter()
-                .map(|(assembly, value)| {
-                    format!("{} is {}", self.assembly_name(*assembly), pose_text(*value))
-                })
+                .flat_map(|(assembly, values)| self.pose_conditions(*assembly, values))
                 .collect()
         };
         let mut conditions = describe(moved);
@@ -1361,7 +1413,8 @@ fn merge(diagnostics: Vec<(Diagnostic, Option<Contact>)>) -> Vec<(Diagnostic, Op
 /// the link it is when the innermost one turns it on its linkage.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Moves {
-    steps: Vec<(AssemblyId, PoseValue)>,
+    /// Each assembly that moves it, with every one of its drives' poses.
+    steps: Vec<(AssemblyId, Vec<PoseValue>)>,
     link: Option<MemberIndex>,
 }
 

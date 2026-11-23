@@ -27,6 +27,9 @@ pub struct MotionShown {
     pub full: f64,
     /// Where the slider is.
     pub value: f64,
+    /// A slider for each other way the same thing moves (each drive after
+    /// the first of an assembly with several), shown under this one.
+    pub more: Vec<MotionShown>,
 }
 
 /// The motion bar's state: what it shows, if anything, and which way it
@@ -49,6 +52,9 @@ pub enum MotionBarInput {
     SetOrientation(gtk::Orientation),
     /// People moved the slider to this value.
     Moved(f64),
+    /// People moved one of the other sliders (its place in
+    /// [`MotionShown::more`]) to this value.
+    MovedMore(usize, f64),
 }
 
 /// What the motion bar tells its owner.
@@ -56,6 +62,9 @@ pub enum MotionBarInput {
 pub enum MotionBarOutput {
     /// People moved the slider to this value.
     Moved(f64),
+    /// People moved one of the other sliders (its place in
+    /// [`MotionShown::more`]) to this value.
+    MovedMore(usize, f64),
 }
 
 #[relm4::component(pub)]
@@ -105,6 +114,11 @@ impl Component for MotionBarComponent {
             gtk::Label {
                 add_css_class: "stave-key",
             },
+            // The sliders for the other ways it moves, made on show.
+            #[name = "more"]
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+            },
         }
     }
 
@@ -141,6 +155,14 @@ impl Component for MotionBarComponent {
                         &tr("Open {name}"),
                         &[("name", &shown.name)],
                     ))]);
+                    // The other sliders, made again: each set before it is
+                    // heard, so setting it calls nobody back.
+                    while let Some(child) = widgets.more.first_child() {
+                        widgets.more.remove(&child);
+                    }
+                    for (index, other) in shown.more.iter().enumerate() {
+                        widgets.more.append(&slider_row(other, index, &sender));
+                    }
                 }
                 self.shown = shown;
             }
@@ -149,9 +171,46 @@ impl Component for MotionBarComponent {
                 // Nobody listening is not a mistake.
                 let _ = sender.output(MotionBarOutput::Moved(value));
             }
+            MotionBarInput::MovedMore(index, value) => {
+                let _ = sender.output(MotionBarOutput::MovedMore(index, value));
+            }
         }
         self.update_view(widgets, sender);
     }
+}
+
+/// One more slider of the motion bar, for another way the same thing
+/// moves: its name, words at each end and the slider, set before its
+/// handler is connected.
+fn slider_row(
+    shown: &MotionShown,
+    index: usize,
+    sender: &ComponentSender<MotionBarComponent>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let name = gtk::Label::new(Some(&shown.name));
+    name.add_css_class("heading");
+    let start = gtk::Label::new(Some(&shown.start));
+    start.add_css_class("stave-key");
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, shown.full.max(0.1), 0.1);
+    scale.set_draw_value(false);
+    scale.set_width_request(220);
+    scale.set_value(shown.value);
+    scale.update_property(&[gtk::accessible::Property::Label(&fill_in(
+        &tr("Open {name}"),
+        &[("name", &shown.name)],
+    ))]);
+    let input = sender.input_sender().clone();
+    scale.connect_value_changed(move |scale| {
+        input.emit(MotionBarInput::MovedMore(index, scale.value()));
+    });
+    let end = gtk::Label::new(Some(&shown.end));
+    end.add_css_class("stave-key");
+    row.append(&name);
+    row.append(&start);
+    row.append(&scale);
+    row.append(&end);
+    row
 }
 
 /// The floating bar at the bottom right of the 3D view: a name, words at
@@ -218,6 +277,7 @@ mod tests {
             end: "110°".to_owned(),
             full: 110.0,
             value,
+            more: Vec::new(),
         })
     }
 

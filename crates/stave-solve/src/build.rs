@@ -12,7 +12,7 @@ use stave_model::ids::{
     AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
 };
 use stave_model::instance::Ctx;
-use stave_model::mechanism::MemberIndex;
+use stave_model::mechanism::{DriveIndex, MemberIndex};
 use stave_model::solved::{
     self, Assembly, BodyOwner, Cut, CutPlace, CutSource, DesignDraft, FastenerUse, Hardware,
     HardwareBase, Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point,
@@ -162,6 +162,7 @@ fn reflect_members(
                     .collect::<Solved<Vec<_>>>()?,
                 body: member.body,
                 name: member.name.clone(),
+                loose: member.loose,
             })
         })
         .collect()
@@ -293,6 +294,7 @@ fn members(
                 carrier,
                 shapes,
             )
+            .map(|body| body.with_loose(member.loose))
             .ok_or_else(|| Fault::Internal("a member's shapes").into())
         })
         .collect()
@@ -2151,6 +2153,7 @@ impl Solver<'_> {
                     })
                     .collect::<Solved<Vec<_>>>()?,
                 rules: hw.rules,
+                clamp: hw.clamp,
                 entries: hw
                     .entries
                     .into_iter()
@@ -2381,7 +2384,9 @@ impl Solver<'_> {
                 kind: None,
                 array: None,
             };
-            let mut poses = Vec::new();
+            let mut poses: Vec<ScenePose> = Vec::new();
+            // Where each pose is written, for a second pose of one drive.
+            let mut written: Vec<stave_lang::ast::Span> = Vec::new();
             for pose in &def.poses {
                 let Value::Assembly(assembly) = self.eval(&pose.target, &env)? else {
                     return Err(self
@@ -2435,10 +2440,58 @@ impl Solver<'_> {
                     .get(assembly.index())
                     .and_then(Option::as_ref)
                     .map(|m| &m.mechanism);
+                let drive = self.pose_drive(assembly, mechanism, pose, value, def.decl.file)?;
                 if let Some(mechanism) = mechanism {
-                    self.pose_within(assembly, mechanism, value, def.decl.file, pose.span)?;
+                    let checked: Vec<DriveIndex> = match drive {
+                        Some(drive) => vec![drive],
+                        None => (0..mechanism.drives().len())
+                            .filter_map(DriveIndex::new)
+                            .collect(),
+                    };
+                    for one in checked {
+                        self.pose_within(
+                            assembly,
+                            mechanism,
+                            one,
+                            value,
+                            def.decl.file,
+                            pose.span,
+                        )?;
+                        self.pose_sets(assembly, mechanism, one, value, def.decl.file, pose.span)?;
+                    }
                 }
-                poses.push(ScenePose { assembly, value });
+                // Two poses of one drive, or of the assembly and one of its
+                // drives, in one scene.
+                let clash = poses.iter().zip(&written).find(|(earlier, _)| {
+                    earlier.assembly == assembly
+                        && match (earlier.drive, drive) {
+                            (Some(a), Some(b)) => a == b,
+                            (None, _) | (_, None) => true,
+                        }
+                });
+                if let Some((_, first)) = clash {
+                    let name = self.pose_name(assembly, mechanism, drive);
+                    let reported = self.report(
+                        Diagnostic::error(
+                            Code::DuplicateName,
+                            format!("{name} is posed twice in scene '{}'", def.decl.name),
+                            Label::new(def.decl.file, pose.span),
+                        )
+                        .with_label(Label::with_message(
+                            def.decl.file,
+                            *first,
+                            "first posed here",
+                        ))
+                        .with_help("pose each motion once in a scene; remove one of them"),
+                    );
+                    return Err(reported.into());
+                }
+                written.push(pose.span);
+                poses.push(ScenePose {
+                    assembly,
+                    drive,
+                    value,
+                });
             }
             let show = match &def.show {
                 Some(expr) => {
@@ -2569,6 +2622,7 @@ impl Solver<'_> {
         Ok(ProjectInfo {
             title: project.title.clone(),
             goal: project.goal.clone(),
+            finish: project.finish.clone(),
             units: project.units,
             resolution,
             style: project.style.clone(),
@@ -2577,6 +2631,7 @@ impl Solver<'_> {
             kerf: allowances.kerf,
             rough_length: allowances.rough_length,
             rough_width: allowances.rough_width,
+            running_gap: self.running_gap()?,
         })
     }
 }

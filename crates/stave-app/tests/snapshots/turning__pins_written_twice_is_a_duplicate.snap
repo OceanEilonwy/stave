@@ -1,0 +1,14 @@
+---
+source: crates/stave-app/tests/turning.rs
+expression: rendered(&opened)
+---
+error[duplicate-name]: 'pins' is declared twice
+  --> /project/project.stave:97:5
+   |
+97 |     pins: along
+   |     ^^^^
+  ::: /project/project.stave:96:5
+   |
+96 |     pins: depth
+   |     ---- first written here
+   = help: write 'pins' once; remove one of them

@@ -1,0 +1,125 @@
+stave 1
+
+project "Folding Camp Stool" {
+  goal: "An X-frame stool, drawn folded: the inner legs swing on a bolt through the outer legs"
+}
+
+region envelope = box(across: 400mm, up: 600mm, deep: 100mm)
+
+stock ash_30 { species: ash, form: solid, thickness: 30mm, max_width: 200mm, max_length: 2400mm }
+stock ash_25 { species: ash, form: solid, thickness: 25mm, max_width: 200mm, max_length: 2400mm }
+
+part outer_leg_l : ash_30 {
+  length: 600mm
+  width:  45mm
+  place {
+    orient(length: up, width: back)
+    flush(envelope.bottom)
+    flush(envelope.left)
+    center(envelope, deep)
+  }
+}
+
+part outer_leg_r = mirror(outer_leg_l, about: mid(envelope, across))
+
+part inner_leg_l : ash_30 {
+  length: 500mm
+  width:  45mm
+  place {
+    orient(length: up, width: back)
+    flush(outer_leg_l.bottom, inset: 50mm)
+    against(outer_leg_l.right, gap: 3mm)
+    center(outer_leg_l, deep)
+  }
+}
+
+part inner_leg_r = mirror(inner_leg_l, about: mid(envelope, across))
+
+part outer_rung : ash_25 {
+  length: fit
+  width:  30mm
+  place {
+    orient(length: right, width: up)
+    flush(outer_leg_l.bottom, inset: 10mm)
+    center(envelope, across)
+    center(outer_leg_l, deep)
+  }
+}
+
+part outer_seat_rail : ash_25 {
+  length: fit
+  width:  30mm
+  place {
+    orient(length: right, width: up)
+    flush(outer_leg_l.top, inset: 10mm)
+    center(envelope, across)
+    center(outer_leg_l, deep)
+  }
+}
+
+part inner_rung : ash_25 {
+  length: fit
+  width:  30mm
+  place {
+    orient(length: right, width: up)
+    flush(inner_leg_l.bottom, inset: 60mm)
+    center(envelope, across)
+    center(inner_leg_l, deep)
+  }
+}
+
+joint outer_tenons : mortise_tenon([outer_rung, outer_seat_rail], into: [outer_leg_l, outer_leg_r], length: 20mm)
+joint inner_tenons : mortise_tenon(inner_rung, into: [inner_leg_l, inner_leg_r], length: 20mm)
+
+kind knob_bolt : fitting {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// Diameter of the hand knob.
+  param knob_diameter = 50mm
+  /// How far the knob stands off the face.
+  param projection = 30mm
+  /// Diameter of the bolt.
+  param bolt_diameter = 8mm
+  /// How far the bolt goes into the other part, into a threaded insert.
+  param thread_length = 25mm
+  /// The gap the bolt crosses between the two parts.
+  param span = 0mm
+  /// Wood left round the holes.
+  param wall = 6mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob: turned by hand to lock or free the joint.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: knob_diameter, depth: -projection..0mm)
+  }
+  /// The bolt: through the piece, across the gap, into a threaded insert.
+  member bolt {
+    with:  into
+    shape: cylinder(diameter: bolt_diameter, depth: 0mm..piece.thickness + span + thread_length - 3mm)
+  }
+
+  cut bolt_hole: crossing(piece, bolt) { drill(diameter: bolt_diameter + 1mm, depth: through, wall: wall) }
+  cut insert_hole: crossing(into, bolt) { drill(diameter: bolt_diameter + 4mm, depth: thread_length, wall: wall) }
+}
+
+hardware pivot_l : knob_bolt(outer_leg_l, into: inner_leg_l, face: left, span: 3mm, knob_diameter: 24mm, projection: 8mm, thread_length: 15mm) {
+  place {
+    center(outer_leg_l, deep)
+    flush(outer_leg_l.bottom, inset: 300mm)
+  }
+}
+
+hardware pivot_r : knob_bolt(outer_leg_r, into: inner_leg_r, face: right, span: 3mm, knob_diameter: 24mm, projection: 8mm, thread_length: 15mm) {
+  place {
+    center(outer_leg_r, deep)
+    flush(outer_leg_r.bottom, inset: 300mm)
+  }
+}

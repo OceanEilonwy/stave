@@ -1,0 +1,24 @@
+---
+source: crates/stave-app/tests/turning.rs
+expression: rendered(&opened)
+---
+error[mechanism]: a pin turns in one part; 'room' is a region
+  --> /project/project.stave:98:17
+   |
+98 |     pivot bolt, room at point(along: 0mm, across: 0mm)
+   |                 ^^^^
+   = help: name a role that is a Part, or a member of the kind
+
+error[missing-field]: hardware 'pivot_l' is missing 'room'
+   --> /project/project.stave:156:22
+    |
+156 |   hardware pivot_l : pivot_bolt(stand_l, into: stile_l, face: left, washer_thickness: washer)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: name the part for 'room' in the call: room: ...
+
+error[missing-field]: hardware 'pivot_r' is missing 'room'
+   --> /project/project.stave:157:22
+    |
+157 |   hardware pivot_r : pivot_bolt(stand_r, into: stile_r, face: right, washer_thickness: washer)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: name the part for 'room' in the call: room: ...

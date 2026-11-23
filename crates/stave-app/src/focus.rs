@@ -1232,7 +1232,12 @@ fn pinned_held(hardware: &Hardware) -> Option<WorldBox> {
         .flat_map(MechanismEntry::members)
         .filter(|index| held(*index))
         .filter_map(|index| mechanism.members().get(index.index()))
-        .filter_map(|member| hardware.members.iter().find(|b| b.id.body == member.body))
+        .filter_map(|member| {
+            hardware
+                .members
+                .iter()
+                .find(|b| Some(b.id.body) == member.body.body())
+        })
         .map(Body::bounds)
         .reduce(|all, one| all.union(&one))
 }

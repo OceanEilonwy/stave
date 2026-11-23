@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use stave_lang::units::{ExactLength, Length};
 use stave_model::defs::BaseEntry;
-use stave_model::defs::{BodyId, ConstraintDef, KindDef};
+use stave_model::defs::{BodyId, ConstraintDef, EntrySide, KindDef};
 use stave_model::solved::{DeclaredNode, DeclaredValue, FramePoint, FrameShape, Model};
 use stave_model::value::ModelRef;
 use stave_schema::kinds::BaseField;
@@ -84,8 +84,15 @@ impl Solver<'_> {
                     } => (bodies, vec![(Some("from"), &**from), (Some("to"), &**to)]),
                     ConstraintDef::Rail { .. } => continue,
                 };
-                let [a, b] = *bodies;
-                let pair_name = format!("{} {}", body_name(a)?, body_name(b)?);
+                let second = match bodies.other {
+                    EntrySide::Member(body) => body_name(body)?,
+                    EntrySide::Role(role) => kind
+                        .roles
+                        .get(role.index())
+                        .map(|role| role.name.as_str())
+                        .ok_or(Failure::Fault(Fault::Internal("a role of a kind")))?,
+                };
+                let pair_name = format!("{} {second}", body_name(bodies.member)?);
                 for (end, point) in points {
                     let exact =
                         self.in_kind(binding, kind, |solver, env| solver.kind_point(point, env))?;
